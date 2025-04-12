@@ -1,0 +1,67 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Documentation builds
+docs/_build/
+site/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.*.sw[a-p]
+
+# Editor temporary/backup files
+*~
+.*.sw[a-p]
+
+# Vim temporary files
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+*.un~
+Session.vim
+.netrwhist
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Project specific
+.calculix_cache/
+.gmsh_cache/
+*.frd
+*.dat
+*.inp
+*.msh
+*.vtk
+*.vtu
+*.vtp
+*.fbd
+
+# OS specific files
+.DS_Store
+Thumbs.db

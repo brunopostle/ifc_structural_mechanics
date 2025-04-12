@@ -1,0 +1,167 @@
+"""
+Tests for the CalculiX results parser module.
+"""
+
+import pytest
+
+from ifc_structural_mechanics.analysis.results_parser import ResultsParser
+from ifc_structural_mechanics.domain.result import (
+    DisplacementResult,
+    StressResult,
+    StrainResult,
+    ReactionForceResult,
+)
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
+
+
+class TestResultsParser:
+    """Tests for the ResultsParser class."""
+
+    @pytest.fixture
+    def mock_domain_model(self):
+        """Create a mock domain model for testing."""
+        return StructuralModel(id="test_model")
+
+    @pytest.fixture
+    def mock_frd_file(self, tmp_path):
+        """Create a mock FRD file for testing."""
+        # Format based on actual CalculiX output
+        frd_content = """    1C
+    1UNODE                                                                                
+    1PDISP         1    1    1    1
+ -1         1    1    0
+            1    1.0000e+00    2.0000e+00    3.0000e+00    0.1000e+00    0.2000e+00    0.3000e+00
+ -1         2    1    0
+            1    4.0000e+00    5.0000e+00    6.0000e+00    0.4000e+00    0.5000e+00    0.6000e+00
+ -3
+    1PSTRESS       1    1    1    1
+ -1         1    1    0
+            1    10.00e+00    20.00e+00    30.00e+00    5.00e+00    6.00e+00    7.00e+00    40.00e+00    20.00e+00    10.00e+00
+ -1         2    1    0
+            1    11.00e+00    21.00e+00    31.00e+00    5.10e+00    6.10e+00    7.10e+00    41.00e+00    21.00e+00    11.00e+00
+ -3
+    1PSTRN         1    1    1    1
+ -1         1    1    0
+            1    0.001e+00    0.002e+00    0.003e+00    0.0005e+00    0.0006e+00    0.0007e+00    0.004e+00    0.002e+00    0.001e+00
+ -1         2    1    0
+            1    0.0011e+00   0.0021e+00   0.0031e+00   0.00051e+00   0.00061e+00   0.00071e+00   0.0041e+00   0.0021e+00   0.0011e+00
+ -3
+    3C"""
+        frd_file = tmp_path / "test.frd"
+        frd_file.write_text(frd_content)
+        return str(frd_file)
+
+    @pytest.fixture
+    def mock_dat_file(self, tmp_path):
+        """Create a mock DAT file for testing."""
+        dat_content = """forces (fx,fy,fz) and moments (mx,my,mz) for all nodes
+
+        node       fx          fy          fz          mx          my          mz
+         1   -10.000E+00  -20.000E+00  -30.000E+00  -1.000E+00  -2.000E+00  -3.000E+00
+         2   -40.000E+00  -50.000E+00  -60.000E+00  -4.000E+00  -5.000E+00  -6.000E+00
+
+total forces (fx,fy,fz) and moments (mx,my,mz)
+       -50.000E+00  -70.000E+00  -90.000E+00  -5.000E+00  -7.000E+00  -9.000E+00"""
+        dat_file = tmp_path / "test.dat"
+        dat_file.write_text(dat_content)
+        return str(dat_file)
+
+    def test_init(self, mock_domain_model):
+        """Test initialization."""
+        parser = ResultsParser(domain_model=mock_domain_model)
+        assert parser.domain_model == mock_domain_model
+
+    def test_parse_displacements(self, mock_frd_file):
+        """Test parsing displacement results."""
+        parser = ResultsParser()
+        results = parser.parse_displacements(mock_frd_file)
+
+        assert len(results) == 2
+        assert isinstance(results[0], DisplacementResult)
+        assert results[0].reference_element == "1"
+        assert results[0].get_translations() == [1.0, 2.0, 3.0]
+        assert results[0].get_rotations() == [0.1, 0.2, 0.3]
+
+        assert results[1].reference_element == "2"
+        assert results[1].get_translations() == [4.0, 5.0, 6.0]
+        assert results[1].get_rotations() == [0.4, 0.5, 0.6]
+
+    def test_parse_stresses(self, mock_frd_file):
+        """Test parsing stress results."""
+        parser = ResultsParser()
+        results = parser.parse_stresses(mock_frd_file)
+
+        assert len(results) == 2
+        assert isinstance(results[0], StressResult)
+        assert results[0].reference_element == "1"
+        assert results[0].get_value("sxx") == 10.0
+        assert results[0].get_value("syy") == 20.0
+        assert results[0].get_value("szz") == 30.0
+        assert results[0].get_value("sxy") == 5.0
+        assert results[0].get_value("syz") == 6.0
+        assert results[0].get_value("sxz") == 7.0
+        assert results[0].get_value("s1") == 40.0
+        assert results[0].get_value("s2") == 20.0
+        assert results[0].get_value("s3") == 10.0
+
+    def test_parse_strains(self, mock_frd_file):
+        """Test parsing strain results."""
+        parser = ResultsParser()
+        results = parser.parse_strains(mock_frd_file)
+
+        assert len(results) == 2
+        assert isinstance(results[0], StrainResult)
+        assert results[0].reference_element == "1"
+        assert results[0].get_value("exx") == 0.001
+        assert results[0].get_value("eyy") == 0.002
+        assert results[0].get_value("ezz") == 0.003
+        assert results[0].get_value("exy") == 0.0005
+        assert results[0].get_value("eyz") == 0.0006
+        assert results[0].get_value("exz") == 0.0007
+        assert results[0].get_value("e1") == 0.004
+        assert results[0].get_value("e2") == 0.002
+        assert results[0].get_value("e3") == 0.001
+
+    def test_parse_reactions(self, mock_dat_file):
+        """Test parsing reaction force results."""
+        parser = ResultsParser()
+        results = parser.parse_reactions(mock_dat_file)
+
+        assert len(results) == 2
+        assert isinstance(results[0], ReactionForceResult)
+        assert results[0].reference_element == "1"
+        assert results[0].get_forces() == [-10.0, -20.0, -30.0]
+        assert results[0].get_moments() == [-1.0, -2.0, -3.0]
+
+        assert results[1].reference_element == "2"
+        assert results[1].get_forces() == [-40.0, -50.0, -60.0]
+        assert results[1].get_moments() == [-4.0, -5.0, -6.0]
+
+    def test_parse_results(self, mock_frd_file, mock_dat_file):
+        """Test parsing all results."""
+        parser = ResultsParser()
+        result_files = {"results": mock_frd_file, "data": mock_dat_file}
+
+        parsed_results = parser.parse_results(result_files)
+
+        assert "displacement" in parsed_results
+        assert "stress" in parsed_results
+        assert "strain" in parsed_results
+        assert "reaction" in parsed_results
+
+        assert len(parsed_results["displacement"]) == 2
+        assert len(parsed_results["stress"]) == 2
+        assert len(parsed_results["strain"]) == 2
+        assert len(parsed_results["reaction"]) == 2
+
+    def test_map_results_to_domain(
+        self, mock_domain_model, mock_frd_file, mock_dat_file
+    ):
+        """Test mapping results to domain model."""
+        parser = ResultsParser(domain_model=mock_domain_model)
+        result_files = {"results": mock_frd_file, "data": mock_dat_file}
+
+        parsed_results = parser.parse_results(result_files)
+
+        # Check that results were added to the domain model
+        assert len(mock_domain_model.results) > 0
