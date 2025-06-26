@@ -1,5 +1,5 @@
 """
-Unit tests for the mesh converter module.
+Updated unit tests for the mesh converter module with correct method names.
 """
 
 import os
@@ -210,7 +210,7 @@ class TestMeshConverter:
                                 member_set = f"MEMBER_{member.id}"
                                 self.converter.element_sets[member_set] = [1]
 
-                # Create a simplified implementation for _write_element_properties
+                # Create a simplified implementation for _write_element_properties_with_validation
                 def simplified_element_properties(file):
                     if not self.converter.domain_model:
                         return
@@ -248,14 +248,14 @@ class TestMeshConverter:
                             )
                             file.write("0.25\n\n")
 
-                # Patch the problematic methods
+                # Patch the methods with correct names
                 with mock.patch.object(
                     self.converter,
                     "_write_elements",
                     side_effect=simplified_write_elements,
                 ), mock.patch.object(
                     self.converter,
-                    "_write_element_properties",
+                    "_write_element_properties_with_validation",
                     side_effect=simplified_element_properties,
                 ):
                     result = self.converter.convert_mesh(input_path, output_path)
@@ -386,6 +386,10 @@ class TestMeshConverter:
             "MEMBER_slab_1": [3, 4],  # Surface elements
         }
 
+        # Also set up the defined_element_sets tracking
+        converter.defined_element_sets.add("MEMBER_beam_1")
+        converter.defined_element_sets.add("MEMBER_slab_1")
+
         # Mock the file operations
         with mock.patch("builtins.open", mock.mock_open()) as mock_file:
             file_handle = mock_file()
@@ -400,13 +404,13 @@ class TestMeshConverter:
                 f.write("*SHELL SECTION, ELSET=MEMBER_slab_1, MATERIAL=MAT_concrete\n")
                 f.write("0.25\n\n")
 
-            # Patch the problematic method
+            # Patch the method with correct name
             with mock.patch.object(
                 converter,
-                "_write_element_properties",
+                "_write_element_properties_with_validation",
                 side_effect=simplified_write_element_properties,
             ):
-                converter._write_element_properties(file_handle)
+                converter._write_element_properties_with_validation(file_handle)
 
         # Check that section definitions were written
         mock_file().write.assert_any_call(
@@ -469,7 +473,7 @@ class TestMeshConverter:
         # Mock the write_element_properties method to avoid the error
         with mock.patch.object(
             self.converter,
-            "_write_element_properties",
+            "_write_element_properties_with_validation",
             return_value=None,  # Simply return without doing anything
         ):
             # Convert the mesh with mapping generation
@@ -524,6 +528,27 @@ class TestMeshConverter:
 
         # Test unknown type
         assert converter._get_specific_type("unknown") is None
+
+    def test_validate_element_set_exists(self):
+        """
+        Test the element set validation functionality.
+        """
+        converter = self.converter
+
+        # Test with a non-existent element set
+        assert not converter._validate_element_set_exists("NON_EXISTENT_SET")
+
+        # Create an element set
+        converter.element_sets["TEST_SET"] = [1, 2, 3]
+        converter.defined_element_sets.add("TEST_SET")
+
+        # Test with existing element set
+        assert converter._validate_element_set_exists("TEST_SET")
+
+        # Test with element set that exists but is empty
+        converter.element_sets["EMPTY_SET"] = []
+        converter.defined_element_sets.add("EMPTY_SET")
+        assert not converter._validate_element_set_exists("EMPTY_SET")
 
     def test_complete_workflow(self):
         """

@@ -393,8 +393,15 @@ class MembersExtractor:
                     )[0]
 
             # Get thickness and convert to SI units
-            thickness_value = entity.Thickness if hasattr(entity, "Thickness") else 0.2
+            thickness_value = entity.Thickness if hasattr(entity, "Thickness") else 0.0
             thickness_value = convert_length(thickness_value, self.length_scale)
+
+            if thickness_value <= 0:
+                logger.warning(
+                    f"Surface member {entity.GlobalId} has zero or invalid thickness ({thickness_value}). "
+                    f"Applying default thickness of 0.1m."
+                )
+                thickness_value = 0.1
 
             # Create and return domain object
             if material:
@@ -645,18 +652,18 @@ class MembersExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia (already in SI units since dimensions are converted)
-                Iy = (width * height**3) / 12 - (width - web_thickness) * (
+                Iy = (width * height ** 3) / 12 - (width - web_thickness) * (
                     (height - 2 * flange_thickness) ** 3
                 ) / 12
-                Iz = (2 * flange_thickness) * (width**3) / 12 + (
+                Iz = (2 * flange_thickness) * (width ** 3) / 12 + (
                     height - 2 * flange_thickness
-                ) * (web_thickness**3) / 12
+                ) * (web_thickness ** 3) / 12
                 Jx = (
                     1
                     / 3
                     * (
-                        (height - flange_thickness) * (web_thickness**3)
-                        + 2 * width * (flange_thickness**3)
+                        (height - flange_thickness) * (web_thickness ** 3)
+                        + 2 * width * (flange_thickness ** 3)
                     )
                 )
 

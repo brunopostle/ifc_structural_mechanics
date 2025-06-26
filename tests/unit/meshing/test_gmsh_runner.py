@@ -324,41 +324,58 @@ class TestGmshRunner:
         """
         Test the command preparation logic.
         """
-        # Mock gmsh path
+        # Use a known gmsh path for consistent testing
+        test_gmsh_path = "/usr/bin/gmsh"
+
+        # Create a fresh runner with the gmsh path mocked during initialization
         with mock.patch.object(
-            self.mock_system_config, "get_gmsh_path", return_value="/usr/bin/gmsh"
+            SystemConfig, "get_gmsh_path", return_value=test_gmsh_path
         ):
-            # Mock the meshing config methods to avoid AttributeError
+            # Create fresh config instances
+            test_meshing_config = MeshingConfig()
+            test_system_config = SystemConfig()
+
+            # Mock the temp directory method
             with mock.patch.object(
-                self.mock_meshing_config, "get_mesh_dimension", return_value=3
-            ), mock.patch.object(
-                self.mock_meshing_config, "get_min_element_size", return_value=0.01
-            ), mock.patch.object(
-                self.mock_meshing_config, "get_max_element_size", return_value=1.0
-            ), mock.patch.object(
-                self.mock_meshing_config, "get_additional_options", return_value={}
+                test_system_config, "get_temp_directory", return_value=get_temp_dir()
             ):
-                # Test meshing command
-                input_file = create_temp_file(prefix="input", suffix=".geo")
-                output_file = create_temp_file(prefix="output", suffix=".msh")
-                command = self.runner._prepare_command(input_file, output_file)
-
-                # Verify command structure
-                assert command[0] == "/usr/bin/gmsh"
-                assert input_file in command
-                assert "-o" in command
-                assert output_file in command
-
-                # Test format conversion command
-                command = self.runner._prepare_command(
-                    input_file, output_file, convert_format=True
+                # Create a new runner with the mocked gmsh path
+                test_runner = GmshRunner(
+                    meshing_config=test_meshing_config,
+                    system_config=test_system_config,
                 )
 
-                # Verify command structure for conversion
-                assert command[0] == "/usr/bin/gmsh"
-                assert "-o" in command
-                assert output_file in command
-                assert input_file in command
+        # Now mock the meshing config methods for this test
+        with mock.patch.object(
+            test_runner.meshing_config, "get_mesh_dimension", return_value=3
+        ), mock.patch.object(
+            test_runner.meshing_config, "get_min_element_size", return_value=0.01
+        ), mock.patch.object(
+            test_runner.meshing_config, "get_max_element_size", return_value=1.0
+        ), mock.patch.object(
+            test_runner.meshing_config, "get_additional_options", return_value={}
+        ):
+            # Test meshing command
+            input_file = create_temp_file(prefix="input", suffix=".geo")
+            output_file = create_temp_file(prefix="output", suffix=".msh")
+            command = test_runner._prepare_command(input_file, output_file)
+
+            # Verify command structure - use the mocked path
+            assert command[0] == test_gmsh_path
+            assert input_file in command
+            assert "-o" in command
+            assert output_file in command
+
+            # Test format conversion command
+            command = test_runner._prepare_command(
+                input_file, output_file, convert_format=True
+            )
+
+            # Verify command structure for conversion
+            assert command[0] == test_gmsh_path
+            assert "-o" in command
+            assert output_file in command
+            assert input_file in command
 
     def test_handle_output(self):
         """

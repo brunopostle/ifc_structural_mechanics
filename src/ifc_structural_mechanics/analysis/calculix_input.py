@@ -1,8 +1,9 @@
 """
-Updated CalculiX Input File Generation Module
+CalculiX Input File Generation Module
 
 This module provides enhanced functionality to generate CalculiX input files (.inp) from
-the domain model, mesh data, and analysis configuration.
+the domain model, mesh data, and analysis configuration with proper element set handling.
+
 """
 
 import os
@@ -62,6 +63,9 @@ class CalculixInputGenerator:
         self.nodes: Dict[int, Tuple[float, float, float]] = {}
         self.elements: Dict[int, Dict[str, Any]] = {}
 
+        # NEW: Track which element sets are actually defined
+        self.defined_element_sets: set = set()
+
         # Validate and prepare the model
         self._validate_domain_model()
         self._generate_nodes_and_elements()
@@ -85,7 +89,7 @@ class CalculixInputGenerator:
 
     def _generate_nodes_and_elements(self) -> None:
         """
-        Generate nodes and elements from the domain model.
+        Generate nodes and elements from the domain model with proper element set tracking.
         """
         if self.nodes or self.elements:
             return  # Skip if already generated
@@ -151,7 +155,7 @@ class CalculixInputGenerator:
                         else:
                             member_node_ids.append(existing_node)
 
-                # Generate elements
+                # Generate elements and properly track element sets
                 if member_node_ids:
                     # Determine element type based on member type
                     if isinstance(member, CurveMember):
@@ -165,6 +169,13 @@ class CalculixInputGenerator:
                     if (
                         len(member_node_ids) >= 2
                     ):  # Need at least 2 nodes for an element
+                        # FIXED: Create proper element set names and track them
+                        member_set = f"MEMBER_{member.id}"
+                        if member_set not in self.element_sets:
+                            self.element_sets[member_set] = []
+                            # Track that this element set will be defined
+                            self.defined_element_sets.add(member_set)
+
                         for i in range(len(member_node_ids) - 1):
                             # Create element connecting two consecutive nodes
                             self.elements[element_id] = {
@@ -172,17 +183,15 @@ class CalculixInputGenerator:
                                 "nodes": [member_node_ids[i], member_node_ids[i + 1]],
                             }
 
-                            # Create element set for this member
+                            # Add to member-specific element set
+                            self.element_sets[member_set].append(element_id)
+
+                            # FIXED: Also create a more detailed element set for different uses
                             member_element_set = f"MEMBER_{member.id}_ELEMENTS"
                             if member_element_set not in self.element_sets:
                                 self.element_sets[member_element_set] = []
+                                self.defined_element_sets.add(member_element_set)
                             self.element_sets[member_element_set].append(element_id)
-
-                            # Also add to a set with just the member ID for section assignment
-                            member_set = f"MEMBER_{member.id}"
-                            if member_set not in self.element_sets:
-                                self.element_sets[member_set] = []
-                            self.element_sets[member_set].append(element_id)
 
                             element_id += 1
 
@@ -191,6 +200,7 @@ class CalculixInputGenerator:
         logger.info(f"Generated {len(self.elements)} elements")
         logger.info(f"Node sets: {list(self.node_sets.keys())}")
         logger.info(f"Element sets: {list(self.element_sets.keys())}")
+        logger.info(f"Defined element sets: {self.defined_element_sets}")
 
     def generate_input_file(self, output_path: str) -> str:
         """
@@ -213,7 +223,9 @@ class CalculixInputGenerator:
                 self._write_node_sets(f)
                 self._write_element_sets(f)
                 self._write_materials(f)
-                self._write_sections(f)
+
+                # Write sections with proper validation
+                self._write_sections_with_validation(f)
 
                 # Write boundary conditions (these can be outside the step)
                 write_boundary_conditions(
@@ -223,16 +235,6 @@ class CalculixInputGenerator:
                     self.element_sets,
                     dict(self.nodes),
                 )
-
-                # REMOVED: Don't call write_loads here since loads need to be
-                # defined inside the step section
-                # write_loads(
-                #     f,
-                #     self.domain_model,
-                #     self.node_sets,
-                #     self.element_sets,
-                #     dict(self.nodes),
-                # )
 
                 # Write analysis steps with appropriate analysis type
                 # The write_analysis_steps function will now handle writing the loads
@@ -314,9 +316,11 @@ class CalculixInputGenerator:
                 file.write("\n")
 
     def _write_element_sets(self, file: TextIO) -> None:
-        """Write element sets to the input file."""
+        """Write element sets to the input file with proper tracking."""
+        written_sets = set()
+
         for set_name, element_ids in self.element_sets.items():
-            if element_ids:
+            if element_ids and set_name not in written_sets:
                 file.write(f"*ELSET, ELSET={set_name}\n")
                 # Write with at most 8 elements per line
                 for i in range(0, len(element_ids), 8):
@@ -324,6 +328,10 @@ class CalculixInputGenerator:
                     line = ", ".join(map(str, line_elements))
                     file.write(f"{line}\n")
                 file.write("\n")
+                written_sets.add(set_name)
+
+        # Update our tracking of defined element sets
+        self.defined_element_sets.update(written_sets)
 
     def _write_materials(self, file: TextIO) -> None:
         """
@@ -357,90 +365,178 @@ class CalculixInputGenerator:
 
             file.write("\n")
 
-    def _write_sections(self, file: TextIO) -> None:
+    def _validate_element_set_exists(self, set_name: str) -> bool:
         """
-        Write section definitions to the input file.
+        Validate that an element set exists before using it.
 
-        Sections define the geometry of structural members and are associated
-        with element sets.
+        Args:
+            set_name (str): Name of the element set to validate
+
+        Returns:
+            bool: True if the element set exists and has elements, False otherwise
+        """
+        return (
+            set_name in self.element_sets
+            and self.element_sets[set_name]
+            and set_name in self.defined_element_sets
+        )
+
+    def _get_or_create_element_set_for_member(self, member) -> Optional[str]:
+        """
+        Get or create an appropriate element set for a member.
+
+        Args:
+            member: The structural member
+
+        Returns:
+            Optional[str]: The element set name if available, None otherwise
+        """
+        # Try the primary member set name
+        member_set = f"MEMBER_{member.id}"
+        if self._validate_element_set_exists(member_set):
+            return member_set
+
+        # Try the alternative member elements set name
+        member_elements_set = f"MEMBER_{member.id}_ELEMENTS"
+        if self._validate_element_set_exists(member_elements_set):
+            return member_elements_set
+
+        # If neither exists, log a warning and return None
+        logger.warning(f"No valid element set found for member {member.id}")
+        return None
+
+        if beam_sections_written == 0 and shell_sections_written == 0:
+            file.write("** WARNING: No valid sections could be written\n")
+            file.write("** Check that members have proper element sets defined\n\n")
+
+    def _write_sections_with_validation(self, file: TextIO) -> None:
+        """
+        Write section definitions to the input file with proper element set validation.
+
+        This method ensures that all element set references are valid before writing
+        section definitions.
 
         Args:
             file (TextIO): The file object to write to.
         """
+        file.write("** Section Definitions\n")
+
         # Process curve members (beam sections)
-        beam_sections = {}
+        beam_sections_written = 0
         for member in self.domain_model.members:
             if (
                 isinstance(member, CurveMember)
                 and hasattr(member, "section")
                 and member.section
             ):
-                set_name = f"MEMBER_{member.id}"
-                if set_name not in self.element_sets:
-                    # Create an element set for this member if it doesn't exist
-                    self.element_sets[set_name] = []
-                beam_sections[set_name] = (member.section, member.material)
+                # Get a valid element set for this member
+                set_name = self._get_or_create_element_set_for_member(member)
 
-        # Write beam section definitions
-        for set_name, (section, material) in beam_sections.items():
-            if (
-                hasattr(section, "section_type")
-                and section.section_type == "rectangular"
-            ):
-                file.write(
-                    f"*BEAM SECTION, ELSET={set_name}, MATERIAL=MAT_{material.id}, SECTION=RECT\n"
+                if set_name is None:
+                    logger.error(
+                        f"Cannot create beam section for member {member.id}: no valid element set"
+                    )
+                    continue
+
+                # Validate that the element set actually exists
+                if not self._validate_element_set_exists(set_name):
+                    logger.error(
+                        f"Element set {set_name} does not exist for member {member.id}"
+                    )
+                    continue
+
+                # Write the beam section
+                material_id = member.material.id if member.material else "DEFAULT"
+
+                if (
+                    hasattr(member.section, "section_type")
+                    and member.section.section_type == "rectangular"
+                ):
+                    file.write(
+                        f"*BEAM SECTION, ELSET={set_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
+                    )
+                    width = member.section.dimensions.get("width", 0.1)
+                    height = member.section.dimensions.get("height", 0.2)
+                    file.write(f"{width:.6e}, {height:.6e}\n")
+                    # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
+                    file.write("0.0, 0.0, -1.0\n\n")
+
+                elif (
+                    hasattr(member.section, "section_type")
+                    and member.section.section_type == "circular"
+                ):
+                    file.write(
+                        f"*BEAM SECTION, ELSET={set_name}, MATERIAL=MAT_{material_id}, SECTION=CIRC\n"
+                    )
+                    radius = member.section.dimensions.get("radius", 0.1)
+                    file.write(f"{radius:.6e}\n")
+                    # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
+                    file.write("0.0, 0.0, -1.0\n\n")
+
+                else:
+                    # For other section types or if section_type isn't available, use a general section
+                    file.write(
+                        f"*BEAM GENERAL SECTION, ELSET={set_name}, MATERIAL=MAT_{material_id}\n"
+                    )
+                    # Area, Iyy, Izz, Iyz, It, Warping constant
+                    area = getattr(member.section, "area", 0.01)
+                    i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
+                    i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
+                    i_yz = 0.0  # Assumed for most sections
+                    it = getattr(member.section, "torsional_constant", area * 0.01)
+                    warping = getattr(member.section, "warping_constant", 0.0) or 0.0
+                    file.write(
+                        f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
+                    )
+                    # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
+                    file.write("0.0, 0.0, -1.0\n\n")
+
+                beam_sections_written += 1
+                logger.debug(
+                    f"Written beam section for member {member.id} using element set {set_name}"
                 )
-                width = section.dimensions.get("width", 0.1)
-                height = section.dimensions.get("height", 0.2)
-                file.write(f"{width:.6e}, {height:.6e}\n")
-                # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
-                file.write("0.0, 0.0, -1.0\n\n")
-            elif (
-                hasattr(section, "section_type") and section.section_type == "circular"
-            ):
-                file.write(
-                    f"*BEAM SECTION, ELSET={set_name}, MATERIAL=MAT_{material.id}, SECTION=CIRC\n"
-                )
-                radius = section.dimensions.get("radius", 0.1)
-                file.write(f"{radius:.6e}\n")
-                # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
-                file.write("0.0, 0.0, -1.0\n\n")
-            else:
-                # For other section types or if section_type isn't available, use a general section
-                file.write(
-                    f"*BEAM GENERAL SECTION, ELSET={set_name}, MATERIAL=MAT_{material.id}\n"
-                )
-                # Area, Iyy, Izz, Iyz, It, Warping constant
-                area = getattr(section, "area", 0.01)
-                i_yy = getattr(section, "moment_of_inertia_y", area * 0.01)
-                i_zz = getattr(section, "moment_of_inertia_z", area * 0.01)
-                i_yz = 0.0  # Assumed for most sections
-                it = getattr(section, "torsional_constant", area * 0.01)
-                warping = getattr(section, "warping_constant", 0.0) or 0.0
-                file.write(
-                    f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
-                )
-                # Direction cosines defining the local beam n1 direction (default: 0,0,-1)
-                file.write("0.0, 0.0, -1.0\n\n")
 
         # Process surface members (shell thicknesses)
-        shell_thicknesses = {}
+        shell_sections_written = 0
         for member in self.domain_model.members:
             if (
                 isinstance(member, SurfaceMember)
                 and hasattr(member, "thickness")
                 and member.thickness
             ):
-                set_name = f"MEMBER_{member.id}"
-                if set_name not in self.element_sets:
-                    # Create an element set for this member if it doesn't exist
-                    self.element_sets[set_name] = []
-                shell_thicknesses[set_name] = (member.thickness, member.material)
+                # Get a valid element set for this member
+                set_name = self._get_or_create_element_set_for_member(member)
 
-        # Write shell section definitions
-        for set_name, (thickness, material) in shell_thicknesses.items():
-            file.write(
-                f"*SHELL SECTION, ELSET={set_name}, MATERIAL=MAT_{material.id}\n"
-            )
-            thickness_value = getattr(thickness, "value", 0.1)
-            file.write(f"{thickness_value:.6e}\n\n")
+                if set_name is None:
+                    logger.error(
+                        f"Cannot create shell section for member {member.id}: no valid element set"
+                    )
+                    continue
+
+                # Validate that the element set actually exists
+                if not self._validate_element_set_exists(set_name):
+                    logger.error(
+                        f"Element set {set_name} does not exist for member {member.id}"
+                    )
+                    continue
+
+                # Write the shell section
+                material_id = member.material.id if member.material else "DEFAULT"
+                file.write(
+                    f"*SHELL SECTION, ELSET={set_name}, MATERIAL=MAT_{material_id}\n"
+                )
+                thickness_value = getattr(member.thickness, "value", 0.1)
+                file.write(f"{thickness_value:.6e}\n\n")
+
+                shell_sections_written += 1
+                logger.debug(
+                    f"Written shell section for member {member.id} using element set {set_name}"
+                )
+
+        logger.info(
+            f"Written {beam_sections_written} beam sections and {shell_sections_written} shell sections"
+        )
+
+        if beam_sections_written == 0 and shell_sections_written == 0:
+            file.write("** WARNING: No valid sections could be written\n")
+            file.write("** Check that members have proper element sets defined\n\n")
