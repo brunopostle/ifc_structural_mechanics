@@ -7,7 +7,7 @@ IFC project units and SI units throughout the library.
 
 import logging
 import numpy as np
-from typing import Dict, List, Optional, Union, Tuple, Any
+from typing import List, Optional, Union
 
 logger = logging.getLogger(__name__)
 

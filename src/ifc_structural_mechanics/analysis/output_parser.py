@@ -6,7 +6,6 @@ identify errors and warnings, classify their severity, and map them back
 to the original IFC entities.
 """
 
-import re
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 

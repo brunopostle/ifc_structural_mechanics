@@ -13,8 +13,6 @@ from ifc_structural_mechanics.domain.load import (
     PointLoad,
     LineLoad,
     AreaLoad,
-    LoadGroup,
-    LoadCombination,
 )
 
 

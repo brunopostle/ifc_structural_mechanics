@@ -16,7 +16,7 @@ structural mechanics analysis package.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple, Any, TextIO, Set, Union
+from typing import Dict, List, Optional, Tuple, Any, TextIO
 
 import numpy as np
 

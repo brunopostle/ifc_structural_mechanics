@@ -7,7 +7,7 @@ utils.error_handling module.
 
 import re
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Import the module under test
 from ifc_structural_mechanics.utils.error_handling import (
@@ -21,11 +21,6 @@ from ifc_structural_mechanics.utils.error_handling import (
     ErrorPattern,
     ErrorPatternRegistry,
     ErrorDetector,
-    EntityErrorMapper,
-    error_context,
-    format_error_message,
-    ErrorCollector,
-    traceable_errors,
 )
 
 

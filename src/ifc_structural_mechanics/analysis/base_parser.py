@@ -9,7 +9,7 @@ and entity mapping.
 
 import re
 import logging
-from typing import Dict, List, Optional, Tuple, Any, Pattern, Union
+from typing import Dict, List, Optional, Tuple, Any
 
 # Configure logging
 logger = logging.getLogger(__name__)

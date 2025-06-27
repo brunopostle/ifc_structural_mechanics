@@ -6,12 +6,10 @@ and load combinations in structural analysis.
 """
 
 from typing import List, Dict, Optional, Union, Any
-import uuid
 import numpy as np
 
 from ifc_structural_mechanics.domain.base_entity import (
     DomainEntity,
-    DomainEntityCollection,
 )
 
 

@@ -6,12 +6,10 @@ This script analyzes the hierarchical load structure in an IFC file,
 focusing on the relationships between load groups, load cases, and load combinations.
 """
 
-import os
-import sys
 import json
 import logging
 import click
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional
 import ifcopenshell
 
 # Configure logging

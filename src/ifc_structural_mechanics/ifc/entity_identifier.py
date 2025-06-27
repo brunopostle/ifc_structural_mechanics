@@ -6,13 +6,12 @@ structural analysis-related IFC entities.
 """
 
 import logging
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any
 
 import ifcopenshell
 import numpy as np
 
 from ..utils.units import (
-    convert_length,
     convert_coordinates,
     convert_point_list,
 )
@@ -331,24 +330,47 @@ def find_related_profile(
 
 def get_coordinate(point, unit_scale: float = 1.0):
     """
-    Extract coordinates from an IfcCartesianPoint.
+    Extract coordinates from an IfcCartesianPoint with robust validation.
 
     Args:
         point: The IfcCartesianPoint entity
         unit_scale: Scale factor to convert to SI units
 
     Returns:
-        List of coordinate values in SI units
+        List of coordinate values in SI units, or None if invalid
     """
     if point is None:
+        logger.warning("get_coordinate called with None point")
         return None
 
     try:
+        if not hasattr(point, "is_a") or not callable(point.is_a):
+            logger.warning(f"Invalid point object: {type(point)}")
+            return None
+
         if point.is_a("IfcCartesianPoint") and hasattr(point, "Coordinates"):
             coords = list(point.Coordinates)
-            # Convert to SI units
-            return convert_coordinates(coords, unit_scale)
+
+            # Validate that all coordinates are numbers, not None
+            if any(coord is None for coord in coords):
+                logger.warning(f"Found None coordinates in point: {coords}")
+                return None
+
+            # Validate that all coordinates are numeric
+            try:
+                numeric_coords = [float(coord) for coord in coords]
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Non-numeric coordinates found: {coords}, error: {e}")
+                return None
+
+            # Convert to SI units - now safe since we validated the coordinates
+            return convert_coordinates(numeric_coords, unit_scale)
+
+        logger.warning(
+            f"Point is not IfcCartesianPoint or missing Coordinates: {point}"
+        )
         return None
+
     except Exception as e:
         logger.warning(f"Error extracting coordinates: {e}")
         return None

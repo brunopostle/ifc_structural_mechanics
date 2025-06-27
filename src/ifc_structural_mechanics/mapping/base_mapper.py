@@ -12,7 +12,7 @@ __module_path__ = "ifc_structural_mechanics.mapping.base_mapper"
 import os
 import json
 import logging
-from typing import Dict, List, Optional, Tuple, Union, Any, TypeVar, Generic
+from typing import Dict, List, Optional, Union, Any, TypeVar, Generic
 
 logger = logging.getLogger(__name__)
 

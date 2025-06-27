@@ -6,10 +6,9 @@ functionality for mapping between domain entities and tool-specific entities.
 """
 
 import os
-import json
 import tempfile
 import unittest
-from typing import Dict, List, Union
+from typing import Dict, List
 
 from ifc_structural_mechanics.mapping.base_mapper import BaseMapper
 

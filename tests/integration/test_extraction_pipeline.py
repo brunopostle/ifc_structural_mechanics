@@ -9,21 +9,11 @@ import os
 import pytest
 import ifcopenshell
 import numpy as np
-from unittest.mock import patch, Mock, MagicMock, PropertyMock
+from unittest.mock import patch, Mock, MagicMock
 
 from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
-from ifc_structural_mechanics.domain.property import Material, Section, Thickness
-from ifc_structural_mechanics.domain.structural_connection import (
-    PointConnection,
-    RigidConnection,
-    HingeConnection,
-)
-from ifc_structural_mechanics.domain.load import (
-    PointLoad,
-    LoadGroup,
-)
+from ifc_structural_mechanics.domain.structural_member import CurveMember
 
 # Define paths to test data
 TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test_data")

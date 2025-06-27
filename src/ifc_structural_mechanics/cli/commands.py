@@ -150,7 +150,7 @@ def run_enhanced_analyze(
     # Print welcome message
     if not json_output:
         click.echo(
-            click.style(f"IFC Structural Analysis (Enhanced)", fg="blue", bold=True)
+            click.style("IFC Structural Analysis (Enhanced)", fg="blue", bold=True)
         )
         click.echo(click.style(f"{'=' * 50}", fg="blue"))
         click.echo(f"Input file:    {ifc_file}")

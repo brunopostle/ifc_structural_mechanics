@@ -5,7 +5,6 @@ This module contains tests to verify the functionality of the BaseParser class,
 which provides common parsing functionality for output and result files.
 """
 
-import os
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
 

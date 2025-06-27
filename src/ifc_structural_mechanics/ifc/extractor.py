@@ -15,7 +15,6 @@ import ifcopenshell
 import ifcopenshell.util.unit
 
 from ..domain.structural_model import StructuralModel
-from ..domain.load import LoadGroup, PointLoad
 
 from .members_extractor import MembersExtractor
 from .properties_extractor import PropertiesExtractor

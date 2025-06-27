@@ -4,14 +4,12 @@ Debug tool specifically for troubleshooting load extraction from IFC files.
 This tool focuses on the details of how loads are extracted from IFC to the domain model.
 """
 
-import os
 import sys
 import logging
 import json
 import click
 import ifcopenshell
-import numpy as np
-from typing import Dict, List, Optional, Set, Any, Tuple
+from typing import Dict, Optional, Any
 
 # Configure detailed logging
 logging.basicConfig(
@@ -305,7 +303,7 @@ class LoadDebugger:
 
         self.logger.info("  Expected domain load:")
         self.logger.info(f"    id: {result['id']}")
-        self.logger.info(f"    load_type: point")
+        self.logger.info("    load_type: point")
         self.logger.info(f"    magnitude: {magnitude}")
         self.logger.info(f"    direction: {direction}")
         self.logger.info(f"    position: {position}")

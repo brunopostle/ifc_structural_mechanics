@@ -7,13 +7,11 @@ which is particularly useful for troubleshooting data connections in
 structural analysis models.
 """
 
-import os
-import sys
 import json
 import logging
 import click
 import ifcopenshell
-from typing import Dict, List, Optional, Set, Any, Tuple
+from typing import Dict, List, Optional, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(message)s")
@@ -481,7 +479,7 @@ def find_path(
                 if "name" in entity and entity["name"]:
                     click.echo(f"   Name: {entity['name']}")
 
-            click.echo(f"\nComplete path information:")
+            click.echo("\nComplete path information:")
             click.echo(json.dumps(path, indent=2))
 
         return 0
@@ -584,7 +582,7 @@ def analyze_structural(ifc_file: str, output: Optional[str]):
             if model["model_type"]:
                 click.echo(f"Type: {model['model_type']}")
 
-            click.echo(f"\nModel contains:")
+            click.echo("\nModel contains:")
             click.echo(f"  - {len(model['groups'])} groups")
             click.echo(f"  - {len(model['members'])} structural members")
             click.echo(f"  - {len(model['connections'])} structural connections")

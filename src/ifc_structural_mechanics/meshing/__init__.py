@@ -7,6 +7,5 @@ suitable for analysis with CalculiX.
 
 from .gmsh_geometry import GmshGeometryConverter
 from .gmsh_runner import GmshRunner
-from .mesh_converter import MeshConverter
 
 __all__ = ["GmshGeometryConverter", "GmshRunner", "MeshConverter"]

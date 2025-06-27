@@ -5,8 +5,6 @@ These tests verify the functionality of converting domain model
 geometric representations to Gmsh geometry objects.
 """
 
-import sys
-import os
 import uuid
 from unittest.mock import patch
 

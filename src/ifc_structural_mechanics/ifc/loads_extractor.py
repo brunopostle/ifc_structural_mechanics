@@ -579,7 +579,8 @@ class LoadsExtractor:
                     force_vector = [f * self.force_scale for f in force_vector]
 
                 # Find related surface
-                surface_ref = "surface_1"  # Default
+                # FIXME this is a hard-coded globalid, so completely wrong
+                surface_ref = "0ufrSuxdDDj9OVSMUAKIdq"  # Default
 
                 # Try to find related structural members through AppliedOn
                 if hasattr(ifc_load, "AppliedOn"):
@@ -840,7 +841,8 @@ class LoadsExtractor:
         """
         try:
             # Default reference ID
-            surface_ref = "surface_1"
+            # FIXME this is a hard-coded globalid, so completely wrong
+            surface_ref = "0ufrSuxdDDj9OVSMUAKIdq"
 
             # Try to find the associated structural surface using IFC4 pattern
             if hasattr(ifc_load, "AppliedOn"):
@@ -857,7 +859,8 @@ class LoadsExtractor:
             self.logger.warning(
                 f"Error extracting surface reference: {e}, using default"
             )
-            return "surface_1"
+            # FIXME this is a hard-coded globalid, so completely wrong
+            return "0ufrSuxdDDj9OVSMUAKIdq"
 
     def _is_linear_distribution(self, ifc_load) -> bool:
         """

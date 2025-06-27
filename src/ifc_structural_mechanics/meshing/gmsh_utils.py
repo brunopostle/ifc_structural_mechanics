@@ -9,10 +9,9 @@ and error handling specific to Gmsh operations.
 import os
 import logging
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, List, Optional, Tuple
 import numpy as np
 import gmsh
-from ..utils.error_handling import MeshingError
 from ..utils.subprocess_utils import run_subprocess
 
 logger = logging.getLogger(__name__)

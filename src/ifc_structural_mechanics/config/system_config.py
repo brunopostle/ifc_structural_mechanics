@@ -3,7 +3,6 @@ import logging
 import shutil
 import subprocess
 from typing import Optional, Dict, Any
-import yaml
 from ..utils import temp_dir
 from .base_config import BaseConfig
 

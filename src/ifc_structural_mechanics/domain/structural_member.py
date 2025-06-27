@@ -6,7 +6,7 @@ structural elements in the intermediate representation between IFC and
 analysis formats.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ifc_structural_mechanics.domain.base_entity import DomainEntity
 

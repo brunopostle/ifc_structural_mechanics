@@ -10,7 +10,6 @@ import uuid
 from typing import List, Optional, Union, Dict
 
 import ifcopenshell
-import numpy as np
 
 from ..domain.structural_member import StructuralMember, CurveMember, SurfaceMember
 from ..domain.property import Material, Section, Thickness
@@ -27,8 +26,6 @@ from ..ifc.entity_identifier import (
 )
 from ..utils.units import (
     convert_length,
-    convert_coordinates,
-    convert_point_list,
     convert_moment_of_inertia,
     convert_area,
     convert_elastic_modulus,
@@ -147,6 +144,15 @@ class MembersExtractor:
                     member = self._create_curve_member(entity)
                     if member:
                         curve_members.append(member)
+                except TypeError as e:
+                    if "unsupported operand type" in str(e):
+                        self.logger.error(
+                            f"Coordinate calculation error for curve member {entity.id()}: {e}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Failed to extract curve member {entity.id()}: {e}"
+                        )
                 except Exception as e:
                     self.logger.warning(
                         f"Failed to extract curve member {entity.id()}: {e}"
@@ -278,6 +284,11 @@ class MembersExtractor:
             geometry = self._extract_geometry(representation, self.length_scale)
             if not geometry:
                 self.logger.warning(f"Failed to extract geometry for {entity.GlobalId}")
+                return None
+            if any(coord is None for coord in geometry if coord is not None):
+                self.logger.warning(
+                    f"Geometry contains invalid coordinates for {entity.GlobalId}"
+                )
                 return None
 
             # Get orientation
@@ -470,6 +481,14 @@ class MembersExtractor:
             # Get coordinates and convert to SI units
             start_coord = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
             end_coord = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
+
+            # Validate coordinates are not None
+            if start_coord is None or end_coord is None:
+                self.logger.warning(
+                    f"Invalid coordinates found in edge geometry: start={start_coord}, end={end_coord}"
+                )
+                return None
+
             return [start_coord, end_coord]
 
         elif item.is_a("IfcFaceSurface"):
@@ -487,6 +506,11 @@ class MembersExtractor:
                             coord = get_coordinate(
                                 edge.EdgeElement.EdgeStart.VertexGeometry, unit_scale
                             )
+                            if coord is None:
+                                self.logger.warning(
+                                    "Invalid coordinate found in surface boundary"
+                                )
+                                continue  # Skip this coordinate
                             coords.append(coord)
                     return coords
 
@@ -652,18 +676,18 @@ class MembersExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia (already in SI units since dimensions are converted)
-                Iy = (width * height ** 3) / 12 - (width - web_thickness) * (
+                Iy = (width * height**3) / 12 - (width - web_thickness) * (
                     (height - 2 * flange_thickness) ** 3
                 ) / 12
-                Iz = (2 * flange_thickness) * (width ** 3) / 12 + (
+                Iz = (2 * flange_thickness) * (width**3) / 12 + (
                     height - 2 * flange_thickness
-                ) * (web_thickness ** 3) / 12
+                ) * (web_thickness**3) / 12
                 Jx = (
                     1
                     / 3
                     * (
-                        (height - flange_thickness) * (web_thickness ** 3)
-                        + 2 * width * (flange_thickness ** 3)
+                        (height - flange_thickness) * (web_thickness**3)
+                        + 2 * width * (flange_thickness**3)
                     )
                 )
 

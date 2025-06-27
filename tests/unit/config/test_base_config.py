@@ -1,9 +1,7 @@
 import os
 import tempfile
 import unittest
-import yaml
 from typing import Dict, Any
-import sys
 
 try:
     from ifc_structural_mechanics.config.base_config import BaseConfig

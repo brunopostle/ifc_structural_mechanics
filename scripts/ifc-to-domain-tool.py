@@ -6,14 +6,13 @@ This tool uses the ifc_structural_mechanics library to extract a structural
 domain model from an IFC file and outputs it in YAML format for inspection.
 """
 
-import os
 import sys
 import yaml
 import logging
 import click
 import numpy as np
 import ifcopenshell
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional
 
 # Import the library components needed
 from ifc_structural_mechanics.ifc.extractor import Extractor
@@ -26,7 +25,6 @@ from ifc_structural_mechanics.domain.structural_connection import (
 )
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
 from ifc_structural_mechanics.domain.load import (
-    Load,
     PointLoad,
     LineLoad,
     AreaLoad,

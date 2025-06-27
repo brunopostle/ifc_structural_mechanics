@@ -1,9 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-import tempfile
 import shutil
-from pathlib import Path
 
 from ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
 from ifc_structural_mechanics.utils.temp_dir import create_temp_subdir

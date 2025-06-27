@@ -5,21 +5,11 @@ Detailed test for debugging IFC simple beam parsing with extensive logging.
 import os
 import pytest
 import logging
-import numpy as np
 
 import ifcopenshell
 
 from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.ifc.entity_identifier import (
-    is_structural_member,
-    is_structural_curve_member,
-    find_member_endpoints,
-)
 from ifc_structural_mechanics.domain.structural_member import CurveMember
-from ifc_structural_mechanics.domain.structural_connection import (
-    PointConnection,
-    RigidConnection,
-)
 from ifc_structural_mechanics.domain.load import PointLoad
 
 # Set up logging

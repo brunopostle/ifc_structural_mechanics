@@ -307,7 +307,7 @@ class CalculixRunner:
             # If model.inp is significantly larger, it probably has the full mesh
             if model_size > analysis_size * 5:  # 5x size difference is significant
                 logger.info(
-                    f"model.inp is much larger, will use it instead of analysis.inp"
+                    "model.inp is much larger, will use it instead of analysis.inp"
                 )
                 use_model_inp = True
 
@@ -316,7 +316,7 @@ class CalculixRunner:
             # Use model.inp
             input_file_path = model_inp_path
             base_name = "model"
-            logger.info(f"Using model.inp for CalculiX analysis (larger file)")
+            logger.info("Using model.inp for CalculiX analysis (larger file)")
         else:
             # Use the file provided to the constructor (typically analysis.inp)
             input_file_path = self.input_file_path
@@ -345,7 +345,7 @@ class CalculixRunner:
                 if element_count > 0:
                     # Add a HEADING with increased element capacity for large models
                     # if not already present
-                    if not "*HEADING" in content and element_count > 1000:
+                    if "*HEADING" not in content and element_count > 1000:
                         logger.info(
                             f"Adding HEADING with increased element capacity (found ~{element_count} elements)"
                         )

@@ -18,8 +18,6 @@ import ifcopenshell
 from ..domain.property import Material, Section, Thickness
 from ..utils.units import (
     convert_length,
-    convert_area,
-    convert_moment_of_inertia,
     convert_elastic_modulus,
     convert_density,
 )

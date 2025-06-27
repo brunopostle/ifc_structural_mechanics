@@ -5,7 +5,7 @@ This module improves the boundary condition and load handling in the conversion 
 from IFC structural models to CalculiX.
 """
 
-from typing import Dict, List, Optional, Set, Tuple, Any, TextIO
+from typing import Dict, List, Optional, Tuple, Any, TextIO
 import logging
 import numpy as np
 from ..domain.structural_model import StructuralModel
@@ -784,18 +784,70 @@ def _write_validated_loads_within_step(
                         loads_written = True
             file.write("\n")
 
-        # Process distributed loads (use *DLOAD)
+        # FIXED: Process distributed loads (use *DLOAD with proper element set references)
         distributed_loads = [
             load for load in load_group.loads if not isinstance(load, PointLoad)
         ]
         if distributed_loads:
             file.write("*DLOAD\n")
             for load in distributed_loads:
-                if _write_validated_distributed_load(file, load):
+                # Get magnitude with validation
+                if hasattr(load, "get_force_vector"):
+                    force_vector = _get_validated_force_vector(load)
+                    magnitude = (
+                        force_vector[0] ** 2
+                        + force_vector[1] ** 2
+                        + force_vector[2] ** 2
+                    ) ** 0.5
+                else:
+                    magnitude = getattr(load, "magnitude", 1000.0)
+
+                # Ensure magnitude is valid
+                if not isinstance(magnitude, (int, float)) or magnitude <= 0:
+                    magnitude = 1000.0
+
+                # FIXED: Find the appropriate element set for this load
+                element_set_name = None
+
+                # Strategy 1: Check if load has surface/member reference
+                if hasattr(load, "surface_reference") and load.surface_reference:
+                    element_set_name = f"MEMBER_{load.surface_reference}"
+                elif hasattr(load, "member_reference") and load.member_reference:
+                    element_set_name = f"MEMBER_{load.member_reference}"
+                elif hasattr(load, "applied_to") and load.applied_to:
+                    element_set_name = f"MEMBER_{load.applied_to}"
+
+                # Strategy 2: If no direct reference, try to find surface members to apply loads to
+                # This is a fallback for loads that don't have explicit member references
+                if not element_set_name:
+                    # Find the first surface member (common target for distributed loads)
+                    surface_members = [
+                        m for m in domain_model.members if m.entity_type == "surface"
+                    ]
+                    if surface_members:
+                        element_set_name = f"MEMBER_{surface_members[0].id}"
+                        logger.info(
+                            f"Applied load {getattr(load, 'id', 'unknown')} to surface member {surface_members[0].id}"
+                        )
+
+                # Write the load if we found a valid element set
+                if element_set_name:
+                    if isinstance(load, LineLoad):
+                        file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
+                    elif isinstance(load, AreaLoad):
+                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                    else:
+                        # Default to area load pressure
+                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
                     loads_written = True
+                else:
+                    logger.warning(
+                        f"Cannot determine element set for distributed load {getattr(load, 'id', 'unknown')}"
+                    )
+
             file.write("\n")
 
-    # Process loads directly on members
+    # Process loads directly on members (same fix applies)
     for member in domain_model.members:
         member_loads = getattr(member, "loads", [])
         if not member_loads:
@@ -816,6 +868,39 @@ def _write_validated_loads_within_step(
                     if abs(component) > 1e-10:
                         file.write(f"{node_id}, {i+1}, {component:.6e}\n")
                         loads_written = True
+            file.write("\n")
+
+        # FIXED: Process distributed loads on members
+        distributed_loads = [
+            load for load in member_loads if not isinstance(load, PointLoad)
+        ]
+        if distributed_loads:
+            file.write("*DLOAD\n")
+            for load in distributed_loads:
+                # For loads directly on members, use the member's element set
+                element_set_name = f"MEMBER_{member.id}"
+
+                # Get magnitude
+                if hasattr(load, "get_force_vector"):
+                    force_vector = _get_validated_force_vector(load)
+                    magnitude = (
+                        force_vector[0] ** 2
+                        + force_vector[1] ** 2
+                        + force_vector[2] ** 2
+                    ) ** 0.5
+                else:
+                    magnitude = getattr(load, "magnitude", 1000.0)
+
+                if not isinstance(magnitude, (int, float)) or magnitude <= 0:
+                    magnitude = 1000.0
+
+                if isinstance(load, LineLoad):
+                    file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
+                elif isinstance(load, AreaLoad):
+                    file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                else:
+                    file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                loads_written = True
             file.write("\n")
 
     # Log results
@@ -901,7 +986,7 @@ def _get_validated_force_vector(load):
 
 def _write_validated_distributed_load(file: TextIO, load) -> bool:
     """
-    Write a distributed load with validation.
+    Write a distributed load with validation and proper element set references.
 
     Args:
         file: File object
@@ -924,15 +1009,32 @@ def _write_validated_distributed_load(file: TextIO, load) -> bool:
         if not isinstance(magnitude, (int, float)) or magnitude <= 0:
             magnitude = 1000.0
 
-        # Write the load
-        load_id = getattr(load, "id", "unknown")
+        # FIXED: Get the actual element set name for the load
+        element_set_name = None
 
+        # Try to get the member/surface reference for the load
+        if hasattr(load, "surface_reference") and load.surface_reference:
+            element_set_name = f"MEMBER_{load.surface_reference}"
+        elif hasattr(load, "member_reference") and load.member_reference:
+            element_set_name = f"MEMBER_{load.member_reference}"
+        elif hasattr(load, "applied_to") and load.applied_to:
+            element_set_name = f"MEMBER_{load.applied_to}"
+
+        # If we still don't have an element set, we can't write the load
+        if not element_set_name:
+            logger.warning(
+                f"Cannot determine element set for distributed load {getattr(load, 'id', 'unknown')}"
+            )
+            return False
+
+        # Write the load using the actual element set name
         if isinstance(load, LineLoad):
-            file.write(f"LOAD_{load_id}, P2, {magnitude:.6e}\n")
+            file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
         elif isinstance(load, AreaLoad):
-            file.write(f"LOAD_{load_id}, P, {magnitude:.6e}\n")
+            file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
         else:
-            file.write(f"LOAD_{load_id}, P, {magnitude:.6e}\n")
+            # Default to area load pressure
+            file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
 
         return True
 

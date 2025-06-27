@@ -1,8 +1,8 @@
 """
-Integration test for the Domain to CalculiX mapper and workflow.
+Integration test for the Domain to CalculiX unified workflow.
 
-This test demonstrates how the DomainToCalculixMapper fits into the complete workflow
-from domain model to CalculiX analysis and error handling.
+This test demonstrates the new unified approach that eliminates dual element writing
+and validates the complete workflow from domain model to CalculiX analysis.
 """
 
 import os
@@ -19,13 +19,20 @@ from src.ifc_structural_mechanics.domain.property import Material, Section, Thic
 from src.ifc_structural_mechanics.mapping.domain_to_calculix import (
     DomainToCalculixMapper,
 )
-from src.ifc_structural_mechanics.meshing.mesh_converter import MeshConverter
+
+# Updated import to use unified writer instead of removed MeshConverter
+from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    UnifiedCalculixWriter,
+    run_complete_analysis_workflow,
+)
 from src.ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
-from src.ifc_structural_mechanics.utils.error_handling import AnalysisError
+from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from src.ifc_structural_mechanics.config.system_config import SystemConfig
 
 
-class TestDomainToCalculixWorkflow(unittest.TestCase):
-    """Test the integration of DomainToCalculixMapper in the analysis workflow."""
+class TestDomainToCalculixUnifiedWorkflow(unittest.TestCase):
+    """Test the unified Domain to CalculiX workflow that eliminates dual element writing."""
 
     def setUp(self):
         """Set up test fixtures."""
@@ -77,214 +84,681 @@ class TestDomainToCalculixWorkflow(unittest.TestCase):
         self.inp_file = os.path.join(self.temp_dir, "test.inp")
         self.mapping_file = os.path.join(self.temp_dir, "mapping.json")
 
+        # Create configurations for unified workflow
+        self.analysis_config = AnalysisConfig()
+        self.meshing_config = MeshingConfig()
+        self.system_config = SystemConfig()
+
     def tearDown(self):
         """Clean up after tests."""
         import shutil
 
         shutil.rmtree(self.temp_dir)
 
-    @patch("meshio.read")
-    @patch("meshio.Mesh")
-    def test_mesh_converter_with_mapper(self, mock_mesh, mock_read):
-        """Test that the mesh converter uses the mapper correctly."""
-        # Mock meshio.read and return a mesh with some elements
-        mock_read.return_value = mock_mesh
-        mock_mesh.points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    def test_unified_writer_with_mapper(self):
+        """Test that the unified writer integrates correctly with the mapper."""
 
-        # Set up cells with one of each element type
-        # Use lists instead of numpy arrays for simpler mocking
-        line_cells = [[0, 1]]
-        quad_cells = [[0, 1, 2, 3]]
-
-        # In newer meshio versions, cells is a list of tuples
-        mock_mesh.cells = [("line", line_cells), ("quad", quad_cells)]
-
-        # Create mapper and mesh converter
-        mapper = DomainToCalculixMapper()
-
-        # Add beam_1 and plate_1 to model in a way that _map_element_to_member will find them
-        self.model.members[0].id = "beam_1"  # First member (beam) in the model
-        self.model.members[1].id = "plate_1"  # Second member (plate) in the model
-
-        converter = MeshConverter(domain_model=self.model, mapper=mapper)
-
-        # Patch the _map_element_to_member method to return specific domain entity IDs for testing
-        def mock_map_element(element_id, element_type, nodes):
-            if element_type == "line":
-                return "beam_1"
-            elif element_type == "quad":
-                return "plate_1"
-            return None
-
-        converter._map_element_to_member = mock_map_element
-
-        # Convert mesh to CalculiX format
-        with open(self.inp_file, "w") as f:
-            f.write("Test")  # Create an empty file to satisfy file existence checks
-
-        # Mock the _write_inp_file method to avoid actual file operations but still call _write_elements
-        def mock_write_inp(mesh, output_file):
-            with open(output_file, "w") as f:
-                f.write("Mock INP file\n")
-                converter._write_elements(mesh, f)
-            return output_file
-
-        with patch.object(converter, "_write_inp_file", side_effect=mock_write_inp):
-            result = converter.convert_mesh(
-                mesh_file="dummy.msh",
-                output_file=self.inp_file,
-                mapping_file=self.mapping_file,
-            )
-
-        # Check that the mapper now contains mappings
-        self.assertGreater(len(mapper.domain_to_ccx["element"]), 0)
-        self.assertTrue("beam_1" in mapper.domain_to_ccx["element"])
-        self.assertTrue("plate_1" in mapper.domain_to_ccx["element"])
-
-        # Check that the mapping file was created
-        self.assertTrue(os.path.exists(self.mapping_file))
-
-    @patch("src.ifc_structural_mechanics.utils.subprocess_utils.run_subprocess")
-    def test_calculix_runner_with_mapper(self, mock_run_subprocess):
-        """Test that the CalculiX runner uses the mapper for error handling."""
-        # Create a test input file
-        with open(self.inp_file, "w") as f:
-            f.write("*NODE\n1, 0.0, 0.0, 0.0\n*ELEMENT\n1, 1\n")
-
-        # Create a mapper and explicitly register element 1 to beam_1
-        mapper = DomainToCalculixMapper()
-        mapper.register_element("beam_1", 1)
-
-        # Create mock subprocess result with the actual error message seen in the output
-        mock_result = MagicMock()
-        mock_result.success = False
-        mock_result.return_code = -11
-        mock_result.stdout = "ERROR reading *ELEMENT: element type is lacking\nERROR reading *ELEMENT. Card image:"
-        mock_result.stderr = ""
-        mock_run_subprocess.return_value = mock_result
-
-        # Create CalculiX runner with mapper
-        runner = CalculixRunner(input_file_path=self.inp_file, mapper=mapper)
-
-        # Make sure our mapper is properly set
-        self.assertEqual(runner.mapper, mapper)
-
-        # Run analysis and expect error
-        try:
-            runner.run_analysis()
-            self.fail("Expected AnalysisError was not raised")
-        except AnalysisError as e:
-            # Check that the error context contains error_details
-            self.assertIn(
-                "error_details",
-                e.context,
-                f"Error context should contain 'error_details', but contains: {e.context}",
-            )
-
-            # Get the error details
-            error_details = e.context["error_details"]
-
-            # Verify there's at least one error detail
-            self.assertTrue(len(error_details) > 0, "No error details found")
-
-            # Print error details for easier debugging
-            print(f"Error details: {error_details}")
-
-            # Find an error detail with domain_id == "beam_1"
-            beam_error = None
-            for detail in error_details:
-                if detail.get("domain_id") == "beam_1":
-                    beam_error = detail
-                    break
-
-            # Verify we found an error mapped to beam_1
-            self.assertIsNotNone(
-                beam_error,
-                f"No error detail mapped to beam_1 found in: {error_details}",
-            )
-
-            # For this test, we don't care about the specific values
-            # as long as it's mapped to the correct domain entity
-
-    def test_complete_workflow_simulation(self):
-        """
-        Test a simulated complete workflow from domain model to analysis.
-        This test mocks the actual meshing and analysis, but shows how the mapper
-        is used throughout the process.
-        """
         # Create mapper
         mapper = DomainToCalculixMapper()
 
-        # Step 1: Mock mesh conversion
-        converter = MeshConverter(domain_model=self.model, mapper=mapper)
+        # Create unified writer with correct parameters
+        writer = UnifiedCalculixWriter(
+            domain_model=self.model,
+            analysis_config=self.analysis_config,
+            mapper=mapper,
+        )
 
-        # Register some mappings as if they came from mesh conversion
-        mapper.register_element("beam_1", 1, "beam")
-        mapper.register_element("beam_1", 2, "beam")
-        mapper.register_element("plate_1", 3, "shell")
-        mapper.register_element("plate_1", 4, "shell")
-        mapper.register_node("node_1", 1)
-        mapper.register_node("node_2", 2)
-        mapper.register_material("material_1", "MAT_material_1")
-        mapper.register_section("section_1", "SECT_section_1")
+        # Create a mock mesh file with mixed element types
+        mesh_content = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+4
+1 0 0 0
+2 5 0 0
+3 1 0 0
+4 1 1 0
+$EndNodes
+$Elements
+2
+1 1 2 0 1 1 2
+2 2 2 0 1 3 4 1
+$EndElements
+"""
 
-        # Save mapping to file
-        mapper.create_mapping_file(self.mapping_file)
+        mesh_file = os.path.join(self.temp_dir, "test.msh")
+        with open(mesh_file, "w") as f:
+            f.write(mesh_content)
 
-        # Step 2: Mock analysis with error
-        # Create a test input file
-        with open(self.inp_file, "w") as f:
-            f.write("*NODE\n1, 0.0, 0.0, 0.0\n*ELEMENT\n1, 1\n")
+        # Process mesh with unified writer
+        writer.write_calculix_input_from_mesh(mesh_file, self.inp_file)
 
-        # Create mock subprocess result with actual error format seen in test output
+        # Verify file was created
+        self.assertTrue(os.path.exists(self.inp_file))
+
+        # Read and validate content
+        with open(self.inp_file, "r") as f:
+            content = f.read()
+
+        # Verify basic CalculiX structure
+        self.assertIn("*NODE", content)
+        self.assertIn("*ELEMENT", content)
+
+        # Verify elements are present and correctly typed
+        elements = self._parse_elements_from_content(content)
+        self.assertGreater(len(elements), 0, "No elements found in output")
+
+        # Key validation: Check that elements maintain correct node counts
+        for elem in elements:
+            if elem.get("type") == "B31":  # Beam elements should have 2 nodes
+                self.assertEqual(
+                    len(elem["nodes"]),
+                    2,
+                    f"B31 element {elem['id']} should have 2 nodes",
+                )
+            elif (
+                elem.get("type") == "S3"
+            ):  # Triangular shell elements should have 3 nodes
+                self.assertEqual(
+                    len(elem["nodes"]),
+                    3,
+                    f"S3 element {elem['id']} should have 3 nodes",
+                )
+
+    def test_run_complete_analysis_workflow(self):
+        """Test the complete unified workflow function."""
+
+        intermediate_dir = os.path.join(self.temp_dir, "intermediate")
+
+        # Mock the Gmsh operations at their correct locations
+        with patch(
+            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+        ) as mock_converter:
+            with patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_runner:
+
+                # Mock the geometry converter
+                mock_converter_instance = MagicMock()
+                mock_converter.return_value = mock_converter_instance
+                mock_converter_instance.convert_model.return_value = {
+                    "beam_1": {"type": "curve"},
+                    "plate_1": {"type": "surface"},
+                }
+
+                # Mock the Gmsh runner
+                mock_runner_instance = MagicMock()
+                mock_runner.return_value = mock_runner_instance
+                mock_runner_instance.run_meshing.return_value = True
+
+                # Create a mock mesh file that the runner would generate
+                os.makedirs(intermediate_dir, exist_ok=True)
+                mock_mesh_file = os.path.join(intermediate_dir, "mesh.msh")
+                with open(mock_mesh_file, "w") as f:
+                    f.write(
+                        """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+2
+1 0 0 0
+2 1 0 0
+$EndNodes
+$Elements
+1
+1 1 2 0 1 1 2
+$EndElements
+"""
+                    )
+
+                mock_runner_instance.generate_mesh_file.return_value = mock_mesh_file
+
+                # Run the complete workflow
+                result_file = run_complete_analysis_workflow(
+                    domain_model=self.model,
+                    output_inp_file=self.inp_file,
+                    analysis_config=self.analysis_config,
+                    meshing_config=self.meshing_config,
+                    system_config=self.system_config,
+                    intermediate_files_dir=intermediate_dir,
+                )
+
+                # Validate results
+                self.assertEqual(result_file, self.inp_file)
+                self.assertTrue(os.path.exists(result_file))
+
+                # Verify the unified workflow was called correctly
+                mock_converter_instance.convert_model.assert_called_once()
+                mock_runner_instance.run_meshing.assert_called_once()
+
+    def test_unified_workflow_element_preservation(self):
+        """Test that the unified workflow preserves element topology correctly."""
+
+        # Create a model with only a surface member to focus on triangular elements
+        surface_model = StructuralModel("surface_model", "Surface Model")
+        surface_model.add_member(self.plate)
+
+        # Create unified writer with correct parameters
+        writer = UnifiedCalculixWriter(
+            domain_model=surface_model,
+            analysis_config=self.analysis_config,
+        )
+
+        # Create mock mesh with triangular elements
+        mesh_content = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+3
+1 0 0 0
+2 1 0 0
+3 0 1 0
+$EndNodes
+$Elements
+1
+1 2 2 0 1 1 2 3
+$EndElements
+"""
+
+        mesh_file = os.path.join(self.temp_dir, "triangular.msh")
+        with open(mesh_file, "w") as f:
+            f.write(mesh_content)
+
+        # Process with unified writer
+        writer.write_calculix_input_from_mesh(mesh_file, self.inp_file)
+
+        # Parse generated elements
+        with open(self.inp_file, "r") as f:
+            content = f.read()
+
+        elements = self._parse_elements_from_content(content)
+
+        # Find triangular shell elements
+        triangular_elements = [e for e in elements if e.get("type") in ["S3", "S6"]]
+
+        # Critical validation: Triangular elements must preserve 3-node topology
+        for elem in triangular_elements:
+            self.assertEqual(
+                len(elem["nodes"]),
+                3,
+                f"Triangular element {elem['id']} has {len(elem['nodes'])} nodes, "
+                f"expected 3. Topology not preserved!",
+            )
+
+    def test_calculix_runner_with_unified_output(self):
+        """Test that CalculiX runner works with unified writer output."""
+
+        # Create a minimal but valid CalculiX input file using unified writer
+        minimal_model = StructuralModel("minimal", "Minimal Model")
+        minimal_model.add_member(self.beam)
+
+        # Create unified writer with correct parameters
+        writer = UnifiedCalculixWriter(
+            domain_model=minimal_model,
+            analysis_config=self.analysis_config,
+        )
+
+        # Create simple mesh for the beam
+        beam_mesh = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+2
+1 0 0 0
+2 5 0 0
+$EndNodes
+$Elements
+1
+1 1 2 0 1 1 2
+$EndElements
+"""
+
+        mesh_file = os.path.join(self.temp_dir, "beam.msh")
+        with open(mesh_file, "w") as f:
+            f.write(beam_mesh)
+
+        # Generate CalculiX input with unified writer
+        writer.write_calculix_input_from_mesh(mesh_file, self.inp_file)
+
+        # Mock CalculiX execution
         with patch(
             "src.ifc_structural_mechanics.utils.subprocess_utils.run_subprocess"
         ) as mock_run:
+            # Mock successful run
             mock_result = MagicMock()
-            mock_result.success = False
-            mock_result.return_code = -11
-            mock_result.stdout = "ERROR reading *ELEMENT: element type is lacking\nERROR reading *ELEMENT. Card image:"
+            mock_result.success = True
+            mock_result.return_code = 0
+            mock_result.stdout = "Job completed successfully"
             mock_result.stderr = ""
             mock_run.return_value = mock_result
 
-            # Run analysis with mapper
-            runner = CalculixRunner(input_file_path=self.inp_file, mapper=mapper)
+            # Run CalculiX with unified input
+            runner = CalculixRunner(input_file_path=self.inp_file)
 
-            # Run analysis and catch the error
+            # This should not raise an exception
             try:
-                runner.run_analysis()
-                self.fail("Expected an AnalysisError to be raised")
-            except AnalysisError as e:
-                # Print the full error context for debugging
-                print(f"Error context: {e.context}")
+                result = runner.run_analysis()
+                # Verify some output files would be generated
+                self.assertIsInstance(result, dict)
+            except Exception as e:
+                self.fail(f"CalculiX runner failed with unified input: {e}")
 
-                # Check that the error was mapped to the correct domain entity
-                error_details = e.context.get("error_details", [])
-                self.assertTrue(len(error_details) > 0, "No error details were found")
+    def test_unified_workflow_no_dual_writing(self):
+        """
+        Test that ensures no dual element writing occurs in the unified workflow.
+        This is the key test that validates the architectural fix.
+        """
 
-                # Find an error detail with domain_id == "beam_1"
-                beam_error = None
-                for detail in error_details:
-                    if detail.get("domain_id") == "beam_1":
-                        beam_error = detail
-                        break
+        # Create unified writer with correct parameters
+        writer = UnifiedCalculixWriter(
+            domain_model=self.model,
+            analysis_config=self.analysis_config,
+        )
 
-                # Verify we found an error mapped to beam_1
-                self.assertIsNotNone(
-                    beam_error,
-                    f"No error detail mapped to beam_1 found in: {error_details}",
+        # Create mock mesh
+        mesh_content = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+4  
+1 0 0 0
+2 5 0 0
+3 1 0 0
+4 1 1 0
+$EndNodes
+$Elements
+2
+1 1 2 0 1 1 2
+2 2 2 0 1 3 4 1
+$EndElements
+"""
+
+        mesh_file = os.path.join(self.temp_dir, "mixed.msh")
+        with open(mesh_file, "w") as f:
+            f.write(mesh_content)
+
+        # Track the elements before and after mesh mapping
+        writer.write_calculix_input_from_mesh(mesh_file, self.inp_file)
+
+        # Read the generated content
+        with open(self.inp_file, "r") as f:
+            content = f.read()
+
+        # Parse all elements from the output
+        elements = self._parse_elements_from_content(content)
+
+        # Critical validation: Each element should appear exactly once
+        # (No dual writing means no duplicate elements)
+        element_ids = [elem["id"] for elem in elements]
+        unique_element_ids = set(element_ids)
+
+        self.assertEqual(
+            len(element_ids),
+            len(unique_element_ids),
+            f"Duplicate element IDs found: {element_ids}. "
+            f"This indicates dual writing occurred!",
+        )
+
+        # Verify we have the expected number of elements (2 from mock mesh)
+        self.assertEqual(
+            len(elements),
+            2,
+            f"Expected 2 elements, found {len(elements)}. "
+            f"Element count mismatch suggests writing issues.",
+        )
+
+        # Additional validation: verify each element type appears in appropriate counts
+        element_types = [elem["type"] for elem in elements]
+        type_counts = {}
+        for elem_type in element_types:
+            type_counts[elem_type] = type_counts.get(elem_type, 0) + 1
+
+        # Should have reasonable element type distribution (no excessive duplicates)
+        for elem_type, count in type_counts.items():
+            self.assertLessEqual(
+                count,
+                2,
+                f"Element type {elem_type} appears {count} times, suggesting dual writing",
+            )
+
+    def test_complete_workflow_simulation_unified(self):
+        """
+        Test a simulated complete workflow using the unified approach.
+        This replaces the old dual-system coordination test.
+        """
+
+        # Mock the complete analysis workflow with correct paths
+        with patch(
+            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+        ) as mock_geo:
+            with patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh:
+
+                # Set up mocks
+                mock_geo_instance = MagicMock()
+                mock_geo.return_value = mock_geo_instance
+                mock_geo_instance.convert_model.return_value = {
+                    "beam_1": {"type": "curve"},
+                    "plate_1": {"type": "surface"},
+                }
+
+                mock_gmsh_instance = MagicMock()
+                mock_gmsh.return_value = mock_gmsh_instance
+                mock_gmsh_instance.run_meshing.return_value = True
+
+                # Create intermediate directory and mock mesh file
+                intermediate_dir = os.path.join(self.temp_dir, "intermediate")
+                os.makedirs(intermediate_dir, exist_ok=True)
+
+                mock_mesh_file = os.path.join(intermediate_dir, "mesh.msh")
+                with open(mock_mesh_file, "w") as f:
+                    f.write(
+                        """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+4
+1 0 0 0
+2 5 0 0
+3 1 0 0
+4 1 1 0
+$EndNodes
+$Elements
+2
+1 1 2 0 1 1 2
+2 2 2 0 1 3 4 1
+$EndElements
+"""
+                    )
+
+                mock_gmsh_instance.generate_mesh_file.return_value = mock_mesh_file
+
+                # Run the unified workflow
+                result_file = run_complete_analysis_workflow(
+                    domain_model=self.model,
+                    output_inp_file=self.inp_file,
+                    analysis_config=self.analysis_config,
+                    meshing_config=self.meshing_config,
+                    system_config=self.system_config,
+                    intermediate_files_dir=intermediate_dir,
                 )
 
-        # Step 3: Load mapping from file in a new mapper
-        new_mapper = DomainToCalculixMapper()
-        new_mapper.load_mapping_file(self.mapping_file)
+                # Validate the unified workflow succeeded
+                self.assertEqual(result_file, self.inp_file)
+                self.assertTrue(os.path.exists(result_file))
 
-        # Verify mappings were preserved
-        self.assertEqual(new_mapper.get_domain_entity_id(1, "element"), "beam_1")
-        self.assertEqual(new_mapper.get_domain_entity_id(3, "element"), "plate_1")
-        self.assertEqual(
-            new_mapper.get_ccx_id("material_1", "material"), "MAT_material_1"
+                # Validate content structure
+                with open(result_file, "r") as f:
+                    content = f.read()
+
+                # Basic CalculiX format validation
+                self.assertIn("*NODE", content)
+                self.assertIn("*ELEMENT", content)
+                self.assertIn("*MATERIAL", content)
+
+                # Parse and validate elements
+                elements = self._parse_elements_from_content(content)
+                self.assertGreater(
+                    len(elements), 0, "No elements found in unified output"
+                )
+
+                # Verify no duplicate elements (key anti-dual-writing check)
+                element_ids = [elem["id"] for elem in elements]
+                self.assertEqual(
+                    len(element_ids),
+                    len(set(element_ids)),
+                    "Duplicate elements found - dual writing detected!",
+                )
+
+                # Verify element types are appropriate for domain members
+                element_types = {elem["type"] for elem in elements if elem["type"]}
+                expected_types = {
+                    "B31",
+                    "B32",
+                    "S3",
+                    "S4",
+                    "S6",
+                    "S8",
+                }  # Common beam and shell types
+                self.assertTrue(
+                    element_types.issubset(expected_types),
+                    f"Unexpected element types found: {element_types - expected_types}",
+                )
+
+    def test_unified_vs_old_workflow_compatibility(self):
+        """
+        Test that demonstrates the unified workflow produces equivalent results
+        to what the old dual system should have produced (without conflicts).
+        """
+
+        # Create a simple model that would have been problematic with dual writing
+        simple_model = StructuralModel("simple", "Simple Model")
+        simple_model.add_member(self.beam)
+
+        # Generate output with unified writer using correct parameters
+        writer = UnifiedCalculixWriter(
+            domain_model=simple_model,
+            analysis_config=self.analysis_config,
         )
+
+        # Simple beam mesh
+        mesh_content = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+2
+1 0 0 0
+2 5 0 0
+$EndNodes
+$Elements
+1
+1 1 2 0 1 1 2
+$EndElements
+"""
+
+        mesh_file = os.path.join(self.temp_dir, "simple.msh")
+        with open(mesh_file, "w") as f:
+            f.write(mesh_content)
+
+        writer.write_calculix_input_from_mesh(mesh_file, self.inp_file)
+
+        # Read and validate
+        with open(self.inp_file, "r") as f:
+            content = f.read()
+
+        # Key compatibility checks
+        self.assertIn("*NODE", content, "Missing node section")
+        self.assertIn("*ELEMENT", content, "Missing element section")
+
+        # Parse elements and verify integrity
+        elements = self._parse_elements_from_content(content)
+
+        # Debug output if test fails
+        if len(elements) != 1:
+            print(f"\nDEBUG: Expected 1 element, got {len(elements)}")
+            print(f"Elements found: {elements}")
+            self._debug_calculix_content(content)
+
+        # Should have exactly one element (from our mesh)
+        self.assertEqual(len(elements), 1, f"Expected 1 element, got {len(elements)}")
+
+        # Element should be a beam type with 2 nodes
+        elem = elements[0]
+        self.assertIn(
+            elem["type"],
+            ["B31", "B32"],
+            f"Expected beam element type, got {elem['type']}",
+        )
+        self.assertEqual(
+            len(elem["nodes"]),
+            2,
+            f"Beam element should have 2 nodes, got {len(elem['nodes'])}",
+        )
+
+        # Verify no artifacts of dual writing by checking element uniqueness
+        # This is a more reliable test than counting lines with commas
+        element_ids = [elem["id"] for elem in elements]
+        unique_element_ids = set(element_ids)
+
+        self.assertEqual(
+            len(element_ids),
+            len(unique_element_ids),
+            f"Duplicate element IDs found: {element_ids}. This indicates dual writing!",
+        )
+
+        # Additional verification: check that we have exactly the expected elements
+        # from our simple mesh (1 line element should become 1 beam element)
+        beam_elements = [e for e in elements if e.get("type") in ["B31", "B32"]]
+        self.assertEqual(
+            len(beam_elements),
+            1,
+            f"Expected exactly 1 beam element, got {len(beam_elements)}",
+        )
+
+    def test_unified_writer_direct_processing(self):
+        """
+        Test the unified writer's direct mesh processing without file I/O.
+        This validates the core element processing logic.
+        """
+        from unittest.mock import MagicMock
+        import numpy as np
+
+        # Create unified writer
+        writer = UnifiedCalculixWriter(
+            domain_model=self.model,
+            analysis_config=self.analysis_config,
+        )
+
+        # Create a mock mesh with both line and triangle elements
+        mock_mesh = MagicMock()
+        mock_mesh.points = np.array(
+            [
+                [0, 0, 0],  # Node 1
+                [5, 0, 0],  # Node 2
+                [1, 0, 0],  # Node 3
+                [1, 1, 0],  # Node 4
+            ]
+        )
+
+        # Mock the cell structure with both element types
+        def mock_cell_items():
+            return [
+                ("line", np.array([[0, 1]])),  # Line element (beam)
+                ("triangle", np.array([[2, 3, 0]])),  # Triangle element (shell)
+            ]
+
+        mock_mesh.cells = MagicMock()
+        mock_mesh.cells.items = mock_cell_items
+
+        # Process the mesh directly
+        writer._process_mesh(mock_mesh)
+
+        # Validate that nodes were processed correctly
+        self.assertEqual(
+            len(writer.nodes), 4, f"Expected 4 nodes, got {len(writer.nodes)}"
+        )
+
+        # Validate that elements were processed correctly
+        self.assertEqual(
+            len(writer.elements), 2, f"Expected 2 elements, got {len(writer.elements)}"
+        )
+
+        # Verify element types are correctly mapped
+        element_types = [elem["type"] for elem in writer.elements.values()]
+        self.assertIn("B31", element_types, "Expected B31 beam elements")
+        self.assertIn("S3", element_types, "Expected S3 shell elements")
+
+        # Map elements to members
+        writer._map_elements_to_members()
+
+        # Verify member-specific element sets were created
+        beam_set = f"MEMBER_{self.beam.id}"
+        plate_set = f"MEMBER_{self.plate.id}"
+
+        self.assertIn(
+            beam_set, writer.element_sets, f"Beam element set {beam_set} not created"
+        )
+        self.assertIn(
+            plate_set, writer.element_sets, f"Plate element set {plate_set} not created"
+        )
+
+        # Verify statistics
+        stats = writer.get_statistics()
+        self.assertEqual(stats["nodes"], 4)
+        self.assertEqual(stats["elements"], 2)
+        self.assertIn("B31", stats["element_types"])
+        self.assertIn("S3", stats["element_types"])
+
+    def _parse_elements_from_content(self, content: str) -> list:
+        """
+        Parse elements from CalculiX input content.
+        Helper method for validation.
+        """
+        elements = []
+        in_element_section = False
+        current_element_type = None
+
+        for line in content.split("\n"):
+            line = line.strip()
+
+            if line.startswith("*ELEMENT"):
+                in_element_section = True
+                # Extract element type from header
+                current_element_type = None
+                if "TYPE=" in line:
+                    type_part = line.split("TYPE=")[1].split(",")[0].strip()
+                    current_element_type = type_part
+                continue
+            elif line.startswith("*") and in_element_section:
+                in_element_section = False
+                current_element_type = None
+                continue
+
+            if in_element_section and line and not line.startswith("*"):
+                # Parse element definition: element_id, node1, node2, ...
+                parts = [p.strip() for p in line.split(",") if p.strip()]
+                if len(parts) >= 2:
+                    try:
+                        elem_id = int(parts[0])
+                        nodes = [
+                            int(parts[i])
+                            for i in range(1, len(parts))
+                            if parts[i].isdigit()
+                        ]
+                        elements.append(
+                            {
+                                "id": elem_id,
+                                "type": current_element_type,
+                                "nodes": nodes,
+                            }
+                        )
+                    except ValueError:
+                        # Skip lines that don't parse as integers
+                        continue
+
+        return elements
+
+    def _debug_calculix_content(self, content: str) -> None:
+        """
+        Debug helper to understand what's in the CalculiX content.
+        """
+        lines = content.split("\n")
+        print(f"\n=== CalculiX Content Debug ({len(lines)} lines) ===")
+
+        section = "Unknown"
+        for i, line in enumerate(lines[:50]):  # Only show first 50 lines
+            line_clean = line.strip()
+
+            if line_clean.startswith("*"):
+                section = line_clean
+                print(f"{i:3d}: [{section}] {line_clean}")
+            elif line_clean and not line_clean.startswith("**"):
+                print(f"{i:3d}: [{section}] {line_clean}")
+
+        if len(lines) > 50:
+            print(f"... and {len(lines) - 50} more lines")
+        print("=== End Debug ===\n")
 
 
 if __name__ == "__main__":

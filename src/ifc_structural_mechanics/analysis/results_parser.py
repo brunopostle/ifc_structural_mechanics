@@ -8,7 +8,7 @@ and convert them into domain model result objects.
 import logging
 import os
 import traceback
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 from .base_parser import BaseParser
 from ..domain.result import (

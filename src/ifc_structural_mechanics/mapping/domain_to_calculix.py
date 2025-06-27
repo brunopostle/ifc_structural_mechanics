@@ -6,10 +6,9 @@ maintaining a bidirectional mapping that can be used to trace analysis errors ba
 to their original domain entities.
 """
 
-import os
 import re
 import logging
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, List, Optional, Union, Any
 
 from ifc_structural_mechanics.mapping.base_mapper import BaseMapper
 

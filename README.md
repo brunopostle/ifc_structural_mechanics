@@ -39,6 +39,10 @@ pip install -e ".[dev]"
 
 ## Usage
 
+```bash
+python -m ifc_structural_mechanics.cli.commands analyze ../analysis-models/ifcFiles/building_01.ifc --output ./results
+```
+
 Basic usage example:
 
 ```python

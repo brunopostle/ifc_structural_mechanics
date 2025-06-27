@@ -7,7 +7,6 @@ in the IFC file, which helps debug the issue where loads are being incorrectly
 added to a default load group instead of preserving the IFC hierarchy.
 """
 
-import os
 import sys
 import logging
 import json

@@ -1,8 +1,8 @@
 """
-Main API for structural analysis.
+Updated structural analysis API using the unified CalculiX writer.
 
-This module provides the primary public API for performing structural analysis
-on IFC models using the CalculiX solver.
+This module provides the simplified public API for performing structural analysis
+on IFC models using the unified workflow that eliminates dual element writing.
 """
 
 import os
@@ -12,14 +12,10 @@ from typing import Dict, Any, Optional
 
 from ..ifc.extractor import Extractor
 from ..domain.structural_model import StructuralModel
-from ..meshing.gmsh_geometry import GmshGeometryConverter
-from ..meshing.gmsh_runner import GmshRunner
-from ..meshing.mesh_converter import MeshConverter
-from ..analysis.calculix_input import CalculixInputGenerator
+from ..meshing.unified_calculix_writer import run_complete_analysis_workflow
 from ..analysis.calculix_runner import CalculixRunner
 from ..analysis.results_parser import ResultsParser
 from ..analysis.output_parser import OutputParser
-from ..mapping.domain_to_calculix import DomainToCalculixMapper
 from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
@@ -30,7 +26,6 @@ from ..utils.error_handling import (
     AnalysisError,
 )
 from ..utils.file_utils import ensure_directory
-from ..utils import temp_dir
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -44,16 +39,18 @@ def analyze_ifc(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
-    Run a structural analysis on an IFC file.
+    Run a structural analysis on an IFC file using the unified workflow.
 
     This function performs the complete workflow from IFC model extraction
-    to structural analysis with CalculiX, and returns the analysis results.
+    to structural analysis with CalculiX, using the new unified approach that
+    eliminates dual element writing conflicts.
 
     Args:
         ifc_path (str): Path to the IFC file to analyze.
         output_dir (str): Directory where the output files will be written.
         analysis_type (str, optional): Type of analysis to perform.
-            Currently supported: "linear_static". Defaults to "linear_static".
+            Currently supported: "linear_static", "linear_buckling".
+            Defaults to "linear_static".
         mesh_size (float, optional): Default mesh size for the finite element mesh.
             Defaults to 0.1.
         verbose (bool, optional): Whether to enable verbose logging.
@@ -65,12 +62,12 @@ def analyze_ifc(
             - warnings (List[Dict]): List of warning messages with details
             - errors (List[Dict]): List of error messages with details
             - output_files (Dict[str, str]): Dictionary of output file paths
+            - mesh_statistics (Dict): Statistics about the generated mesh
 
     Raises:
         ModelExtractionError: If the model extraction from IFC fails.
         MeshingError: If the meshing process fails.
         AnalysisError: If the analysis process fails.
-        ResultProcessingError: If the result processing fails.
         StructuralAnalysisError: For general errors in the analysis workflow.
         ValueError: If the analysis type is not supported.
     """
@@ -95,296 +92,198 @@ def analyze_ifc(
         "warnings": [],
         "errors": [],
         "output_files": {},
+        "mesh_statistics": {},
     }
-
-    # Create a mapper to track entity mappings throughout the workflow
-    mapper = DomainToCalculixMapper()
 
     # Ensure output directory exists
     output_dir = ensure_directory(output_dir)
 
-    # Step 1: Extract the structural model from the IFC file
-    logger.info(f"Extracting structural model from {ifc_path}")
-    domain_model = extract_model(ifc_path)
-
-    # Check if the model has any members
-    if not domain_model.members:
-        logger.error("No structural members found in the IFC file")
-        raise ModelExtractionError("No structural members found in the IFC file")
-
-    logger.info(f"Extracted structural model with {len(domain_model.members)} members")
-
-    # Step 2: Configure analysis
-    analysis_config = create_analysis_config(analysis_type)
-    meshing_config = create_meshing_config(mesh_size)
-    system_config = SystemConfig()
-
-    # Use the default shared temporary directory for the analysis
-    work_dir = temp_dir.get_temp_dir()
     try:
-        # Step 3: Convert the domain model to Gmsh geometry
-        logger.info("Converting domain model to Gmsh geometry")
-        geometry_converter = GmshGeometryConverter(
+        # Step 1: Extract the structural model from the IFC file
+        logger.info(f"Extracting structural model from {ifc_path}")
+        domain_model = extract_model(ifc_path)
+
+        # Check if the model has any members
+        if not domain_model.members:
+            logger.error("No structural members found in the IFC file")
+            raise ModelExtractionError("No structural members found in the IFC file")
+
+        logger.info(
+            f"Extracted structural model with {len(domain_model.members)} members"
+        )
+
+        # Step 2: Create configurations
+        analysis_config = create_analysis_config(analysis_type)
+        meshing_config = create_meshing_config(mesh_size)
+        system_config = SystemConfig()
+
+        # Step 3: Define output file paths
+        intermediate_files_dir = os.path.join(output_dir, "intermediate")
+        final_inp_file = os.path.join(output_dir, "analysis.inp")
+
+        # Step 4: Run the unified workflow (Domain Model → Gmsh → CalculiX Input)
+        logger.info("Running unified analysis workflow...")
+
+        unified_inp_file = run_complete_analysis_workflow(
+            domain_model=domain_model,
+            output_inp_file=final_inp_file,
+            analysis_config=analysis_config,
             meshing_config=meshing_config,
-            mapper=None,  # Using a separate mapper for Gmsh to domain mapping
+            system_config=system_config,
+            intermediate_files_dir=intermediate_files_dir,
         )
 
-        geometry_converter.convert_model(domain_model)
+        logger.info(f"Generated unified CalculiX input file: {unified_inp_file}")
 
-        # Step 4: Run the meshing process
-        logger.info("Running meshing process")
-        gmsh_runner = GmshRunner(
-            meshing_config=meshing_config, system_config=system_config
-        )
-
-        success = gmsh_runner.run_meshing()
-        if not success:
-            logger.error("Meshing process failed")
-            raise MeshingError("Meshing process failed")
-
-        # Generate mesh file
-        mesh_file = os.path.join(work_dir, "mesh.msh")
-        gmsh_runner.generate_mesh_file(mesh_file)
-        logger.info(f"Generated mesh file: {mesh_file}")
-
-        # Step 5: Convert mesh to CalculiX input format
-        logger.info("Converting mesh to CalculiX input format")
-        mesh_converter = MeshConverter(domain_model=domain_model, mapper=mapper)
-        inp_file = os.path.join(work_dir, "model.inp")
-        mesh_converter.convert_mesh(mesh_file, inp_file)
-        logger.info(f"Generated CalculiX input file: {inp_file}")
-
-        # Step 6: Generate CalculiX input file with analysis parameters
-        logger.info("Generating CalculiX input file with analysis parameters")
-        input_generator = CalculixInputGenerator(
-            domain_model, analysis_config, inp_file
-        )
-        calculix_input_file = os.path.join(work_dir, "analysis.inp")
-        input_generator.generate_input_file(calculix_input_file)
-        logger.info(f"Generated complete CalculiX input file: {calculix_input_file}")
-
-        # Step 7: Run the CalculiX analysis
-        logger.info("Running CalculiX analysis")
+        # Step 5: Run the CalculiX analysis
+        logger.info("Running CalculiX analysis...")
         calculix_runner = CalculixRunner(
-            calculix_input_file,
+            input_file_path=unified_inp_file,
             system_config=system_config,
             analysis_config=analysis_config,
-            working_dir=work_dir,
-            mapper=mapper,
+            working_dir=output_dir,
         )
 
-        output_files = calculix_runner.run_analysis()
-        logger.info(f"CalculiX analysis completed: {output_files}")
+        calculix_output_files = calculix_runner.run_analysis()
+        logger.info(f"CalculiX analysis completed: {calculix_output_files}")
 
-        # Step 8: Parse results
-        logger.info("Parsing analysis results")
+        # Step 6: Parse results and check for errors/warnings
+        logger.info("Parsing analysis results...")
 
         # Parse output for errors and warnings
-        output_parser = OutputParser(mapper)
+        output_parser = OutputParser()
 
         # Parse the output file or captured output
-        if "message" in output_files:
-            with open(output_files["message"], "r") as f:
+        if "message" in calculix_output_files and os.path.exists(
+            calculix_output_files["message"]
+        ):
+            with open(calculix_output_files["message"], "r") as f:
                 output_text = f.read()
             parse_result = output_parser.parse_output(output_text)
 
             # Add warnings and errors to result
-            result["warnings"] = parse_result["warnings"]
-            result["errors"] = parse_result["errors"]
+            result["warnings"] = parse_result.get("warnings", [])
+            result["errors"] = parse_result.get("errors", [])
 
             # Check if analysis converged
             converged, reason = output_parser.check_convergence(output_text)
 
             if not converged:
                 logger.error(f"Analysis did not converge: {reason}")
-                raise AnalysisError(f"Analysis did not converge: {reason}")
+                result["errors"].append(
+                    {
+                        "message": f"Analysis did not converge: {reason}",
+                        "severity": "critical",
+                        "entity_type": None,
+                        "ccx_id": None,
+                        "domain_id": None,
+                    }
+                )
+                # Don't raise exception here - let user see the results
 
-        # Parse result files
-        results_parser = ResultsParser(domain_model)
-        parsed_results = results_parser.parse_results(output_files)
+        # Parse result files for detailed results
+        if calculix_output_files:
+            try:
+                results_parser = ResultsParser(domain_model)
+                parsed_results = results_parser.parse_results(calculix_output_files)
+                logger.info("Successfully parsed analysis results")
+            except Exception as e:
+                logger.warning(f"Error parsing detailed results: {e}")
+                result["warnings"].append(
+                    {
+                        "message": f"Could not parse detailed results: {str(e)}",
+                        "severity": "warning",
+                        "entity_type": None,
+                        "ccx_id": None,
+                        "domain_id": None,
+                    }
+                )
 
-        # Step 9: Copy output files to output directory
-        for file_type, file_path in output_files.items():
+        # Step 7: Copy output files to output directory and organize them
+        organized_output_files = {}
+
+        # Copy CalculiX result files
+        for file_type, file_path in calculix_output_files.items():
             if os.path.exists(file_path):
-                target_path = os.path.join(output_dir, os.path.basename(file_path))
+                target_filename = f"calculix_output.{file_type}"
+                target_path = os.path.join(output_dir, target_filename)
                 shutil.copy2(file_path, target_path)
-                output_files[file_type] = target_path
+                organized_output_files[file_type] = target_path
+                logger.debug(f"Copied {file_type} file to {target_path}")
 
-        # Add output files to result
-        result["output_files"] = output_files
+        # Copy the main input file if it's not already in output_dir
+        if unified_inp_file != final_inp_file and os.path.exists(unified_inp_file):
+            shutil.copy2(unified_inp_file, final_inp_file)
+        organized_output_files["input"] = final_inp_file
 
-        # Mark as success if no errors were found
-        if not result["errors"]:
+        # Copy intermediate files if they exist
+        if os.path.exists(intermediate_files_dir):
+            for filename in os.listdir(intermediate_files_dir):
+                if filename.endswith((".msh", ".geo", ".map.json")):
+                    src_path = os.path.join(intermediate_files_dir, filename)
+                    dst_path = os.path.join(output_dir, filename)
+                    shutil.copy2(src_path, dst_path)
+                    organized_output_files[f"intermediate_{filename}"] = dst_path
+
+        # Add organized output files to result
+        result["output_files"] = organized_output_files
+
+        # Step 8: Add mesh statistics if available
+        # Note: In future versions, this could be extracted from the unified writer
+        result["mesh_statistics"] = {
+            "mesh_file_size": _get_file_size(
+                organized_output_files.get("intermediate_mesh.msh")
+            ),
+            "input_file_size": _get_file_size(final_inp_file),
+            "analysis_type": analysis_type,
+            "mesh_size": mesh_size,
+        }
+
+        # Step 9: Determine final status
+        if result["errors"]:
+            # Check if errors are critical
+            critical_errors = [
+                e for e in result["errors"] if e.get("severity") == "critical"
+            ]
+            if critical_errors:
+                result["status"] = "failed"
+                logger.error(
+                    f"Analysis failed with {len(critical_errors)} critical errors"
+                )
+            else:
+                result["status"] = "completed_with_errors"
+                logger.warning(
+                    f"Analysis completed with {len(result['errors'])} non-critical errors"
+                )
+        else:
             result["status"] = "success"
+            logger.info("Analysis completed successfully")
 
-    finally:
-        # No need to explicitly clean up the temporary directory
-        # unless we want to force cleanup before the program exits
-        pass
+        return result
 
-    return result
+    except ModelExtractionError:
+        # Re-raise model extraction errors
+        raise
 
-
-def run_enhanced_analysis(
-    ifc_path: str,
-    output_dir: str,
-    analysis_type: str = "linear_static",
-    mesh_size: float = 0.1,
-    verbose: bool = False,
-) -> Dict[str, Any]:
-    """
-    Run an enhanced structural analysis on an IFC file with improved boundary condition
-    and load handling.
-
-    Args:
-        ifc_path (str): Path to the IFC file to analyze.
-        output_dir (str): Directory where the analysis results will be saved.
-        analysis_type (str): Type of structural analysis to perform.
-        mesh_size (float): Size of the mesh elements.
-        verbose (bool): Whether to print verbose output.
-
-    Returns:
-        Dict[str, Any]: Dictionary containing the analysis results and output file paths.
-
-    Raises:
-        StructuralAnalysisError: If an error occurs during the analysis.
-    """
-    try:
-        # Step 1: Extract the structural model from the IFC file
-        # This uses the existing IFC extraction functionality
-        logger.info(f"Extracting structural model from {ifc_path}")
-
-        # Call the existing analyze_ifc function but intercept its output
-        result = analyze_ifc(
-            ifc_path=ifc_path,
-            output_dir=output_dir,
-            analysis_type=analysis_type,
-            mesh_size=mesh_size,
-            verbose=verbose,
+    except (MeshingError, AnalysisError) as e:
+        # Handle known analysis errors
+        logger.error(f"Analysis workflow error: {str(e)}")
+        result["errors"].append(
+            {
+                "message": str(e),
+                "severity": "critical",
+                "entity_type": None,
+                "ccx_id": None,
+                "domain_id": None,
+            }
         )
-
-        # Check the results to see if we need to enhance the analysis
-        if result["status"] == "success":
-            # The analysis completed, but we need to check if it had proper boundary conditions
-            # and loads. If not, we'll need to reprocess the output files.
-
-            # Path to the CalculiX input file
-            inp_file = next(
-                (v for k, v in result["output_files"].items() if k == "data"), None
-            )
-
-            if inp_file and os.path.exists(inp_file):
-                # Check if the file contains boundary conditions and loads
-                with open(inp_file, "r") as f:
-                    content = f.read()
-
-                has_boundary_conditions = "*BOUNDARY" in content
-                has_loads = "*CLOAD" in content or "*DLOAD" in content
-                has_analysis_steps = "*STEP" in content and "*END STEP" in content
-
-                if not (has_boundary_conditions and has_loads and has_analysis_steps):
-                    logger.warning(
-                        "Original analysis missing proper boundary conditions, loads, or analysis steps"
-                    )
-                    logger.info("Enhancing the analysis with improved handling")
-
-                    # We need to enhance the analysis by adding proper boundary conditions and loads
-                    # This would involve reprocessing the domain model and generating a new input file
-                    enhanced_result = _enhance_analysis(
-                        result, ifc_path, output_dir, analysis_type
-                    )
-
-                    # Return the enhanced result
-                    return enhanced_result
-
-        # If we get here, either the analysis failed or it completed successfully with proper
-        # boundary conditions and loads, so we return the original result
+        result["status"] = "failed"
         return result
 
     except Exception as e:
-        logger.error(f"Error in enhanced analysis: {str(e)}")
-        raise StructuralAnalysisError(f"Enhanced analysis failed: {str(e)}")
-
-
-def _enhance_analysis(
-    original_result: Dict,
-    ifc_path: str,
-    output_dir: str,
-    analysis_type: str = "linear_static",
-) -> Dict:
-    """
-    Enhance an existing analysis by adding proper boundary conditions and loads.
-
-    Args:
-        original_result (Dict): The result from the original analysis.
-        ifc_path (str): Path to the IFC file.
-        output_dir (str): Directory where the enhanced analysis results will be saved.
-        analysis_type (str): Type of structural analysis to perform.
-
-    Returns:
-        Dict: Dictionary containing the enhanced analysis results and output file paths.
-    """
-    try:
-        # Create a backup of the original files
-        backup_dir = os.path.join(output_dir, "original_backup")
-        os.makedirs(backup_dir, exist_ok=True)
-
-        for file_type, file_path in original_result["output_files"].items():
-            if os.path.exists(file_path):
-                backup_path = os.path.join(backup_dir, os.path.basename(file_path))
-                shutil.copy2(file_path, backup_path)
-                logger.info(f"Backed up {file_type} to {backup_path}")
-
-        # Get the paths to key files
-        inp_file = original_result["output_files"].get("data", "")
-        frd_file = original_result["output_files"].get("results", "")
-
-        # Create enhanced input file with proper boundary conditions and loads
-        enhanced_inp_file = os.path.join(output_dir, "enhanced_model.inp")
-
-        # Extract the structural model
-        model = extract_model(ifc_path)
-
-        # Ensure the model has all the necessary components
-        if not model.members:
-            logger.warning("No structural members found in the model")
-            return original_result
-
-        # Check if the model has connections (supports)
-        if not model.connections:
-            logger.warning("No structural connections found in the model")
-            # This is where we could infer supports from the geometry
-            # For example, find nodes at y=0 and add fixed supports
-
-        # Generate enhanced CalculiX input file
-        input_generator = CalculixInputGenerator(model)
-        enhanced_inp_file = input_generator.generate_input_file(enhanced_inp_file)
-
-        # Run CalculiX with the enhanced input file
-        calculix_runner = CalculixRunner(enhanced_inp_file)
-        result_files = calculix_runner.run_analysis()
-
-        # Update the result
-        enhanced_result = original_result.copy()
-        enhanced_result["output_files"] = result_files
-        enhanced_result["status"] = "success" if result_files else "failed"
-
-        # Add a note about the enhancement
-        if "notes" not in enhanced_result:
-            enhanced_result["notes"] = []
-        enhanced_result["notes"].append(
-            "Analysis enhanced with improved boundary condition and load handling"
-        )
-
-        return enhanced_result
-
-    except Exception as e:
-        logger.error(f"Error enhancing analysis: {str(e)}")
-        # If enhancement fails, return the original result with a note
-        original_result["notes"] = original_result.get("notes", []) + [
-            f"Failed to enhance analysis: {str(e)}"
-        ]
-        return original_result
+        # Handle unexpected errors
+        logger.error(f"Unexpected error in analysis workflow: {str(e)}")
+        raise StructuralAnalysisError(f"Analysis workflow failed: {str(e)}") from e
 
 
 def extract_model(ifc_path: str) -> StructuralModel:
@@ -410,35 +309,6 @@ def extract_model(ifc_path: str) -> StructuralModel:
         return model
     except Exception as e:
         raise ModelExtractionError(f"Failed to extract model from IFC file: {str(e)}")
-
-
-def get_entity_mapping(
-    domain_model: StructuralModel, calculix_input: str
-) -> DomainToCalculixMapper:
-    """
-    Get the mapping between CalculiX entities and IFC entities.
-
-    Args:
-        domain_model (StructuralModel): The domain model.
-        calculix_input (str): Path to the CalculiX input file.
-
-    Returns:
-        DomainToCalculixMapper: The entity mapper.
-
-    Raises:
-        StructuralAnalysisError: If the mapping fails.
-    """
-    try:
-        # Create a mesh converter which will establish the mapping
-        mesh_converter = MeshConverter(domain_model)
-
-        # Convert the mesh to establish the mapping
-        mesh_converter.convert_mesh(calculix_input, calculix_input + ".tmp")
-
-        # Return the mapper
-        return mesh_converter.get_mapper()
-    except Exception as e:
-        raise StructuralAnalysisError(f"Failed to get entity mapping: {str(e)}")
 
 
 def create_analysis_config(analysis_type: str) -> AnalysisConfig:
@@ -500,3 +370,81 @@ def create_meshing_config(mesh_size: float) -> MeshingConfig:
     config.validate()
 
     return config
+
+
+def _get_file_size(file_path: Optional[str]) -> Optional[int]:
+    """
+    Get the size of a file in bytes.
+
+    Args:
+        file_path: Path to the file
+
+    Returns:
+        File size in bytes, or None if file doesn't exist
+    """
+    if not file_path:
+        return None
+
+    try:
+        if os.path.exists(file_path):
+            return os.path.getsize(file_path)
+    except (OSError, FileNotFoundError):
+        # File might have been moved or deleted, return None
+        pass
+
+    return None
+
+
+# Simplified convenience function for common use cases
+def analyze_ifc_simple(ifc_path: str, output_dir: str) -> bool:
+    """
+    Simplified analysis function for basic use cases.
+
+    Args:
+        ifc_path (str): Path to the IFC file to analyze
+        output_dir (str): Directory where results will be saved
+
+    Returns:
+        bool: True if analysis succeeded, False otherwise
+    """
+    try:
+        result = analyze_ifc(ifc_path, output_dir)
+        return result["status"] == "success"
+    except Exception as e:
+        logger.error(f"Simple analysis failed: {e}")
+        return False
+
+
+# Migration helper for existing code
+def run_enhanced_analysis(
+    ifc_path: str,
+    output_dir: str,
+    analysis_type: str = "linear_static",
+    mesh_size: float = 0.1,
+    verbose: bool = False,
+) -> Dict[str, Any]:
+    """
+    Enhanced analysis function - now just calls the unified analyze_ifc.
+
+    This function is kept for backward compatibility but now uses the
+    simplified unified workflow internally.
+
+    Args:
+        ifc_path (str): Path to the IFC file to analyze.
+        output_dir (str): Directory where the analysis results will be saved.
+        analysis_type (str): Type of structural analysis to perform.
+        mesh_size (float): Size of the mesh elements.
+        verbose (bool): Whether to print verbose output.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing the analysis results and output file paths.
+    """
+    logger.info("Using unified analysis workflow (enhanced analysis is now standard)")
+
+    return analyze_ifc(
+        ifc_path=ifc_path,
+        output_dir=output_dir,
+        analysis_type=analysis_type,
+        mesh_size=mesh_size,
+        verbose=verbose,
+    )

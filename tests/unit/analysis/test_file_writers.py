@@ -7,9 +7,8 @@ file sections according to expected formats and requirements.
 
 import io
 import unittest
-from unittest.mock import Mock, patch, MagicMock, PropertyMock
+from unittest.mock import Mock, patch, PropertyMock
 import numpy as np
-from typing import Dict, List, Tuple, Any, Optional
 
 from ifc_structural_mechanics.analysis import file_writers
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
