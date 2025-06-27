@@ -113,27 +113,34 @@ class GmshResourceManager:
         """
         Finalize Gmsh if we were the ones who initialized it.
         """
-        if self._initialized and self._we_initialized:
-            try:
-                # Clear the model first to clean up resources properly
-                if gmsh.isInitialized():
-                    try:
-                        gmsh.clear()
-                    except Exception:
-                        pass  # Ignore errors during clear
+        # Make the method idempotent - safe to call multiple times
+        if not (self._initialized and self._we_initialized):
+            return  # Already finalized or we didn't initialize
 
-                    # Then finalize
-                    gmsh.finalize()
+        try:
+            # Clear the model first to clean up resources properly
+            if gmsh.isInitialized():
+                try:
+                    gmsh.clear()
+                except Exception:
+                    pass  # Ignore errors during clear
 
-                self._initialized = False
-                self._we_initialized = False
-                logger.debug("Gmsh finalized successfully")
-            except Exception as e:
-                # Only log in non-test environments to avoid noise
-                import sys
+                # Then finalize
+                gmsh.finalize()
 
-                if "pytest" not in sys.modules and "unittest" not in sys.modules:
-                    logger.warning(f"Error finalizing Gmsh: {e}")
+            # Only reset state on SUCCESS (preserves original behavior)
+            self._initialized = False
+            self._we_initialized = False
+            logger.debug("Gmsh finalized successfully")
+        except Exception as e:
+            # On exception, DON'T reset state - this preserves the original behavior
+            # that the tests expect (manager should remain in initialized state if finalization fails)
+
+            # Only log in non-test environments to avoid noise
+            import sys
+
+            if "pytest" not in sys.modules and "unittest" not in sys.modules:
+                logger.warning(f"Error finalizing Gmsh: {e}")
 
     def is_initialized(self) -> bool:
         """

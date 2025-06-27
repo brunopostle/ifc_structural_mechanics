@@ -228,8 +228,8 @@ class TestEnhancedCalculixInputGenerator:
         assert "*BOUNDARY" in write_args_str, "Boundary condition definition missing"
 
     def test_loads(self):
-        """Test writing of load definitions with the new approach."""
-        # Prepare node coordinates for testing
+        """Test writing of load definitions with the correct approach."""
+        # Prepare node coordinates for testing (though not used by write_analysis_steps)
         node_coords = {
             1: (0, 0, 0),  # Fixed support at start
             2: (5, 0, 0),  # End of beam
@@ -239,27 +239,30 @@ class TestEnhancedCalculixInputGenerator:
         # Mock the file operations
         file_mock = MagicMock()
 
-        # Call the enhanced function directly
-        write_loads(
-            file_mock,
-            self.model,
-            self.generator.node_sets,
-            self.generator.element_sets,
-            node_coords,
-        )
+        # Call the function that actually writes loads (within analysis steps)
+        write_analysis_steps(file_mock, self.model, "linear_static")
 
         # Get the arguments passed to write
         write_args = [call[0][0] for call in file_mock.write.call_args_list]
         write_args_str = "\n".join(write_args)
 
-        # Check for load definitions
-        assert "** Load Group: Main Loads" in write_args_str, "Load group missing"
+        # Debug: Print what was actually written
+        print("DEBUG - Analysis steps output:")
+        print(write_args_str)
 
-        # Check for either point or area load definitions
+        # Check for load definitions within the analysis step
+        assert (
+            "** Load Group: Main Loads" in write_args_str
+        ), f"Load group missing in: {write_args_str}"
+
+        # Check for load directives
         load_types = ["*CLOAD", "*DLOAD"]
-        assert any(
-            load_type in write_args_str for load_type in load_types
-        ), "No load definitions found"
+        has_loads = any(load_type in write_args_str for load_type in load_types)
+        assert has_loads, f"No load definitions found. Output: {write_args_str}"
+
+        # Check for analysis step structure
+        assert "*STEP" in write_args_str, "Analysis step missing"
+        assert "*END STEP" in write_args_str, "End step missing"
 
     def test_generate_real_file(self):
         """Test generation of an actual file on disk with the new approach."""

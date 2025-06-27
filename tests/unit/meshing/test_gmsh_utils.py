@@ -32,6 +32,8 @@ class TestGmshResourceManager(unittest.TestCase):
             finalize=mock.DEFAULT,
             option=mock.DEFAULT,
             model=mock.DEFAULT,
+            isInitialized=mock.DEFAULT,
+            clear=mock.DEFAULT,
         )
 
         # Start all patches
@@ -42,6 +44,9 @@ class TestGmshResourceManager(unittest.TestCase):
 
         # Configure mock_gmsh.model.add
         self.mock_gmsh["model"].add = mock.Mock()
+
+        # Configure mock_gmsh.isInitialized to return True by default
+        self.mock_gmsh["isInitialized"].return_value = True
 
     def tearDown(self):
         """Clean up after each test."""
@@ -88,21 +93,16 @@ class TestGmshResourceManager(unittest.TestCase):
         manager._initialized = True
         manager._we_initialized = True
 
-        # Mock gmsh.isInitialized to return True
-        with mock.patch("gmsh.isInitialized", return_value=True), mock.patch(
-            "gmsh.clear"
-        ) as mock_clear, mock.patch("gmsh.finalize") as mock_finalize:
+        # Call finalize
+        manager.finalize()
 
-            # Call finalize
-            manager.finalize()
+        # Verify clear and finalize were called
+        self.mock_gmsh["clear"].assert_called_once()
+        self.mock_gmsh["finalize"].assert_called_once()
 
-            # Verify clear and finalize were called
-            mock_clear.assert_called_once()
-            mock_finalize.assert_called_once()
-
-            # Verify state is reset
-            self.assertFalse(manager.is_initialized())
-            self.assertFalse(manager._we_initialized)
+        # Verify state is reset
+        self.assertFalse(manager.is_initialized())
+        self.assertFalse(manager._we_initialized)
 
     def test_setup_model(self):
         """Test setting up a Gmsh model."""
@@ -120,26 +120,89 @@ class TestGmshResourceManager(unittest.TestCase):
         self.assertTrue(result)
 
     def test_finalize_in_test_environment(self):
-        """Test that finalize works properly in test environments."""
+        """Test that finalize works properly when an exception occurs and logs appropriately."""
         manager = GmshResourceManager(auto_initialize=False)
 
         # Set up the internal state as if we had initialized
         manager._initialized = True
         manager._we_initialized = True
 
-        # Mock sys.modules to NOT include pytest (simulating non-test environment)
-        with mock.patch("sys.modules", {"some_module": mock.Mock()}), mock.patch(
-            "gmsh.isInitialized", return_value=True
-        ), mock.patch("gmsh.clear") as mock_clear, mock.patch(
-            "gmsh.finalize"
-        ) as mock_finalize:
+        # Call finalize
+        manager.finalize()
 
-            # Call finalize
+        # Verify clear and finalize were called
+        self.mock_gmsh["clear"].assert_called_once()
+        self.mock_gmsh["finalize"].assert_called_once()
+
+        # Verify state is reset
+        self.assertFalse(manager.is_initialized())
+        self.assertFalse(manager._we_initialized)
+
+    def test_finalize_with_exception_handling(self):
+        """Test that finalize handles exceptions gracefully and respects test environment."""
+        manager = GmshResourceManager(auto_initialize=False)
+
+        # Set up the internal state as if we had initialized
+        manager._initialized = True
+        manager._we_initialized = True
+
+        # Make gmsh.finalize raise an exception
+        # This will trigger the exception handling path where sys.modules is checked
+        self.mock_gmsh["finalize"].side_effect = Exception("Test exception")
+
+        with mock.patch(
+            "ifc_structural_mechanics.meshing.gmsh_utils.logger"
+        ) as mock_logger:
+
+            # Call finalize - should handle the exception gracefully
             manager.finalize()
 
-            # Verify clear and finalize were called in non-test environment
-            mock_clear.assert_called_once()
-            mock_finalize.assert_called_once()
+            # Verify clear and finalize were called
+            self.mock_gmsh["clear"].assert_called_once()
+            self.mock_gmsh["finalize"].assert_called_once()
+
+            # In a test environment, the warning should NOT be logged
+            # (because pytest is in sys.modules)
+            mock_logger.warning.assert_not_called()
+
+            # When finalize() raises an exception, the state should NOT be reset
+            # because the state reset code is inside the try block
+            self.assertTrue(manager.is_initialized())
+            self.assertTrue(manager._we_initialized)
+
+    def test_finalize_with_exception_logs_in_non_test_environment(self):
+        """Test that finalize logs exceptions when not in a test environment."""
+        manager = GmshResourceManager(auto_initialize=False)
+
+        # Set up the internal state as if we had initialized
+        manager._initialized = True
+        manager._we_initialized = True
+
+        # Create a mock sys module without pytest/unittest
+        mock_sys_modules = {"some_module": mock.Mock()}
+
+        # Make gmsh.finalize raise an exception
+        self.mock_gmsh["finalize"].side_effect = Exception("Test exception")
+
+        with mock.patch(
+            "ifc_structural_mechanics.meshing.gmsh_utils.logger"
+        ) as mock_logger:
+
+            # Patch the sys import inside the finalize method
+            with mock.patch("sys.modules", mock_sys_modules):
+                # Call finalize - should handle the exception gracefully
+                manager.finalize()
+
+            # Verify clear and finalize were called exactly once each
+            self.mock_gmsh["clear"].assert_called_once()
+            self.mock_gmsh["finalize"].assert_called_once()
+
+            # In a non-test environment, the warning SHOULD be logged
+            mock_logger.warning.assert_called_once()
+
+            # When finalize() raises an exception, the state should NOT be reset
+            self.assertTrue(manager.is_initialized())
+            self.assertTrue(manager._we_initialized)
 
     def test_context_manager(self):
         """Test using GmshResourceManager as a context manager."""
@@ -148,17 +211,13 @@ class TestGmshResourceManager(unittest.TestCase):
             "Gmsh has not been initialized"
         )
 
-        with mock.patch("gmsh.isInitialized", return_value=True), mock.patch(
-            "gmsh.clear"
-        ) as mock_clear, mock.patch("gmsh.finalize") as mock_finalize:
+        with GmshResourceManager() as manager:
+            self.assertTrue(manager.is_initialized())
 
-            with GmshResourceManager() as manager:
-                self.assertTrue(manager.is_initialized())
-
-            # Verify initialize, clear, and finalize were called
-            self.mock_gmsh["initialize"].assert_called_once()
-            mock_clear.assert_called_once()
-            mock_finalize.assert_called_once()
+        # Verify initialize, clear, and finalize were called
+        self.mock_gmsh["initialize"].assert_called_once()
+        self.mock_gmsh["clear"].assert_called_once()
+        self.mock_gmsh["finalize"].assert_called_once()
 
     def test_context_manager_in_test_environment(self):
         """Test context manager behavior in test environment (should suppress cleanup)."""
@@ -194,13 +253,14 @@ class TestGmshResourceManager(unittest.TestCase):
         manager._we_initialized = True
 
         # Mock gmsh.isInitialized to return False
-        with mock.patch("gmsh.isInitialized", return_value=False):
-            # Should not raise an exception
-            manager.finalize()
+        self.mock_gmsh["isInitialized"].return_value = False
 
-            # State should still be reset
-            self.assertFalse(manager.is_initialized())
-            self.assertFalse(manager._we_initialized)
+        # Should not raise an exception
+        manager.finalize()
+
+        # State should still be reset
+        self.assertFalse(manager.is_initialized())
+        self.assertFalse(manager._we_initialized)
 
 
 class TestGmshGeometryHelper(unittest.TestCase):
