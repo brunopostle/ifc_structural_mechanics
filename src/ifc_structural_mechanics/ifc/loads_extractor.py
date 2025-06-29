@@ -1,5 +1,5 @@
 """
-Loads extractor for IFC4 structural analysis models - FIXED VERSION.
+Loads extractor for IFC4 structural analysis models - CLEANED VERSION.
 
 This module contains the LoadsExtractor class which is responsible for
 extracting structural loads, load groups, and load combinations from IFC files
@@ -75,12 +75,10 @@ class LoadsExtractor:
                 "ifc_file must be a file path or an ifcopenshell.file object"
             )
 
-        # Store unit scales
+        # Store unit scales - only keep the ones actually used
         self.unit_scales = unit_scales or {}
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
-        self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
-        self.moment_scale = self.unit_scales.get("MOMENTUNIT", 1.0)
 
         # Cache for already extracted loads to avoid duplications
         self._load_cache = {}
@@ -579,17 +577,7 @@ class LoadsExtractor:
                     force_vector = [f * self.force_scale for f in force_vector]
 
                 # Find related surface
-                # FIXME this is a hard-coded globalid, so completely wrong
-                surface_ref = "0ufrSuxdDDj9OVSMUAKIdq"  # Default
-
-                # Try to find related structural members through AppliedOn
-                if hasattr(ifc_load, "AppliedOn"):
-                    for rel in ifc_load.AppliedOn:
-                        if hasattr(rel, "RelatingElement"):
-                            element = rel.RelatingElement
-                            if hasattr(element, "GlobalId"):
-                                surface_ref = element.GlobalId
-                                break
+                surface_ref = self._get_surface_reference(ifc_load)
 
                 # Calculate direction
                 magnitude = np.array(force_vector, dtype=float)
@@ -615,26 +603,34 @@ class LoadsExtractor:
             self.logger.error(f"Error creating domain load: {e}")
             return None
 
-    def _is_structural_load(self, entity):
-        """Check if an entity is a structural load."""
-        if entity is None:
-            return False
+    def _get_surface_reference(self, ifc_load) -> str:
+        """
+        Get the surface reference for an area load.
 
+        Args:
+            ifc_load: IFC area load entity
+
+        Returns:
+            ID of the referenced surface
+        """
         try:
-            if not hasattr(entity, "is_a") or not callable(entity.is_a):
-                return False
+            # Try to find the associated structural surface using IFC4 pattern
+            if hasattr(ifc_load, "AppliedOn"):
+                for applied_rel in ifc_load.AppliedOn:
+                    if hasattr(applied_rel, "RelatingElement"):
+                        element = applied_rel.RelatingElement
+                        if hasattr(element, "GlobalId"):
+                            return element.GlobalId
 
-            load_types = [
-                "IfcStructuralPointAction",
-                "IfcStructuralLinearAction",
-                "IfcStructuralPlanarAction",
-                "IfcStructuralLoadCase",
-            ]
+            # Fallback to a default reference
+            self.logger.warning(
+                f"Could not find surface reference for load {getattr(ifc_load, 'GlobalId', 'unknown')}, using default"
+            )
+            return "default_surface"
 
-            return entity.is_a() in load_types
         except Exception as e:
-            self.logger.warning(f"Error checking if entity is structural load: {e}")
-            return False
+            self.logger.warning(f"Error getting surface reference: {e}, using default")
+            return "default_surface"
 
     def _extract_load_position(self, ifc_load) -> List[float]:
         """
@@ -772,13 +768,13 @@ class LoadsExtractor:
                                         ]
 
             # Final fallback
-            logger.warning(
+            self.logger.warning(
                 f"Could not extract precise location for load {getattr(ifc_load, 'GlobalId', 'unknown')}"
             )
             return [0.0, 0.0, 0.0]
 
         except Exception as e:
-            logger.error(f"Error extracting load position: {e}")
+            self.logger.error(f"Error extracting load position: {e}")
             return [0.0, 0.0, 0.0]
 
     def _extract_load_line(self, ifc_load) -> Tuple[List[float], List[float]]:
@@ -802,7 +798,6 @@ class LoadsExtractor:
                     if hasattr(applied_rel, "RelatingElement"):
                         element = applied_rel.RelatingElement
                         try:
-
                             endpoints = find_member_endpoints(
                                 element, self.length_scale
                             )
@@ -828,140 +823,6 @@ class LoadsExtractor:
                 f"Error extracting line load endpoints: {e}, using defaults"
             )
             return [0.0, 0.0, 0.0], [10.0 * self.length_scale, 0.0, 0.0]
-
-    def _extract_surface_reference(self, ifc_load) -> str:
-        """
-        Extract the surface reference for an area load.
-
-        Args:
-            ifc_load: IFC area load entity
-
-        Returns:
-            ID of the referenced surface
-        """
-        try:
-            # Default reference ID
-            # FIXME this is a hard-coded globalid, so completely wrong
-            surface_ref = "0ufrSuxdDDj9OVSMUAKIdq"
-
-            # Try to find the associated structural surface using IFC4 pattern
-            if hasattr(ifc_load, "AppliedOn"):
-                for applied_rel in ifc_load.AppliedOn:
-                    if hasattr(applied_rel, "RelatingElement"):
-                        element = applied_rel.RelatingElement
-                        if hasattr(element, "GlobalId"):
-                            surface_ref = element.GlobalId
-                            break
-
-            return surface_ref
-
-        except Exception as e:
-            self.logger.warning(
-                f"Error extracting surface reference: {e}, using default"
-            )
-            # FIXME this is a hard-coded globalid, so completely wrong
-            return "0ufrSuxdDDj9OVSMUAKIdq"
-
-    def _is_linear_distribution(self, ifc_load) -> bool:
-        """
-        Determine if a load has a linear distribution.
-
-        Args:
-            ifc_load: IFC load entity
-
-        Returns:
-            True if the load has a linear distribution, False otherwise
-        """
-        try:
-            # IFC4 pattern to check for attributes that indicate linear distribution
-            if hasattr(ifc_load, "VaryingAppliedLoadLocation"):
-                return True
-
-            # Check for specific distribution type attribute in IFC4
-            if hasattr(ifc_load, "DistributionType"):
-                dist_type = ifc_load.DistributionType
-                return dist_type in ["LINEAR", "LINEARLY_VARYING"]
-
-            return False
-
-        except Exception as e:
-            self.logger.warning(
-                f"Error determining load distribution: {e}, assuming uniform"
-            )
-            return False
-
-    def _extract_linear_magnitudes(self, ifc_load) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Extract start and end magnitudes for a linearly varying load.
-
-        Args:
-            ifc_load: IFC load entity with linear distribution
-
-        Returns:
-            Tuple of (start_magnitude, end_magnitude)
-        """
-        try:
-            # Default to using the main magnitude for both
-            main_mag, _ = self._extract_load_vector(ifc_load)
-            start_mag = main_mag
-            end_mag = main_mag
-
-            # Try to extract specific start/end values if available (IFC4 pattern)
-            if hasattr(ifc_load, "VaryingAppliedLoadLocation"):
-                varying = ifc_load.VaryingAppliedLoadLocation
-
-                # Extract start magnitude
-                if hasattr(varying, "StartPointLoad"):
-                    start_load = varying.StartPointLoad
-                    if (
-                        hasattr(start_load, "ForceX")
-                        or hasattr(start_load, "ForceY")
-                        or hasattr(start_load, "ForceZ")
-                    ):
-                        # Extract force components directly from the start load
-                        force_x = float(getattr(start_load, "ForceX", 0.0) or 0.0)
-                        force_y = float(getattr(start_load, "ForceY", 0.0) or 0.0)
-                        force_z = float(getattr(start_load, "ForceZ", 0.0) or 0.0)
-
-                        # Build force vector
-                        start_mag = np.array([force_x, force_y, force_z], dtype=float)
-
-                        # Apply force scale
-                        start_mag = start_mag * self.force_scale
-                    else:
-                        # Use the _extract_load_vector method as fallback
-                        start_mag, _ = self._extract_load_vector(start_load)
-
-                # Extract end magnitude
-                if hasattr(varying, "EndPointLoad"):
-                    end_load = varying.EndPointLoad
-                    if (
-                        hasattr(end_load, "ForceX")
-                        or hasattr(end_load, "ForceY")
-                        or hasattr(end_load, "ForceZ")
-                    ):
-                        # Extract force components directly from the end load
-                        force_x = float(getattr(end_load, "ForceX", 0.0) or 0.0)
-                        force_y = float(getattr(end_load, "ForceY", 0.0) or 0.0)
-                        force_z = float(getattr(end_load, "ForceZ", 0.0) or 0.0)
-
-                        # Build force vector
-                        end_mag = np.array([force_x, force_y, force_z], dtype=float)
-
-                        # Apply force scale
-                        end_mag = end_mag * self.force_scale
-                    else:
-                        # Use the _extract_load_vector method as fallback
-                        end_mag, _ = self._extract_load_vector(end_load)
-
-            return start_mag, end_mag
-
-        except Exception as e:
-            self.logger.warning(
-                f"Error extracting linear magnitudes: {e}, using main magnitude"
-            )
-            main_mag, _ = self._extract_load_vector(ifc_load)
-            return main_mag, main_mag
 
     def _extract_load_vector(self, ifc_load):
         """

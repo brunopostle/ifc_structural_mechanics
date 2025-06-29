@@ -705,47 +705,6 @@ def find_closest_node(
     return closest_node
 
 
-def extract_curve_endpoints(geometry: Any) -> List[List[float]]:
-    """
-    Extract endpoints from curve geometry.
-
-    Args:
-        geometry (Any): The geometry representation of a curve.
-
-    Returns:
-        List[List[float]]: List of curve endpoint coordinates.
-    """
-    # Case 1: Tuple of two points (start, end)
-    if (
-        isinstance(geometry, tuple)
-        and len(geometry) == 2
-        and all(isinstance(p, (list, tuple, np.ndarray)) for p in geometry)
-    ):
-        return [list(geometry[0]), list(geometry[1])]
-
-    # Case 2: List of points
-    if isinstance(geometry, list):
-        if all(
-            isinstance(p, (list, tuple, np.ndarray)) and len(p) == 3 for p in geometry
-        ):
-            return [list(geometry[0]), list(geometry[-1])]
-
-    # Case 3: Dictionary format with "boundaries"
-    if isinstance(geometry, dict) and "boundaries" in geometry:
-        boundaries = geometry.get("boundaries", [])
-        if boundaries and isinstance(boundaries[0], list):
-            return [list(boundaries[0][0]), list(boundaries[0][-1])]
-
-    # Case 4: Dictionary with specific start/end
-    if isinstance(geometry, dict) and "type" in geometry:
-        if geometry["type"] == "line" and "start" in geometry and "end" in geometry:
-            return [list(geometry["start"]), list(geometry["end"])]
-
-    # If none of the formats match, return an empty list
-    logger.warning(f"Could not extract endpoints from geometry: {geometry}")
-    return []
-
-
 def _write_validated_loads_within_step(
     file: TextIO, domain_model: StructuralModel
 ) -> bool:

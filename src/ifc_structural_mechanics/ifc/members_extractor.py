@@ -85,9 +85,6 @@ class MembersExtractor:
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
 
-        # Tolerance for geometry calculations
-        self.tol = 1e-06
-
     def extract_all_members(self) -> List[StructuralMember]:
         """
         Extract all structural members from the IFC file.
@@ -190,60 +187,6 @@ class MembersExtractor:
 
         self.logger.info(f"Extracted {len(surface_members)} surface members")
         return surface_members
-
-    def extract_member_by_id(self, entity_id: str) -> Optional[StructuralMember]:
-        """
-        Extract a specific member by its ID.
-
-        Args:
-            entity_id (str): ID of the entity to extract
-
-        Returns:
-            Optional[StructuralMember]: The extracted member or None if not a valid structural member
-        """
-        try:
-            # Get the entity by ID
-            logger.info(f"Extracting member with ID {entity_id}")
-
-            # First try to find by GlobalId
-            entity = None
-            for entity_type in [
-                "IfcStructuralCurveMember",
-                "IfcStructuralSurfaceMember",
-            ]:
-                for ent in self.ifc.by_type(entity_type):
-                    if ent.GlobalId == entity_id:
-                        entity = ent
-                        break
-                if entity:
-                    break
-
-            # If not found by GlobalId, try by ID
-            if not entity:
-                try:
-                    entity = self.ifc.by_id(entity_id)
-                except:
-                    logger.warning(f"Failed to get entity by ID {entity_id}")
-                    return None
-
-            # Check if it's a structural member
-            if not is_structural_member(entity):
-                logger.warning(f"Entity {entity_id} is not a structural member")
-                return None
-
-            # Check if it's a curve or surface member
-            if is_structural_curve_member(entity):
-                return self._create_curve_member(entity)
-            elif is_structural_surface_member(entity):
-                return self._create_surface_member(entity)
-
-            # If neither curve nor surface, return None
-            logger.warning(f"Entity {entity_id} is not a valid curve or surface member")
-            return None
-
-        except Exception as e:
-            logger.error(f"Error extracting member by ID {entity_id}: {e}")
-            return None
 
     def _create_curve_member(self, entity) -> Optional[CurveMember]:
         """

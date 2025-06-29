@@ -246,14 +246,25 @@ class TestConnectionsExtractor:
 
             # Create a mock wrappedValue for each stiffness
             point_connection.AppliedCondition = MagicMock()
+
+            # FIXED: Set up BOTH translational AND rotational stiffness
             for ax, value in zip(["X", "Y", "Z"], stiffness_values):
-                # Set up the stiffness with a mock wrappedValue
+                # Set up the translational stiffness with a mock wrappedValue
                 stiffness_mock = MagicMock()
                 stiffness_mock.wrappedValue = value
                 setattr(
                     point_connection.AppliedCondition,
                     f"TranslationalStiffness{ax}",
                     stiffness_mock,
+                )
+
+                # FIXED: Also set up rotational stiffness with numeric values
+                rot_stiffness_mock = MagicMock()
+                rot_stiffness_mock.wrappedValue = 1.0  # Set to numeric value, not mock
+                setattr(
+                    point_connection.AppliedCondition,
+                    f"RotationalStiffness{ax}",
+                    rot_stiffness_mock,
                 )
 
             # Create domain connection

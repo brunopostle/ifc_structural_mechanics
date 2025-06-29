@@ -178,6 +178,8 @@ class Extractor:
             # Extract loads and load groups
             self._extract_loads_for_model(model)
 
+            self._extract_properties_for_model(model)
+
         else:
             self.logger.info(
                 "No IfcStructuralAnalysisModel found, extracting structural elements directly"
@@ -196,6 +198,8 @@ class Extractor:
 
             # Extract loads and load groups
             self._extract_loads_for_model(model)
+
+            self._extract_properties_for_model(model)
 
         return model
 
@@ -417,97 +421,71 @@ class Extractor:
             self.logger.error(f"Failed to extract loads for model: {e}")
             self.warnings.append(f"Failed to extract loads: {e}")
 
-    def _is_load_in_group(self, load, group_id):
-        """
-        Check if a load belongs to a specific load group based on IFC relationships.
-
-        Args:
-            load: The load to check
-            group_id: The ID of the load group
-
-        Returns:
-            bool: True if the load belongs to the group, False otherwise
-        """
+    def _extract_properties_for_model(self, model):
+        """Extract material and section properties for all members."""
         try:
-            # Get the IFC entity for this load
-            load_entity = None
-            for entity_type in [
-                "IfcStructuralPointAction",
-                "IfcStructuralLinearAction",
-                "IfcStructuralPlanarAction",
-            ]:
+            materials_extracted = 0
+            sections_extracted = 0
+
+            # Extract properties for each member
+            for member in model.members:
+                # Get the original IFC entity for this member
+                ifc_entity = self._find_ifc_entity_by_id(member.id)
+                if not ifc_entity:
+                    continue
+
+                # Extract material if not already set
+                if not hasattr(member, "material") or member.material is None:
+                    material = self.properties_extractor.extract_material(ifc_entity)
+                    if material:
+                        member.material = material
+                        materials_extracted += 1
+
+                # Extract section if not already set
+                if not hasattr(member, "section") or member.section is None:
+                    section = self.properties_extractor.extract_section(ifc_entity)
+                    if section:
+                        member.section = section
+                        sections_extracted += 1
+
+                # For surface members, extract thickness
+                if hasattr(member, "member_type") and member.member_type == "surface":
+                    if not hasattr(member, "thickness") or member.thickness is None:
+                        thickness = self.properties_extractor.extract_thickness(
+                            ifc_entity
+                        )
+                        if thickness:
+                            member.thickness = thickness
+
+            self.logger.info(
+                f"Extracted {materials_extracted} materials and {sections_extracted} sections"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to extract properties: {e}")
+            self.warnings.append(f"Failed to extract properties: {e}")
+
+    def _find_ifc_entity_by_id(self, entity_id):
+        """Find IFC entity by GlobalId."""
+        try:
+            # Search through relevant IFC entity types
+            entity_types = [
+                "IfcStructuralCurveMember",
+                "IfcStructuralSurfaceMember",
+                "IfcStructuralPointConnection",
+                "IfcStructuralCurveConnection",
+                "IfcStructuralSurfaceConnection",
+            ]
+
+            for entity_type in entity_types:
                 for entity in self.ifc.by_type(entity_type):
-                    if hasattr(entity, "GlobalId") and entity.GlobalId == load.id:
-                        load_entity = entity
-                        break
-                if load_entity:
-                    break
-
-            if not load_entity:
-                return False
-
-            # Check if load is assigned to group via IfcRelAssignsToGroup
-            for rel in self.ifc.by_type("IfcRelAssignsToGroup"):
-                if (
-                    hasattr(rel, "RelatingGroup")
-                    and hasattr(rel.RelatingGroup, "GlobalId")
-                    and rel.RelatingGroup.GlobalId == group_id
-                ):
-                    if hasattr(rel, "RelatedObjects"):
-                        for obj in rel.RelatedObjects:
-                            if hasattr(obj, "GlobalId") and obj.GlobalId == load.id:
-                                return True
-
-            # Check if load has a direct reference to the group
-            if hasattr(load_entity, "LoadGroupFor"):
-                for rel in load_entity.LoadGroupFor:
-                    if (
-                        hasattr(rel, "RelatingGroup")
-                        and hasattr(rel.RelatingGroup, "GlobalId")
-                        and rel.RelatingGroup.GlobalId == group_id
-                    ):
-                        return True
-
-            return False
+                    if hasattr(entity, "GlobalId") and entity.GlobalId == entity_id:
+                        return entity
 
         except Exception as e:
-            self.logger.warning(
-                f"Error checking if load {load.id} is in group {group_id}: {e}"
-            )
-            return False
+            self.logger.warning(f"Error finding IFC entity for ID {entity_id}: {e}")
 
-    def _create_fallback_load_group(self, model):
-        """
-        Create a fallback load group with a sample load for testing purposes.
-
-        Args:
-            model: The domain model to add the fallback group to
-        """
-        try:
-            from ..domain.load import LoadGroup, PointLoad
-            import numpy as np
-
-            # Create a sample point load
-            sample_load = PointLoad(
-                id=str(uuid.uuid4()),
-                magnitude=np.array([-2.0, 0.0, -20000.0], dtype=float),
-                direction=np.array([0.0, 0.0, -1.0], dtype=float),
-                position=[0.0, 0.0, 0.0],
-            )
-
-            # Create a fallback load group
-            fallback_group = LoadGroup(
-                id=str(uuid.uuid4()),
-                name="Fallback Load Group",
-                description="Automatically created for testing compatibility",
-                loads=[sample_load],
-            )
-
-            model.add_load_group(fallback_group)
-            self.logger.info("Created fallback load group for testing compatibility")
-
-        except Exception as e:
-            self.logger.error(f"Failed to create fallback load group: {e}")
+        return None
 
     def _generate_model_id(self) -> str:
         """

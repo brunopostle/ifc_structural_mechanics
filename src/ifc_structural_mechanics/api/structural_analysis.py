@@ -186,6 +186,7 @@ def analyze_ifc(
             try:
                 results_parser = ResultsParser(domain_model)
                 parsed_results = results_parser.parse_results(calculix_output_files)
+                result["parsed_results"] = parsed_results
                 logger.info("Successfully parsed analysis results")
             except Exception as e:
                 logger.warning(f"Error parsing detailed results: {e}")

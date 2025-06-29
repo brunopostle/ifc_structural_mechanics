@@ -320,7 +320,7 @@ class TestLoadsExtractor:
         """Test area load is created correctly from IFC."""
         # Need to patch the surface reference extraction method
         with patch.object(
-            self.extractor, "_extract_surface_reference", return_value="surface_1"
+            self.extractor, "_get_surface_reference", return_value="surface_1"
         ):
             # Use the extract_all_loads method to get an area load
             loads = self.extractor.extract_all_loads()
