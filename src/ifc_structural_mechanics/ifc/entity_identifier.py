@@ -796,27 +796,112 @@ def get_0D_orientation(axes):
 
 def get_1D_orientation(geometry, zAxis):
     """
-    Get the orientation for a 1D element.
+    Get the orientation for a 1D element with robust null checking.
 
     Args:
         geometry: The geometry of the element
-        zAxis: The Z axis direction
+        zAxis: The Z axis direction (IFC entity with DirectionRatios attribute)
 
     Returns:
-        List of orientation vectors
+        List of orientation vectors or None if input is invalid
     """
-    if not geometry or len(geometry) < 2 or not zAxis:
-        return np.eye(3).tolist()
+    # Validate inputs
+    if not geometry or len(geometry) < 2:
+        logger.warning("Invalid geometry for 1D orientation calculation")
+        return None
 
-    xAxis = np.array(geometry[1]) - np.array(geometry[0])
-    xAxis /= np.linalg.norm(xAxis)
-    zAxis = np.array(zAxis.DirectionRatios)
-    yAxis = np.cross(zAxis, xAxis)
-    yAxis /= np.linalg.norm(yAxis)
-    zAxis = np.cross(xAxis, yAxis)
-    zAxis /= np.linalg.norm(zAxis)
+    if not zAxis:
+        logger.warning("No zAxis provided for 1D orientation calculation")
+        return None
 
-    return [xAxis.tolist(), yAxis.tolist(), zAxis.tolist()]
+    try:
+        # Extract direction ratios safely
+        direction_ratios = None
+        if hasattr(zAxis, "DirectionRatios"):
+            direction_ratios = zAxis.DirectionRatios
+        else:
+            logger.warning("zAxis does not have DirectionRatios attribute")
+            return None
+
+        # Check if direction_ratios is None or empty
+        if direction_ratios is None:
+            logger.warning("DirectionRatios is None")
+            return None
+
+        # Convert to numpy array and validate
+        try:
+            z_direction = np.array(direction_ratios, dtype=float)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid DirectionRatios: {direction_ratios}, error: {e}")
+            return None
+
+        # Validate that we have numeric values
+        if np.any(np.isnan(z_direction)) or np.any(np.isinf(z_direction)):
+            logger.warning(f"Invalid DirectionRatios contain NaN or inf: {z_direction}")
+            return None
+
+        # Calculate x-axis from geometry
+        try:
+            point1 = np.array(geometry[0], dtype=float)
+            point2 = np.array(geometry[1], dtype=float)
+
+            # Check for None values in geometry points
+            if np.any(np.isnan(point1)) or np.any(np.isnan(point2)):
+                logger.warning("Geometry points contain NaN values")
+                return None
+
+            xAxis = point2 - point1
+            x_norm = np.linalg.norm(xAxis)
+
+            if x_norm < 1e-10:
+                logger.warning("Geometry points are too close together")
+                return None
+
+            xAxis = xAxis / x_norm
+        except (ValueError, TypeError, IndexError) as e:
+            logger.warning(f"Error processing geometry points: {e}")
+            return None
+
+        # Normalize z-axis
+        z_norm = np.linalg.norm(z_direction)
+        if z_norm < 1e-10:
+            logger.warning("Z direction vector is too small")
+            return None
+
+        zAxis_normalized = z_direction / z_norm
+
+        # Calculate y-axis using cross product
+        try:
+            yAxis = np.cross(zAxis_normalized, xAxis)
+            y_norm = np.linalg.norm(yAxis)
+
+            if y_norm < 1e-10:
+                logger.warning(
+                    "X and Z axes are parallel, cannot form orthogonal system"
+                )
+                return None
+
+            yAxis = yAxis / y_norm
+
+            # Recalculate z-axis to ensure orthogonality
+            zAxis_final = np.cross(xAxis, yAxis)
+            z_final_norm = np.linalg.norm(zAxis_final)
+
+            if z_final_norm < 1e-10:
+                logger.warning("Cannot form orthogonal coordinate system")
+                return None
+
+            zAxis_final = zAxis_final / z_final_norm
+
+            return [xAxis.tolist(), yAxis.tolist(), zAxis_final.tolist()]
+
+        except Exception as e:
+            logger.error(f"Unexpected error in cross product calculation: {e}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Unexpected error in 1D orientation calculation: {e}")
+        return None
 
 
 def get_2D_orientation(representation):

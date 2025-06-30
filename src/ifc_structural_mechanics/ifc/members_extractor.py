@@ -146,6 +146,17 @@ class MembersExtractor:
                         self.logger.error(
                             f"Coordinate calculation error for curve member {entity.id()}: {e}"
                         )
+                        # Add more debug info about the entity
+                        self.logger.error(
+                            f"Entity type: {entity.is_a() if hasattr(entity, 'is_a') else 'unknown'}"
+                        )
+                        self.logger.error(f"Has Axis: {hasattr(entity, 'Axis')}")
+                        if hasattr(entity, "Axis"):
+                            self.logger.error(f"Axis: {entity.Axis}")
+                            if entity.Axis:
+                                self.logger.error(
+                                    f"Axis DirectionRatios: {getattr(entity.Axis, 'DirectionRatios', 'No DirectionRatios')}"
+                                )
                     else:
                         self.logger.warning(
                             f"Failed to extract curve member {entity.id()}: {e}"
@@ -199,16 +210,19 @@ class MembersExtractor:
             Optional[CurveMember]: The created curve member or None if creation fails
         """
         try:
+            entity_id = getattr(entity, "GlobalId", "unknown")
+            self.logger.debug(f"Creating curve member for entity {entity_id}")
+
             # Extract representation
             representation = get_representation(entity, "Edge")
             if not representation:
-                self.logger.warning(f"No representation found for {entity.GlobalId}")
+                self.logger.warning(f"No representation found for {entity_id}")
                 return None
 
             # Extract material and profile
             material_profile = self._get_material_profile(entity)
             if not material_profile:
-                self.logger.warning(f"No material profile found for {entity.GlobalId}")
+                self.logger.warning(f"No material profile found for {entity_id}")
                 material = None
                 profile = None
             else:
@@ -224,35 +238,87 @@ class MembersExtractor:
                 )
 
             # Extract geometry using entity_identifier get_coordinate, passing unit_scale
+            self.logger.debug(f"Extracting geometry for {entity_id}")
             geometry = self._extract_geometry(representation, self.length_scale)
             if not geometry:
-                self.logger.warning(f"Failed to extract geometry for {entity.GlobalId}")
+                self.logger.warning(f"Failed to extract geometry for {entity_id}")
                 return None
             if any(coord is None for coord in geometry if coord is not None):
                 self.logger.warning(
-                    f"Geometry contains invalid coordinates for {entity.GlobalId}"
+                    f"Geometry contains invalid coordinates for {entity_id}"
                 )
                 return None
 
-            # Get orientation
-            orientation = (
-                get_1D_orientation(geometry, entity.Axis)
-                if hasattr(entity, "Axis")
-                else None
+            self.logger.debug(
+                f"Geometry extracted successfully for {entity_id}: {geometry}"
             )
 
+            # Get orientation - THIS IS WHERE THE ERROR LIKELY OCCURS
+            orientation = None
+            try:
+                self.logger.debug(f"Checking for Axis attribute on entity {entity_id}")
+                if hasattr(entity, "Axis"):
+                    axis_value = entity.Axis
+                    self.logger.debug(f"Entity {entity_id} has Axis: {axis_value}")
+
+                    if axis_value is not None:
+                        self.logger.debug(
+                            f"Entity {entity_id} Axis is not None, calling get_1D_orientation"
+                        )
+                        # Log more details about the axis
+                        if hasattr(axis_value, "DirectionRatios"):
+                            direction_ratios = axis_value.DirectionRatios
+                            self.logger.debug(
+                                f"Entity {entity_id} DirectionRatios: {direction_ratios}"
+                            )
+                        else:
+                            self.logger.debug(
+                                f"Entity {entity_id} Axis has no DirectionRatios attribute"
+                            )
+
+                        orientation = get_1D_orientation(geometry, axis_value)
+                        self.logger.debug(
+                            f"Entity {entity_id} orientation result: {orientation}"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"Entity {entity_id} Axis is None, skipping orientation"
+                        )
+                else:
+                    self.logger.debug(f"Entity {entity_id} has no Axis attribute")
+            except Exception as e:
+                self.logger.error(f"Error getting orientation for {entity_id}: {e}")
+                self.logger.error(f"Geometry: {geometry}")
+                if hasattr(entity, "Axis"):
+                    self.logger.error(f"Axis: {entity.Axis}")
+                    if entity.Axis and hasattr(entity.Axis, "DirectionRatios"):
+                        self.logger.error(
+                            f"DirectionRatios: {entity.Axis.DirectionRatios}"
+                        )
+                # Continue without orientation
+                orientation = None
+
             # Apply transformation if needed
-            transformation = (
-                get_transformation(entity.ObjectPlacement)
-                if hasattr(entity, "ObjectPlacement")
-                else None
-            )
-            if transformation:
-                geometry = transform_vectors(geometry, transformation)
-                if orientation:
-                    orientation = transform_vectors(
-                        [orientation], transformation, include_translation=False
-                    )[0]
+            transformation = None
+            try:
+                self.logger.debug(f"Checking for transformation on entity {entity_id}")
+                if hasattr(entity, "ObjectPlacement") and entity.ObjectPlacement:
+                    transformation = get_transformation(entity.ObjectPlacement)
+                    if transformation:
+                        self.logger.debug(
+                            f"Applying transformation to geometry for {entity_id}"
+                        )
+                        geometry = transform_vectors(geometry, transformation)
+                        if orientation:
+                            self.logger.debug(
+                                f"Applying transformation to orientation for {entity_id}"
+                            )
+                            orientation = transform_vectors(
+                                [orientation], transformation, include_translation=False
+                            )[0]
+            except Exception as e:
+                self.logger.error(f"Error applying transformation for {entity_id}: {e}")
+                # Continue with original geometry and orientation
 
             # Create and return domain object
             if material and profile:
@@ -261,7 +327,7 @@ class MembersExtractor:
                 domain_section = self._create_section(profile)
 
                 return CurveMember(
-                    id=entity.GlobalId,
+                    id=entity_id,
                     geometry=geometry,
                     material=domain_material,
                     section=domain_section,
@@ -278,7 +344,7 @@ class MembersExtractor:
                 default_height = convert_length(0.2, self.length_scale)
 
                 return CurveMember(
-                    id=entity.GlobalId,
+                    id=entity_id,
                     geometry=geometry,
                     material=Material(
                         id="default_material",
@@ -295,6 +361,60 @@ class MembersExtractor:
                     ),
                 )
 
+        except TypeError as e:
+            if "unsupported operand type" in str(e):
+                self.logger.error(
+                    f"DETAILED ERROR for curve member {getattr(entity, 'GlobalId', 'unknown')}: {e}"
+                )
+                # Add extensive debugging info
+                self.logger.error(
+                    f"Entity type: {entity.is_a() if hasattr(entity, 'is_a') else 'unknown'}"
+                )
+                self.logger.error(f"Has Axis: {hasattr(entity, 'Axis')}")
+                if hasattr(entity, "Axis"):
+                    self.logger.error(f"Axis value: {entity.Axis}")
+                    if entity.Axis:
+                        self.logger.error(f"Axis type: {type(entity.Axis)}")
+                        self.logger.error(
+                            f"Has DirectionRatios: {hasattr(entity.Axis, 'DirectionRatios')}"
+                        )
+                        if hasattr(entity.Axis, "DirectionRatios"):
+                            self.logger.error(
+                                f"DirectionRatios value: {entity.Axis.DirectionRatios}"
+                            )
+                            self.logger.error(
+                                f"DirectionRatios type: {type(entity.Axis.DirectionRatios)}"
+                            )
+
+                # Also check geometry for None values
+                try:
+                    geometry = self._extract_geometry(
+                        get_representation(entity, "Edge"), self.length_scale
+                    )
+                    self.logger.error(f"Extracted geometry: {geometry}")
+                    if geometry:
+                        for i, point in enumerate(geometry):
+                            self.logger.error(
+                                f"Point {i}: {point} (type: {type(point)})"
+                            )
+                            if point and hasattr(point, "__iter__"):
+                                for j, coord in enumerate(point):
+                                    self.logger.error(
+                                        f"  Coord {j}: {coord} (type: {type(coord)})"
+                                    )
+                except Exception as geom_e:
+                    self.logger.error(
+                        f"Error extracting geometry for debugging: {geom_e}"
+                    )
+
+                import traceback
+
+                self.logger.error(f"Full traceback: {traceback.format_exc()}")
+            else:
+                self.logger.warning(
+                    f"Failed to extract curve member {getattr(entity, 'GlobalId', 'unknown')}: {e}"
+                )
+            return None
         except Exception as e:
             logger.error(f"Unexpected error creating curve member: {e}")
             return None
@@ -416,47 +536,104 @@ class MembersExtractor:
             Geometry data in SI units
         """
         if not representation or not representation.Items:
+            self.logger.debug("No representation or items")
             return None
 
         item = representation.Items[0]
+        self.logger.debug(
+            f"Processing representation item type: {item.is_a() if hasattr(item, 'is_a') else 'unknown'}"
+        )
 
         if item.is_a("IfcEdge"):
+            self.logger.debug("Processing IfcEdge")
             # Get coordinates and convert to SI units
-            start_coord = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
-            end_coord = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
+            try:
+                self.logger.debug("Getting start coordinate")
+                start_coord = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
+                self.logger.debug(f"Start coordinate: {start_coord}")
 
-            # Validate coordinates are not None
-            if start_coord is None or end_coord is None:
-                self.logger.warning(
-                    f"Invalid coordinates found in edge geometry: start={start_coord}, end={end_coord}"
+                self.logger.debug("Getting end coordinate")
+                end_coord = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
+                self.logger.debug(f"End coordinate: {end_coord}")
+
+                # Validate coordinates are not None
+                if start_coord is None or end_coord is None:
+                    self.logger.warning(
+                        f"Invalid coordinates found in edge geometry: start={start_coord}, end={end_coord}"
+                    )
+                    return None
+
+                # Additional validation - check for None values within coordinate lists
+                if (
+                    isinstance(start_coord, (list, tuple))
+                    and any(c is None for c in start_coord)
+                ) or (
+                    isinstance(end_coord, (list, tuple))
+                    and any(c is None for c in end_coord)
+                ):
+                    self.logger.warning(
+                        f"Coordinates contain None values: start={start_coord}, end={end_coord}"
+                    )
+                    return None
+
+                self.logger.debug(
+                    f"Returning edge geometry: [{start_coord}, {end_coord}]"
                 )
+                return [start_coord, end_coord]
+
+            except Exception as e:
+                self.logger.error(f"Error extracting edge coordinates: {e}")
                 return None
 
-            return [start_coord, end_coord]
-
         elif item.is_a("IfcFaceSurface"):
-            if hasattr(item, "Bounds") and item.Bounds and len(item.Bounds) > 0:
-                if hasattr(item.Bounds[0], "Bound") and hasattr(
-                    item.Bounds[0].Bound, "EdgeList"
-                ):
-                    edges = item.Bounds[0].Bound.EdgeList
-                    coords = []
-                    for edge in edges:
-                        if hasattr(edge, "EdgeElement") and hasattr(
-                            edge.EdgeElement, "EdgeStart"
-                        ):
-                            # Get coordinates and convert to SI units
-                            coord = get_coordinate(
-                                edge.EdgeElement.EdgeStart.VertexGeometry, unit_scale
-                            )
-                            if coord is None:
-                                self.logger.warning(
-                                    "Invalid coordinate found in surface boundary"
+            self.logger.debug("Processing IfcFaceSurface")
+            try:
+                if hasattr(item, "Bounds") and item.Bounds and len(item.Bounds) > 0:
+                    if hasattr(item.Bounds[0], "Bound") and hasattr(
+                        item.Bounds[0].Bound, "EdgeList"
+                    ):
+                        edges = item.Bounds[0].Bound.EdgeList
+                        coords = []
+                        for i, edge in enumerate(edges):
+                            if hasattr(edge, "EdgeElement") and hasattr(
+                                edge.EdgeElement, "EdgeStart"
+                            ):
+                                # Get coordinates and convert to SI units
+                                self.logger.debug(f"Getting coordinate for edge {i}")
+                                coord = get_coordinate(
+                                    edge.EdgeElement.EdgeStart.VertexGeometry,
+                                    unit_scale,
                                 )
-                                continue  # Skip this coordinate
-                            coords.append(coord)
-                    return coords
+                                if coord is None:
+                                    self.logger.warning(
+                                        f"Invalid coordinate found in surface boundary at edge {i}"
+                                    )
+                                    continue  # Skip this coordinate
 
+                                # Check for None values within coordinate
+                                if isinstance(coord, (list, tuple)) and any(
+                                    c is None for c in coord
+                                ):
+                                    self.logger.warning(
+                                        f"Coordinate {i} contains None values: {coord}"
+                                    )
+                                    continue
+
+                                coords.append(coord)
+
+                        if len(coords) > 0:
+                            self.logger.debug(
+                                f"Returning surface geometry with {len(coords)} coordinates"
+                            )
+                            return coords
+                        else:
+                            self.logger.warning("No valid coordinates found in surface")
+                            return None
+            except Exception as e:
+                self.logger.error(f"Error extracting surface coordinates: {e}")
+                return None
+
+        self.logger.debug("No valid geometry found")
         return None
 
     def _get_material_profile(self, element):
@@ -666,10 +843,15 @@ class MembersExtractor:
             flange_thickness = convert_length(
                 profile.FlangeThickness, self.length_scale
             )
-            fillet_radius = convert_length(
-                profile.FilletRadius if hasattr(profile, "FilletRadius") else 0.0,
-                self.length_scale,
-            )
+
+            # FIXED: Safely handle FilletRadius that might be None
+            fillet_radius_value = 0.0  # Default value
+            if hasattr(profile, "FilletRadius"):
+                raw_fillet_radius = profile.FilletRadius
+                if raw_fillet_radius is not None:
+                    fillet_radius_value = raw_fillet_radius
+
+            fillet_radius = convert_length(fillet_radius_value, self.length_scale)
 
             # Create section
             return Section(

@@ -468,6 +468,28 @@ class UnifiedCalculixWriter:
                     radius = member.section.dimensions.get("radius", 0.1)
                     file.write(f"{radius:.6e}\n")
                     file.write("0.0, 0.0, -1.0\n\n")
+                elif (
+                    hasattr(member.section, "section_type")
+                    and member.section.section_type == "i"
+                ):
+                    # For CalculiX, I-beams should use BEAM SECTION with GENERAL
+                    file.write(
+                        f"*BEAM SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}, SECTION=GENERAL\n"
+                    )
+
+                    # Write area, I11, I22, I12, J, warping (6 values)
+                    area = getattr(member.section, "area", 0.01)
+                    i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
+                    i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
+                    i_yz = 0.0
+                    it = getattr(member.section, "torsional_constant", area * 0.01)
+                    warping = getattr(member.section, "warping_constant", 0.0)
+
+                    # Format numbers to avoid very small scientific notation
+                    file.write(
+                        f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
+                    )
+                    file.write("0.0, 0.0, -1.0\n\n")
                 else:
                     # General beam section
                     file.write(
