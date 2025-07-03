@@ -796,18 +796,18 @@ class MembersExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia (already in SI units since dimensions are converted)
-                Iy = (width * height**3) / 12 - (width - web_thickness) * (
+                Iy = (width * height ** 3) / 12 - (width - web_thickness) * (
                     (height - 2 * flange_thickness) ** 3
                 ) / 12
-                Iz = (2 * flange_thickness) * (width**3) / 12 + (
+                Iz = (2 * flange_thickness) * (width ** 3) / 12 + (
                     height - 2 * flange_thickness
-                ) * (web_thickness**3) / 12
+                ) * (web_thickness ** 3) / 12
                 Jx = (
                     1
                     / 3
                     * (
-                        (height - flange_thickness) * (web_thickness**3)
-                        + 2 * width * (flange_thickness**3)
+                        (height - flange_thickness) * (web_thickness ** 3)
+                        + 2 * width * (flange_thickness ** 3)
                     )
                 )
 

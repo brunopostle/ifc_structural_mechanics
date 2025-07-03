@@ -93,7 +93,7 @@ def convert_area(value: float, unit_scale: float) -> float:
     Returns:
         Area in square meters
     """
-    return value * (unit_scale**2)
+    return value * (unit_scale ** 2)
 
 
 def convert_volume(value: float, unit_scale: float) -> float:
@@ -107,7 +107,7 @@ def convert_volume(value: float, unit_scale: float) -> float:
     Returns:
         Volume in cubic meters
     """
-    return value * (unit_scale**3)
+    return value * (unit_scale ** 3)
 
 
 def convert_moment_of_inertia(value: float, unit_scale: float) -> float:
@@ -121,7 +121,7 @@ def convert_moment_of_inertia(value: float, unit_scale: float) -> float:
     Returns:
         Moment of inertia in m^4
     """
-    return value * (unit_scale**4)
+    return value * (unit_scale ** 4)
 
 
 def convert_density(
@@ -139,7 +139,7 @@ def convert_density(
         Density in kg/m^3
     """
     mass_factor = mass_scale if mass_scale is not None else 1.0
-    return value * (mass_factor / (unit_scale**3))
+    return value * (mass_factor / (unit_scale ** 3))
 
 
 def convert_elastic_modulus(
@@ -156,7 +156,7 @@ def convert_elastic_modulus(
     Returns:
         Elastic modulus in Pa
     """
-    return value * (force_scale / (unit_scale**2))
+    return value * (force_scale / (unit_scale ** 2))
 
 
 def convert_linear_stiffness(

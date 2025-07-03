@@ -431,12 +431,12 @@ class PropertiesExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia
-                Iy = (width * height**3) / 12 - (width - web_thick) * (
+                Iy = (width * height ** 3) / 12 - (width - web_thick) * (
                     (height - 2 * flange_thick) ** 3
                 ) / 12
-                Iz = (2 * flange_thick) * (width**3) / 12 + (
+                Iz = (2 * flange_thick) * (width ** 3) / 12 + (
                     height - 2 * flange_thick
-                ) * (web_thick**3) / 12
+                ) * (web_thick ** 3) / 12
 
                 # Ensure positive values
                 area = max(1e-6, area)
@@ -447,8 +447,8 @@ class PropertiesExtractor:
                 self.logger.warning(f"Error calculating I-section properties: {e}")
                 # Use simplified rectangular calculation
                 area = width * height
-                Iy = width * height**3 / 12
-                Iz = height * width**3 / 12
+                Iy = width * height ** 3 / 12
+                Iz = height * width ** 3 / 12
 
             profile_id = (
                 str(profile.id())

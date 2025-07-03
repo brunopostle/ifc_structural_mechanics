@@ -58,10 +58,6 @@ class Mapper:
             "property_mappings": property_mappings,
         }
 
-    def register_custom_mapper(self, id, mapper_func):
-        """Register a custom mapper function for special cases."""
-        self._custom_mappers[id] = mapper_func
-
     def register_post_processor(self, processor):
         """Register a post-processing function to be applied after mapping."""
         self._post_processors.append(processor)
@@ -154,7 +150,7 @@ def _normalize_vector(vector):
     sum_squares = 0.0
     for v in vector:
         sum_squares += v * v
-    magnitude = sum_squares**0.5
+    magnitude = sum_squares ** 0.5
 
     if magnitude < 1e-10:
         return [0.0, 0.0, 1.0]  # Default direction for zero vectors
@@ -467,7 +463,6 @@ class StructuralModelMapper:
         """Initialize the structural model mapper with specific mappers."""
         self._member_mapper = StructuralMemberMapper()
         self._connection_mapper = StructuralConnectionMapper()
-        self._load_mapper = LoadMapper()
         self._material_mapper = MaterialMapper()
         self._section_mapper = SectionMapper()
         self._thickness_mapper = ThicknessMapper()

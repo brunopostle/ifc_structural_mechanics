@@ -300,7 +300,7 @@ class StressResult(Result):
                     (sxx - syy) ** 2
                     + (syy - szz) ** 2
                     + (szz - sxx) ** 2
-                    + 6 * (sxy**2 + syz**2 + sxz**2)
+                    + 6 * (sxy ** 2 + syz ** 2 + sxz ** 2)
                 )
             )
         else:
@@ -420,7 +420,7 @@ class StrainResult(Result):
                     (exx - eyy) ** 2
                     + (eyy - ezz) ** 2
                     + (ezz - exx) ** 2
-                    + 6 * (exy**2 + eyz**2 + exz**2)
+                    + 6 * (exy ** 2 + eyz ** 2 + exz ** 2)
                 )
             )
         else:

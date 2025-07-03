@@ -58,12 +58,6 @@ class DomainToCalculixMapper(BaseMapper[str, Union[int, str]]):
             (r"section\s+(\w+).*undefined", "section"),
         ]
 
-    # Compatibility properties for backward compatibility
-    @property
-    def domain_to_ccx(self):
-        """Legacy accessor for domain_to_tool for backward compatibility."""
-        return self.domain_to_tool
-
     @property
     def ccx_to_domain(self):
         """Legacy accessor for tool_to_domain for backward compatibility."""

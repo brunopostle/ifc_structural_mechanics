@@ -27,7 +27,6 @@ from . import surface_geometry
 
 # Type aliases for better readability
 Point = Tuple[float, float, float]
-Vector = Tuple[float, float, float]
 
 logger = logging.getLogger(__name__)
 
@@ -116,53 +115,6 @@ def find_connected_elements(
     except Exception as e:
         logger.error(f"Error finding connected elements: {e}")
         return []
-
-
-def _extract_member_location(member):
-    """
-    Extract the location of a structural member.
-
-    Args:
-        member: The IFC structural member entity
-
-    Returns:
-        Location coordinates (typically midpoint of the member)
-    """
-    try:
-        # Extract endpoints if possible
-        endpoints = find_member_endpoints(member)
-
-        if endpoints:
-            # Calculate midpoint
-            return [
-                (endpoints[0][0] + endpoints[1][0]) / 2,
-                (endpoints[0][1] + endpoints[1][1]) / 2,
-                (endpoints[0][2] + endpoints[1][2]) / 2,
-            ]
-
-        # Fallback to object placement
-        if hasattr(member, "ObjectPlacement") and member.ObjectPlacement:
-            placement = member.ObjectPlacement
-            if hasattr(placement, "RelativePlacement") and placement.RelativePlacement:
-                loc = placement.RelativePlacement.Location
-                if hasattr(loc, "Coordinates"):
-                    # Convert from mm to m
-                    return [
-                        float(loc.Coordinates[0]) / 1000,
-                        float(loc.Coordinates[1]) / 1000,
-                        (
-                            float(loc.Coordinates[2]) / 1000
-                            if len(loc.Coordinates) > 2
-                            else 0.0
-                        ),
-                    ]
-
-        # Absolute fallback
-        return [0.0, 0.0, 0.0]
-
-    except Exception as e:
-        logger.warning(f"Error extracting member location: {e}")
-        return [0.0, 0.0, 0.0]
 
 
 def _find_physical_connections(

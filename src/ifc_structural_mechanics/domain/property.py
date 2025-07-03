@@ -301,17 +301,17 @@ class Section:
         h = self.dimensions["height"]
 
         # Calculate moments of inertia
-        self.moment_of_inertia_y = (b * h**3) / 12  # About y-axis (strong axis)
-        self.moment_of_inertia_z = (h * b**3) / 12  # About z-axis (weak axis)
+        self.moment_of_inertia_y = (b * h ** 3) / 12  # About y-axis (strong axis)
+        self.moment_of_inertia_z = (h * b ** 3) / 12  # About z-axis (weak axis)
 
         # Calculate torsional constant
         if b >= h:
-            self.torsional_constant = (h * b**3) * (
-                16 / 3 - 3.36 * (b / h) * (1 - (b**4) / (12 * h**4))
+            self.torsional_constant = (h * b ** 3) * (
+                16 / 3 - 3.36 * (b / h) * (1 - (b ** 4) / (12 * h ** 4))
             )
         else:
-            self.torsional_constant = (b * h**3) * (
-                16 / 3 - 3.36 * (h / b) * (1 - (h**4) / (12 * b**4))
+            self.torsional_constant = (b * h ** 3) * (
+                16 / 3 - 3.36 * (h / b) * (1 - (h ** 4) / (12 * b ** 4))
             )
 
         # Warping constant (not commonly used for rectangular sections)
@@ -326,11 +326,11 @@ class Section:
         r = self.dimensions["radius"]
 
         # Calculate moments of inertia (same in both directions for circular)
-        self.moment_of_inertia_y = (math.pi * r**4) / 4
+        self.moment_of_inertia_y = (math.pi * r ** 4) / 4
         self.moment_of_inertia_z = self.moment_of_inertia_y
 
         # Calculate torsional constant (equals polar moment of inertia for circular)
-        self.torsional_constant = (math.pi * r**4) / 2
+        self.torsional_constant = (math.pi * r ** 4) / 2
 
         # Warping constant (zero for circular sections)
         self.warping_constant = 0
@@ -348,16 +348,16 @@ class Section:
 
         # Calculate moments of inertia
         # Strong axis (y-axis) - vertical web
-        self.moment_of_inertia_y = (b * h**3) / 12 - (b - tw) * (h - 2 * tf) ** 3 / 12
+        self.moment_of_inertia_y = (b * h ** 3) / 12 - (b - tw) * (h - 2 * tf) ** 3 / 12
 
         # Weak axis (z-axis) - horizontal flanges
-        self.moment_of_inertia_z = (2 * tf * b**3) / 12 + tw * (h - 2 * tf) ** 3 / 12
+        self.moment_of_inertia_z = (2 * tf * b ** 3) / 12 + tw * (h - 2 * tf) ** 3 / 12
 
         # Approximate torsional constant
-        self.torsional_constant = (1 / 3) * (b * tf**3 * 2 + (h - 2 * tf) * tw**3)
+        self.torsional_constant = (1 / 3) * (b * tf ** 3 * 2 + (h - 2 * tf) * tw ** 3)
 
         # Warping constant - complex calculation, simplified approximation
-        self.warping_constant = (tf * b**3 * (h - tf) ** 2) / 24
+        self.warping_constant = (tf * b ** 3 * (h - tf) ** 2) / 24
 
         # Shear areas - approximate
         self.shear_area_y = h * tw  # Web area for y-direction
@@ -377,20 +377,20 @@ class Section:
 
         # Calculate moments of inertia about centroidal axes
         # Strong axis (y-axis) - vertical web
-        Iy_flange = (b * tf**3) / 12 + Af * (h - tf / 2 - y_centroid) ** 2
+        Iy_flange = (b * tf ** 3) / 12 + Af * (h - tf / 2 - y_centroid) ** 2
         Iy_web = (tw * (h - tf) ** 3) / 12 + Aw * ((h - tf) / 2 - y_centroid) ** 2
         self.moment_of_inertia_y = Iy_flange + Iy_web
 
         # Weak axis (z-axis) - horizontal flange
-        Iz_flange = (tf * b**3) / 12
-        Iz_web = (tw**3 * (h - tf)) / 12
+        Iz_flange = (tf * b ** 3) / 12
+        Iz_web = (tw ** 3 * (h - tf)) / 12
         self.moment_of_inertia_z = Iz_flange + Iz_web
 
         # Approximate torsional constant
-        self.torsional_constant = (1 / 3) * (b * tf**3 + (h - tf) * tw**3)
+        self.torsional_constant = (1 / 3) * (b * tf ** 3 + (h - tf) * tw ** 3)
 
         # Warping constant - simplified approximation
-        self.warping_constant = (b**3 * tf * (h - tf) ** 2) / 12
+        self.warping_constant = (b ** 3 * tf * (h - tf) ** 2) / 12
 
         # Shear areas - approximate
         self.shear_area_y = tw * (h - tf)  # Web area for y-direction
@@ -405,30 +405,30 @@ class Section:
         # Calculate centroid position from corner
         Ax = t * h  # Area in x-direction
         Az = t * w  # Area in z-direction
-        A = Ax + Az - t**2  # Total area (subtracting overlap)
+        A = Ax + Az - t ** 2  # Total area (subtracting overlap)
 
         cx = (Az * w / 2) / A  # Centroid x-coordinate
         cy = (Ax * h / 2) / A  # Centroid y-coordinate
 
         # Calculate moments of inertia about centroidal axes
         # These are simplified approximations
-        Ixx = (t * h**3) / 3 - t * cy**2
-        Izz = (t * w**3) / 3 - t * cx**2
+        Ixx = (t * h ** 3) / 3 - t * cy ** 2
+        Izz = (t * w ** 3) / 3 - t * cx ** 2
         Ixz = t * cx * cy
 
         # Calculate principal moments of inertia
         avg = (Ixx + Izz) / 2
         diff = (Ixx - Izz) / 2
-        rad = math.sqrt(diff**2 + Ixz**2)
+        rad = math.sqrt(diff ** 2 + Ixz ** 2)
 
         self.moment_of_inertia_y = avg + rad  # Major principal moment
         self.moment_of_inertia_z = avg - rad  # Minor principal moment
 
         # Approximate torsional constant
-        self.torsional_constant = (1 / 3) * t**3 * (w + h - t)
+        self.torsional_constant = (1 / 3) * t ** 3 * (w + h - t)
 
         # Warping constant - simplified approximation
-        self.warping_constant = (t * (w**2 * h**2) * (w + h)) / 36
+        self.warping_constant = (t * (w ** 2 * h ** 2) * (w + h)) / 36
 
         # Shear areas - approximate
         self.shear_area_y = 2 / 3 * t * h  # Approximation
@@ -451,20 +451,20 @@ class Section:
 
         # Calculate moments of inertia
         # Strong axis (y-axis) - vertical web
-        self.moment_of_inertia_y = (tw * h**3) / 12 + 2 * (
-            (tf * b**3) / 12 + tf * b * (h / 2) ** 2
+        self.moment_of_inertia_y = (tw * h ** 3) / 12 + 2 * (
+            (tf * b ** 3) / 12 + tf * b * (h / 2) ** 2
         )
 
         # Weak axis (z-axis) - horizontal flanges
-        self.moment_of_inertia_z = (h * tw**3) / 12 + 2 * (
-            b * tf**3 / 12 + b * tf * cx**2
+        self.moment_of_inertia_z = (h * tw ** 3) / 12 + 2 * (
+            b * tf ** 3 / 12 + b * tf * cx ** 2
         )
 
         # Approximate torsional constant
-        self.torsional_constant = (1 / 3) * (h * tw**3 + 2 * b * tf**3)
+        self.torsional_constant = (1 / 3) * (h * tw ** 3 + 2 * b * tf ** 3)
 
         # Warping constant - simplified approximation
-        self.warping_constant = (h**2 * b**2 * tf) / 6
+        self.warping_constant = (h ** 2 * b ** 2 * tf) / 6
 
         # Shear areas - approximate
         self.shear_area_y = h * tw  # Web area for y-direction
@@ -487,8 +487,8 @@ class Section:
             )
 
         # Calculate moments of inertia
-        self.moment_of_inertia_y = (bo * ho**3) / 12 - (bi * hi**3) / 12
-        self.moment_of_inertia_z = (ho * bo**3) / 12 - (hi * bi**3) / 12
+        self.moment_of_inertia_y = (bo * ho ** 3) / 12 - (bi * hi ** 3) / 12
+        self.moment_of_inertia_z = (ho * bo ** 3) / 12 - (hi * bi ** 3) / 12
 
         # Approximate torsional constant
         self.torsional_constant = 2 * t * (bo - t) * (ho - t) ** 2 / (bo + ho - 2 * t)
@@ -515,11 +515,11 @@ class Section:
             )
 
         # Calculate moments of inertia (same in both directions for circular)
-        self.moment_of_inertia_y = (math.pi / 4) * (ro**4 - ri**4)
+        self.moment_of_inertia_y = (math.pi / 4) * (ro ** 4 - ri ** 4)
         self.moment_of_inertia_z = self.moment_of_inertia_y
 
         # Calculate torsional constant
-        self.torsional_constant = (math.pi / 2) * (ro**4 - ri**4)
+        self.torsional_constant = (math.pi / 2) * (ro ** 4 - ri ** 4)
 
         # Warping constant (zero for circular sections)
         self.warping_constant = 0
@@ -608,7 +608,7 @@ class Section:
         Returns:
             Section: A Section object with circular properties
         """
-        area = math.pi * radius**2
+        area = math.pi * radius ** 2
         dimensions = {"radius": radius}
         return cls(id, name, "circular", area, dimensions)
 
@@ -747,7 +747,7 @@ class Section:
             raise ValueError("Thickness too large for given radius")
 
         # Calculate area
-        area = math.pi * (outer_radius**2 - inner_radius**2)
+        area = math.pi * (outer_radius ** 2 - inner_radius ** 2)
 
         dimensions = {
             "outer_radius": outer_radius,

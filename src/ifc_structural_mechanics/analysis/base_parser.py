@@ -33,7 +33,6 @@ class BaseParser:
                 tracing data back to domain entities.
         """
         self.mapper = mapper
-        self.result_cache = {}  # Cache for parsed results
 
     def match_patterns(
         self,

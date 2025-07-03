@@ -119,9 +119,9 @@ class LoadsExtractor:
                 if load:
                     loads.append(load)
                     # Cache the load for future reference
-                    self._load_cache[getattr(entity, "GlobalId", str(uuid.uuid4()))] = (
-                        load
-                    )
+                    self._load_cache[
+                        getattr(entity, "GlobalId", str(uuid.uuid4()))
+                    ] = load
             except Exception as e:
                 self.logger.error(
                     f"Error extracting load {getattr(entity, 'GlobalId', 'unknown')}: {e}"
@@ -823,85 +823,3 @@ class LoadsExtractor:
                 f"Error extracting line load endpoints: {e}, using defaults"
             )
             return [0.0, 0.0, 0.0], [10.0 * self.length_scale, 0.0, 0.0]
-
-    def _extract_load_vector(self, ifc_load):
-        """
-        Extract force magnitude and direction from an IFC load entity.
-
-        Args:
-            ifc_load: IFC load entity
-
-        Returns:
-            Tuple of (magnitude in SI units, direction)
-        """
-        try:
-            # Handle IfcStructuralLoadSingleForce specifically (common in simple_beam.ifc)
-            if hasattr(ifc_load, "AppliedLoad") and ifc_load.AppliedLoad:
-                load_entity = ifc_load.AppliedLoad
-
-                if (
-                    hasattr(load_entity, "is_a")
-                    and callable(load_entity.is_a)
-                    and load_entity.is_a("IfcStructuralLoadSingleForce")
-                ):
-                    force_x = float(getattr(load_entity, "ForceX", 0.0) or 0.0)
-                    force_y = float(getattr(load_entity, "ForceY", 0.0) or 0.0)
-                    force_z = float(getattr(load_entity, "ForceZ", 0.0) or 0.0)
-
-                    # Build force vector (3D vector for simplicity)
-                    force_vector = np.array([force_x, force_y, force_z], dtype=float)
-
-                    # Convert to SI units (newtons)
-                    force_vector = force_vector * self.force_scale
-
-                    # For simplified IFC4 implementation, we'll just use 3D force vectors
-                    magnitude = force_vector
-
-                    # Calculate direction (normalize the force part)
-                    norm = np.linalg.norm(force_vector)
-
-                    if norm > 1e-10:  # Avoid division by near-zero
-                        direction = force_vector / norm
-                    else:
-                        # Default direction if force is near zero
-                        direction = np.array(
-                            [0.0, 0.0, -1.0], dtype=float
-                        )  # Default to downward
-
-                    return magnitude, direction
-
-            # Direct force attributes on the entity itself (for test mocks)
-            if (
-                hasattr(ifc_load, "ForceX")
-                or hasattr(ifc_load, "ForceY")
-                or hasattr(ifc_load, "ForceZ")
-            ):
-                force_x = float(getattr(ifc_load, "ForceX", 0.0) or 0.0)
-                force_y = float(getattr(ifc_load, "ForceY", 0.0) or 0.0)
-                force_z = float(getattr(ifc_load, "ForceZ", 0.0) or 0.0)
-
-                # Build force vector
-                force_vector = np.array([force_x, force_y, force_z], dtype=float)
-
-                # Convert to SI units
-                force_vector = force_vector * self.force_scale
-
-                # Use as magnitude
-                magnitude = force_vector
-
-                # Calculate direction
-                norm = np.linalg.norm(force_vector)
-                if norm > 1e-10:
-                    direction = force_vector / norm
-                else:
-                    direction = np.array([0.0, 0.0, -1.0], dtype=float)
-
-                return magnitude, direction
-
-        except Exception as e:
-            self.logger.warning(f"Error extracting load vector: {e}, using defaults")
-
-        # Default values if extraction fails
-        return np.array([0.0, 0.0, -1.0 * self.force_scale], dtype=float), np.array(
-            [0.0, 0.0, -1.0], dtype=float
-        )
