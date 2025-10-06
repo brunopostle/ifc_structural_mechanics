@@ -12,7 +12,6 @@ import logging
 from ..config.meshing_config import MeshingConfig
 from ..domain.structural_model import StructuralModel
 from ..domain.structural_member import CurveMember, SurfaceMember
-from ..mapping.domain_to_gmsh import DomainToGmshMapper
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class GmshGeometryConverter:
     def __init__(
         self,
         meshing_config: Optional[MeshingConfig] = None,
-        mapper: Optional[DomainToGmshMapper] = None,
+        domain_model: Optional[StructuralModel] = None,
     ):
         """
         Initialize the Gmsh geometry converter.
@@ -37,9 +36,8 @@ class GmshGeometryConverter:
         Args:
             meshing_config (Optional[MeshingConfig]): Meshing configuration to use.
                 If not provided, a default configuration will be created.
-            mapper (Optional[DomainToGmshMapper]): Mapper to use for maintaining
-                bidirectional mapping between domain model and Gmsh entities.
-                If not provided, a new mapper will be created.
+            domain_model (Optional[StructuralModel]): Domain model for registering
+                mesh entity traceability. If not provided, traceability won't be registered.
         """
         # Track if we initialized Gmsh ourselves
         self._we_initialized_gmsh = False
@@ -50,8 +48,8 @@ class GmshGeometryConverter:
         # Use provided config or create default
         self.meshing_config = meshing_config or MeshingConfig()
 
-        # Use provided mapper or create a new one
-        self.mapper = mapper or DomainToGmshMapper()
+        # Store domain model reference for traceability
+        self.domain_model = domain_model
 
         # Maintain backward compatibility with _entity_map for existing tests
         self._entity_map = {}
@@ -117,9 +115,6 @@ class GmshGeometryConverter:
         # Ensure Gmsh is initialized
         self._ensure_gmsh_initialized()
 
-        # Clear any existing mappings in the mapper
-        self.mapper.clear()
-
         # Clear the entity map for backward compatibility
         self._entity_map = {}
 
@@ -163,11 +158,6 @@ class GmshGeometryConverter:
             try:
                 point_tag = gmsh.model.occ.addPoint(point[0], point[1], point[2])
                 point_tags.append(point_tag)
-
-                # Register the point in the mapper
-                # Use a composite ID to avoid collisions
-                point_id = f"{member.id}_point_{len(point_tags)}"
-                self.mapper.register_point(point_id, point_tag)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh point: {e}")
 
@@ -176,10 +166,6 @@ class GmshGeometryConverter:
             try:
                 line_tag = gmsh.model.occ.addLine(point_tags[i], point_tags[i + 1])
                 line_tags.append(line_tag)
-
-                # Register individual line segments in the mapper
-                line_id = f"{member.id}_segment_{i+1}"
-                self.mapper.register_curve(line_id, line_tag)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh line: {e}")
 
@@ -196,8 +182,13 @@ class GmshGeometryConverter:
             except Exception as e:
                 logger.warning(f"Error setting mesh size: {e}")
 
-        # Register the complete curve member in the mapper
-        self.mapper.register_curve(member.id, line_tags)
+        # Register mesh entities in domain model for traceability
+        if hasattr(self, 'domain_model') and self.domain_model:
+            # Convert tags to strings for consistent ID format
+            mesh_ids = [str(tag) for tag in line_tags]
+            self.domain_model.register_mesh_entities(
+                member.id, mesh_ids, entity_type="member"
+            )
 
         # Maintain backward compatibility with _entity_map
         self._entity_map[member.id] = {
@@ -237,10 +228,6 @@ class GmshGeometryConverter:
             try:
                 point_tag = gmsh.model.occ.addPoint(point[0], point[1], point[2])
                 point_tags.append(point_tag)
-
-                # Register the point in the mapper
-                point_id = f"{member.id}_point_{len(point_tags)}"
-                self.mapper.register_point(point_id, point_tag)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh point: {e}")
 
@@ -252,10 +239,6 @@ class GmshGeometryConverter:
                     point_tags[i], point_tags[(i + 1) % len(point_tags)]
                 )
                 line_tags.append(line_tag)
-
-                # Register individual line segments in the mapper
-                line_id = f"{member.id}_edge_{i+1}"
-                self.mapper.register_curve(line_id, line_tag)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh line: {e}")
 
@@ -286,8 +269,13 @@ class GmshGeometryConverter:
             except Exception as e:
                 logger.warning(f"Error setting mesh size: {e}")
 
-        # Register the surface in the mapper
-        self.mapper.register_surface(member.id, surface_tag)
+        # Register mesh entities in domain model for traceability
+        if hasattr(self, 'domain_model') and self.domain_model:
+            # Convert tag to string for consistent ID format
+            mesh_ids = [str(surface_tag)]
+            self.domain_model.register_mesh_entities(
+                member.id, mesh_ids, entity_type="member"
+            )
 
         # Maintain backward compatibility with _entity_map
         self._entity_map[member.id] = {
@@ -495,31 +483,12 @@ class GmshGeometryConverter:
         return corners
 
     def save_mapping(self, file_path: str) -> None:
-        """
-        Save the domain to Gmsh mapping to a file.
-
-        Args:
-            file_path (str): Path where the mapping file should be saved.
-
-        Raises:
-            IOError: If there's an error writing the file.
-        """
-        self.mapper.create_mapping_file(file_path)
-        logger.info(f"Mapping saved to {file_path}")
+        """Save mapping (deprecated - traceability is now in domain model)."""
+        logger.warning("Mapping file generation deprecated - traceability is in domain model")
 
     def load_mapping(self, file_path: str) -> None:
-        """
-        Load domain to Gmsh mapping from a file.
-
-        Args:
-            file_path (str): Path to the mapping file.
-
-        Raises:
-            IOError: If there's an error reading the file.
-            ValueError: If the file format is invalid.
-        """
-        self.mapper.load_mapping_file(file_path)
-        logger.info(f"Mapping loaded from {file_path}")
+        """Load mapping (deprecated - traceability is now in domain model)."""
+        logger.warning("Mapping file loading deprecated - traceability is in domain model")
 
     def __del__(self):
         """

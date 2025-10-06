@@ -280,9 +280,6 @@ class TestGmshIntegration:
         from src.ifc_structural_mechanics.meshing.gmsh_geometry import (
             GmshGeometryConverter,
         )
-        from src.ifc_structural_mechanics.mapping.domain_to_gmsh import (
-            DomainToGmshMapper,
-        )
 
         # Create a simple domain model with a beam
         model = StructuralModel(id="test_model", name="Test Model")
@@ -304,12 +301,9 @@ class TestGmshIntegration:
         # Add the beam to the model
         model.add_member(beam)
 
-        # Create a mapper
-        mapper = DomainToGmshMapper()
-
         # Convert domain model to Gmsh geometry
         geometry_converter = GmshGeometryConverter(
-            meshing_config=self.meshing_config, mapper=mapper
+            meshing_config=self.meshing_config
         )
 
         entity_map = geometry_converter.convert_model(model)
@@ -317,11 +311,10 @@ class TestGmshIntegration:
         # Verify the entity map contains our beam
         assert "beam_1" in entity_map
 
-        # Create the runner with the same mapper
+        # Create the runner
         runner = GmshRunner(
             meshing_config=self.meshing_config,
             system_config=self.system_config,
-            mapper=mapper,
         )
 
         # Run meshing
@@ -335,14 +328,6 @@ class TestGmshIntegration:
         assert os.path.exists(mesh_file)
         assert os.path.getsize(mesh_file) > 0
 
-        # Check if mapping file was created
-        mapping_file = os.path.splitext(output_file)[0] + ".map.json"
-        assert os.path.exists(mapping_file)
-
-        # Verify we can load the mapping
-        new_mapper = DomainToGmshMapper()
-        new_mapper.load_mapping_file(mapping_file)
-
-        # Check if our beam is in the loaded mapping - updated for BaseMapper structure
-        # A beam is a curve, so it should be in the 'curve' category
-        assert "beam_1" in new_mapper.domain_to_tool["curve"]
+        # Check if mapping file was created (mapper functionality removed, test skipped)
+        # mapping_file = os.path.splitext(output_file)[0] + ".map.json"
+        # assert os.path.exists(mapping_file)

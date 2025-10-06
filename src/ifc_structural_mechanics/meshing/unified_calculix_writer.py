@@ -20,7 +20,6 @@ import meshio
 from ..domain.structural_model import StructuralModel
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..config.analysis_config import AnalysisConfig
-from ..mapping.domain_to_calculix import DomainToCalculixMapper
 from ..utils.error_handling import AnalysisError, MeshingError
 from ..utils.temp_dir import get_temp_dir, create_temp_subdir
 
@@ -72,7 +71,6 @@ class UnifiedCalculixWriter:
         self,
         domain_model: StructuralModel,
         analysis_config: Optional[AnalysisConfig] = None,
-        mapper: Optional[DomainToCalculixMapper] = None,
     ):
         """
         Initialize the unified CalculiX writer.
@@ -80,11 +78,9 @@ class UnifiedCalculixWriter:
         Args:
             domain_model: The structural domain model
             analysis_config: Analysis configuration
-            mapper: Domain to CalculiX mapper
         """
         self.domain_model = domain_model
         self.analysis_config = analysis_config or AnalysisConfig()
-        self.mapper = mapper or DomainToCalculixMapper()
 
         # Single source of truth for mesh data
         self.nodes: Dict[int, Tuple[float, float, float]] = {}
@@ -294,9 +290,10 @@ class UnifiedCalculixWriter:
             self.element_sets[member_set] = member_elements
             self.defined_element_sets.add(member_set)
 
-            # Register mapping
-            for elem_id in member_elements:
-                self.mapper.register_element(member.id, elem_id, member_type)
+            # Register analysis elements in domain model for traceability
+            self.domain_model.register_analysis_elements(
+                member.id, member_elements, entity_type="member"
+            )
 
             logger.info(
                 f"Assigned {len(member_elements)} {member_type} elements to member {member.id}"
@@ -523,12 +520,8 @@ class UnifiedCalculixWriter:
         logger.info(f"Wrote {sections_written} section definitions")
 
     def _save_mapping(self, mapping_file: str) -> None:
-        """Save domain to CalculiX mapping."""
-        try:
-            self.mapper.create_mapping_file(mapping_file)
-            logger.info(f"Mapping saved to {mapping_file}")
-        except Exception as e:
-            logger.warning(f"Failed to save mapping: {e}")
+        """Save domain to CalculiX mapping (deprecated - now in domain model)."""
+        logger.warning("Mapping file generation deprecated - traceability is in domain model")
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get processing statistics."""

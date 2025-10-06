@@ -17,7 +17,6 @@ from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
-from ifc_structural_mechanics.mapping.domain_to_gmsh import DomainToGmshMapper
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -77,7 +76,6 @@ def gmsh_converter(meshing_config):
 
     # Set up the converter manually with all required attributes
     converter.meshing_config = meshing_config
-    converter.mapper = DomainToGmshMapper()
     converter._entity_map = {}
     converter._we_initialized_gmsh = False
     converter._gmsh_checked = False  # Add this missing attribute

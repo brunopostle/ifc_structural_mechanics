@@ -15,17 +15,23 @@ from ifc_structural_mechanics.domain.base_entity import DomainEntity
 class StructuralConnection(DomainEntity):
     """Base class for structural connections between members with stiffness support."""
 
-    def __init__(self, id: str, connection_type: str):
+    def __init__(self, id: str, connection_type: str, ifc_guid: Optional[str] = None):
         """
         Initialize a structural connection.
 
         Args:
             id: Unique identifier for the connection
             connection_type: Type of connection (e.g., "point", "rigid", "hinge")
+            ifc_guid: IFC GlobalId for traceability to source model
         """
         # Initialize instance variables first
         self.connected_members: List[str] = []  # List of member IDs
         self.stiffness_properties: Optional[Dict[str, float]] = None
+
+        # NEW: Traceability fields for error propagation
+        self.ifc_guid: Optional[str] = ifc_guid
+        self.mesh_entity_ids: List[str] = []
+        self.analysis_element_ids: List[int] = []
 
         # Then call parent constructor
         super().__init__(id=id, entity_type=connection_type)
@@ -253,9 +259,9 @@ class StructuralConnection(DomainEntity):
 class PointConnection(StructuralConnection):
     """A point connection between structural members."""
 
-    def __init__(self, id: str, position: List[float]):
+    def __init__(self, id: str, position: List[float], ifc_guid: Optional[str] = None):
         self.position = position
-        super().__init__(id, "point")
+        super().__init__(id, "point", ifc_guid)
 
     def validate(self) -> bool:
         base_valid = super().validate()
@@ -275,9 +281,9 @@ class PointConnection(StructuralConnection):
 class RigidConnection(StructuralConnection):
     """A rigid connection between structural members."""
 
-    def __init__(self, id: str, position: Optional[List[float]] = None):
+    def __init__(self, id: str, position: Optional[List[float]] = None, ifc_guid: Optional[str] = None):
         self.position = position
-        super().__init__(id, "rigid")
+        super().__init__(id, "rigid", ifc_guid)
 
     def validate(self) -> bool:
         base_valid = super().validate()
@@ -307,10 +313,11 @@ class HingeConnection(StructuralConnection):
         id: str,
         position: List[float],
         rotation_axis: Optional[List[float]] = None,
+        ifc_guid: Optional[str] = None,
     ):
         self.position = position
         self.rotation_axis = rotation_axis
-        super().__init__(id, "hinge")
+        super().__init__(id, "hinge", ifc_guid)
 
     def validate(self) -> bool:
         base_valid = super().validate()
@@ -341,9 +348,9 @@ class HingeConnection(StructuralConnection):
 class SpringConnection(StructuralConnection):
     """A spring connection with explicit stiffness properties."""
 
-    def __init__(self, id: str, position: List[float], stiffness: Dict[str, float]):
+    def __init__(self, id: str, position: List[float], stiffness: Dict[str, float], ifc_guid: Optional[str] = None):
         self.position = position
-        super().__init__(id, "spring")
+        super().__init__(id, "spring", ifc_guid)
         self.set_stiffness_properties(stiffness)
 
     def get_translational_stiffness(self) -> Dict[str, float]:
@@ -387,6 +394,7 @@ def create_connection_from_stiffness(
     position: List[float],
     stiffness: Optional[Dict[str, float]] = None,
     connection_type: Optional[str] = None,
+    ifc_guid: Optional[str] = None,
 ) -> StructuralConnection:
     """Create appropriate connection type based on stiffness properties."""
 
@@ -398,16 +406,16 @@ def create_connection_from_stiffness(
     # If explicit type is provided, use it
     if connection_type:
         if connection_type == "rigid":
-            conn = RigidConnection(connection_id, position)
+            conn = RigidConnection(connection_id, position, ifc_guid)
         elif connection_type == "hinge":
-            conn = HingeConnection(connection_id, position)
+            conn = HingeConnection(connection_id, position, ifc_guid=ifc_guid)
         elif connection_type == "spring":
             if stiffness:
-                conn = SpringConnection(connection_id, position, stiffness)
+                conn = SpringConnection(connection_id, position, stiffness, ifc_guid)
             else:
-                conn = PointConnection(connection_id, position)
+                conn = PointConnection(connection_id, position, ifc_guid)
         else:
-            conn = PointConnection(connection_id, position)
+            conn = PointConnection(connection_id, position, ifc_guid)
 
         if stiffness:
             conn.set_stiffness_properties(stiffness)
@@ -415,17 +423,17 @@ def create_connection_from_stiffness(
 
     # Auto-detect based on stiffness properties
     if not stiffness:
-        return PointConnection(connection_id, position)
+        return PointConnection(connection_id, position, ifc_guid)
 
     # Create spring connection and analyze behavior
-    spring_conn = SpringConnection(connection_id, position, stiffness)
+    spring_conn = SpringConnection(connection_id, position, stiffness, ifc_guid)
 
     if spring_conn.is_rigid_behavior():
-        rigid_conn = RigidConnection(connection_id, position)
+        rigid_conn = RigidConnection(connection_id, position, ifc_guid)
         rigid_conn.set_stiffness_properties(stiffness)
         return rigid_conn
     elif spring_conn.is_pinned_behavior():
-        hinge_conn = HingeConnection(connection_id, position, [0.0, 0.0, 1.0])
+        hinge_conn = HingeConnection(connection_id, position, [0.0, 0.0, 1.0], ifc_guid)
         hinge_conn.set_stiffness_properties(stiffness)
         return hinge_conn
 

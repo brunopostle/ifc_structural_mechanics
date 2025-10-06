@@ -10,11 +10,10 @@ import re
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from ..config.analysis_config import AnalysisConfig
 from ..config.system_config import SystemConfig
-from ..mapping.domain_to_calculix import DomainToCalculixMapper
 from ..utils.subprocess_utils import run_subprocess
 from ..utils.error_handling import AnalysisError
 from ..utils.temp_dir import create_temp_subdir
@@ -37,7 +36,7 @@ class CalculixRunner:
         system_config: Optional[SystemConfig] = None,
         analysis_config: Optional[AnalysisConfig] = None,
         working_dir: Optional[str] = None,
-        mapper: Optional[DomainToCalculixMapper] = None,
+        mapper: Optional[Any] = None,
     ):
         """
         Initialize the CalculiX runner.
@@ -50,8 +49,7 @@ class CalculixRunner:
                 If not provided, a default one will be created.
             working_dir (Optional[str]): Working directory for the analysis.
                 If not provided, a temporary directory will be used.
-            mapper (Optional[DomainToCalculixMapper]): A mapper to track mappings
-                between domain model and CalculiX entities. Used for error handling.
+            mapper (Optional[Any]): Deprecated - mapper no longer used for error handling.
 
         Raises:
             AnalysisError: If the input file does not exist or other initialization errors.
@@ -594,20 +592,20 @@ class CalculixRunner:
         """
         return self.result_files
 
-    def set_mapper(self, mapper: DomainToCalculixMapper) -> None:
+    def set_mapper(self, mapper) -> None:
         """
         Set the domain to CalculiX mapper.
 
         Args:
-            mapper (DomainToCalculixMapper): The mapper to use for error handling.
+            mapper: The mapper to use for error handling (deprecated, kept for compatibility).
         """
         self.mapper = mapper
 
-    def get_mapper(self) -> Optional[DomainToCalculixMapper]:
+    def get_mapper(self):
         """
         Get the domain to CalculiX mapper.
 
         Returns:
-            Optional[DomainToCalculixMapper]: The mapper used for error handling, or None if not set.
+            The mapper used for error handling, or None if not set (deprecated).
         """
         return self.mapper

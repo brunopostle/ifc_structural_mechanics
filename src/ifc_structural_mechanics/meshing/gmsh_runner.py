@@ -17,7 +17,6 @@ import gmsh
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
 from ..utils.error_handling import MeshingError
-from ..mapping.domain_to_gmsh import DomainToGmshMapper
 from ..utils.subprocess_utils import run_subprocess
 from ..utils.temp_dir import create_temp_subdir
 
@@ -41,7 +40,6 @@ class GmshRunner:
         self,
         meshing_config: Optional[MeshingConfig] = None,
         system_config: Optional[SystemConfig] = None,
-        mapper: Optional[DomainToGmshMapper] = None,
     ):
         """
         Initialize the Gmsh runner.
@@ -51,16 +49,10 @@ class GmshRunner:
                 If not provided, a default configuration will be created.
             system_config (Optional[SystemConfig]): System configuration to use.
                 If not provided, a default configuration will be created.
-            mapper (Optional[DomainToGmshMapper]): Mapper to use for maintaining
-                bidirectional mapping between domain model and Gmsh entities.
-                If not provided, a new mapper will be created.
         """
         # Use provided configs or create defaults
         self.meshing_config = meshing_config or MeshingConfig()
         self.system_config = system_config or SystemConfig()
-
-        # Use provided mapper or create a new one
-        self.mapper = mapper or DomainToGmshMapper()
 
         # Determine Gmsh executable path
         self.gmsh_path = self.system_config.get_gmsh_path()
@@ -496,15 +488,8 @@ class GmshRunner:
                     # If we're just using the latest mesh file as-is, nothing to do
                     pass
 
-            # If we're using our mapper, save the mapping file alongside the mesh file
-            if (
-                self.mapper
-                and hasattr(self.mapper, "domain_to_gmsh")
-                and self.mapper.domain_to_gmsh
-            ):
-                mapping_file = os.path.splitext(output_file)[0] + ".map.json"
-                self.mapper.create_mapping_file(mapping_file)
-                logger.info(f"Entity mapping saved to {mapping_file}")
+            # Mapping file generation deprecated
+            # Traceability is now in the domain model via register_mesh_entities
 
             # For testing purposes, if we're running in pytest and the file doesn't exist,
             # let's create an empty file so the test passes

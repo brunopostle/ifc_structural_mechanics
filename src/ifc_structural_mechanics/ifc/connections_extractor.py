@@ -224,12 +224,14 @@ class ConnectionsExtractor:
             except Exception as e:
                 self.logger.debug(f"No stiffness properties for {connection_id}: {e}")
 
-            # CREATE CONNECTION
+            # CREATE CONNECTION WITHOUT VALIDATION
             connection = None
+            # Extract IFC GUID for traceability
+            ifc_guid = ifc_connection.GlobalId if hasattr(ifc_connection, 'GlobalId') else None
 
             if ifc_connection.is_a("IfcStructuralPointConnection"):
                 connection = create_connection_from_stiffness(
-                    connection_id, position, stiffness_props, connection_type
+                    connection_id, position, stiffness_props, connection_type, ifc_guid
                 )
 
             elif ifc_connection.is_a("IfcStructuralCurveConnection"):
@@ -251,20 +253,20 @@ class ConnectionsExtractor:
                         midpoint = position
 
                     connection = create_connection_from_stiffness(
-                        connection_id, midpoint, stiffness_props, connection_type
+                        connection_id, midpoint, stiffness_props, connection_type, ifc_guid
                     )
                 else:
                     connection = create_connection_from_stiffness(
-                        connection_id, position, stiffness_props, connection_type
+                        connection_id, position, stiffness_props, connection_type, ifc_guid
                     )
 
             elif ifc_connection.is_a("IfcStructuralSurfaceConnection"):
                 connection = create_connection_from_stiffness(
-                    connection_id, position, stiffness_props, connection_type
+                    connection_id, position, stiffness_props, connection_type, ifc_guid
                 )
             else:
                 # Default fallback
-                connection = PointConnection(connection_id, position)
+                connection = PointConnection(connection_id, position, ifc_guid)
                 if stiffness_props:
                     connection.set_stiffness_properties(stiffness_props)
 

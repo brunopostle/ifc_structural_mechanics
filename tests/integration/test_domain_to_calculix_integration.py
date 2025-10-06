@@ -16,9 +16,6 @@ from src.ifc_structural_mechanics.domain.structural_member import (
     SurfaceMember,
 )
 from src.ifc_structural_mechanics.domain.property import Material, Section, Thickness
-from src.ifc_structural_mechanics.mapping.domain_to_calculix import (
-    DomainToCalculixMapper,
-)
 
 # Updated import to use unified writer instead of removed MeshConverter
 from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
@@ -98,14 +95,10 @@ class TestDomainToCalculixUnifiedWorkflow(unittest.TestCase):
     def test_unified_writer_with_mapper(self):
         """Test that the unified writer integrates correctly with the mapper."""
 
-        # Create mapper
-        mapper = DomainToCalculixMapper()
-
         # Create unified writer with correct parameters
         writer = UnifiedCalculixWriter(
             domain_model=self.model,
             analysis_config=self.analysis_config,
-            mapper=mapper,
         )
 
         # Create a mock mesh file with mixed element types

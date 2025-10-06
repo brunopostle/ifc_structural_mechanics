@@ -331,6 +331,7 @@ class MembersExtractor:
                     geometry=geometry,
                     material=domain_material,
                     section=domain_section,
+                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
                 )
             else:
                 # Create with default material and section
@@ -359,6 +360,7 @@ class MembersExtractor:
                         width=default_width,
                         height=default_height,
                     ),
+                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
                 )
 
         except TypeError as e:
@@ -494,6 +496,7 @@ class MembersExtractor:
                     geometry=geometry,
                     material=domain_material,
                     thickness=domain_thickness,
+                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
                 )
             else:
                 # Create with default material
@@ -518,6 +521,7 @@ class MembersExtractor:
                         name="Surface Thickness",
                         value=thickness_value,
                     ),
+                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
                 )
 
         except Exception as e:

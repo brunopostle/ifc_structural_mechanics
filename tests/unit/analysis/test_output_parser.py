@@ -6,9 +6,6 @@ import unittest
 from unittest.mock import Mock
 
 from src.ifc_structural_mechanics.analysis.output_parser import OutputParser
-from src.ifc_structural_mechanics.mapping.domain_to_calculix import (
-    DomainToCalculixMapper,
-)
 
 
 class TestOutputParser(unittest.TestCase):
@@ -18,12 +15,8 @@ class TestOutputParser(unittest.TestCase):
         """Set up test fixtures."""
         self.parser = OutputParser()
 
-        # Create mock mapper
-        self.mock_mapper = Mock(spec=DomainToCalculixMapper)
-        self.mock_mapper.get_domain_entity_id = Mock(return_value="domain_123")
-
-        # Create parser with mock mapper
-        self.parser_with_mapper = OutputParser(self.mock_mapper)
+        # Mapper removed - tests updated to use domain model traceability
+        # self.parser_with_mapper = OutputParser()
 
     def test_empty_output(self):
         """Test parsing empty or None output."""
@@ -167,19 +160,19 @@ class TestOutputParser(unittest.TestCase):
         converged, reason = self.parser.check_convergence(output3)
         self.assertFalse(converged)
 
-    def test_mapper_integration(self):
-        """Test integration with DomainToCalculixMapper."""
-        output = """
-        *ERROR in e_c3d: negative jacobian in element 42
-        """
-
-        result = self.parser_with_mapper.parse_output(output)
-
-        # Check if the mapper was used to get domain entity ID
-        self.mock_mapper.get_domain_entity_id.assert_called_once_with(42, "element")
-
-        # Check if the domain ID was set correctly
-        self.assertEqual(result["errors"][0]["domain_id"], "domain_123")
+    # Mapper integration test removed - mapper functionality deleted
+    # def test_mapper_integration(self):
+    #     output = """
+    #     *ERROR in e_c3d: negative jacobian in element 42
+    #     """
+    #
+    #     result = self.parser_with_mapper.parse_output(output)
+    #
+    #     # Check if the mapper was used to get domain entity ID
+    #     self.mock_mapper.get_domain_entity_id.assert_called_once_with(42, "element")
+    #
+    #     # Check if the domain ID was set correctly
+    #     self.assertEqual(result["errors"][0]["domain_id"], "domain_123")
 
     def test_classify_error_severity(self):
         """Test error severity classification."""
@@ -207,11 +200,11 @@ class TestOutputParser(unittest.TestCase):
         mapping = self.parser.map_error_to_entity(error_text)
         self.assertIsNone(mapping["domain_id"])
 
-        # Parser with mapper
-        mapping = self.parser_with_mapper.map_error_to_entity(error_text)
-        self.assertEqual(mapping["entity_type"], "element")
-        self.assertEqual(mapping["ccx_id"], 42)
-        self.assertEqual(mapping["domain_id"], "domain_123")
+        # Parser with mapper - mapper functionality removed, test skipped
+        # mapping = self.parser_with_mapper.map_error_to_entity(error_text)
+        # self.assertEqual(mapping["entity_type"], "element")
+        # self.assertEqual(mapping["ccx_id"], 42)
+        # self.assertEqual(mapping["domain_id"], "domain_123")
 
     def test_generate_error_summary(self):
         """Test generation of human-readable error summary."""
@@ -250,74 +243,74 @@ class TestOutputParser(unittest.TestCase):
         self.assertIn("domain ID: slab_2", summary)
 
 
-class TestOutputParserWithMockedMapper(unittest.TestCase):
-    """Tests for OutputParser with a more complex mocked mapper."""
-
-    def setUp(self):
-        """Set up test fixtures with a more complex mock mapper."""
-        # Create a more detailed mock mapper
-        self.mapper = Mock(spec=DomainToCalculixMapper)
-
-        # Configure the mock mapper to return different domain IDs for different entity types
-        def mock_get_domain_entity_id(ccx_id, entity_type):
-            if entity_type == "element":
-                if ccx_id == 42:
-                    return "beam_42"
-                elif ccx_id == 123:
-                    return "shell_123"
-                else:
-                    return f"element_{ccx_id}"
-            elif entity_type == "node":
-                return f"node_{ccx_id}"
-            elif entity_type == "material":
-                return f"material_{ccx_id}"
-            else:
-                return f"{entity_type}_{ccx_id}"
-
-        self.mapper.get_domain_entity_id = Mock(side_effect=mock_get_domain_entity_id)
-
-        # Create parser with the mock mapper
-        self.parser = OutputParser(self.mapper)
-
-    def test_complex_error_mapping(self):
-        """Test mapping complex errors with multiple entity types."""
-        output = """
-        CalculiX Version 2.18
-        
-        *ERROR in e_c3d: negative jacobian in element 42
-        *ERROR in calinput: material Steel_S355 undefined
-        *ERROR in calinput: node 789 not connected
-        """
-
-        result = self.parser.parse_output(output)
-
-        # Check error count
-        self.assertEqual(len(result["errors"]), 3)
-
-        # Check first error (element)
-        self.assertEqual(result["errors"][0]["entity_type"], "element")
-        self.assertEqual(result["errors"][0]["ccx_id"], 42)
-        self.assertEqual(result["errors"][0]["domain_id"], "beam_42")
-
-        # Check second error (material)
-        self.assertEqual(result["errors"][1]["entity_type"], "material")
-        self.assertEqual(result["errors"][1]["ccx_id"], "Steel_S355")
-        self.assertEqual(result["errors"][1]["domain_id"], "material_Steel_S355")
-
-        # Check third error (node)
-        self.assertEqual(result["errors"][2]["entity_type"], "node")
-        self.assertEqual(result["errors"][2]["ccx_id"], 789)
-        self.assertEqual(result["errors"][2]["domain_id"], "node_789")
-
-        # Verify the mapper calls
-        expected_calls = [
-            unittest.mock.call(42, "element"),
-            unittest.mock.call("Steel_S355", "material"),
-            unittest.mock.call(789, "node"),
-        ]
-        self.mapper.get_domain_entity_id.assert_has_calls(
-            expected_calls, any_order=True
-        )
+# Mapper-based tests removed - mapper functionality deleted
+# class TestOutputParserWithMockedMapper(unittest.TestCase):
+#     """Tests for OutputParser with a more complex mocked mapper."""
+#
+#     def setUp(self):
+#         """Set up test fixtures with a more complex mock mapper."""
+#         # Create a more detailed mock mapper
+#
+#         # Configure the mock mapper to return different domain IDs for different entity types
+#         def mock_get_domain_entity_id(ccx_id, entity_type):
+#             if entity_type == "element":
+#                 if ccx_id == 42:
+#                     return "beam_42"
+#                 elif ccx_id == 123:
+#                     return "shell_123"
+#                 else:
+#                     return f"element_{ccx_id}"
+#             elif entity_type == "node":
+#                 return f"node_{ccx_id}"
+#             elif entity_type == "material":
+#                 return f"material_{ccx_id}"
+#             else:
+#                 return f"{entity_type}_{ccx_id}"
+#
+#         self.mapper.get_domain_entity_id = Mock(side_effect=mock_get_domain_entity_id)
+#
+#         # Create parser with the mock mapper
+#         self.parser = OutputParser(self.mapper)
+#
+#     def test_complex_error_mapping(self):
+#         """Test mapping complex errors with multiple entity types."""
+#         output = """
+#         CalculiX Version 2.18
+#
+#         *ERROR in e_c3d: negative jacobian in element 42
+#         *ERROR in calinput: material Steel_S355 undefined
+#         *ERROR in calinput: node 789 not connected
+#         """
+#
+#         result = self.parser.parse_output(output)
+#
+#         # Check error count
+#         self.assertEqual(len(result["errors"]), 3)
+#
+#         # Check first error (element)
+#         self.assertEqual(result["errors"][0]["entity_type"], "element")
+#         self.assertEqual(result["errors"][0]["ccx_id"], 42)
+#         self.assertEqual(result["errors"][0]["domain_id"], "beam_42")
+#
+#         # Check second error (material)
+#         self.assertEqual(result["errors"][1]["entity_type"], "material")
+#         self.assertEqual(result["errors"][1]["ccx_id"], "Steel_S355")
+#         self.assertEqual(result["errors"][1]["domain_id"], "material_Steel_S355")
+#
+#         # Check third error (node)
+#         self.assertEqual(result["errors"][2]["entity_type"], "node")
+#         self.assertEqual(result["errors"][2]["ccx_id"], 789)
+#         self.assertEqual(result["errors"][2]["domain_id"], "node_789")
+#
+#         # Verify the mapper calls
+#         expected_calls = [
+#             unittest.mock.call(42, "element"),
+#             unittest.mock.call("Steel_S355", "material"),
+#             unittest.mock.call(789, "node"),
+#         ]
+#         self.mapper.get_domain_entity_id.assert_has_calls(
+#             expected_calls, any_order=True
+#         )
 
 
 if __name__ == "__main__":

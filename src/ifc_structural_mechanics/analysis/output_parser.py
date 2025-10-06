@@ -10,7 +10,6 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any
 
 from .base_parser import BaseParser
-from ..mapping.domain_to_calculix import DomainToCalculixMapper
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -89,13 +88,13 @@ class OutputParser(BaseParser):
         "ANALYSIS ABORTED",
     ]
 
-    def __init__(self, mapper: Optional[DomainToCalculixMapper] = None):
+    def __init__(self, mapper=None):
         """
         Initialize the output parser.
 
         Args:
-            mapper (Optional[DomainToCalculixMapper]): Domain to CalculiX mapper for
-                tracing errors back to IFC entities.
+            mapper: Domain to CalculiX mapper for tracing errors back to IFC entities
+                (deprecated, kept for compatibility).
         """
         super().__init__(mapper)
 

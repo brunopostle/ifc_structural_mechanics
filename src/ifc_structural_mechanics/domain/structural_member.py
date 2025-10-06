@@ -6,7 +6,7 @@ structural elements in the intermediate representation between IFC and
 analysis formats.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ifc_structural_mechanics.domain.base_entity import DomainEntity
 
@@ -34,6 +34,7 @@ class StructuralMember(DomainEntity):
         geometry: Any,
         material: Any,
         allow_none_props: bool = False,
+        ifc_guid: Optional[str] = None,
     ) -> None:
         """
         Initialize a structural member.
@@ -45,6 +46,7 @@ class StructuralMember(DomainEntity):
             material (Any): Material properties of the member.
             allow_none_props (bool): If True, allows None values for material and other properties
                                     (used for testing or incremental construction).
+            ifc_guid (Optional[str]): IFC GlobalId for traceability to source model.
 
         Raises:
             ValueError: If any of the required parameters are invalid.
@@ -54,6 +56,11 @@ class StructuralMember(DomainEntity):
         self.material = material
         self.boundary_conditions: List[Any] = []
         self.loads: List[Any] = []
+
+        # NEW: Traceability fields for error propagation
+        self.ifc_guid: Optional[str] = ifc_guid
+        self.mesh_entity_ids: List[str] = []
+        self.analysis_element_ids: List[int] = []
 
         # Initialize base entity with ID and type
         super().__init__(
@@ -193,6 +200,7 @@ class CurveMember(StructuralMember):
         material: Any,
         section: Any,
         allow_none_props: bool = False,
+        ifc_guid: Optional[str] = None,
     ) -> None:
         """
         Initialize a curve member.
@@ -204,6 +212,7 @@ class CurveMember(StructuralMember):
             section (Any): Section properties of the curve member.
             allow_none_props (bool): If True, allows None values for material and section
                                     (used for testing or incremental construction).
+            ifc_guid (Optional[str]): IFC GlobalId for traceability to source model.
 
         Raises:
             ValueError: If any of the required parameters are invalid.
@@ -212,7 +221,7 @@ class CurveMember(StructuralMember):
         self.section = section
 
         # Initialize parent with common properties
-        super().__init__(id, "curve", geometry, material, allow_none_props)
+        super().__init__(id, "curve", geometry, material, allow_none_props, ifc_guid)
 
         # Validate section if not bypassing validation
         if not allow_none_props:
@@ -276,6 +285,7 @@ class SurfaceMember(StructuralMember):
         material: Any,
         thickness: Any,
         allow_none_props: bool = False,
+        ifc_guid: Optional[str] = None,
     ) -> None:
         """
         Initialize a surface member.
@@ -287,6 +297,7 @@ class SurfaceMember(StructuralMember):
             thickness (Any): Thickness property of the surface member.
             allow_none_props (bool): If True, allows None values for material and thickness
                                     (used for testing or incremental construction).
+            ifc_guid (Optional[str]): IFC GlobalId for traceability to source model.
 
         Raises:
             ValueError: If any of the required parameters are invalid.
@@ -295,7 +306,7 @@ class SurfaceMember(StructuralMember):
         self.thickness = thickness
 
         # Initialize parent with common properties
-        super().__init__(id, "surface", geometry, material, allow_none_props)
+        super().__init__(id, "surface", geometry, material, allow_none_props, ifc_guid)
 
         # Validate thickness if not bypassing validation
         if not allow_none_props:
