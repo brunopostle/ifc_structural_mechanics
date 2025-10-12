@@ -408,6 +408,10 @@ class UnifiedCalculixWriter:
         """
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
 
+        # Collect boundary condition (node, DOF) pairs before writing connections
+        # to avoid MPC/SPC conflicts
+        bc_node_dofs = self._collect_boundary_condition_dofs()
+
         with open(output_file, "w") as f:
             # Header
             self._write_header(f)
@@ -423,7 +427,8 @@ class UnifiedCalculixWriter:
             self._write_sections(f)
 
             # Connections (kinematic couplings, MPCs)
-            self._write_connections(f)
+            # Pass boundary condition DOFs to avoid conflicts
+            self._write_connections(f, bc_node_dofs)
 
             # Boundary conditions and loads
             write_boundary_conditions(
@@ -719,7 +724,62 @@ class UnifiedCalculixWriter:
 
         logger.info(f"Wrote {sections_written} section definitions")
 
-    def _write_connections(self, file: TextIO) -> None:
+    def _collect_boundary_condition_dofs(self) -> set:
+        """
+        Collect all (node, DOF) pairs that have boundary conditions (SPCs).
+
+        This prevents MPC/SPC conflicts where a node DOF is constrained by
+        both an MPC (from connections) and an SPC (from boundary conditions).
+
+        Replicates the logic from write_boundary_conditions() to determine
+        which nodes will have SPCs applied.
+
+        Returns:
+            Set of (node_id, dof) tuples that have boundary conditions
+        """
+        bc_node_dofs = set()
+        node_coords = dict(self.nodes)
+
+        from ..analysis.boundary_condition_handling import find_nodes_at_position
+
+        for conn in self.domain_model.connections:
+            # Find nodes at this connection's position
+            if hasattr(conn, "position") and conn.position:
+                bc_nodes = find_nodes_at_position(
+                    conn.position, node_coords, tolerance=0.1
+                )
+
+                if not bc_nodes:
+                    continue
+
+                # Determine what DOFs will be constrained
+                bc_type = getattr(conn, "connection_type", "rigid")
+
+                if bc_type == "rigid" or bc_type == "fixed":
+                    # Fixed: constrain all 6 DOF (1-6)
+                    for node in bc_nodes:
+                        for dof in [1, 2, 3, 4, 5, 6]:
+                            bc_node_dofs.add((node, dof))
+
+                elif bc_type == "hinge":
+                    # Pinned: constrain translations (1-3), but not rotations
+                    for node in bc_nodes:
+                        for dof in [1, 2, 3]:
+                            bc_node_dofs.add((node, dof))
+
+                elif bc_type == "point":
+                    # Point: constrain vertical movement (DOF 2)
+                    for node in bc_nodes:
+                        bc_node_dofs.add((node, 2))
+
+        logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
+        if logger.isEnabledFor(logging.DEBUG):
+            # Log first 20 for debugging
+            sample = sorted(list(bc_node_dofs))[:20]
+            logger.debug(f"Sample boundary condition DOFs: {sample}")
+        return bc_node_dofs
+
+    def _write_connections(self, file: TextIO, bc_node_dofs: set) -> None:
         """
         Write structural connections as CalculiX constraints.
 
@@ -729,7 +789,11 @@ class UnifiedCalculixWriter:
         - Spring connections: *SPRING elements (future)
 
         Uses hierarchical constraint approach to avoid conflicts when nodes
-        are shared between multiple connections.
+        are shared between multiple connections or have boundary conditions.
+
+        Args:
+            file: Output file handle
+            bc_node_dofs: Set of (node_id, dof) tuples that have boundary conditions
         """
         if not self.domain_model.connections:
             logger.debug("No connections to write")
@@ -744,8 +808,10 @@ class UnifiedCalculixWriter:
         connections_written = 0
 
         # Track which (node, DOF) pairs are already constrained as dependent
-        # to avoid CalculiX error: "DOF detected on dependent side of two different MPC's"
-        constrained_node_dofs = set()  # Set of (node_id, dof) tuples
+        # to avoid CalculiX errors:
+        # - "DOF detected on dependent side of two different MPC's"
+        # - "DOF detected on dependent side of a MPC and a SPC"
+        constrained_node_dofs = set(bc_node_dofs)  # Start with boundary condition DOFs
 
         for conn in self.domain_model.connections:
             # Skip connections with dummy members (boundary conditions)

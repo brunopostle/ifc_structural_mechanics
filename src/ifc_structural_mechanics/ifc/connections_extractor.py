@@ -10,6 +10,7 @@ import logging
 from typing import List, Optional, Union, Dict
 
 import ifcopenshell
+import ifcopenshell.util.placement
 import numpy as np
 
 # Updated imports to use existing domain model
@@ -359,6 +360,11 @@ class ConnectionsExtractor:
         """
         Extract the position of a connection from its IFC representation.
 
+        For structural connections, the position is typically stored in the
+        TopologyRepresentation (VertexPoint geometry), not the ObjectPlacement.
+        The ObjectPlacement is often at the origin (0,0,0) with the actual
+        coordinates stored in the topology.
+
         Args:
             ifc_connection: IFC connection entity
 
@@ -366,49 +372,60 @@ class ConnectionsExtractor:
             [x, y, z] position coordinates in SI units
         """
         try:
-            # Try to extract from object placement first
-            if (
-                hasattr(ifc_connection, "ObjectPlacement")
-                and ifc_connection.ObjectPlacement
-            ):
-                placement = ifc_connection.ObjectPlacement
-                if (
-                    hasattr(placement, "RelativePlacement")
-                    and placement.RelativePlacement
-                ):
-                    relative = placement.RelativePlacement
-                    if hasattr(relative, "Location") and relative.Location:
-                        location = relative.Location
-                        coords = location.Coordinates
-                        # Convert to SI units
-                        return [
-                            coords[0] * self.length_scale,
-                            coords[1] * self.length_scale,
-                            (coords[2] if len(coords) > 2 else 0.0) * self.length_scale,
-                        ]
-
-            # Extract from representation as fallback
+            # Method 1: Extract from TopologyRepresentation (VertexPoint geometry)
+            # This is the primary method for structural connections
             representation = None
             if ifc_connection.is_a("IfcStructuralPointConnection"):
                 representation = get_representation(ifc_connection, "Vertex")
             elif ifc_connection.is_a("IfcStructuralCurveConnection"):
                 representation = get_representation(ifc_connection, "Edge")
 
+            self.logger.debug(f"Connection {ifc_connection.GlobalId}: representation = {representation}")
+
             if representation and representation.Items:
                 geometry = self._extract_geometry(representation)
+                self.logger.debug(f"Connection {ifc_connection.GlobalId}: geometry = {geometry}")
 
                 if isinstance(geometry, list) and len(geometry) > 0:
                     if all(isinstance(g, list) for g in geometry):
                         # For curves or faces, use first point and convert to SI units
-                        return [g * self.length_scale for g in geometry[0]]
+                        result = [g * self.length_scale for g in geometry[0]]
+                        self.logger.debug(f"Connection {ifc_connection.GlobalId}: Method 1 result (nested list) = {result}")
+                        return result
                     else:
                         # For points, convert to SI units
-                        return [g * self.length_scale for g in geometry]
+                        result = [g * self.length_scale for g in geometry]
+                        self.logger.debug(f"Connection {ifc_connection.GlobalId}: Method 1 result (flat list) = {result}")
+                        return result
 
+            # Method 2: Fallback to ObjectPlacement if TopologyRepresentation not available
+            if hasattr(ifc_connection, "ObjectPlacement") and ifc_connection.ObjectPlacement:
+                try:
+                    # Get the 4x4 transformation matrix for absolute placement
+                    matrix = ifcopenshell.util.placement.get_local_placement(ifc_connection.ObjectPlacement)
+                    # The translation is in the last column, first 3 rows
+                    coords = [matrix[0][3], matrix[1][3], matrix[2][3]]
+                    self.logger.debug(f"Connection {ifc_connection.GlobalId}: ObjectPlacement coords = {coords}")
+                    # Only use if non-zero (structural connections often have (0,0,0) placement)
+                    if any(c != 0.0 for c in coords):
+                        # Convert to SI units
+                        result = [
+                            coords[0] * self.length_scale,
+                            coords[1] * self.length_scale,
+                            coords[2] * self.length_scale,
+                        ]
+                        self.logger.debug(f"Connection {ifc_connection.GlobalId}: Method 2 result = {result}")
+                        return result
+                except Exception as e:
+                    self.logger.debug(f"Could not extract from ObjectPlacement: {e}")
+
+            self.logger.warning(f"Could not extract position for connection {ifc_connection.GlobalId}, defaulting to origin")
             return [0.0, 0.0, 0.0]
 
         except Exception as e:
             self.logger.error(f"Error extracting connection position: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return [0.0, 0.0, 0.0]
 
     def _extract_geometry(self, representation):
