@@ -418,6 +418,7 @@ class UnifiedCalculixWriter:
 
             # Mesh data
             self._write_nodes(f)
+            self._write_nodal_thickness(f)  # Must come after nodes, before elements
             self._write_elements(f)
             self._write_node_sets(f)
             self._write_element_sets(f)
@@ -456,6 +457,50 @@ class UnifiedCalculixWriter:
             file.write(f"** Description: {self.domain_model.description}\n")
         file.write(f"** Analysis Type: {self.analysis_config.get_analysis_type()}\n")
         file.write("**\n\n")
+
+    def _write_nodal_thickness(self, file: TextIO) -> None:
+        """
+        Write nodal thickness definitions for shell elements.
+
+        CalculiX requires *NODAL THICKNESS to be defined after *NODE
+        and before *ELEMENT for shell elements.
+        """
+        # Collect all shell members and their nodes with thickness
+        nodal_thickness_map = {}  # node_id -> thickness
+
+        for member in self.domain_model.members:
+            if isinstance(member, SurfaceMember) and hasattr(member, "thickness") and member.thickness:
+                thickness_value = getattr(member.thickness, "value", None)
+                if thickness_value is None or thickness_value <= 0:
+                    continue
+
+                # Find element set for this member
+                member_set = f"MEMBER_{self._get_short_id(member.id)}"
+                if member_set in self.element_sets:
+                    # Get all nodes in this member's shell elements only
+                    for elem_id in self.element_sets[member_set]:
+                        if elem_id in self.elements:
+                            elem_type = self.elements[elem_id]['type']
+                            # Only add thickness for shell elements (S3, S4, S6, S8, etc.)
+                            if elem_type.startswith('S'):
+                                for node_id in self.elements[elem_id]['nodes']:
+                                    # Use maximum thickness if node belongs to multiple members
+                                    if node_id in nodal_thickness_map:
+                                        nodal_thickness_map[node_id] = max(
+                                            nodal_thickness_map[node_id], thickness_value
+                                        )
+                                    else:
+                                        nodal_thickness_map[node_id] = thickness_value
+
+        # Write nodal thickness if we have any shell elements
+        if nodal_thickness_map:
+            file.write("**\n")
+            file.write("** Nodal Thickness for Shell Elements\n")
+            file.write("*NODAL THICKNESS\n")
+            for node_id in sorted(nodal_thickness_map.keys()):
+                file.write(f"{node_id}, {nodal_thickness_map[node_id]:.6e}\n")
+            file.write("\n")
+            logger.debug(f"Wrote nodal thickness for {len(nodal_thickness_map)} nodes")
 
     def _write_nodes(self, file: TextIO) -> None:
         """Write node definitions."""
@@ -715,10 +760,11 @@ class UnifiedCalculixWriter:
                 and hasattr(member, "thickness")
                 and member.thickness
             ):
+                thickness_value = getattr(member.thickness, "value", 0.1)
+                # Note: Nodal thickness is written separately before elements
                 file.write(
                     f"*SHELL SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}\n"
                 )
-                thickness_value = getattr(member.thickness, "value", 0.1)
                 file.write(f"{thickness_value:.6e}\n\n")
                 sections_written += 1
 
