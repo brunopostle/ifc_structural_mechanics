@@ -191,6 +191,8 @@ class CurveMember(StructuralMember):
 
     Attributes:
         section (Any): Section properties for the curve member.
+        local_axis (Optional[tuple]): Local coordinate system axis for the member (x, y, z).
+                                      Used for beam orientation in FEA.
     """
 
     def __init__(
@@ -201,6 +203,7 @@ class CurveMember(StructuralMember):
         section: Any,
         allow_none_props: bool = False,
         ifc_guid: Optional[str] = None,
+        local_axis: Optional[tuple] = None,
     ) -> None:
         """
         Initialize a curve member.
@@ -213,12 +216,14 @@ class CurveMember(StructuralMember):
             allow_none_props (bool): If True, allows None values for material and section
                                     (used for testing or incremental construction).
             ifc_guid (Optional[str]): IFC GlobalId for traceability to source model.
+            local_axis (Optional[tuple]): Local axis orientation vector (x, y, z) for the member.
 
         Raises:
             ValueError: If any of the required parameters are invalid.
         """
         # Set section property first
         self.section = section
+        self.local_axis = local_axis
 
         # Initialize parent with common properties
         super().__init__(id, "curve", geometry, material, allow_none_props, ifc_guid)

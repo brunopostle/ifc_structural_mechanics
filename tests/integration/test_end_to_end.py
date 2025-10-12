@@ -508,8 +508,11 @@ def test_unified_writer_direct_mesh_processing():
     writer._map_elements_to_members()
 
     # Verify member-specific element sets were created
-    beam_set = f"MEMBER_{beam.id}"
-    plate_set = f"MEMBER_{plate.id}"
+    # Use short ID mapping
+    beam_short_id = writer._get_short_id(beam.id)
+    plate_short_id = writer._get_short_id(plate.id)
+    beam_set = f"MEMBER_{beam_short_id}"
+    plate_set = f"MEMBER_{plate_short_id}"
 
     assert beam_set in writer.element_sets, f"Beam element set {beam_set} not created"
     assert (

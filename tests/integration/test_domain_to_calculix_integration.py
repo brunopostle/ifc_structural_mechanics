@@ -666,8 +666,11 @@ $EndElements
         writer._map_elements_to_members()
 
         # Verify member-specific element sets were created
-        beam_set = f"MEMBER_{self.beam.id}"
-        plate_set = f"MEMBER_{self.plate.id}"
+        # Use short ID mapping
+        beam_short_id = writer._get_short_id(self.beam.id)
+        plate_short_id = writer._get_short_id(self.plate.id)
+        beam_set = f"MEMBER_{beam_short_id}"
+        plate_set = f"MEMBER_{plate_short_id}"
 
         self.assertIn(
             beam_set, writer.element_sets, f"Beam element set {beam_set} not created"

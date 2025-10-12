@@ -418,6 +418,8 @@ def write_analysis_steps(
     file: TextIO,
     domain_model: Optional[StructuralModel] = None,
     analysis_type: str = "linear_static",
+    short_id_map: Optional[Dict[str, str]] = None,
+    element_sets: Optional[Dict[str, List[int]]] = None,
 ) -> None:
     """
     Write comprehensive analysis step definitions to the CalculiX input file.
@@ -429,6 +431,8 @@ def write_analysis_steps(
         file (TextIO): The file object to write to.
         domain_model (Optional[StructuralModel]): The structural domain model.
         analysis_type (str): Type of analysis to perform. Default is "linear_static".
+        short_id_map (Optional[Dict[str, str]]): Mapping from full IFC GUIDs to short IDs.
+        element_sets (Optional[Dict[str, List[int]]]): Available element sets.
     """
     if not domain_model:
         logger.error("Cannot write analysis steps without domain model")
@@ -504,7 +508,7 @@ def write_analysis_steps(
 
     # ENHANCED: Write loads within the step with comprehensive validation
     file.write("** Loads within step\n")
-    loads_written = _write_validated_loads_within_step(file, domain_model)
+    loads_written = _write_validated_loads_within_step(file, domain_model, short_id_map, element_sets)
 
     if not loads_written:
         file.write("** CRITICAL WARNING: No loads written to analysis step\n")
@@ -706,7 +710,9 @@ def find_closest_node(
 
 
 def _write_validated_loads_within_step(
-    file: TextIO, domain_model: StructuralModel
+    file: TextIO, domain_model: StructuralModel,
+    short_id_map: Optional[Dict[str, str]] = None,
+    element_sets: Optional[Dict[str, List[int]]] = None
 ) -> bool:
     """
     Enhanced load writing with validation - replaces the existing function.
@@ -769,12 +775,28 @@ def _write_validated_loads_within_step(
                 element_set_name = None
 
                 # Strategy 1: Check if load has surface/member reference
+                # Skip "default" or "default_surface" as these are placeholders
                 if hasattr(load, "surface_reference") and load.surface_reference:
-                    element_set_name = f"MEMBER_{load.surface_reference}"
+                    if load.surface_reference not in ("default", "default_surface"):
+                        # Use short ID if available
+                        if short_id_map and load.surface_reference in short_id_map:
+                            element_set_name = f"MEMBER_{short_id_map[load.surface_reference]}"
+                        else:
+                            element_set_name = f"MEMBER_{load.surface_reference}"
                 elif hasattr(load, "member_reference") and load.member_reference:
-                    element_set_name = f"MEMBER_{load.member_reference}"
+                    if load.member_reference not in ("default", "default_surface"):
+                        # Use short ID if available
+                        if short_id_map and load.member_reference in short_id_map:
+                            element_set_name = f"MEMBER_{short_id_map[load.member_reference]}"
+                        else:
+                            element_set_name = f"MEMBER_{load.member_reference}"
                 elif hasattr(load, "applied_to") and load.applied_to:
-                    element_set_name = f"MEMBER_{load.applied_to}"
+                    if load.applied_to not in ("default", "default_surface"):
+                        # Use short ID if available
+                        if short_id_map and load.applied_to in short_id_map:
+                            element_set_name = f"MEMBER_{short_id_map[load.applied_to]}"
+                        else:
+                            element_set_name = f"MEMBER_{load.applied_to}"
 
                 # Strategy 2: If no direct reference, try to find surface members to apply loads to
                 # This is a fallback for loads that don't have explicit member references
@@ -784,7 +806,11 @@ def _write_validated_loads_within_step(
                         m for m in domain_model.members if m.entity_type == "surface"
                     ]
                     if surface_members:
-                        element_set_name = f"MEMBER_{surface_members[0].id}"
+                        # Use short ID if available
+                        if short_id_map and surface_members[0].id in short_id_map:
+                            element_set_name = f"MEMBER_{short_id_map[surface_members[0].id]}"
+                        else:
+                            element_set_name = f"MEMBER_{surface_members[0].id}"
                         logger.info(
                             f"Applied load {getattr(load, 'id', 'unknown')} to surface member {surface_members[0].id}"
                         )

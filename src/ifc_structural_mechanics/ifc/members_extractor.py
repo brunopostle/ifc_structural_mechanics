@@ -332,6 +332,7 @@ class MembersExtractor:
                     material=domain_material,
                     section=domain_section,
                     ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    local_axis=tuple(orientation) if orientation is not None else None,
                 )
             else:
                 # Create with default material and section
@@ -361,6 +362,7 @@ class MembersExtractor:
                         height=default_height,
                     ),
                     ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    local_axis=tuple(orientation) if orientation is not None else None,
                 )
 
         except TypeError as e:

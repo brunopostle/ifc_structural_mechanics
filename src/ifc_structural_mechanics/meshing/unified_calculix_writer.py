@@ -15,6 +15,7 @@ import os
 import logging
 from typing import Dict, List, Optional, Tuple, Any, TextIO
 
+import numpy as np
 import meshio
 
 from ..domain.structural_model import StructuralModel
@@ -89,6 +90,10 @@ class UnifiedCalculixWriter:
         self.element_sets: Dict[str, List[int]] = {}
         self.defined_element_sets: set = set()
 
+        # Short ID mapping for CalculiX (20-char limit for set names)
+        self.short_id_map: Dict[str, str] = {}
+        self.short_id_counter = 0
+
         # Working directory
         self.work_dir = create_temp_subdir(prefix="unified_calculix_")
 
@@ -105,6 +110,100 @@ class UnifiedCalculixWriter:
         logger.info(
             f"Validated domain model with {len(self.domain_model.members)} members"
         )
+
+    def _get_short_id(self, full_id: str) -> str:
+        """
+        Generate a short ID for CalculiX set names (20-char limit).
+
+        CalculiX has a 20-character limit for set names. This method creates
+        short, unique IDs (e.g., M1, M2, ...) mapped to full IFC GUIDs.
+
+        Args:
+            full_id: Full IFC GUID or entity ID
+
+        Returns:
+            Short ID suitable for CalculiX (max 20 chars)
+        """
+        if full_id not in self.short_id_map:
+            self.short_id_counter += 1
+            self.short_id_map[full_id] = f"M{self.short_id_counter}"
+        return self.short_id_map[full_id]
+
+    def _get_beam_normal(self, member: CurveMember) -> Tuple[float, float, float]:
+        """
+        Get beam normal vector from member's local axis.
+
+        CalculiX requires a normal vector for beam elements that is perpendicular
+        to the beam axis. This method uses the local_axis extracted from IFC.
+
+        The local_axis from IFC is a tuple of (xAxis, yAxis, zAxis) where:
+        - xAxis: Local X direction
+        - yAxis: Local Y direction (used as beam normal in CalculiX)
+        - zAxis: Beam axis direction
+
+        Args:
+            member: CurveMember with local_axis from IFC transformation
+
+        Returns:
+            Tuple[float, float, float]: Normal vector (nx, ny, nz)
+        """
+        # Use local axis from IFC if available
+        if hasattr(member, 'local_axis') and member.local_axis is not None:
+            # local_axis is (xAxis, yAxis, zAxis) - try xAxis for beam normal
+            if isinstance(member.local_axis, (tuple, list)) and len(member.local_axis) == 3:
+                x_axis = member.local_axis[0]  # Get xAxis
+                logger.info(f"Using x-axis from IFC local coordinate system: {x_axis}")
+                return tuple(x_axis)
+            else:
+                logger.warning(f"Unexpected local_axis format: {member.local_axis}")
+                # Try to use it directly if it's already a 3-element vector
+                if isinstance(member.local_axis, (tuple, list)) and len(member.local_axis) == 3:
+                    return tuple(member.local_axis)
+
+        # Fallback: compute from geometry if no local axis
+        logger.warning(f"Member {member.id} has no local_axis, computing from geometry")
+
+        curve_geometry = member.geometry
+
+        # Extract start and end points
+        if isinstance(curve_geometry, tuple) and len(curve_geometry) == 2:
+            start_point = np.array(curve_geometry[0], dtype=float)
+            end_point = np.array(curve_geometry[1], dtype=float)
+        elif isinstance(curve_geometry, list) and len(curve_geometry) >= 2:
+            start_point = np.array(curve_geometry[0], dtype=float)
+            end_point = np.array(curve_geometry[-1], dtype=float)
+        else:
+            logger.warning("Unable to extract beam geometry points, using default normal")
+            return (0.0, 1.0, 0.0)
+
+        # Compute beam axis direction
+        beam_axis = end_point - start_point
+        beam_length = np.linalg.norm(beam_axis)
+
+        if beam_length < 1e-10:
+            logger.warning("Beam has zero length, using default normal")
+            return (0.0, 1.0, 0.0)
+
+        # Normalize beam axis
+        beam_axis_normalized = beam_axis / beam_length
+
+        # Find a perpendicular vector
+        candidate_vectors = [
+            np.array([0.0, 1.0, 0.0]),  # Global Y
+            np.array([0.0, 0.0, 1.0]),  # Global Z
+            np.array([1.0, 0.0, 0.0]),  # Global X
+        ]
+
+        for candidate in candidate_vectors:
+            normal = np.cross(beam_axis_normalized, candidate)
+            normal_length = np.linalg.norm(normal)
+
+            if normal_length > 1e-6:
+                normal_normalized = normal / normal_length
+                return (float(normal_normalized[0]), float(normal_normalized[1]), float(normal_normalized[2]))
+
+        logger.warning("Could not compute perpendicular normal, using default")
+        return (0.0, 1.0, 0.0)
 
     def write_calculix_input_from_mesh(
         self,
@@ -285,7 +384,8 @@ class UnifiedCalculixWriter:
 
             # Assign elements to member
             member_elements = elements[start_idx:end_idx]
-            member_set = f"MEMBER_{member.id}"
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
 
             self.element_sets[member_set] = member_elements
             self.defined_element_sets.add(member_set)
@@ -333,7 +433,8 @@ class UnifiedCalculixWriter:
 
             # Analysis steps
             write_analysis_steps(
-                f, self.domain_model, self.analysis_config.get_analysis_type()
+                f, self.domain_model, self.analysis_config.get_analysis_type(),
+                self.short_id_map, self.element_sets
             )
 
     def _write_header(self, file: TextIO) -> None:
@@ -422,14 +523,144 @@ class UnifiedCalculixWriter:
                 file.write(f"{material.density:.6e}\n")
             file.write("\n")
 
+    def _write_list_in_chunks(self, file: TextIO, items: List[int], chunk_size: int = 16) -> None:
+        """Write a list of integers in chunks with proper formatting."""
+        for i in range(0, len(items), chunk_size):
+            chunk = items[i:i+chunk_size]
+            file.write(", ".join(str(x) for x in chunk))
+            if i + chunk_size < len(items):
+                file.write(",\n")
+            else:
+                file.write("\n")
+
+    def _write_beam_section_for_set(
+        self, file: TextIO, member: CurveMember, elset_name: str, material_id: str, beam_normal: tuple
+    ) -> None:
+        """Write a beam section definition for a given element set."""
+        if (
+            hasattr(member.section, "section_type")
+            and member.section.section_type == "rectangular"
+        ):
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
+            )
+            width = member.section.dimensions.get("width", 0.1)
+            height = member.section.dimensions.get("height", 0.2)
+            file.write(f"{width:.6e}, {height:.6e}\n")
+            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+
+        elif (
+            hasattr(member.section, "section_type")
+            and member.section.section_type == "circular"
+        ):
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=CIRC\n"
+            )
+            radius = member.section.dimensions.get("radius", 0.1)
+            file.write(f"{radius:.6e}\n")
+            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+
+        elif (
+            hasattr(member.section, "section_type")
+            and member.section.section_type == "i"
+        ):
+            # For I-beams in CalculiX, use SECTION=RECT with equivalent dimensions
+            area = getattr(member.section, "area", 0.01)
+            height = (area ** 0.5) if area > 0 else 0.1
+            width = height
+
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
+            )
+            file.write(f"{width:.6e}, {height:.6e}\n")
+            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+
+        else:
+            # General beam section
+            file.write(
+                f"*BEAM GENERAL SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}\n"
+            )
+            area = getattr(member.section, "area", 0.01)
+            i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
+            i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
+            i_yz = 0.0
+            it = getattr(member.section, "torsional_constant", area * 0.01)
+            warping = getattr(member.section, "warping_constant", 0.0) or 0.0
+            file.write(
+                f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
+            )
+            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+
+    def _compute_element_normal(self, element_id: int) -> Tuple[float, float, float]:
+        """
+        Compute normal vector for a specific beam element based on its node positions.
+
+        Args:
+            element_id: Element ID to compute normal for
+
+        Returns:
+            Normal vector perpendicular to the element axis
+        """
+        if element_id not in self.elements:
+            logger.warning(f"Element {element_id} not found in mesh")
+            return (0.0, 1.0, 0.0)
+
+        element = self.elements[element_id]
+        connectivity = element.get('nodes', [])
+
+        if len(connectivity) < 2:
+            logger.warning(f"Element {element_id} has insufficient nodes")
+            return (0.0, 1.0, 0.0)
+
+        # Get node coordinates
+        node1_id = connectivity[0]
+        node2_id = connectivity[1]
+
+        if node1_id not in self.nodes or node2_id not in self.nodes:
+            logger.warning(f"Node coordinates not found for element {element_id}")
+            return (0.0, 1.0, 0.0)
+
+        node1 = np.array(self.nodes[node1_id])
+        node2 = np.array(self.nodes[node2_id])
+
+        # Compute element axis
+        element_axis = node2 - node1
+        element_length = np.linalg.norm(element_axis)
+
+        if element_length < 1e-10:
+            return (0.0, 1.0, 0.0)
+
+        element_axis_normalized = element_axis / element_length
+
+        # Find perpendicular vector
+        candidates = [
+            np.array([0.0, 1.0, 0.0]),
+            np.array([0.0, 0.0, 1.0]),
+            np.array([1.0, 0.0, 0.0]),
+        ]
+
+        for candidate in candidates:
+            normal = np.cross(element_axis_normalized, candidate)
+            normal_length = np.linalg.norm(normal)
+
+            if normal_length > 1e-6:
+                normal_normalized = normal / normal_length
+                return (float(normal_normalized[0]), float(normal_normalized[1]), float(normal_normalized[2]))
+
+        return (0.0, 1.0, 0.0)
+
     def _write_sections(self, file: TextIO) -> None:
         """Write section definitions for members."""
         file.write("** Section Definitions\n")
 
         sections_written = 0
 
+        # Split beam element sets by orientation
+        beam_orientation_groups = self._split_beam_sets_by_orientation()
+
         for member in self.domain_model.members:
-            member_set = f"MEMBER_{member.id}"
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
 
             # Check if member has elements
             if member_set not in self.element_sets or not self.element_sets[member_set]:
@@ -444,65 +675,31 @@ class UnifiedCalculixWriter:
                 and hasattr(member, "section")
                 and member.section
             ):
-                if (
-                    hasattr(member.section, "section_type")
-                    and member.section.section_type == "rectangular"
-                ):
-                    file.write(
-                        f"*BEAM SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
-                    )
-                    width = member.section.dimensions.get("width", 0.1)
-                    height = member.section.dimensions.get("height", 0.2)
-                    file.write(f"{width:.6e}, {height:.6e}\n")
-                    file.write("0.0, 0.0, -1.0\n\n")
-                elif (
-                    hasattr(member.section, "section_type")
-                    and member.section.section_type == "circular"
-                ):
-                    file.write(
-                        f"*BEAM SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}, SECTION=CIRC\n"
-                    )
-                    radius = member.section.dimensions.get("radius", 0.1)
-                    file.write(f"{radius:.6e}\n")
-                    file.write("0.0, 0.0, -1.0\n\n")
-                elif (
-                    hasattr(member.section, "section_type")
-                    and member.section.section_type == "i"
-                ):
-                    # For CalculiX, I-beams should use BEAM SECTION with GENERAL
-                    file.write(
-                        f"*BEAM SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}, SECTION=GENERAL\n"
-                    )
+                # Get orientation groups for this member
+                if member_set in beam_orientation_groups:
+                    orientation_groups = beam_orientation_groups[member_set]
 
-                    # Write area, I11, I22, I12, J, warping (6 values)
-                    area = getattr(member.section, "area", 0.01)
-                    i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
-                    i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
-                    i_yz = 0.0
-                    it = getattr(member.section, "torsional_constant", area * 0.01)
-                    warping = getattr(member.section, "warping_constant", 0.0)
+                    # Write a section for each orientation group
+                    for ori_idx, (normal_key, element_ids) in enumerate(orientation_groups.items()):
+                        # Create sub-element-set for this orientation
+                        subset_name = f"{member_set}_ORI{ori_idx+1}"
 
-                    # Format numbers to avoid very small scientific notation
-                    file.write(
-                        f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
-                    )
-                    file.write("0.0, 0.0, -1.0\n\n")
+                        # Write the element set definition
+                        file.write(f"*ELSET, ELSET={subset_name}\n")
+                        self._write_list_in_chunks(file, element_ids, chunk_size=16)
+                        file.write("\n")
+
+                        # Use computed normal from grouping
+                        beam_normal = normal_key
+
+                        # Write beam section for this subset
+                        self._write_beam_section_for_set(file, member, subset_name, material_id, beam_normal)
+                        sections_written += 1
                 else:
-                    # General beam section
-                    file.write(
-                        f"*BEAM GENERAL SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}\n"
-                    )
-                    area = getattr(member.section, "area", 0.01)
-                    i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
-                    i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
-                    i_yz = 0.0
-                    it = getattr(member.section, "torsional_constant", area * 0.01)
-                    warping = getattr(member.section, "warping_constant", 0.0) or 0.0
-                    file.write(
-                        f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
-                    )
-                    file.write("0.0, 0.0, -1.0\n\n")
-                sections_written += 1
+                    # No orientation groups (shouldn't happen, but fallback to single section)
+                    beam_normal = self._get_beam_normal(member)
+                    self._write_beam_section_for_set(file, member, member_set, material_id, beam_normal)
+                    sections_written += 1
 
             # Write shell sections
             elif (
@@ -518,6 +715,39 @@ class UnifiedCalculixWriter:
                 sections_written += 1
 
         logger.info(f"Wrote {sections_written} section definitions")
+
+    def _split_beam_sets_by_orientation(self) -> Dict[str, Dict[tuple, List[int]]]:
+        """
+        Split beam element sets by element orientation.
+
+        Returns a mapping of member_set -> {normal_vector: [element_ids]}
+        """
+        orientation_groups = {}
+
+        for member in self.domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+
+            if member_set not in self.element_sets or not self.element_sets[member_set]:
+                continue
+
+            # Group elements by their computed normal
+            groups = {}
+            for elem_id in self.element_sets[member_set]:
+                normal = self._compute_element_normal(elem_id)
+                # Round to avoid floating point comparison issues
+                normal_key = tuple(round(x, 6) for x in normal)
+
+                if normal_key not in groups:
+                    groups[normal_key] = []
+                groups[normal_key].append(elem_id)
+
+            orientation_groups[member_set] = groups
+
+        return orientation_groups
 
     def _save_mapping(self, mapping_file: str) -> None:
         """Save domain to CalculiX mapping (deprecated - now in domain model)."""

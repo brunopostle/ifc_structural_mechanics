@@ -254,13 +254,17 @@ class TestUnifiedCalculixWriter:
         surface_members = [m for m in self.model.members if m.entity_type == "surface"]
 
         for member in curve_members:
-            member_set = f"MEMBER_{member.id}"
+            # Use short ID mapping
+            short_id = self.writer._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
             assert member_set in self.writer.element_sets
             assert member_set in self.writer.defined_element_sets
             assert len(self.writer.element_sets[member_set]) > 0
 
         for member in surface_members:
-            member_set = f"MEMBER_{member.id}"
+            # Use short ID mapping
+            short_id = self.writer._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
             assert member_set in self.writer.element_sets
             assert member_set in self.writer.defined_element_sets
             assert len(self.writer.element_sets[member_set]) > 0
