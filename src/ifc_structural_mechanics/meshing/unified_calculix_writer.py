@@ -422,6 +422,9 @@ class UnifiedCalculixWriter:
             self._write_materials(f)
             self._write_sections(f)
 
+            # Connections (kinematic couplings, MPCs)
+            self._write_connections(f)
+
             # Boundary conditions and loads
             write_boundary_conditions(
                 f,
@@ -715,6 +718,180 @@ class UnifiedCalculixWriter:
                 sections_written += 1
 
         logger.info(f"Wrote {sections_written} section definitions")
+
+    def _write_connections(self, file: TextIO) -> None:
+        """
+        Write structural connections as CalculiX constraints.
+
+        Connections between members are implemented as:
+        - Point connections: *KINEMATIC coupling (rigid connection)
+        - Hinge connections: Boundary conditions (handled elsewhere)
+        - Spring connections: *SPRING elements (future)
+        """
+        if not self.domain_model.connections:
+            logger.debug("No connections to write")
+            return
+
+        file.write("**\n")
+        file.write("** ========================================\n")
+        file.write("** STRUCTURAL CONNECTIONS\n")
+        file.write("** ========================================\n")
+        file.write("**\n\n")
+
+        connections_written = 0
+
+        for conn in self.domain_model.connections:
+            # Skip connections with dummy members (boundary conditions)
+            real_members = [m for m in conn.connected_members if not m.startswith('dummy_member_')]
+            if len(real_members) < 2:
+                logger.debug(f"Skipping connection {conn.id} - only {len(real_members)} real members (boundary condition)")
+                continue
+
+            # Get connection type
+            if conn.entity_type == "point":
+                self._write_point_connection(file, conn, real_members)
+                connections_written += 1
+            elif conn.entity_type == "rigid":
+                self._write_rigid_connection(file, conn, real_members)
+                connections_written += 1
+            elif conn.entity_type == "hinge":
+                # Hinges with multiple members could be modeled differently
+                # For now, treat as point connection with note
+                if len(real_members) >= 2:
+                    logger.debug(f"Hinge connection {conn.id} with {len(real_members)} members - treating as pinned joint")
+                    self._write_point_connection(file, conn, real_members, is_hinge=True)
+                    connections_written += 1
+            elif conn.entity_type == "spring":
+                logger.warning(f"Spring connections not yet implemented: {conn.id}")
+            else:
+                logger.warning(f"Unknown connection type '{conn.entity_type}' for {conn.id}")
+
+        logger.info(f"Wrote {connections_written} structural connections")
+
+    def _write_point_connection(self, file: TextIO, conn, member_ids: List[str], is_hinge: bool = False) -> None:
+        """
+        Write a point connection using CalculiX *EQUATION constraints.
+
+        A point connection ties all member nodes at the connection point together.
+        """
+        # Find nodes at this connection point for each member
+        connection_nodes = self._find_connection_nodes(conn, member_ids)
+
+        if len(connection_nodes) < 2:
+            logger.warning(f"Connection {conn.id}: Found only {len(connection_nodes)} nodes, need at least 2")
+            return
+
+        conn_type = "HINGE" if is_hinge else "POINT"
+        file.write(f"** {conn_type} Connection: {conn.id}\n")
+        file.write(f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n")
+
+        # Use first node as reference, constrain all others to it
+        ref_node = connection_nodes[0]
+
+        # For each DOF, create equation: node_i.dof = ref_node.dof
+        # Equation format: *EQUATION
+        #                  2
+        #                  node1, dof1, coef1, node2, dof2, coef2
+
+        dofs = [1, 2, 3]  # X, Y, Z translations
+        if not is_hinge:
+            dofs.extend([4, 5, 6])  # Add rotations for rigid connection
+
+        for dof in dofs:
+            for node in connection_nodes[1:]:
+                file.write(f"*EQUATION\n")
+                file.write(f"2\n")
+                file.write(f"{node},{dof},1.0,{ref_node},{dof},-1.0\n")
+
+        file.write("**\n")
+
+    def _write_rigid_connection(self, file: TextIO, conn, member_ids: List[str]) -> None:
+        """Write a rigid connection (same as point connection for now)."""
+        self._write_point_connection(file, conn, member_ids, is_hinge=False)
+
+    def _find_connection_nodes(self, conn, member_ids: List[str]) -> List[int]:
+        """
+        Find mesh nodes shared by connected members.
+
+        Strategy:
+        1. Get all nodes from elements of each connected member
+        2. Find nodes that are spatially coincident (within tolerance)
+        3. Return nodes at the connection point
+        """
+        # Collect all nodes from all connected members
+        member_nodes = {}  # member_id -> set of node_ids
+
+        for member_id in member_ids:
+            # Get element set for this member
+            short_id = self._get_short_id(member_id)
+            member_set = f"MEMBER_{short_id}"
+
+            if member_set not in self.element_sets:
+                logger.warning(f"Connection {conn.id}: Member {member_id} has no element set {member_set}")
+                continue
+
+            # Get all nodes from this member's elements
+            nodes = set()
+            for elem_id in self.element_sets[member_set]:
+                if elem_id in self.elements:
+                    elem_nodes = self.elements[elem_id]['connectivity']
+                    nodes.update(elem_nodes)
+
+            member_nodes[member_id] = nodes
+
+        if len(member_nodes) < 2:
+            logger.warning(f"Connection {conn.id}: Could not find nodes for enough members ({len(member_nodes)} < 2)")
+            return []
+
+        # Find coincident nodes: nodes that appear in multiple members
+        # or are spatially close to nodes from other members
+        tolerance = 1e-3  # Spatial tolerance
+
+        connection_node_ids = []
+        all_nodes = set().union(*member_nodes.values())
+
+        # Group nodes by spatial proximity
+        node_groups = []  # List of lists of coincident node IDs
+        processed = set()
+
+        for node_id in all_nodes:
+            if node_id in processed:
+                continue
+
+            # Start a new group with this node
+            group = [node_id]
+            processed.add(node_id)
+            node_pos = self.nodes[node_id]
+
+            # Find all other unprocessed nodes within tolerance
+            for other_id in all_nodes:
+                if other_id in processed:
+                    continue
+
+                other_pos = self.nodes[other_id]
+                dist = np.sqrt(sum((node_pos[i] - other_pos[i])**2 for i in range(3)))
+
+                if dist < tolerance:
+                    group.append(other_id)
+                    processed.add(other_id)
+
+            if len(group) > 1 or self._node_connects_multiple_members(group[0], member_nodes):
+                node_groups.append(group)
+
+        # Find the largest group (most likely the connection point)
+        if node_groups:
+            largest_group = max(node_groups, key=len)
+            connection_node_ids = largest_group
+            logger.debug(f"Connection {conn.id}: Found {len(connection_node_ids)} coincident nodes")
+        else:
+            logger.warning(f"Connection {conn.id}: No coincident nodes found")
+
+        return connection_node_ids
+
+    def _node_connects_multiple_members(self, node_id: int, member_nodes: Dict[str, set]) -> bool:
+        """Check if a node belongs to elements from multiple members."""
+        count = sum(1 for nodes in member_nodes.values() if node_id in nodes)
+        return count >= 2
 
     def _split_beam_sets_by_orientation(self) -> Dict[str, Dict[tuple, List[int]]]:
         """
