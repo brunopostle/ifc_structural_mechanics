@@ -51,8 +51,11 @@ pip install -e ".[docs]"
 The easiest way to perform structural analysis is through the command-line interface:
 
 ```bash
-# Basic analysis
+# Basic analysis (using installed command)
 ifc-analysis analyze model.ifc --output ./results
+
+# Or run as a module (useful for development)
+python -m ifc_structural_mechanics.cli analyze model.ifc --output ./results
 
 # Specify analysis type and mesh size
 ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static --mesh-size 0.2
@@ -60,6 +63,13 @@ ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static 
 # Enable verbose output and JSON results
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
+
+**Available Options:**
+- `--output DIR`: Output directory for analysis results (required)
+- `--analysis-type TYPE`: Analysis type: `linear_static` (default) or `linear_buckling`
+- `--mesh-size FLOAT`: Element size for mesh generation (default: 0.1)
+- `--verbose`: Enable verbose logging output
+- `--json-output`: Write results in JSON format
 
 ### Python API
 

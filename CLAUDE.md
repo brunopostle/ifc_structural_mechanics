@@ -48,8 +48,11 @@ flake8 src/
 
 ### Running Analysis
 ```bash
-# Basic analysis using CLI
+# Basic analysis using CLI (installed command)
 ifc-analysis analyze model.ifc --output ./results
+
+# Or run as a module (useful for development)
+python -m ifc_structural_mechanics.cli analyze model.ifc --output ./results
 
 # Specify analysis type and mesh size
 ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static --mesh-size 0.2

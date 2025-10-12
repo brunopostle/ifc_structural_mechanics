@@ -40,6 +40,7 @@ def write_boundary_conditions(
 
     # Keep track of which nodes have been assigned to BCs
     bc_nodes_found = False
+    all_bc_nodes = set()  # Collect all nodes with boundary conditions for reaction output
 
     # Process connections (which are often supports/boundary conditions)
     for connection in domain_model.connections:
@@ -55,6 +56,7 @@ def write_boundary_conditions(
             if bc_nodes:
                 # Create node set for this boundary condition
                 node_sets[set_name] = bc_nodes
+                all_bc_nodes.update(bc_nodes)  # Track for reaction force output
 
                 # Write the node set
                 file.write(f"*NSET, NSET={set_name}\n")
@@ -116,6 +118,7 @@ def write_boundary_conditions(
             if bc_nodes:
                 # Create node set for this boundary condition
                 node_sets[set_name] = bc_nodes
+                all_bc_nodes.update(bc_nodes)  # Track for reaction force output
 
                 # Write the node set
                 file.write(f"*NSET, NSET={set_name}\n")
@@ -156,6 +159,7 @@ def write_boundary_conditions(
         if potential_support_nodes:
             set_name = "BC_AUTO"
             node_sets[set_name] = potential_support_nodes
+            all_bc_nodes.update(potential_support_nodes)  # Track for reaction force output
 
             # Write the node set
             file.write(f"*NSET, NSET={set_name}\n")
@@ -174,6 +178,19 @@ def write_boundary_conditions(
                 "No explicit boundary conditions found. Automatically adding fixed supports at y=0."
             )
             bc_nodes_found = True
+
+    # Create a combined node set for all boundary condition nodes (for reaction force output)
+    if all_bc_nodes:
+        file.write("** Combined set of all nodes with boundary conditions\n")
+        file.write("*NSET, NSET=ALL_BC_NODES\n")
+        bc_nodes_list = sorted(list(all_bc_nodes))
+        for i in range(0, len(bc_nodes_list), 8):
+            line_nodes = bc_nodes_list[i : i + 8]
+            line = ", ".join(map(str, line_nodes))
+            file.write(f"{line}\n")
+        file.write("\n")
+        node_sets["ALL_BC_NODES"] = bc_nodes_list
+        logger.info(f"Created ALL_BC_NODES set with {len(bc_nodes_list)} nodes for reaction force output")
 
     # If still no boundary conditions, add a warning comment
     if not bc_nodes_found:
@@ -521,8 +538,10 @@ def write_analysis_steps(
     file.write("*NODE FILE\n")
     file.write("U\n")  # Displacements
 
-    file.write("*NODE PRINT, TOTALS=ONLY\n")
-    file.write("RF\n")  # Reaction forces summary
+    # Request reaction forces for all nodes with boundary conditions
+    # Note: RF (reaction forces) are only calculated at nodes with constraints
+    file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY\n")
+    file.write("RF\n")  # Reaction forces - outputs to .dat file
 
     file.write("*EL FILE\n")
     file.write("S, E\n")  # Stresses and strains
