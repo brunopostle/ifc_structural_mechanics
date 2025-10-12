@@ -400,6 +400,18 @@ def get_representation(element, rep_type):
         ):
             return representation
 
+        # Check if it's a MappedRepresentation that contains the type we're looking for
+        if (
+            hasattr(representation, "RepresentationIdentifier")
+            and representation.RepresentationIdentifier == "Reference"
+            and hasattr(representation, "RepresentationType")
+            and representation.RepresentationType == "MappedRepresentation"
+        ):
+            # Try to find the representation type inside the MappedRepresentation
+            mapped_rep = get_specific_representation(representation, "Reference", rep_type)
+            if mapped_rep:
+                return mapped_rep
+
     # Then try without rep identifier
     for representation in element.Representation.Representations:
         if (
@@ -407,6 +419,16 @@ def get_representation(element, rep_type):
             and representation.RepresentationType == rep_type
         ):
             return representation
+
+        # Check if it's a MappedRepresentation that contains the type we're looking for
+        if (
+            hasattr(representation, "RepresentationType")
+            and representation.RepresentationType == "MappedRepresentation"
+        ):
+            # Try to find the representation type inside the MappedRepresentation
+            mapped_rep = get_specific_representation(representation, None, rep_type)
+            if mapped_rep:
+                return mapped_rep
 
     return None
 

@@ -513,14 +513,24 @@ class UnifiedCalculixWriter:
         file.write("\n")
 
     def _write_elements(self, file: TextIO) -> None:
-        """Write element definitions grouped by type."""
-        # Group elements by type
+        """Write element definitions grouped by type, only for elements assigned to members."""
+        # Collect element IDs that are assigned to members
+        assigned_element_ids = set()
+        for member in self.domain_model.members:
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+            if member_set in self.element_sets:
+                assigned_element_ids.update(self.element_sets[member_set])
+
+        # Group assigned elements by type
         element_types = {}
-        for element_id, element_data in self.elements.items():
-            element_type = element_data["type"]
-            if element_type not in element_types:
-                element_types[element_type] = []
-            element_types[element_type].append((element_id, element_data["nodes"]))
+        for element_id in assigned_element_ids:
+            if element_id in self.elements:
+                element_data = self.elements[element_id]
+                element_type = element_data["type"]
+                if element_type not in element_types:
+                    element_types[element_type] = []
+                element_types[element_type].append((element_id, element_data["nodes"]))
 
         # Write each element type
         for element_type, elements in element_types.items():

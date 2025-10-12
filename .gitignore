@@ -62,6 +62,25 @@ Session.vim
 *.vtp
 *.fbd
 
+# Test and analysis output directories
+test_*/
+results/
+results*/
+*_01/
+*_02/
+verify_*/
+intermediate/
+spooles.out
+*.12d
+*.cvg
+*.sta
+
+# Temporary files
+complexity-reduction-brief.md
+prompt_plan*.md
+library.txt
+downloads
+
 # OS specific files
 .DS_Store
 Thumbs.db
