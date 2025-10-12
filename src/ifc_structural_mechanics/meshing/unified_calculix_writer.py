@@ -727,6 +727,9 @@ class UnifiedCalculixWriter:
         - Point connections: *KINEMATIC coupling (rigid connection)
         - Hinge connections: Boundary conditions (handled elsewhere)
         - Spring connections: *SPRING elements (future)
+
+        Uses hierarchical constraint approach to avoid conflicts when nodes
+        are shared between multiple connections.
         """
         if not self.domain_model.connections:
             logger.debug("No connections to write")
@@ -740,6 +743,10 @@ class UnifiedCalculixWriter:
 
         connections_written = 0
 
+        # Track which (node, DOF) pairs are already constrained as dependent
+        # to avoid CalculiX error: "DOF detected on dependent side of two different MPC's"
+        constrained_node_dofs = set()  # Set of (node_id, dof) tuples
+
         for conn in self.domain_model.connections:
             # Skip connections with dummy members (boundary conditions)
             real_members = [m for m in conn.connected_members if not m.startswith('dummy_member_')]
@@ -749,17 +756,17 @@ class UnifiedCalculixWriter:
 
             # Get connection type
             if conn.entity_type == "point":
-                self._write_point_connection(file, conn, real_members)
+                self._write_point_connection(file, conn, real_members, constrained_node_dofs)
                 connections_written += 1
             elif conn.entity_type == "rigid":
-                self._write_rigid_connection(file, conn, real_members)
+                self._write_rigid_connection(file, conn, real_members, constrained_node_dofs)
                 connections_written += 1
             elif conn.entity_type == "hinge":
                 # Hinges with multiple members could be modeled differently
                 # For now, treat as point connection with note
                 if len(real_members) >= 2:
                     logger.debug(f"Hinge connection {conn.id} with {len(real_members)} members - treating as pinned joint")
-                    self._write_point_connection(file, conn, real_members, is_hinge=True)
+                    self._write_point_connection(file, conn, real_members, constrained_node_dofs, is_hinge=True)
                     connections_written += 1
             elif conn.entity_type == "spring":
                 logger.warning(f"Spring connections not yet implemented: {conn.id}")
@@ -768,11 +775,19 @@ class UnifiedCalculixWriter:
 
         logger.info(f"Wrote {connections_written} structural connections")
 
-    def _write_point_connection(self, file: TextIO, conn, member_ids: List[str], is_hinge: bool = False) -> None:
+    def _write_point_connection(self, file: TextIO, conn, member_ids: List[str],
+                                 constrained_node_dofs: set, is_hinge: bool = False) -> None:
         """
         Write a point connection using CalculiX *EQUATION constraints.
 
         A point connection ties all member nodes at the connection point together.
+
+        Args:
+            file: Output file handle
+            conn: Connection object
+            member_ids: List of member IDs
+            constrained_node_dofs: Set of (node_id, dof) tuples already constrained
+            is_hinge: If True, only constrain translations, not rotations
         """
         # Find nodes at this connection point for each member
         connection_nodes = self._find_connection_nodes(conn, member_ids)
@@ -785,6 +800,9 @@ class UnifiedCalculixWriter:
         file.write(f"** {conn_type} Connection: {conn.id}\n")
         file.write(f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n")
 
+        # Check if all connected elements support rotational DOFs
+        has_rotational_dofs = self._check_rotational_dofs_at_nodes(connection_nodes)
+
         # Use first node as reference, constrain all others to it
         ref_node = connection_nodes[0]
 
@@ -793,21 +811,42 @@ class UnifiedCalculixWriter:
         #                  2
         #                  node1, dof1, coef1, node2, dof2, coef2
 
-        dofs = [1, 2, 3]  # X, Y, Z translations
-        if not is_hinge:
+        dofs = [1, 2, 3]  # X, Y, Z translations (always constrained)
+
+        # Only constrain rotations if all elements support them AND it's not a hinge
+        if not is_hinge and has_rotational_dofs:
             dofs.extend([4, 5, 6])  # Add rotations for rigid connection
+        elif not is_hinge and not has_rotational_dofs:
+            logger.debug(f"Connection {conn.id}: Skipping rotational constraints (shell elements present)")
+
+        equations_written = 0
+        equations_skipped = 0
 
         for dof in dofs:
             for node in connection_nodes[1:]:
+                # Check if this (node, DOF) is already constrained
+                if (node, dof) in constrained_node_dofs:
+                    logger.debug(f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)")
+                    equations_skipped += 1
+                    continue
+
+                # Write the equation
                 file.write(f"*EQUATION\n")
                 file.write(f"2\n")
                 file.write(f"{node},{dof},1.0,{ref_node},{dof},-1.0\n")
 
+                # Mark this (node, DOF) as constrained
+                constrained_node_dofs.add((node, dof))
+                equations_written += 1
+
+        if equations_skipped > 0:
+            logger.info(f"Connection {conn.id}: Wrote {equations_written} equations, skipped {equations_skipped} (shared nodes)")
+
         file.write("**\n")
 
-    def _write_rigid_connection(self, file: TextIO, conn, member_ids: List[str]) -> None:
+    def _write_rigid_connection(self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set) -> None:
         """Write a rigid connection (same as point connection for now)."""
-        self._write_point_connection(file, conn, member_ids, is_hinge=False)
+        self._write_point_connection(file, conn, member_ids, constrained_node_dofs, is_hinge=False)
 
     def _find_connection_nodes(self, conn, member_ids: List[str]) -> List[int]:
         """
@@ -834,7 +873,7 @@ class UnifiedCalculixWriter:
             nodes = set()
             for elem_id in self.element_sets[member_set]:
                 if elem_id in self.elements:
-                    elem_nodes = self.elements[elem_id]['connectivity']
+                    elem_nodes = self.elements[elem_id]['nodes']
                     nodes.update(elem_nodes)
 
             member_nodes[member_id] = nodes
@@ -892,6 +931,28 @@ class UnifiedCalculixWriter:
         """Check if a node belongs to elements from multiple members."""
         count = sum(1 for nodes in member_nodes.values() if node_id in nodes)
         return count >= 2
+
+    def _check_rotational_dofs_at_nodes(self, node_ids: List[int]) -> bool:
+        """
+        Check if all elements connected to these nodes support rotational DOFs.
+
+        Returns:
+            True if all elements support rotations (beam elements), False otherwise
+        """
+        # Element types that support rotational DOFs in CalculiX
+        rotational_types = {'B31', 'B32', 'B33'}  # Beam elements
+
+        for node_id in node_ids:
+            # Find all elements using this node
+            for elem_id, elem_data in self.elements.items():
+                if node_id in elem_data['nodes']:
+                    elem_type = elem_data['type']
+                    if elem_type not in rotational_types:
+                        # Found an element that doesn't support rotations (e.g., shell)
+                        logger.debug(f"Node {node_id} has element {elem_id} of type {elem_type} (no rotational DOFs)")
+                        return False
+
+        return True
 
     def _split_beam_sets_by_orientation(self) -> Dict[str, Dict[tuple, List[int]]]:
         """
