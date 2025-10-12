@@ -614,13 +614,26 @@ class LoadsExtractor:
             ID of the referenced surface
         """
         try:
-            # Try to find the associated structural surface using IFC4 pattern
-            if hasattr(ifc_load, "AppliedOn"):
-                for applied_rel in ifc_load.AppliedOn:
-                    if hasattr(applied_rel, "RelatingElement"):
-                        element = applied_rel.RelatingElement
-                        if hasattr(element, "GlobalId"):
-                            return element.GlobalId
+            # Method 1: Check AssignedToStructuralItem (IFC4 pattern)
+            if hasattr(ifc_load, "AssignedToStructuralItem"):
+                for rel in ifc_load.AssignedToStructuralItem:
+                    if rel.is_a("IfcRelConnectsStructuralActivity"):
+                        if hasattr(rel, "RelatingElement") and rel.RelatingElement:
+                            element = rel.RelatingElement
+                            if hasattr(element, "GlobalId"):
+                                self.logger.debug(f"Found surface reference via AssignedToStructuralItem: {element.GlobalId}")
+                                return element.GlobalId
+
+            # Method 2: Use inverse relationships to find IfcRelConnectsStructuralActivity
+            if hasattr(self.ifc_file, 'get_inverse'):
+                inverse_rels = self.ifc_file.get_inverse(ifc_load)
+                for rel in inverse_rels:
+                    if rel.is_a("IfcRelConnectsStructuralActivity"):
+                        if hasattr(rel, "RelatingElement") and rel.RelatingElement:
+                            element = rel.RelatingElement
+                            if hasattr(element, "GlobalId"):
+                                self.logger.debug(f"Found surface reference via inverse relationship: {element.GlobalId}")
+                                return element.GlobalId
 
             # Fallback to a default reference
             self.logger.warning(
