@@ -281,7 +281,10 @@ class UnifiedCalculixWriter:
             calculix_type = self.ELEMENT_TYPE_MAPPING.get(block_name)
 
             if not calculix_type:
-                logger.warning(f"Unknown element type: {block_name}")
+                # Skip non-structural element types (vertex, edge, etc.) silently
+                # These are geometric entities from Gmsh, not FEA elements
+                if block_name not in ['vertex', 'edge', 'point']:
+                    logger.warning(f"Unknown element type: {block_name}")
                 continue
 
             # Create element set for this block type
