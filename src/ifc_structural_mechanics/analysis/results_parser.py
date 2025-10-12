@@ -7,6 +7,7 @@ and convert them into domain model result objects.
 
 import logging
 import os
+import re
 import traceback
 from typing import Dict, List, Optional
 
@@ -103,76 +104,76 @@ class ResultsParser(BaseParser):
             while i < len(lines):
                 line = lines[i].strip()
 
-                # Look for the start of a displacement block
-                if any(marker in line for marker in ["1PDISP", "DISPLACEMENTS"]):
+                # Look for the start of a displacement block (modern format: " -4  DISP")
+                if line.startswith("-4") and "DISP" in line:
                     logger.debug(f"Found displacement block at line {i}: {line}")
                     in_disp_block = True
                     i += 1
+                    # Skip -5 header lines (component definitions)
+                    while i < len(lines) and lines[i].strip().startswith("-5"):
+                        i += 1
                     continue
 
                 # If we're in a displacement block, parse the entries
                 if in_disp_block:
                     # Check for end of block
-                    if line.startswith("-3") or line.startswith("3C"):
+                    if line.startswith("-3"):
                         logger.debug(f"End of displacement block at line {i}")
                         in_disp_block = False
                         i += 1
                         continue
 
-                    # Look for node marker lines
+                    # Look for node data lines (format: " -1  node_id  dx  dy  dz")
                     if line.startswith("-1"):
-                        parts = line.split()
-                        if len(parts) >= 2:
+                        # FRD format uses fixed-width columns - values can run together
+                        # Extract node ID first (after the -1 marker)
+                        try:
+                            # Split by spaces to get node ID
+                            parts = line.split()
                             node_id = parts[1]
-                            logger.debug(f"Found node marker at line {i}: {node_id}")
 
-                            # Next line should contain displacement values
-                            if i + 1 < len(lines):
-                                i += 1
-                                values_line = lines[i].strip()
-                                logger.debug(
-                                    f"Values line for node {node_id}: {values_line}"
-                                )
-                                values = values_line.split()
+                            # Get the rest of the line after node ID for value extraction
+                            # Find where node ID ends in the original line
+                            node_id_pos = line.find(node_id) + len(node_id)
+                            values_str = line[node_id_pos:].strip()
 
-                                # Try to extract displacement values
-                                translations = [0.0, 0.0, 0.0]
+                            # Parse values using regex to handle concatenated scientific notation
+                            # Match: decimal number with optional exponent OR integer with required exponent
+                            # This avoids matching plain integers (like node IDs)
+                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
+                            matches = re.findall(value_pattern, values_str)
+
+                            # Filter out empty matches and convert to floats
+                            values = []
+                            for m in matches:
+                                if m and m not in ['+', '-', '']:
+                                    try:
+                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
+                                    except ValueError:
+                                        pass
+
+                            if len(values) >= 3:
+                                # Extract displacement values
+                                translations = values[0:3]
+
+                                # Extract rotations if available
                                 rotations = [0.0, 0.0, 0.0]
+                                if len(values) >= 6:
+                                    rotations = values[3:6]
 
-                                try:
-                                    if len(values) >= 4:
-                                        # Format often has node number again followed by values
-                                        start_idx = 1
+                                # Create displacement result
+                                result = DisplacementResult(reference_element=node_id)
+                                result.set_translations(translations)
+                                result.set_rotations(rotations)
 
-                                        # Extract translations if there are enough values
-                                        if len(values) >= start_idx + 3:
-                                            for j in range(3):
-                                                translations[j] = float(
-                                                    values[start_idx + j]
-                                                )
-
-                                        # Extract rotations if there are enough values
-                                        if len(values) >= start_idx + 6:
-                                            for j in range(3):
-                                                rotations[j] = float(
-                                                    values[start_idx + 3 + j]
-                                                )
-
-                                        # Create displacement result
-                                        result = DisplacementResult(
-                                            reference_element=node_id
-                                        )
-                                        result.set_translations(translations)
-                                        result.set_rotations(rotations)
-
-                                        displacements.append(result)
-                                        logger.debug(
-                                            f"Added displacement for node {node_id}: {translations}"
-                                        )
-                                except (ValueError, IndexError) as e:
-                                    logger.warning(
-                                        f"Error parsing displacement values for node {node_id}: {e}"
-                                    )
+                                displacements.append(result)
+                                logger.debug(
+                                    f"Added displacement for node {node_id}: {translations}"
+                                )
+                        except (ValueError, IndexError) as e:
+                            logger.warning(
+                                f"Error parsing displacement line: {line}, error: {e}"
+                            )
 
                 i += 1
 
@@ -335,61 +336,75 @@ class ResultsParser(BaseParser):
 
             stresses = []
             i = 0
+            in_stress_block = False
+
             while i < len(lines):
                 line = lines[i].strip()
-                logger.debug(f"Processing line {i}: {line}")
 
-                # Look for stress block start
-                if "1PSTRESS" in line or "STRESSES" in line:
-                    logger.debug("Found stress block")
-
-                    # Move to the next lines to find data
-                    while i < len(lines) - 1:
+                # Look for stress block start (modern format: " -4  STRESS")
+                if line.startswith("-4") and "STRESS" in line:
+                    logger.debug(f"Found stress block at line {i}: {line}")
+                    in_stress_block = True
+                    i += 1
+                    # Skip -5 header lines (component definitions)
+                    while i < len(lines) and lines[i].strip().startswith("-5"):
                         i += 1
-                        line = lines[i].strip()
-                        logger.debug(f"Checking line {i}: {line}")
+                    continue
 
-                        # Look for lines starting with -1 (element markers)
-                        if line.startswith("-1"):
+                # If we're in a stress block, parse the entries
+                if in_stress_block:
+                    # Check for end of block
+                    if line.startswith("-3"):
+                        logger.debug(f"End of stress block at line {i}")
+                        in_stress_block = False
+                        i += 1
+                        continue
+
+                    # Look for node data lines (format: " -1  node_id  sxx  syy  szz  sxy  syz  szx")
+                    if line.startswith("-1"):
+                        try:
+                            # Split by spaces to get node/element ID
                             parts = line.split()
-                            if len(parts) >= 3:
-                                # Next line should contain stress values
-                                if i + 1 < len(lines):
-                                    i += 1
-                                    values_line = lines[i].strip().split()
+                            element_id = parts[1]
 
-                                    # Check if values line looks valid
-                                    if len(values_line) >= 10:
-                                        element_id = parts[1]
+                            # Get the rest of the line after element ID
+                            elem_id_pos = line.find(element_id) + len(element_id)
+                            values_str = line[elem_id_pos:].strip()
 
-                                        # Create stress result
-                                        result = StressResult(
-                                            reference_element=element_id
-                                        )
+                            # Parse values using regex to handle concatenated scientific notation
+                            # Match: decimal number with optional exponent OR integer with required exponent
+                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
+                            matches = re.findall(value_pattern, values_str)
 
-                                        # Normal stresses
-                                        result.add_value("sxx", float(values_line[1]))
-                                        result.add_value("syy", float(values_line[2]))
-                                        result.add_value("szz", float(values_line[3]))
+                            # Convert to floats
+                            values = []
+                            for m in matches:
+                                if m and m not in ['+', '-', '']:
+                                    try:
+                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
+                                    except ValueError:
+                                        pass
 
-                                        # Shear stresses
-                                        result.add_value("sxy", float(values_line[4]))
-                                        result.add_value("syz", float(values_line[5]))
-                                        result.add_value("sxz", float(values_line[6]))
+                            if len(values) >= 6:
+                                # Create stress result
+                                result = StressResult(reference_element=element_id)
 
-                                        # Principal stresses
-                                        result.add_value("s1", float(values_line[7]))
-                                        result.add_value("s2", float(values_line[8]))
-                                        result.add_value("s3", float(values_line[9]))
+                                # Normal stresses
+                                result.add_value("sxx", values[0])
+                                result.add_value("syy", values[1])
+                                result.add_value("szz", values[2])
 
-                                        stresses.append(result)
-                                        logger.debug(
-                                            f"Added stress for element {element_id}"
-                                        )
+                                # Shear stresses
+                                result.add_value("sxy", values[3])
+                                result.add_value("syz", values[4])
+                                result.add_value("sxz", values[5])
 
-                        # Break if end of block marker found
-                        if line.startswith("-3") or line.startswith("3C"):
-                            break
+                                stresses.append(result)
+                                logger.debug(f"Added stress for element {element_id}")
+                        except (ValueError, IndexError) as e:
+                            logger.warning(
+                                f"Error parsing stress line: {line}, error: {e}"
+                            )
 
                 i += 1
 
@@ -430,61 +445,75 @@ class ResultsParser(BaseParser):
 
             strains = []
             i = 0
+            in_strain_block = False
+
             while i < len(lines):
                 line = lines[i].strip()
-                logger.debug(f"Processing line {i}: {line}")
 
-                # Look for strain block start
-                if "1PSTRN" in line or "STRAINS" in line:
-                    logger.debug("Found strain block")
-
-                    # Move to the next lines to find data
-                    while i < len(lines) - 1:
+                # Look for strain block start (modern format: " -4  TOSTRAIN" or "STRAIN")
+                if line.startswith("-4") and ("STRAIN" in line or "TOSTRAIN" in line):
+                    logger.debug(f"Found strain block at line {i}: {line}")
+                    in_strain_block = True
+                    i += 1
+                    # Skip -5 header lines (component definitions)
+                    while i < len(lines) and lines[i].strip().startswith("-5"):
                         i += 1
-                        line = lines[i].strip()
-                        logger.debug(f"Checking line {i}: {line}")
+                    continue
 
-                        # Look for lines starting with -1 (element markers)
-                        if line.startswith("-1"):
+                # If we're in a strain block, parse the entries
+                if in_strain_block:
+                    # Check for end of block
+                    if line.startswith("-3"):
+                        logger.debug(f"End of strain block at line {i}")
+                        in_strain_block = False
+                        i += 1
+                        continue
+
+                    # Look for node data lines (format: " -1  node_id  exx  eyy  ezz  exy  eyz  ezx")
+                    if line.startswith("-1"):
+                        try:
+                            # Split by spaces to get node/element ID
                             parts = line.split()
-                            if len(parts) >= 3:
-                                # Next line should contain strain values
-                                if i + 1 < len(lines):
-                                    i += 1
-                                    values_line = lines[i].strip().split()
+                            element_id = parts[1]
 
-                                    # Check if values line looks valid
-                                    if len(values_line) >= 10:
-                                        element_id = parts[1]
+                            # Get the rest of the line after element ID
+                            elem_id_pos = line.find(element_id) + len(element_id)
+                            values_str = line[elem_id_pos:].strip()
 
-                                        # Create strain result
-                                        result = StrainResult(
-                                            reference_element=element_id
-                                        )
+                            # Parse values using regex to handle concatenated scientific notation
+                            # Match: decimal number with optional exponent OR integer with required exponent
+                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
+                            matches = re.findall(value_pattern, values_str)
 
-                                        # Normal strains
-                                        result.add_value("exx", float(values_line[1]))
-                                        result.add_value("eyy", float(values_line[2]))
-                                        result.add_value("ezz", float(values_line[3]))
+                            # Convert to floats
+                            values = []
+                            for m in matches:
+                                if m and m not in ['+', '-', '']:
+                                    try:
+                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
+                                    except ValueError:
+                                        pass
 
-                                        # Shear strains
-                                        result.add_value("exy", float(values_line[4]))
-                                        result.add_value("eyz", float(values_line[5]))
-                                        result.add_value("exz", float(values_line[6]))
+                            if len(values) >= 6:
+                                # Create strain result
+                                result = StrainResult(reference_element=element_id)
 
-                                        # Principal strains
-                                        result.add_value("e1", float(values_line[7]))
-                                        result.add_value("e2", float(values_line[8]))
-                                        result.add_value("e3", float(values_line[9]))
+                                # Normal strains
+                                result.add_value("exx", values[0])
+                                result.add_value("eyy", values[1])
+                                result.add_value("ezz", values[2])
 
-                                        strains.append(result)
-                                        logger.debug(
-                                            f"Added strain for element {element_id}"
-                                        )
+                                # Shear strains
+                                result.add_value("exy", values[3])
+                                result.add_value("eyz", values[4])
+                                result.add_value("exz", values[5])
 
-                        # Break if end of block marker found
-                        if line.startswith("-3") or line.startswith("3C"):
-                            break
+                                strains.append(result)
+                                logger.debug(f"Added strain for element {element_id}")
+                        except (ValueError, IndexError) as e:
+                            logger.warning(
+                                f"Error parsing strain line: {line}, error: {e}"
+                            )
 
                 i += 1
 

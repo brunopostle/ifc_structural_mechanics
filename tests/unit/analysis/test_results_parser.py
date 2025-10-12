@@ -25,26 +25,36 @@ class TestResultsParser:
     @pytest.fixture
     def mock_frd_file(self, tmp_path):
         """Create a mock FRD file for testing."""
-        # Format based on actual CalculiX output
+        # Format based on modern CalculiX output (v2.20+)
         frd_content = """    1C
-    1UNODE                                                                                
-    1PDISP         1    1    1    1
- -1         1    1    0
-            1    1.0000e+00    2.0000e+00    3.0000e+00    0.1000e+00    0.2000e+00    0.3000e+00
- -1         2    1    0
-            1    4.0000e+00    5.0000e+00    6.0000e+00    0.4000e+00    0.5000e+00    0.6000e+00
+    1UNODE
+ -4  DISP        4    1
+ -5  D1          1    2    1    0
+ -5  D2          1    2    2    0
+ -5  D3          1    2    3    0
+ -5  ALL         1    2    0    0    1ALL
+ -1         1 1.0000e+00 2.0000e+00 3.0000e+00 0.1000e+00 0.2000e+00 0.3000e+00
+ -1         2 4.0000e+00 5.0000e+00 6.0000e+00 0.4000e+00 0.5000e+00 0.6000e+00
  -3
-    1PSTRESS       1    1    1    1
- -1         1    1    0
-            1    10.00e+00    20.00e+00    30.00e+00    5.00e+00    6.00e+00    7.00e+00    40.00e+00    20.00e+00    10.00e+00
- -1         2    1    0
-            1    11.00e+00    21.00e+00    31.00e+00    5.10e+00    6.10e+00    7.10e+00    41.00e+00    21.00e+00    11.00e+00
+ -4  STRESS      6    1
+ -5  SXX         1    4    1    1
+ -5  SYY         1    4    2    2
+ -5  SZZ         1    4    3    3
+ -5  SXY         1    4    1    2
+ -5  SYZ         1    4    2    3
+ -5  SZX         1    4    3    1
+ -1         1 10.00e+00 20.00e+00 30.00e+00 5.00e+00 6.00e+00 7.00e+00
+ -1         2 11.00e+00 21.00e+00 31.00e+00 5.10e+00 6.10e+00 7.10e+00
  -3
-    1PSTRN         1    1    1    1
- -1         1    1    0
-            1    0.001e+00    0.002e+00    0.003e+00    0.0005e+00    0.0006e+00    0.0007e+00    0.004e+00    0.002e+00    0.001e+00
- -1         2    1    0
-            1    0.0011e+00   0.0021e+00   0.0031e+00   0.00051e+00   0.00061e+00   0.00071e+00   0.0041e+00   0.0021e+00   0.0011e+00
+ -4  TOSTRAIN    6    1
+ -5  EXX         1    4    1    1
+ -5  EYY         1    4    2    2
+ -5  EZZ         1    4    3    3
+ -5  EXY         1    4    1    2
+ -5  EYZ         1    4    2    3
+ -5  EZX         1    4    3    1
+ -1         1 0.001e+00 0.002e+00 0.003e+00 0.0005e+00 0.0006e+00 0.0007e+00
+ -1         2 0.0011e+00 0.0021e+00 0.0031e+00 0.00051e+00 0.00061e+00 0.00071e+00
  -3
     3C"""
         frd_file = tmp_path / "test.frd"
@@ -100,9 +110,7 @@ total forces (fx,fy,fz) and moments (mx,my,mz)
         assert results[0].get_value("sxy") == 5.0
         assert results[0].get_value("syz") == 6.0
         assert results[0].get_value("sxz") == 7.0
-        assert results[0].get_value("s1") == 40.0
-        assert results[0].get_value("s2") == 20.0
-        assert results[0].get_value("s3") == 10.0
+        # Note: Principal stresses (s1, s2, s3) are not in the modern FRD format
 
     def test_parse_strains(self, mock_frd_file):
         """Test parsing strain results."""
@@ -118,9 +126,7 @@ total forces (fx,fy,fz) and moments (mx,my,mz)
         assert results[0].get_value("exy") == 0.0005
         assert results[0].get_value("eyz") == 0.0006
         assert results[0].get_value("exz") == 0.0007
-        assert results[0].get_value("e1") == 0.004
-        assert results[0].get_value("e2") == 0.002
-        assert results[0].get_value("e3") == 0.001
+        # Note: Principal strains (e1, e2, e3) are not in the modern FRD format
 
     def test_parse_reactions(self, mock_dat_file):
         """Test parsing reaction force results."""
