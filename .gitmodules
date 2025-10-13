@@ -1,0 +1,3 @@
+[submodule "examples/analysis-models"]
+	path = examples/analysis-models
+	url = git@github.com:IfcOpenShell/analysis-models.git
