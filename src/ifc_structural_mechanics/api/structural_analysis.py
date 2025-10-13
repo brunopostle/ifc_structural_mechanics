@@ -93,6 +93,7 @@ def analyze_ifc(
         "errors": [],
         "output_files": {},
         "mesh_statistics": {},
+        "model": None,
     }
 
     # Ensure output directory exists
@@ -102,6 +103,9 @@ def analyze_ifc(
         # Step 1: Extract the structural model from the IFC file
         logger.info(f"Extracting structural model from {ifc_path}")
         domain_model = extract_model(ifc_path)
+
+        # Store the model in results for later access
+        result["model"] = domain_model
 
         # Check if the model has any members
         if not domain_model.members:

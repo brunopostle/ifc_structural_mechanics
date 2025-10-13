@@ -634,7 +634,12 @@ class ResultsParser(BaseParser):
                             f"Error parsing reaction line: {line}, error: {e}"
                         )
 
-            # If no results found, try alternative formats
+            # If no results found, try to parse total reactions (TOTALS=ONLY format)
+            if not reactions:
+                logger.debug("No individual nodal reactions found, trying to parse total reactions")
+                reactions = self._parse_total_reactions(lines)
+
+            # If still no results, try alternative formats
             if not reactions:
                 logger.debug("No reaction forces found, trying alternative formats")
                 reactions = self._parse_reactions_alternative_format(lines)
@@ -653,6 +658,64 @@ class ResultsParser(BaseParser):
             logger.error(f"Error parsing reaction forces: {str(e)}")
             # Return empty list instead of raising exception
             return []
+
+    def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
+        """
+        Parse total reaction forces from CalculiX TOTALS=ONLY format.
+
+        When CalculiX is run with *NODE PRINT, TOTALS=ONLY, it outputs only
+        the sum of all reaction forces, not individual nodal values. This is
+        useful for equilibrium checking.
+
+        Format:
+            total force (fx,fy,fz) for set ALL_BC_NODES and time  0.1000000E+01
+
+                    0.000000E+00  0.000000E+00  -4.000000E+04
+
+        Args:
+            lines (List[str]): The lines of the DAT file.
+
+        Returns:
+            List[ReactionForceResult]: List with a single result for total reactions.
+        """
+        reactions = []
+
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+
+            # Look for total force line
+            if "total force" in line_lower and ("fx" in line_lower or "fy" in line_lower or "fz" in line_lower):
+                logger.debug(f"Found total force line at {i}: {line.strip()}")
+
+                # The next non-empty line should have the force values
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    value_line = lines[j].strip()
+
+                    if not value_line:
+                        continue
+
+                    try:
+                        # Parse the force values
+                        parts = value_line.split()
+                        if len(parts) >= 3:
+                            forces = [float(parts[k]) for k in range(3)]
+
+                            # Create a single reaction force result for the totals
+                            # Use "TOTAL" as reference element to indicate this is summed
+                            result = ReactionForceResult(reference_element="TOTAL")
+                            result.set_forces(forces)
+                            result.set_moments([0.0, 0.0, 0.0])  # Totals don't include moments typically
+
+                            reactions.append(result)
+                            logger.info(f"Parsed total reaction forces: {forces}")
+                            break
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"Error parsing total force values: {value_line}, error: {e}")
+
+                # We found the total force section, no need to continue
+                break
+
+        return reactions
 
     def _parse_reactions_alternative_format(
         self, lines: List[str]
