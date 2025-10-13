@@ -12,6 +12,8 @@ IFC Structural Mechanics provides a complete workflow for performing structural 
 - **Automated Meshing**: Generate high-quality finite element meshes using Gmsh
 - **Structural Analysis**: Perform linear static and linear buckling analysis using CalculiX
 - **Result Processing**: Parse and process analysis results with error detection and mapping
+- **Interactive Visualization**: 3D visualization of deformed meshes and stress fields using PyVista
+- **Equilibrium Validation**: Automatic checking of load/reaction equilibrium
 - **Flexible Configuration**: Comprehensive configuration system for analysis, meshing, and system settings
 - **Command-Line Interface**: Easy-to-use CLI for batch processing and automation
 - **Error Handling**: Robust error detection with mapping back to original IFC entities
@@ -45,6 +47,9 @@ pip install -e ".[dev]"
 
 # Install documentation dependencies
 pip install -e ".[docs]"
+
+# Install visualization dependencies
+pip install -e ".[viz]"
 ```
 
 ## Usage
@@ -129,6 +134,51 @@ inp_file = run_complete_analysis_workflow(
     meshing_config=meshing_config,
     system_config=system_config
 )
+```
+
+### Visualization
+
+Visualize analysis results interactively using PyVista:
+
+```python
+from ifc_structural_mechanics.visualization import ResultVisualizer
+from ifc_structural_mechanics.ifc.extractor import Extractor
+from ifc_structural_mechanics.analysis.results_parser import ResultsParser
+
+# Extract model and parse results
+extractor = Extractor("model.ifc")
+model = extractor.extract_model()
+
+parser = ResultsParser(domain_model=model)
+results = parser.parse_results({
+    "results": "results/analysis.frd",
+    "data": "results/analysis.dat"
+})
+
+# Create visualization
+viz = ResultVisualizer(model)
+viz.load_mesh_from_file("results/mesh.msh")
+viz.apply_displacement_field(scale_factor=100.0)  # Scale for visibility
+viz.add_stress_field()
+
+# Show interactive 3D view
+viz.plot_deformed(field='Von Mises Stress', show_undeformed=True)
+
+# Or export to HTML
+viz.export_to_html("results.html")
+```
+
+**Visualization Features:**
+- Interactive 3D deformed mesh with rotation, zoom, pan
+- Color-coded displacement magnitude
+- Von Mises stress visualization
+- Side-by-side undeformed/deformed comparison
+- Export to HTML for sharing
+- Save screenshots
+
+**Installation:**
+```bash
+pip install -e ".[viz]"
 ```
 
 ## Configuration

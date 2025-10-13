@@ -48,6 +48,9 @@ docs = [
     "mkdocstrings>=0.18.0",
     "mkdocstrings-python>=0.7.0",
 ]
+viz = [
+    "pyvista>=0.38.0",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/example/ifc_structural_mechanics"
