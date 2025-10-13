@@ -30,9 +30,12 @@ IFC Structural Mechanics provides a complete workflow for performing structural 
 ### Install from Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/brunopostle/ifc_structural_mechanics.git
+# Clone the repository (including example models submodule)
+git clone --recurse-submodules https://github.com/brunopostle/ifc_structural_mechanics.git
 cd ifc_structural_mechanics
+
+# Or if you already cloned without submodules:
+# git submodule update --init --recursive
 
 # Install in development mode
 pip install -e .
