@@ -100,6 +100,115 @@ class ResultVisualizer:
         logger.info(f"Loaded mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements")
         return self.mesh
 
+    def load_mesh_from_frd(self, frd_file: str, inp_file: Optional[str] = None) -> pv.UnstructuredGrid:
+        """
+        Load mesh from CalculiX FRD and INP files.
+
+        The FRD file contains node coordinates (including higher-order nodes created
+        by CalculiX), while the INP file contains element connectivity. This method
+        reads both files and creates a mapping between them using node coordinates.
+
+        Args:
+            frd_file: Path to .frd file
+            inp_file: Path to .inp file (defaults to same directory as frd_file)
+
+        Returns:
+            PyVista unstructured grid
+        """
+        logger.info(f"Loading mesh from FRD: {frd_file}")
+
+        # Default inp_file location
+        if inp_file is None:
+            frd_path = Path(frd_file)
+            inp_file = str(frd_path.parent / frd_path.stem) + '.inp'
+
+        logger.info(f"Reading mesh structure from INP: {inp_file}")
+
+        # Read FRD file for node coordinates (CalculiX renumbered nodes)
+        frd_nodes = {}  # node_id -> [x, y, z]
+        with open(frd_file, 'r') as f:
+            for line in f:
+                if 'PSTEP' in line:
+                    break
+                if line.startswith(' -1') and len(line) >= 37:
+                    try:
+                        node_id = int(line[3:13].strip())
+                        x = float(line[13:25].strip())
+                        y = float(line[25:37].strip())
+                        z = float(line[37:49].strip()) if len(line) >= 49 else 0.0
+                        frd_nodes[node_id] = np.array([x, y, z])
+                    except (ValueError, IndexError):
+                        pass
+
+        logger.info(f"Parsed {len(frd_nodes)} nodes from FRD")
+
+        # Read INP file for mesh structure using meshio
+        try:
+            inp_mesh = meshio.read(inp_file)
+        except Exception as e:
+            raise ValueError(f"Failed to read INP file: {e}")
+
+        logger.info(f"Read INP mesh: {len(inp_mesh.points)} nodes, {sum(len(c.data) for c in inp_mesh.cells)} elements")
+
+        # Build coordinate-based mapping from INP nodes to FRD nodes
+        # INP nodes are 1-based indexed, so inp_mesh.points[i] corresponds to node ID i+1
+        inp_to_frd_mapping = {}
+        tolerance = 0.15  # CalculiX refines mesh, so allow some distance
+
+        for inp_idx, inp_coord in enumerate(inp_mesh.points):
+            inp_node_id = inp_idx + 1  # INP uses 1-based indexing
+            min_dist = float('inf')
+            best_frd_id = None
+
+            # Find closest FRD node by coordinate
+            for frd_id, frd_coord in frd_nodes.items():
+                dist = np.linalg.norm(inp_coord - frd_coord)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_frd_id = frd_id
+
+            if min_dist < tolerance and best_frd_id is not None:
+                inp_to_frd_mapping[inp_node_id] = best_frd_id
+            elif min_dist < 0.5:  # Only warn for nearby misses
+                logger.debug(f"FRD match for INP node {inp_node_id}: dist={min_dist:.3f}m")
+
+        logger.info(f"Mapped {len(inp_to_frd_mapping)} INP nodes to FRD nodes")
+
+        # Store mapping for later use in apply_displacement_field
+        self._inp_node_to_frd_node = inp_to_frd_mapping
+
+        # Create PyVista mesh from INP data
+        cells = []
+        cell_types = []
+
+        vtk_type_map = {
+            'line': pv.CellType.LINE,
+            'line3': pv.CellType.QUADRATIC_EDGE,
+            'triangle': pv.CellType.TRIANGLE,
+            'triangle6': pv.CellType.QUADRATIC_TRIANGLE,
+            'quad': pv.CellType.QUAD,
+            'quad8': pv.CellType.QUADRATIC_QUAD,
+            'tetra': pv.CellType.TETRA,
+            'tetra10': pv.CellType.QUADRATIC_TETRA,
+            'hexahedron': pv.CellType.HEXAHEDRON,
+            'hexahedron20': pv.CellType.QUADRATIC_HEXAHEDRON,
+            'wedge': pv.CellType.WEDGE,
+        }
+
+        for cell_block in inp_mesh.cells:
+            cell_type_str = cell_block.type
+            if cell_type_str in vtk_type_map:
+                vtk_type = vtk_type_map[cell_type_str]
+                for cell in cell_block.data:
+                    cells.append(np.insert(cell, 0, len(cell)))
+                    cell_types.append(vtk_type)
+
+        cells_array = np.hstack(cells)
+        self.mesh = pv.UnstructuredGrid(cells_array, cell_types, inp_mesh.points)
+
+        logger.info(f"Created mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements")
+        return self.mesh
+
     def apply_displacement_field(
         self,
         scale_factor: float = 1.0,
@@ -133,17 +242,38 @@ class ResultVisualizer:
         displacements = np.zeros((n_points, 3))
         displacement_magnitude = np.zeros(n_points)
 
-        # Map node IDs to array indices
-        # Note: assuming node IDs are 1-based and sequential
+        # Build FRD node ID to result mapping
+        frd_result_map = {}
         for result in displacement_results:
-            try:
-                node_id = int(result.reference_element) - 1  # Convert to 0-based
-                if 0 <= node_id < n_points:
+            frd_node_id = int(result.reference_element)
+            frd_result_map[frd_node_id] = result
+
+        # Apply results using coordinate mapping if available
+        if hasattr(self, '_inp_node_to_frd_node'):
+            logger.info("Using INP-to-FRD mapping for displacement field")
+            mapped_count = 0
+            for mesh_idx in range(n_points):
+                inp_node_id = mesh_idx + 1  # Convert to 1-based INP node ID
+                frd_node_id = self._inp_node_to_frd_node.get(inp_node_id)
+                if frd_node_id and frd_node_id in frd_result_map:
+                    result = frd_result_map[frd_node_id]
                     trans = result.get_translations()
-                    displacements[node_id] = trans
-                    displacement_magnitude[node_id] = result.get_magnitude()
-            except (ValueError, IndexError) as e:
-                logger.warning(f"Error processing displacement for node {result.reference_element}: {e}")
+                    displacements[mesh_idx] = trans
+                    displacement_magnitude[mesh_idx] = result.get_magnitude()
+                    mapped_count += 1
+            logger.info(f"Mapped {mapped_count}/{n_points} nodes to displacement results")
+        else:
+            # Fallback: assume sequential node IDs (1-based)
+            logger.info("Using direct node ID mapping (1-based)")
+            for result in displacement_results:
+                try:
+                    node_id = int(result.reference_element) - 1  # Convert to 0-based
+                    if 0 <= node_id < n_points:
+                        trans = result.get_translations()
+                        displacements[node_id] = trans
+                        displacement_magnitude[node_id] = result.get_magnitude()
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Error processing displacement for node {result.reference_element}: {e}")
 
         # Create displaced mesh
         displaced_points = self.mesh.points + scale_factor * displacements
@@ -162,8 +292,8 @@ class ResultVisualizer:
         """
         Add stress field to mesh for visualization.
 
-        Handles both node-based and element-based stress results. If stress IDs
-        are beyond node count, treats them as element centers and averages to nodes.
+        Handles both node-based and element-based stress results. Uses INP-to-FRD
+        node mapping if available to correctly map CalculiX results to mesh nodes.
 
         Args:
             stress_results: List of stress results (or use model.results)
@@ -182,97 +312,51 @@ class ResultVisualizer:
             return
 
         n_points = self.displaced_mesh.n_points
-        n_cells = self.displaced_mesh.n_cells
+        von_mises = np.zeros(n_points)
 
-        # Check if results are node-based or element-based
-        stress_ids = [int(r.reference_element) for r in stress_results]
-        min_id = min(stress_ids)
-        max_id = max(stress_ids)
+        # Build FRD node ID to stress result mapping
+        frd_stress_map = {}
+        for result in stress_results:
+            frd_node_id = int(result.reference_element)
+            try:
+                vm_stress = result.get_von_mises_stress()
+                frd_stress_map[frd_node_id] = vm_stress
+            except ValueError:
+                pass
 
-        # If IDs are within node range (1-based), treat as node data
-        if max_id <= n_points:
-            logger.info("Treating stress as node-based data")
-            von_mises = np.zeros(n_points)
+        logger.info(f"Parsed {len(frd_stress_map)} stress results from FRD")
 
-            for result in stress_results:
-                try:
-                    node_id = int(result.reference_element) - 1  # Convert to 0-based
-                    if 0 <= node_id < n_points:
-                        try:
-                            vm_stress = result.get_von_mises_stress()
-                            von_mises[node_id] = vm_stress
-                        except ValueError:
-                            pass
-                except (ValueError, IndexError) as e:
-                    logger.warning(f"Error processing stress for element {result.reference_element}: {e}")
-
-            self.displaced_mesh['Von Mises Stress'] = von_mises
+        # Apply stress using coordinate mapping if available
+        if hasattr(self, '_inp_node_to_frd_node'):
+            logger.info("Using INP-to-FRD mapping for stress field")
+            mapped_count = 0
+            for mesh_idx in range(n_points):
+                inp_node_id = mesh_idx + 1  # Convert to 1-based INP node ID
+                frd_node_id = self._inp_node_to_frd_node.get(inp_node_id)
+                if frd_node_id and frd_node_id in frd_stress_map:
+                    von_mises[mesh_idx] = frd_stress_map[frd_node_id]
+                    mapped_count += 1
+            logger.info(f"Mapped {mapped_count}/{n_points} nodes to stress results")
         else:
-            # Element-based data - map integration points to elements, then to nodes
-            logger.info("Treating stress as element/integration point data")
-            logger.info(f"Stress IDs range: {min_id} to {max_id}, mesh has {n_points} nodes, {n_cells} elements")
+            # Fallback: try direct node ID mapping
+            logger.info("Using direct node ID mapping for stress")
+            stress_ids = list(frd_stress_map.keys())
+            min_id = min(stress_ids)
+            max_id = max(stress_ids)
+            logger.info(f"Stress IDs range: {min_id} to {max_id}, mesh has {n_points} nodes")
 
-            # Collect all stress values (integration points)
-            stress_values = []
-            for result in stress_results:
-                try:
-                    vm_stress = result.get_von_mises_stress()
-                    stress_values.append(vm_stress)
-                except (ValueError, IndexError):
-                    pass
-
-            if stress_values:
-                stress_array = np.array(stress_values)
-                logger.info(f"Collected {len(stress_array)} stress values")
-                logger.info(f"Stress range: {stress_array.min():.6e} to {stress_array.max():.6e}")
-
-                # Map stress results to mesh elements
-                # CalculiX typically outputs multiple integration points per element
-                # Try to determine integration points per element
-                n_integration_points = len(stress_array) // n_cells if n_cells > 0 else 1
-                logger.info(f"Estimated integration points per element: {n_integration_points:.1f}")
-
-                # Assign stress to elements by averaging integration points
-                cell_stress = np.zeros(n_cells)
-                if n_integration_points >= 1:
-                    # Reshape and average integration points for each element
-                    # Handle case where we don't have exact multiple
-                    points_per_elem = max(1, int(len(stress_array) / n_cells))
-                    for i in range(n_cells):
-                        start_idx = i * points_per_elem
-                        end_idx = min(start_idx + points_per_elem, len(stress_array))
-                        if end_idx > start_idx:
-                            cell_stress[i] = np.mean(stress_array[start_idx:end_idx])
-                        else:
-                            # Fallback: use overall mean
-                            cell_stress[i] = np.mean(stress_array)
-                else:
-                    # Fallback: distribute all values
-                    cell_stress[:] = np.mean(stress_array)
-
-                logger.info(f"Element stress range: {cell_stress.min():.6e} to {cell_stress.max():.6e}")
-
-                # Extrapolate element stresses to nodes
-                node_stress = np.zeros(n_points)
-                node_count = np.zeros(n_points)
-
-                for i in range(n_cells):
-                    cell = self.displaced_mesh.get_cell(i)
-                    for node_id in cell.point_ids:
-                        node_stress[node_id] += cell_stress[i]
-                        node_count[node_id] += 1
-
-                # Average the accumulated stresses
-                mask = node_count > 0
-                node_stress[mask] /= node_count[mask]
-
-                logger.info(f"Node stress range: {node_stress.min():.6e} to {node_stress.max():.6e}")
-                self.displaced_mesh['Von Mises Stress'] = node_stress
+            if max_id <= n_points:
+                # Direct mapping possible
+                for frd_id, vm_stress in frd_stress_map.items():
+                    node_idx = frd_id - 1  # Convert to 0-based
+                    if 0 <= node_idx < n_points:
+                        von_mises[node_idx] = vm_stress
             else:
-                logger.warning("No valid stress values found")
-                self.displaced_mesh['Von Mises Stress'] = np.zeros(n_points)
+                logger.warning(f"Cannot map stress: FRD IDs ({min_id}-{max_id}) don't match mesh nodes (1-{n_points})")
 
-        max_stress = self.displaced_mesh['Von Mises Stress'].max()
+        # Add stress field to mesh
+        self.displaced_mesh['Von Mises Stress'] = von_mises
+        max_stress = von_mises.max()
         logger.info(f"Added stress field, max von Mises: {max_stress:.6e}")
 
     def plot_deformed(
