@@ -138,7 +138,45 @@ inp_file = run_complete_analysis_workflow(
 
 ### Visualization
 
-Visualize analysis results interactively using PyVista:
+#### Interactive Command-Line Tool
+
+The easiest way to visualize results is with the interactive CLI tool:
+
+```bash
+# Visualize displacement (with auto-scaled deformation)
+python visualize_interactive.py \
+    examples/analysis-models/ifcFiles/building_01.ifc \
+    ./results_building_01 \
+    ./results_building_01/mesh_*.msh \
+    --field displacement
+
+# Visualize stress distribution
+python visualize_interactive.py \
+    model.ifc \
+    ./results \
+    ./results/mesh_*.msh \
+    --field stress \
+    --scale 10000
+
+# Save screenshot instead of interactive view
+python visualize_interactive.py \
+    model.ifc \
+    ./results \
+    ./results/mesh_*.msh \
+    --field displacement \
+    --screenshot output.png
+```
+
+**Options:**
+- `--field {displacement,stress}`: Choose what to visualize (default: displacement)
+- `--scale FACTOR`: Displacement scale factor (auto-calculated if not specified)
+- `--no-undeformed`: Hide undeformed mesh overlay
+- `--screenshot FILE`: Save screenshot and exit (non-interactive)
+- `--time-step N`: Visualize specific time step (for multi-step analyses)
+
+#### Python API
+
+For programmatic use:
 
 ```python
 from ifc_structural_mechanics.visualization import ResultVisualizer
@@ -158,10 +196,19 @@ results = parser.parse_results({
 # Create visualization
 viz = ResultVisualizer(model)
 viz.load_mesh_from_file("results/mesh.msh")
-viz.apply_displacement_field(scale_factor=100.0)  # Scale for visibility
-viz.add_stress_field()
 
-# Show interactive 3D view
+# Auto-calculate scale factor for visibility
+displacements = results['displacement']
+max_disp = max(d.get_magnitude() for d in displacements)
+scale_factor = 0.01 / max_disp  # ~1% of model size
+
+viz.apply_displacement_field(scale_factor=scale_factor)
+
+# Show displacement or stress
+viz.plot_deformed(field='Displacement', show_undeformed=True)
+
+# Or show stress
+viz.add_stress_field()
 viz.plot_deformed(field='Von Mises Stress', show_undeformed=True)
 
 # Or export to HTML
@@ -170,11 +217,13 @@ viz.export_to_html("results.html")
 
 **Visualization Features:**
 - Interactive 3D deformed mesh with rotation, zoom, pan
-- Color-coded displacement magnitude
-- Von Mises stress visualization
-- Side-by-side undeformed/deformed comparison
+- Color-coded displacement magnitude visualization
+- Von Mises stress distribution with proper element-to-node mapping
+- Side-by-side undeformed/deformed mesh comparison
+- Auto-scaling for tiny displacements (typical in building structures)
 - Export to HTML for sharing
-- Save screenshots
+- Save high-resolution screenshots
+- Multiple time step/load case support
 
 **Installation:**
 ```bash
