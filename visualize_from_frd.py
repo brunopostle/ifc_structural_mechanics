@@ -23,7 +23,7 @@ def main():
     frd_file = f"{results_dir}/analysis.frd"
 
     print("=" * 80)
-    print("FRD-Based Visualization (Stress)")
+    print("FRD-Based Visualization (Displacement)")
     print("=" * 80)
 
     # Extract model (for metadata)
@@ -51,11 +51,10 @@ def main():
     # Apply displacement field (scale=1 for undeformed visualization)
     print(f"\n4. Mapping results to mesh...")
     viz.apply_displacement_field(scale_factor=1.0)
-    viz.add_stress_field()
 
     # Visualize
     print(f"\n5. Creating visualization...")
-    print("   Showing stress on undeformed mesh")
+    print("   Showing displacement magnitude on undeformed mesh")
     print("   Controls:")
     print("   - Left click + drag: Rotate")
     print("   - Right click + drag: Pan")
@@ -66,7 +65,7 @@ def main():
     viz.plot_deformed(
         scale_factor=1.0,
         show_undeformed=False,
-        field='Von Mises Stress',
+        field='Displacement',
         cmap='jet',
         window_size=(1400, 900)
     )
