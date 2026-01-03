@@ -111,9 +111,11 @@ Stateless utility functions for type conversions:
 #### 4. Meshing (`src/ifc_structural_mechanics/meshing/`)
 Generates finite element meshes:
 - `unified_calculix_writer.py`: **THE UNIFIED SOLUTION** - Single tool for writing CalculiX input files. This replaces dual systems and eliminates element writing conflicts. **Registers analysis element IDs** in domain model via `StructuralModel.register_analysis_elements()`
-- `gmsh_runner.py`: Executes Gmsh to generate meshes
+- `gmsh_runner.py`: Executes Gmsh to generate meshes. Outputs `.msh` mesh files (not `.geo` script files).
 - `gmsh_geometry.py`: Creates Gmsh geometry from domain model. **Registers mesh entity IDs** in domain model via `StructuralModel.register_mesh_entities()`
 - `gmsh_utils.py`: Gmsh utility functions
+
+**Note**: The workflow uses Gmsh's `.msh` mesh format exclusively. `.geo` geometry script files are not used in production as they may have XAO dependencies in newer Gmsh versions.
 
 #### 5. Analysis (`src/ifc_structural_mechanics/analysis/`)
 Runs CalculiX and processes results:
@@ -183,8 +185,13 @@ Command-line interface:
 
 - **Unit tests** (`tests/unit/`): Test individual classes/functions in isolation with mocks
 - **Integration tests** (`tests/integration/`): Test workflows across multiple modules with real IFC files
+  - `test_ifc_to_geo.py`: Tests IFC → Gmsh mesh conversion, outputs `.msh` files for inspection
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
+
+### Note on Gmsh File Formats
+- **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
+- **`.geo` format**: Gmsh geometry scripts. Modern Gmsh versions may create `.geo_unrolled` files with XAO references that require OpenCASCADE support for reading. Use `.msh` format for testing and inspection instead.
 
 ## Dependencies
 

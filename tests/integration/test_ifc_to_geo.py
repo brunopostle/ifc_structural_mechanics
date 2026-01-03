@@ -1,9 +1,9 @@
 """
-Test IFC to Gmsh .geo file conversion.
+Test IFC to Gmsh mesh file conversion.
 
 This test reads a simple_beam.ifc file, uses GmshGeometryConverter to convert
-the structural model to Gmsh geometry, and saves the result as a .geo file
-for manual inspection.
+the structural model to Gmsh geometry, generates a mesh, and saves the result
+as a .msh file for inspection and validation.
 """
 
 import os
@@ -21,19 +21,20 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
-class TestIFCToGeoConversion:
-    """Test the conversion of IFC structural model to Gmsh .geo file."""
+class TestIFCToMeshConversion:
+    """Test the conversion of IFC structural model to Gmsh mesh file."""
 
-    def test_ifc_to_geo_conversion(self):
+    def test_ifc_to_msh_conversion(self):
         """
-        Test converting simple_beam.ifc to a Gmsh .geo file.
+        Test converting simple_beam.ifc to a Gmsh .msh file.
 
         This test:
         1. Reads the simple_beam.ifc file
         2. Extracts the structural model
         3. Converts it to Gmsh geometry
-        4. Saves the result as a .geo file
-        5. Verifies the file is valid
+        4. Generates a mesh
+        5. Saves the result as a .msh file
+        6. Verifies the file is valid
         """
         # Define paths
         ifc_path = os.path.join("tests", "test_data", "simple_beam.ifc")
@@ -42,8 +43,8 @@ class TestIFCToGeoConversion:
         output_dir = os.path.join("tests", "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        # Output geo file path
-        geo_file = os.path.join(output_dir, "simple_beam.geo")
+        # Output mesh file path
+        msh_file = os.path.join(output_dir, "simple_beam.msh")
 
         # Check if IFC file exists
         if not os.path.exists(ifc_path):
@@ -81,93 +82,52 @@ class TestIFCToGeoConversion:
             assert entity_map, "Failed to convert model to Gmsh geometry"
             logger.info(f"Converted model with {len(entity_map)} entities")
 
-            # Step 3: Write the .geo file
-            logger.info(f"Writing Gmsh geometry to {geo_file}")
+            # Step 3: Generate mesh
+            logger.info("Generating mesh from geometry")
             try:
-                # Ensure the model is synchronized before writing
+                # Ensure the model is synchronized before meshing
                 gmsh.model.occ.synchronize()
 
-                # Set options to force Geo format output
+                # Verify we have entities to mesh
+                entities = gmsh.model.getEntities()
+                assert entities, "No geometric entities found to mesh"
+                logger.info(f"Found {len(entities)} entities to mesh")
+
+                # Generate 1D mesh (for curve members like beams)
+                gmsh.model.mesh.generate(1)
+
+                # Try to generate 2D mesh if there are surface entities
                 try:
-                    # Try different methods to set the output format
-                    gmsh.option.setNumber(
-                        "General.Terminal", 1
-                    )  # Enable terminal output for debugging
-
-                    # Create a simple model to ensure we have something to write
-                    # This is a fallback in case the conversion didn't create valid entities
-                    try:
-                        # First check if we have any entities
-                        entities = gmsh.model.getEntities()
-                        if not entities:
-                            logger.warning(
-                                "No entities found in model, creating a simple cube"
-                            )
-                            # Create a simple cube as fallback
-                            gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1)
-                            gmsh.model.occ.synchronize()
-                    except Exception as e:
-                        logger.warning(
-                            f"Error checking entities: {e}, creating fallback geometry"
-                        )
-                        # Create a simple cube
-                        gmsh.model.occ.addBox(0, 0, 0, 1, 1, 1)
-                        gmsh.model.occ.synchronize()
-
-                    # First try to write directly
-                    try:
-                        gmsh.write(geo_file)
-                    except Exception as direct_write_error:
-                        logger.warning(f"Direct write failed: {direct_write_error}")
-
-                        # Try creating a .geo_unrolled file (newer Gmsh versions)
-                        unrolled_file = f"{os.path.splitext(geo_file)[0]}.geo_unrolled"
-                        try:
-                            gmsh.write(unrolled_file)
-                            # If successful, rename to the desired file
-                            if os.path.exists(unrolled_file):
-                                os.rename(unrolled_file, geo_file)
-                                logger.info(
-                                    f"Created {unrolled_file} and renamed to {geo_file}"
-                                )
-                            else:
-                                raise FileNotFoundError(
-                                    f"{unrolled_file} was not created"
-                                )
-                        except Exception as unrolled_error:
-                            logger.warning(f"Unrolled write failed: {unrolled_error}")
-
-                            # Last resort: export as Brep and convert
-                            brep_file = f"{os.path.splitext(geo_file)[0]}.brep"
-                            gmsh.write(brep_file)
-
-                            # Create a simple geo file that references the brep
-                            with open(geo_file, "w") as f:
-                                f.write(f'Merge "{brep_file}";\n')
-                                f.write(
-                                    "// This is a reference to a BREP file containing the actual geometry\n"
-                                )
-
-                            logger.info(
-                                f"Created reference geo file pointing to {brep_file}"
-                            )
-
+                    surface_entities = [e for e in entities if e[0] == 2]
+                    if surface_entities:
+                        gmsh.model.mesh.generate(2)
+                        logger.info("Generated 2D mesh for surface entities")
                 except Exception as e:
-                    logger.error(f"All geo file creation methods failed: {e}")
-                    raise
+                    logger.warning(f"Could not generate 2D mesh: {e}")
 
-                # Verify the file was created
-                assert os.path.exists(geo_file), f"Failed to create {geo_file}"
-                assert os.path.getsize(geo_file) > 0, f"{geo_file} is empty"
-
-                logger.info(f"Successfully wrote Gmsh geometry to {geo_file}")
+                logger.info("Mesh generation completed")
 
             except Exception as e:
-                logger.error(f"Error writing .geo file: {e}")
+                logger.error(f"Error generating mesh: {e}")
                 raise
 
-            # Step 4: Verify the .geo file is valid
-            logger.info(f"Verifying {geo_file} is valid")
+            # Step 4: Write the .msh file
+            logger.info(f"Writing mesh to {msh_file}")
+            try:
+                gmsh.write(msh_file)
+
+                # Verify the file was created
+                assert os.path.exists(msh_file), f"Failed to create {msh_file}"
+                assert os.path.getsize(msh_file) > 0, f"{msh_file} is empty"
+
+                logger.info(f"Successfully wrote mesh to {msh_file}")
+
+            except Exception as e:
+                logger.error(f"Error writing .msh file: {e}")
+                raise
+
+            # Step 5: Verify the .msh file is valid by reading it back
+            logger.info(f"Verifying {msh_file} is valid")
             try:
                 # Reset Gmsh
                 if gmsh.isInitialized():
@@ -176,16 +136,21 @@ class TestIFCToGeoConversion:
                 # Re-initialize Gmsh
                 gmsh.initialize()
 
-                # Try to read the .geo file
-                gmsh.open(geo_file)
+                # Try to read the .msh file
+                gmsh.open(msh_file)
 
-                # If we get here without exception, the file is valid
-                logger.info(f"{geo_file} is a valid Gmsh .geo file")
-                assert True, f"{geo_file} is valid"
+                # Check that we have nodes and elements
+                node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+                assert len(node_tags) > 0, "Mesh file contains no nodes"
+
+                element_types, element_tags, element_node_tags = gmsh.model.mesh.getElements()
+                assert len(element_types) > 0, "Mesh file contains no elements"
+
+                logger.info(f"Mesh file is valid: {len(node_tags)} nodes, {sum(len(tags) for tags in element_tags)} elements")
 
             except Exception as e:
-                logger.error(f"Error validating .geo file: {e}")
-                assert False, f"{geo_file} is not a valid Gmsh .geo file: {str(e)}"
+                logger.error(f"Error validating .msh file: {e}")
+                raise AssertionError(f"{msh_file} is not a valid mesh file: {str(e)}")
 
         finally:
             # Finalize Gmsh if we initialized it
@@ -196,7 +161,7 @@ class TestIFCToGeoConversion:
                     logger.warning(f"Error finalizing Gmsh: {e}")
 
             # Print information for manual inspection
-            if os.path.exists(geo_file):
-                logger.info(f"Gmsh .geo file preserved at {os.path.abspath(geo_file)}")
-                print(f"\nGmsh .geo file preserved at {os.path.abspath(geo_file)}")
+            if os.path.exists(msh_file):
+                logger.info(f"Gmsh mesh file preserved at {os.path.abspath(msh_file)}")
+                print(f"\nGmsh mesh file preserved at {os.path.abspath(msh_file)}")
                 print("You can open this file in Gmsh for manual inspection.")
