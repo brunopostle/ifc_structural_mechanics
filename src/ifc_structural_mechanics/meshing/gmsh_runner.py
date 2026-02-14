@@ -66,12 +66,12 @@ class GmshRunner:
         # Verify that the Gmsh executable is available if needed
         self._verify_gmsh_executable()
 
-        # Check if Gmsh is already initialized
+        # Check if Gmsh is already initialized.
+        # Note: gmsh.option.getNumber() does NOT raise a Python exception
+        # when Gmsh is uninitialized — it just prints to stderr and returns 0.
+        # Use gmsh.isInitialized() for a reliable check.
         self._we_initialized_gmsh = False
-        try:
-            gmsh.option.getNumber("General.Terminal")
-        except:
-            # Only initialize if we're using the Python API
+        if not gmsh.isInitialized():
             if self.meshing_config.use_python_api:
                 gmsh.initialize()
                 self._we_initialized_gmsh = True

@@ -55,10 +55,8 @@ class TestGmshResourceManager(unittest.TestCase):
 
     def test_initialize_not_already_running(self):
         """Test initialization when Gmsh is not already running."""
-        # Setup mock to raise exception (simulating Gmsh not initialized)
-        self.mock_gmsh["option"].getNumber.side_effect = Exception(
-            "Gmsh has not been initialized"
-        )
+        # Setup mock to report Gmsh not initialized
+        self.mock_gmsh["isInitialized"].return_value = False
 
         # Create manager with auto_initialize=False to test initialize() directly
         manager = GmshResourceManager(auto_initialize=False)
@@ -206,10 +204,8 @@ class TestGmshResourceManager(unittest.TestCase):
 
     def test_context_manager(self):
         """Test using GmshResourceManager as a context manager."""
-        # Setup mock to raise exception (simulating Gmsh not initialized)
-        self.mock_gmsh["option"].getNumber.side_effect = Exception(
-            "Gmsh has not been initialized"
-        )
+        # isInitialized returns False before initialize(), True after
+        self.mock_gmsh["isInitialized"].side_effect = [False, True]
 
         with GmshResourceManager() as manager:
             self.assertTrue(manager.is_initialized())
@@ -221,10 +217,8 @@ class TestGmshResourceManager(unittest.TestCase):
 
     def test_context_manager_in_test_environment(self):
         """Test context manager behavior in test environment (should suppress cleanup)."""
-        # Setup mock to raise exception (simulating Gmsh not initialized)
-        self.mock_gmsh["option"].getNumber.side_effect = Exception(
-            "Gmsh has not been initialized"
-        )
+        # Setup mock to report Gmsh not initialized
+        self.mock_gmsh["isInitialized"].return_value = False
 
         # This test runs in the actual test environment, so finalize should be suppressed
         with GmshResourceManager() as manager:

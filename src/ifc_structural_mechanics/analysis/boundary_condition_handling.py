@@ -47,6 +47,27 @@ def write_boundary_conditions(
         connection_id = connection.id
         set_name = f"BC_{connection_id}"
 
+        # Determine BC type from connection
+        if hasattr(connection, "connection_type"):
+            bc_type = connection.connection_type
+        else:
+            bc_type = getattr(connection, "entity_type", "point")
+
+        # Skip connections that are NOT supports:
+        # - "point" connections without stiffness properties are purely geometric
+        #   (e.g., load application points), not boundary conditions.
+        # - Only connections with actual stiffness or explicit support type get BCs.
+        has_stiffness = (
+            hasattr(connection, "has_stiffness_properties")
+            and connection.has_stiffness_properties()
+        )
+        if bc_type == "point" and not has_stiffness:
+            logger.debug(
+                f"Skipping connection {connection_id} — 'point' type without "
+                f"stiffness properties (not a support)"
+            )
+            continue
+
         # Find nodes that correspond to this connection's position
         if hasattr(connection, "position") and connection.position:
             bc_nodes = find_nodes_at_position(
@@ -66,12 +87,6 @@ def write_boundary_conditions(
                     line = ", ".join(map(str, line_nodes))
                     file.write(f"{line}\n")
 
-                # Determine BC type
-                if hasattr(connection, "connection_type"):
-                    bc_type = connection.connection_type
-                else:
-                    bc_type = "rigid"  # Default to rigid/fixed connection
-
                 # Write the boundary condition
                 file.write("*BOUNDARY\n")
 
@@ -81,9 +96,14 @@ def write_boundary_conditions(
                 elif bc_type == "hinge":
                     # Pinned: constrain translations (1-3), but not rotations
                     file.write(f"{set_name}, 1, 3\n")
-                elif bc_type == "point":
-                    # For standard point connections, constrain vertical movement (2)
-                    file.write(f"{set_name}, 2, 2\n")
+                elif bc_type == "point" and has_stiffness:
+                    # Point with stiffness: use stiffness to determine DOFs
+                    # If rigid behavior, fix all DOFs; otherwise fix translations
+                    if (hasattr(connection, "is_rigid_behavior")
+                            and connection.is_rigid_behavior()):
+                        file.write(f"{set_name}, 1, 6\n")
+                    else:
+                        file.write(f"{set_name}, 1, 3\n")
 
                 bc_nodes_found = True
                 file.write("\n")
@@ -437,6 +457,7 @@ def write_analysis_steps(
     analysis_type: str = "linear_static",
     short_id_map: Optional[Dict[str, str]] = None,
     element_sets: Optional[Dict[str, List[int]]] = None,
+    node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
 ) -> None:
     """
     Write comprehensive analysis step definitions to the CalculiX input file.
@@ -525,7 +546,9 @@ def write_analysis_steps(
 
     # ENHANCED: Write loads within the step with comprehensive validation
     file.write("** Loads within step\n")
-    loads_written = _write_validated_loads_within_step(file, domain_model, short_id_map, element_sets)
+    loads_written = _write_validated_loads_within_step(
+        file, domain_model, short_id_map, element_sets, node_coords
+    )
 
     if not loads_written:
         file.write("** CRITICAL WARNING: No loads written to analysis step\n")
@@ -731,16 +754,18 @@ def find_closest_node(
 def _write_validated_loads_within_step(
     file: TextIO, domain_model: StructuralModel,
     short_id_map: Optional[Dict[str, str]] = None,
-    element_sets: Optional[Dict[str, List[int]]] = None
+    element_sets: Optional[Dict[str, List[int]]] = None,
+    node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
 ) -> bool:
     """
-    Enhanced load writing with validation - replaces the existing function.
+    Enhanced load writing with validation and deduplication.
 
     Returns:
         bool: True if any loads were successfully written, False otherwise.
     """
     loads_written = False
     total_loads_attempted = 0
+    written_load_ids = set()  # Track load IDs to avoid duplicates
 
     # Process load groups
     for load_group in domain_model.load_groups:
@@ -752,11 +777,17 @@ def _write_validated_loads_within_step(
 
         # Process point loads (use *CLOAD)
         point_loads = [load for load in load_group.loads if isinstance(load, PointLoad)]
+        # Deduplicate: skip loads already written (from another load group)
+        point_loads = [l for l in point_loads if l.id not in written_load_ids]
         if point_loads:
             file.write("*CLOAD\n")
             for load in point_loads:
-                # Enhanced node determination with fallback
-                node_id = _determine_load_node_with_fallback(load)
+                written_load_ids.add(load.id)
+
+                # Position-based node determination
+                node_id = _determine_load_node_with_fallback(
+                    load, node_coords=node_coords
+                )
 
                 # Enhanced force vector validation
                 force_vector = _get_validated_force_vector(load)
@@ -862,10 +893,14 @@ def _write_validated_loads_within_step(
 
         # Process point loads on members
         point_loads = [load for load in member_loads if isinstance(load, PointLoad)]
+        point_loads = [l for l in point_loads if l.id not in written_load_ids]
         if point_loads:
             file.write("*CLOAD\n")
             for load in point_loads:
-                node_id = _determine_load_node_with_fallback(load, default_node=2)
+                written_load_ids.add(load.id)
+                node_id = _determine_load_node_with_fallback(
+                    load, node_coords=node_coords, default_node=2
+                )
                 force_vector = _get_validated_force_vector(load)
 
                 for i, component in enumerate(force_vector):
@@ -923,26 +958,30 @@ def _write_validated_loads_within_step(
     return loads_written
 
 
-def _determine_load_node_with_fallback(load, default_node=2):
+def _determine_load_node_with_fallback(load, node_coords=None, default_node=2):
     """
-    Determine which node a load should be applied to with intelligent fallbacks.
+    Determine which node a load should be applied to using position-based lookup.
+
+    Uses the load's position attribute and the mesh node coordinates to find
+    the closest mesh node. Falls back to default_node if position is unavailable.
 
     Args:
-        load: Load object
-        default_node: Fallback node ID
+        load: Load object (should have a .position attribute)
+        node_coords: Dict[int, Tuple[float, float, float]] of mesh node coordinates
+        default_node: Fallback node ID if position lookup fails
 
     Returns:
         int: Node ID for load application
     """
-    if hasattr(load, "position") and load.position:
-        # Simple heuristic based on position
-        x, y, z = load.position
-
-        # If X > 2.0, use node 2 (end of beam), otherwise node 1 (start)
-        if x > 2.0:
-            return 2
-        else:
-            return 1
+    if hasattr(load, "position") and load.position and node_coords:
+        # Use position-based lookup to find the closest mesh node
+        closest = find_closest_node(load.position, node_coords)
+        if closest is not None:
+            logger.debug(
+                f"Load {getattr(load, 'id', '?')} at position {load.position} "
+                f"mapped to node {closest}"
+            )
+            return closest
 
     # Fallback to default node
     return default_node

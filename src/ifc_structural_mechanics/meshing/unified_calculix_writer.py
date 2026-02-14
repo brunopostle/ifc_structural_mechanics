@@ -446,7 +446,7 @@ class UnifiedCalculixWriter:
             # Analysis steps
             write_analysis_steps(
                 f, self.domain_model, self.analysis_config.get_analysis_type(),
-                self.short_id_map, self.element_sets
+                self.short_id_map, self.element_sets, dict(self.nodes)
             )
 
     def _write_header(self, file: TextIO) -> None:
@@ -802,6 +802,17 @@ class UnifiedCalculixWriter:
         from ..analysis.boundary_condition_handling import find_nodes_at_position
 
         for conn in self.domain_model.connections:
+            # Determine BC type
+            bc_type = getattr(conn, "connection_type", getattr(conn, "entity_type", "point"))
+
+            # Skip non-support connections (same logic as write_boundary_conditions)
+            has_stiffness = (
+                hasattr(conn, "has_stiffness_properties")
+                and conn.has_stiffness_properties()
+            )
+            if bc_type == "point" and not has_stiffness:
+                continue
+
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
                 bc_nodes = find_nodes_at_position(
@@ -810,9 +821,6 @@ class UnifiedCalculixWriter:
 
                 if not bc_nodes:
                     continue
-
-                # Determine what DOFs will be constrained
-                bc_type = getattr(conn, "connection_type", "rigid")
 
                 if bc_type == "rigid" or bc_type == "fixed":
                     # Fixed: constrain all 6 DOF (1-6)
@@ -826,10 +834,17 @@ class UnifiedCalculixWriter:
                         for dof in [1, 2, 3]:
                             bc_node_dofs.add((node, dof))
 
-                elif bc_type == "point":
-                    # Point: constrain vertical movement (DOF 2)
-                    for node in bc_nodes:
-                        bc_node_dofs.add((node, 2))
+                elif bc_type == "point" and has_stiffness:
+                    # Point with stiffness: check behavior
+                    if (hasattr(conn, "is_rigid_behavior")
+                            and conn.is_rigid_behavior()):
+                        for node in bc_nodes:
+                            for dof in [1, 2, 3, 4, 5, 6]:
+                                bc_node_dofs.add((node, dof))
+                    else:
+                        for node in bc_nodes:
+                            for dof in [1, 2, 3]:
+                                bc_node_dofs.add((node, dof))
 
         logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
         if logger.isEnabledFor(logging.DEBUG):
@@ -1202,38 +1217,67 @@ def run_complete_analysis_workflow(
     from .gmsh_geometry import GmshGeometryConverter
     from .gmsh_runner import GmshRunner
     from pathlib import Path
+    import gmsh
 
     logger.info("Starting complete unified analysis workflow...")
 
-    # Step 1: Convert domain model to Gmsh geometry
-    logger.info("Phase 1: Converting domain model to Gmsh geometry...")
-    geometry_converter = GmshGeometryConverter(meshing_config=meshing_config)
-    entity_map = geometry_converter.convert_model(domain_model)
-    logger.info(f"Created Gmsh geometry with {len(entity_map)} entities")
+    # Explicitly manage Gmsh lifecycle for the entire workflow.
+    # This prevents premature finalization between geometry conversion
+    # and mesh generation phases.
+    we_initialized_gmsh = not gmsh.isInitialized()
+    if we_initialized_gmsh:
+        gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)
 
-    # Step 2: Generate mesh with Gmsh
-    logger.info("Phase 2: Generating mesh with Gmsh...")
-    gmsh_runner = GmshRunner(meshing_config=meshing_config, system_config=system_config)
-    success = gmsh_runner.run_meshing()
+    try:
+        # Step 1: Convert domain model to Gmsh geometry
+        logger.info("Phase 1: Converting domain model to Gmsh geometry...")
+        geometry_converter = GmshGeometryConverter(meshing_config=meshing_config)
+        entity_map = geometry_converter.convert_model(domain_model)
+        logger.info(f"Created Gmsh geometry with {len(entity_map)} entities")
 
-    if not success:
-        raise MeshingError("Gmsh meshing failed")
+        # Prevent the converter from finalizing Gmsh in __del__ —
+        # we manage the lifecycle here.
+        geometry_converter._we_initialized_gmsh = False
 
-    # Determine mesh file path
-    if intermediate_files_dir:
-        intermediate_dir = Path(intermediate_files_dir)
-        intermediate_dir.mkdir(exist_ok=True)
-        mesh_file = str(intermediate_dir / f"mesh_{domain_model.id}.msh")
-        mapping_file = str(intermediate_dir / f"mapping_{domain_model.id}.json")
-    else:
-        temp_dir = get_temp_dir()
-        mesh_file = str(Path(temp_dir) / f"mesh_{domain_model.id}.msh")
-        mapping_file = None
+        # Step 2: Generate mesh with Gmsh
+        logger.info("Phase 2: Generating mesh with Gmsh...")
+        gmsh_runner = GmshRunner(
+            meshing_config=meshing_config, system_config=system_config
+        )
+        success = gmsh_runner.run_meshing()
 
-    mesh_file = gmsh_runner.generate_mesh_file(mesh_file)
-    logger.info(f"Generated mesh file: {mesh_file}")
+        if not success:
+            raise MeshingError("Gmsh meshing failed")
 
-    # Step 3: Generate CalculiX input using unified writer
+        # Determine mesh file path
+        if intermediate_files_dir:
+            intermediate_dir = Path(intermediate_files_dir)
+            intermediate_dir.mkdir(exist_ok=True)
+            mesh_file = str(intermediate_dir / f"mesh_{domain_model.id}.msh")
+            mapping_file = str(
+                intermediate_dir / f"mapping_{domain_model.id}.json"
+            )
+        else:
+            temp_dir = get_temp_dir()
+            mesh_file = str(Path(temp_dir) / f"mesh_{domain_model.id}.msh")
+            mapping_file = None
+
+        mesh_file = gmsh_runner.generate_mesh_file(mesh_file)
+        logger.info(f"Generated mesh file: {mesh_file}")
+
+        # Prevent the runner from finalizing Gmsh in __del__
+        gmsh_runner._we_initialized_gmsh = False
+
+    finally:
+        # Finalize Gmsh after all meshing operations are complete
+        if we_initialized_gmsh and gmsh.isInitialized():
+            try:
+                gmsh.finalize()
+            except Exception:
+                pass
+
+    # Step 3: Generate CalculiX input using unified writer (no Gmsh needed)
     logger.info("Phase 3: Generating CalculiX input with unified writer...")
     result = generate_calculix_input(
         domain_model=domain_model,

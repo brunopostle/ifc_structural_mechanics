@@ -68,12 +68,10 @@ class GmshGeometryConverter:
         # Set flag to avoid repeated checks
         self._gmsh_checked = True
 
-        try:
-            # Try to access a Gmsh function to check if it's initialized
-            gmsh.option.getNumber("General.Terminal")
-        except Exception as e:
-            logger.debug(f"Gmsh not initialized: {e}")
-            # Not initialized, so initialize it
+        # Use gmsh.isInitialized() for a reliable check.
+        # Note: gmsh.option.getNumber() does NOT raise a Python exception
+        # when Gmsh is uninitialized — it just prints to stderr and returns 0.
+        if not gmsh.isInitialized():
             try:
                 gmsh.initialize()
                 self._we_initialized_gmsh = True
@@ -82,7 +80,6 @@ class GmshGeometryConverter:
                 gmsh.option.setNumber("General.Terminal", 0)
             except Exception as e:
                 logger.warning(f"Failed to initialize Gmsh: {e}")
-                # Don't raise - we'll let the methods handle failures on their own
 
         # Now try to set up the model
         try:

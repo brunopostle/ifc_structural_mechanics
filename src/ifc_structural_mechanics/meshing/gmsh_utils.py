@@ -51,28 +51,27 @@ class GmshResourceManager:
         if self._initialized:
             return True
 
-        try:
-            # Try to access a Gmsh function to check if it's initialized
-            gmsh.option.getNumber("General.Terminal")
+        # Use gmsh.isInitialized() for a reliable check.
+        # Note: gmsh.option.getNumber() does NOT raise a Python exception
+        # when Gmsh is uninitialized — it just prints to stderr and returns 0.
+        if gmsh.isInitialized():
             self._initialized = True
             logger.debug("Gmsh was already initialized")
             return True
+
+        # Not initialized, so initialize it
+        try:
+            gmsh.initialize()
+            self._initialized = True
+            self._we_initialized = True
+
+            # Reduce terminal output
+            gmsh.option.setNumber("General.Terminal", 0)
+            logger.debug("Gmsh initialized successfully")
+            return True
         except Exception as e:
-            logger.debug(f"Gmsh not yet initialized: {e}")
-
-            # Not initialized, so initialize it
-            try:
-                gmsh.initialize()
-                self._initialized = True
-                self._we_initialized = True
-
-                # Reduce terminal output
-                gmsh.option.setNumber("General.Terminal", 0)
-                logger.debug("Gmsh initialized successfully")
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to initialize Gmsh: {e}")
-                return False
+            logger.warning(f"Failed to initialize Gmsh: {e}")
+            return False
 
     def setup_model(self, model_name: str = "structural_model") -> bool:
         """
