@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mshquery"
+version = "0.1.0"
+description = "CLI tool for querying Gmsh mesh files"
+keywords = ["Gmsh", "Mesh", "Query"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = ["meshio>=5.0.0", "numpy>=1.20.0"]
+
+[project.scripts]
+mshquery = "mshquery.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mshquery*"]
