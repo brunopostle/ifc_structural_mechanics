@@ -35,6 +35,7 @@ class LoadsExtractor:
     # IFC4 entity types for structural loads
     POINT_LOAD_TYPE = "IfcStructuralPointAction"
     LINE_LOAD_TYPE = "IfcStructuralLinearAction"
+    CURVE_LOAD_TYPE = "IfcStructuralCurveAction"
     AREA_LOAD_TYPE = "IfcStructuralPlanarAction"
     LOAD_GROUP_TYPE = "IfcStructuralLoadGroup"
     LOAD_CASE_TYPE = "IfcStructuralLoadCase"
@@ -102,6 +103,7 @@ class LoadsExtractor:
         for entity_type in [
             self.POINT_LOAD_TYPE,
             self.LINE_LOAD_TYPE,
+            self.CURVE_LOAD_TYPE,
             self.AREA_LOAD_TYPE,
         ]:
             try:
@@ -320,6 +322,7 @@ class LoadsExtractor:
                             and (
                                 obj.is_a("IfcStructuralPointAction")
                                 or obj.is_a("IfcStructuralLinearAction")
+                                or obj.is_a("IfcStructuralCurveAction")
                                 or obj.is_a("IfcStructuralPlanarAction")
                             )
                         ):
@@ -516,8 +519,8 @@ class LoadsExtractor:
                     position=position,
                 )
 
-            # For line loads
-            elif ifc_load.is_a("IfcStructuralLinearAction"):
+            # For line loads (IfcStructuralLinearAction or IfcStructuralCurveAction)
+            elif ifc_load.is_a("IfcStructuralLinearAction") or ifc_load.is_a("IfcStructuralCurveAction"):
                 # Similar to point loads but with line geometry
                 applied_load = getattr(ifc_load, "AppliedLoad", None)
                 if applied_load is None:
@@ -526,14 +529,16 @@ class LoadsExtractor:
                 # Extract force components
                 force_vector = [0.0, 0.0, 0.0]  # Default
 
-                if hasattr(applied_load, "ForceX"):
-                    force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
-                    force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
-                    force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
-                    force_vector = [force_x, force_y, force_z]
+                force_vector, is_per_length = self._extract_line_force_vector(applied_load)
 
-                    # Apply force scale
-                    force_vector = [f * self.force_scale for f in force_vector]
+                # Apply appropriate unit scale
+                if is_per_length:
+                    # Linear force (force/length): scale = force_scale / length_scale
+                    scale = self.force_scale / self.length_scale
+                else:
+                    # Concentrated force: scale = force_scale
+                    scale = self.force_scale
+                force_vector = [f * scale for f in force_vector]
 
                 # Extract start and end positions
                 start_pos, end_pos = self._extract_load_line(ifc_load)
@@ -549,13 +554,20 @@ class LoadsExtractor:
                     direction = np.array([0.0, 0.0, -1.0], dtype=float)
 
                 # Create the line load
-                return LineLoad(
+                line_load = LineLoad(
                     id=load_id,
                     magnitude=magnitude,
                     direction=direction,
                     start_position=start_pos,
                     end_position=end_pos,
                 )
+
+                # Extract member reference from AssignedToStructuralItem
+                member_ref = self._get_member_reference(ifc_load)
+                if member_ref:
+                    line_load.member_reference = member_ref
+
+                return line_load
 
             # For area loads
             elif ifc_load.is_a("IfcStructuralPlanarAction"):
@@ -602,6 +614,68 @@ class LoadsExtractor:
         except Exception as e:
             self.logger.error(f"Error creating domain load: {e}")
             return None
+
+    def _get_member_reference(self, ifc_load) -> Optional[str]:
+        """
+        Get the GlobalId of the structural member this load is applied to.
+
+        Uses the IFC AssignedToStructuralItem inverse relationship.
+
+        Args:
+            ifc_load: IFC structural action entity
+
+        Returns:
+            GlobalId of the related structural member, or None
+        """
+        try:
+            if hasattr(ifc_load, "AssignedToStructuralItem"):
+                for rel in ifc_load.AssignedToStructuralItem:
+                    if rel.is_a("IfcRelConnectsStructuralActivity"):
+                        element = getattr(rel, "RelatingElement", None)
+                        if element and hasattr(element, "GlobalId"):
+                            return element.GlobalId
+        except Exception as e:
+            self.logger.debug(f"Error getting member reference: {e}")
+        return None
+
+    def _extract_line_force_vector(self, applied_load) -> Tuple[List[float], bool]:
+        """
+        Extract force vector from a line load's applied load entity.
+
+        Handles multiple IFC load types:
+        - IfcStructuralLoadLinearForce: has LinearForceX/Y/Z (force per length)
+        - IfcStructuralLoadSingleForce: has ForceX/Y/Z (concentrated force)
+        - IfcStructuralLoadConfiguration: contains Values list of the above
+
+        Args:
+            applied_load: IFC applied load entity
+
+        Returns:
+            Tuple of ([fx, fy, fz] in project units, is_per_length flag)
+        """
+        # Handle IfcStructuralLoadConfiguration (wraps multiple load values)
+        if applied_load.is_a("IfcStructuralLoadConfiguration"):
+            values = getattr(applied_load, "Values", [])
+            if values and len(values) > 0:
+                # Use the first load value (for uniform loads, all are equal)
+                return self._extract_line_force_vector(values[0])
+            return [0.0, 0.0, 0.0], False
+
+        # Handle IfcStructuralLoadLinearForce (force per unit length)
+        if hasattr(applied_load, "LinearForceX"):
+            force_x = getattr(applied_load, "LinearForceX", 0.0) or 0.0
+            force_y = getattr(applied_load, "LinearForceY", 0.0) or 0.0
+            force_z = getattr(applied_load, "LinearForceZ", 0.0) or 0.0
+            return [force_x, force_y, force_z], True
+
+        # Handle IfcStructuralLoadSingleForce (concentrated force)
+        if hasattr(applied_load, "ForceX"):
+            force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
+            force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
+            force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
+            return [force_x, force_y, force_z], False
+
+        return [0.0, 0.0, 0.0], False
 
     def _get_surface_reference(self, ifc_load) -> str:
         """

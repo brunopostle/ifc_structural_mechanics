@@ -848,21 +848,27 @@ def _write_validated_loads_within_step(
                         else:
                             element_set_name = f"MEMBER_{load.applied_to}"
 
-                # Strategy 2: If no direct reference, try to find surface members to apply loads to
-                # This is a fallback for loads that don't have explicit member references
+                # Strategy 2: If no direct reference, try to find members to apply loads to
                 if not element_set_name:
-                    # Find the first surface member (common target for distributed loads)
-                    surface_members = [
-                        m for m in domain_model.members if m.entity_type == "surface"
-                    ]
-                    if surface_members:
+                    # For line loads, prefer curve members; for area loads, prefer surface members
+                    if isinstance(load, LineLoad):
+                        target_members = [
+                            m for m in domain_model.members if m.entity_type == "curve"
+                        ]
+                    else:
+                        target_members = [
+                            m for m in domain_model.members if m.entity_type == "surface"
+                        ]
+                    if not target_members:
+                        target_members = list(domain_model.members)
+                    if target_members:
                         # Use short ID if available
-                        if short_id_map and surface_members[0].id in short_id_map:
-                            element_set_name = f"MEMBER_{short_id_map[surface_members[0].id]}"
+                        if short_id_map and target_members[0].id in short_id_map:
+                            element_set_name = f"MEMBER_{short_id_map[target_members[0].id]}"
                         else:
-                            element_set_name = f"MEMBER_{surface_members[0].id}"
+                            element_set_name = f"MEMBER_{target_members[0].id}"
                         logger.info(
-                            f"Applied load {getattr(load, 'id', 'unknown')} to surface member {surface_members[0].id}"
+                            f"Applied load {getattr(load, 'id', 'unknown')} to member {target_members[0].id}"
                         )
 
                 # Write the load if we found a valid element set

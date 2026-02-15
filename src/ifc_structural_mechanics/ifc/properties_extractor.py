@@ -75,6 +75,7 @@ class PropertiesExtractor:
         self.length_scale = self._safe_get_scale("LENGTHUNIT", 1.0)
         self.force_scale = self._safe_get_scale("FORCEUNIT", 1.0)
         self.mass_scale = self._safe_get_scale("MASSUNIT", 1.0)
+        self.pressure_scale = self._safe_get_scale("PRESSUREUNIT", 1.0)
 
     def _safe_get_scale(self, unit_type: str, default: float) -> float:
         """Safely get unit scale with validation."""
@@ -251,31 +252,37 @@ class PropertiesExtractor:
                     self.logger.debug(f"Error processing property set: {e}")
                     continue
 
-            # Get values with safe fallbacks (default values in base units)
-            density = commonProps.get("massDensity") or 7850.0  # kg/m³ for steel
-            elastic_modulus = mechProps.get("youngModulus") or 210e9  # Pa for steel
-            poisson_ratio = mechProps.get("poissonRatio") or 0.3
+            # Get extracted values (None if not found in IFC)
+            density_raw = commonProps.get("massDensity")
+            elastic_modulus_raw = mechProps.get("youngModulus")
+            poisson_ratio_raw = mechProps.get("poissonRatio")
 
-            # Validate extracted values
-            density = max(0.1, float(density)) if density else 7850.0
-            elastic_modulus = (
-                max(1e6, float(elastic_modulus)) if elastic_modulus else 210e9
-            )
-            poisson_ratio = (
-                max(0.0, min(0.5, float(poisson_ratio))) if poisson_ratio else 0.3
-            )
-
-            # Convert to SI units with safe operations
+            # Only convert values extracted from IFC (they're in project units).
+            # Use SI defaults directly when not found.
             try:
-                density = convert_density(density, self.length_scale, self.mass_scale)
-                elastic_modulus = convert_elastic_modulus(
-                    elastic_modulus, self.force_scale, self.length_scale
-                )
+                if density_raw is not None:
+                    density = max(0.1, float(density_raw))
+                    density = convert_density(
+                        density, self.length_scale, self.mass_scale
+                    )
+                else:
+                    density = 7850.0  # kg/m³, already SI
+
+                if elastic_modulus_raw is not None:
+                    elastic_modulus = max(1e6, float(elastic_modulus_raw))
+                    elastic_modulus = elastic_modulus * self.pressure_scale
+                else:
+                    elastic_modulus = 210e9  # Pa, already SI
             except Exception as e:
                 self.logger.warning(f"Error converting material units: {e}")
-                # Use defaults in SI units
-                density = convert_density(7850.0, 1.0, 1.0)
-                elastic_modulus = convert_elastic_modulus(210e9, 1.0, 1.0)
+                density = 7850.0
+                elastic_modulus = 210e9
+
+            poisson_ratio = (
+                max(0.0, min(0.5, float(poisson_ratio_raw)))
+                if poisson_ratio_raw
+                else 0.3
+            )
 
             # Create material with extracted properties
             material_id = (
@@ -302,23 +309,12 @@ class PropertiesExtractor:
             return self._create_default_material()
 
     def _create_default_material(self) -> Material:
-        """Create a default material with converted units."""
-        try:
-            density = convert_density(7850.0, self.length_scale, self.mass_scale)
-            elastic_modulus = convert_elastic_modulus(
-                210e9, self.force_scale, self.length_scale
-            )
-        except Exception as e:
-            self.logger.warning(f"Error converting default material units: {e}")
-            # Fallback to SI units
-            density = 7850.0
-            elastic_modulus = 210e9
-
+        """Create a default material with SI units (no conversion needed)."""
         return Material(
             id="default_material",
             name="Default Steel",
-            density=density,
-            elastic_modulus=elastic_modulus,
+            density=7850.0,  # kg/m³
+            elastic_modulus=210e9,  # Pa
             poisson_ratio=0.3,
         )
 
@@ -476,20 +472,12 @@ class PropertiesExtractor:
             return self._create_default_section()
 
     def _create_default_section(self) -> Section:
-        """Create a default rectangular section with converted units."""
-        try:
-            width = convert_length(0.1, self.length_scale)
-            height = convert_length(0.2, self.length_scale)
-        except Exception as e:
-            self.logger.warning(f"Error converting default section dimensions: {e}")
-            width = 0.1  # SI units
-            height = 0.2  # SI units
-
+        """Create a default rectangular section with SI units (no conversion needed)."""
         return Section.create_rectangular_section(
             id=str(uuid.uuid4()),
             name="Default Rectangular Section",
-            width=width,
-            height=height,
+            width=0.1,  # m
+            height=0.2,  # m
         )
 
     def extract_thickness(
@@ -583,17 +571,11 @@ class PropertiesExtractor:
             return self._create_default_thickness()
 
     def _create_default_thickness(self) -> Thickness:
-        """Create a default thickness with converted units."""
-        try:
-            thickness_value = convert_length(0.2, self.length_scale)
-        except Exception as e:
-            self.logger.warning(f"Error converting default thickness: {e}")
-            thickness_value = 0.2  # SI units
-
+        """Create a default thickness with SI units (no conversion needed)."""
         return Thickness(
             id=f"thickness_{uuid.uuid4()}",
             name="Default Thickness",
-            value=thickness_value,
+            value=0.2,  # m
         )
 
     def _find_related_material(self, entity):

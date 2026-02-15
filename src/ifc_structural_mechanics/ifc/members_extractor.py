@@ -84,6 +84,7 @@ class MembersExtractor:
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
+        self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
 
     def extract_all_members(self) -> List[StructuralMember]:
         """
@@ -335,15 +336,12 @@ class MembersExtractor:
                     local_axis=tuple(orientation) if orientation is not None else None,
                 )
             else:
-                # Create with default material and section
-                # Also converted to SI units
-                elastic_modulus = convert_elastic_modulus(
-                    210e9, self.force_scale, self.length_scale
-                )
-                density = convert_density(7850.0, self.length_scale, self.mass_scale)
+                # Create with default material and section (SI units)
+                elastic_modulus = 210e9  # Pa
+                density = 7850.0  # kg/m³
 
-                default_width = convert_length(0.1, self.length_scale)
-                default_height = convert_length(0.2, self.length_scale)
+                default_width = 0.1  # m
+                default_height = 0.2  # m
 
                 return CurveMember(
                     id=entity_id,
@@ -501,12 +499,9 @@ class MembersExtractor:
                     ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
                 )
             else:
-                # Create with default material
-                # Convert default properties to SI units
-                elastic_modulus = convert_elastic_modulus(
-                    210e9, self.force_scale, self.length_scale
-                )
-                density = convert_density(7850.0, self.length_scale, self.mass_scale)
+                # Create with default material (SI units)
+                elastic_modulus = 210e9  # Pa
+                density = 7850.0  # kg/m³
 
                 return SurfaceMember(
                     id=entity.GlobalId,
@@ -713,16 +708,22 @@ class MembersExtractor:
                     else:
                         commonProps[propName] = value
 
-        # Get default values or extracted values
-        density = commonProps.get("massDensity", 7850.0)
-        elastic_modulus = mechProps.get("youngModulus", 210e9)
+        # Get extracted values (None if not found in IFC)
+        density_raw = commonProps.get("massDensity")
+        elastic_modulus_raw = mechProps.get("youngModulus")
         poisson_ratio = mechProps.get("poissonRatio", 0.3)
 
-        # Convert to SI units
-        density = convert_density(density, self.length_scale, self.mass_scale)
-        elastic_modulus = convert_elastic_modulus(
-            elastic_modulus, self.force_scale, self.length_scale
-        )
+        # Only convert values extracted from IFC (they're in project units).
+        # Use SI defaults directly when not found.
+        if density_raw is not None:
+            density = convert_density(density_raw, self.length_scale, self.mass_scale)
+        else:
+            density = 7850.0  # kg/m³, already SI
+
+        if elastic_modulus_raw is not None:
+            elastic_modulus = elastic_modulus_raw * self.pressure_scale
+        else:
+            elastic_modulus = 210e9  # Pa, already SI
 
         # Create material with extracted properties or defaults, converted to SI units
         return Material(
@@ -882,10 +883,9 @@ class MembersExtractor:
                 },
             )
 
-        # Default rectangular section
-        # Convert default dimensions to SI units
-        default_width = convert_length(0.1, self.length_scale)
-        default_height = convert_length(0.2, self.length_scale)
+        # Default rectangular section (SI units)
+        default_width = 0.1  # m
+        default_height = 0.2  # m
 
         return Section.create_rectangular_section(
             id=str(uuid.uuid4()),
