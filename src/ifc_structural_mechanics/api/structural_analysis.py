@@ -37,6 +37,7 @@ def analyze_ifc(
     analysis_type: str = "linear_static",
     mesh_size: float = 0.1,
     verbose: bool = False,
+    gravity: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -117,7 +118,7 @@ def analyze_ifc(
         )
 
         # Step 2: Create configurations
-        analysis_config = create_analysis_config(analysis_type)
+        analysis_config = create_analysis_config(analysis_type, gravity=gravity)
         meshing_config = create_meshing_config(mesh_size)
         system_config = SystemConfig()
 
@@ -316,12 +317,13 @@ def extract_model(ifc_path: str) -> StructuralModel:
         raise ModelExtractionError(f"Failed to extract model from IFC file: {str(e)}")
 
 
-def create_analysis_config(analysis_type: str) -> AnalysisConfig:
+def create_analysis_config(analysis_type: str, gravity: bool = False) -> AnalysisConfig:
     """
     Create an analysis configuration for the specified analysis type.
 
     Args:
         analysis_type (str): Type of analysis to perform.
+        gravity (bool): Whether to include self-weight gravity loads.
 
     Returns:
         AnalysisConfig: The analysis configuration.
@@ -344,6 +346,7 @@ def create_analysis_config(analysis_type: str) -> AnalysisConfig:
     config._config["solver_params"] = AnalysisConfig.ANALYSIS_TYPES[analysis_type][
         "default_solver_params"
     ]
+    config._config["gravity"] = gravity
 
     # Validate the configuration
     config.validate()
@@ -427,6 +430,7 @@ def run_enhanced_analysis(
     analysis_type: str = "linear_static",
     mesh_size: float = 0.1,
     verbose: bool = False,
+    gravity: bool = False,
 ) -> Dict[str, Any]:
     """
     Enhanced analysis function - now just calls the unified analyze_ifc.
@@ -440,6 +444,7 @@ def run_enhanced_analysis(
         analysis_type (str): Type of structural analysis to perform.
         mesh_size (float): Size of the mesh elements.
         verbose (bool): Whether to print verbose output.
+        gravity (bool): Whether to include self-weight gravity loads.
 
     Returns:
         Dict[str, Any]: Dictionary containing the analysis results and output file paths.
@@ -452,4 +457,5 @@ def run_enhanced_analysis(
         analysis_type=analysis_type,
         mesh_size=mesh_size,
         verbose=verbose,
+        gravity=gravity,
     )

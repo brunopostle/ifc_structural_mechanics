@@ -579,7 +579,18 @@ class LoadsExtractor:
                 # Extract force components
                 force_vector = [0.0, 0.0, 0.0]  # Default
 
-                if hasattr(applied_load, "ForceX"):
+                if hasattr(applied_load, "PlanarForceX"):
+                    # IFC standard: IfcStructuralLoadPlanarForce uses PlanarForceX/Y/Z
+                    force_x = getattr(applied_load, "PlanarForceX", 0.0) or 0.0
+                    force_y = getattr(applied_load, "PlanarForceY", 0.0) or 0.0
+                    force_z = getattr(applied_load, "PlanarForceZ", 0.0) or 0.0
+                    force_vector = [force_x, force_y, force_z]
+
+                    # Planar force is force/area: scale = force_scale / length_scale^2
+                    area_scale = self.force_scale / (self.length_scale ** 2)
+                    force_vector = [f * area_scale for f in force_vector]
+                elif hasattr(applied_load, "ForceX"):
+                    # Fallback: IfcStructuralLoadSingleForce uses ForceX/Y/Z
                     force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
                     force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
                     force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0

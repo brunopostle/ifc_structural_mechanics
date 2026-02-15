@@ -446,7 +446,9 @@ class UnifiedCalculixWriter:
             # Analysis steps
             write_analysis_steps(
                 f, self.domain_model, self.analysis_config.get_analysis_type(),
-                self.short_id_map, self.element_sets, dict(self.nodes)
+                self.short_id_map, self.element_sets, dict(self.nodes),
+                gravity=self.analysis_config.get_gravity(),
+                gravity_direction=self.analysis_config.get_gravity_direction(),
             )
 
     def _write_header(self, file: TextIO) -> None:
@@ -624,21 +626,6 @@ class UnifiedCalculixWriter:
             )
             radius = member.section.dimensions.get("radius", 0.1)
             file.write(f"{radius:.6e}\n")
-            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
-
-        elif (
-            hasattr(member.section, "section_type")
-            and member.section.section_type == "i"
-        ):
-            # For I-beams in CalculiX, use SECTION=RECT with equivalent dimensions
-            area = getattr(member.section, "area", 0.01)
-            height = (area ** 0.5) if area > 0 else 0.1
-            width = height
-
-            file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
-            )
-            file.write(f"{width:.6e}, {height:.6e}\n")
             file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
 
         else:

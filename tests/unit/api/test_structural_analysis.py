@@ -460,6 +460,7 @@ def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
         analysis_type="linear_static",
         mesh_size=0.1,
         verbose=True,
+        gravity=False,
     )
 
 

@@ -458,6 +458,8 @@ def write_analysis_steps(
     short_id_map: Optional[Dict[str, str]] = None,
     element_sets: Optional[Dict[str, List[int]]] = None,
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
+    gravity: bool = False,
+    gravity_direction: Optional[List[float]] = None,
 ) -> None:
     """
     Write comprehensive analysis step definitions to the CalculiX input file.
@@ -549,6 +551,15 @@ def write_analysis_steps(
     loads_written = _write_validated_loads_within_step(
         file, domain_model, short_id_map, element_sets, node_coords
     )
+
+    # Write gravity load if enabled
+    if gravity:
+        gdir = gravity_direction or [0.0, 0.0, -1.0]
+        file.write("** Gravity (self-weight) load\n")
+        file.write("*DLOAD\n")
+        file.write(f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n")
+        file.write("\n")
+        loads_written = True
 
     if not loads_written:
         file.write("** CRITICAL WARNING: No loads written to analysis step\n")

@@ -213,7 +213,7 @@ class PropertiesExtractor:
             mechProps = {}
             commonProps = {}
 
-            # Get mechanical properties with safe extraction
+            # First pass: standard pset names (preferred)
             for pset in psets:
                 try:
                     pset_name = self._safe_get_attribute(pset, "Name", "")
@@ -256,6 +256,34 @@ class PropertiesExtractor:
             density_raw = commonProps.get("massDensity")
             elastic_modulus_raw = mechProps.get("youngModulus")
             poisson_ratio_raw = mechProps.get("poissonRatio")
+
+            # Second pass: if key properties still missing, search all psets by property name
+            if elastic_modulus_raw is None or density_raw is None:
+                for pset in psets:
+                    try:
+                        properties = self._safe_get_attribute(
+                            pset, "Properties",
+                            self._safe_get_attribute(pset, "HasProperties", [])
+                        )
+                        for prop in properties:
+                            try:
+                                prop_name = self._safe_get_attribute(prop, "Name", "")
+                                lower_name = prop_name.lower()
+                                value = self._safe_get_property_value(
+                                    prop, default_value=None, expected_type=float
+                                )
+                                if value is None:
+                                    continue
+                                if ("youngmodulus" in lower_name or "elasticmodulus" in lower_name) and elastic_modulus_raw is None:
+                                    elastic_modulus_raw = value
+                                elif ("massdensity" in lower_name or lower_name == "density") and density_raw is None:
+                                    density_raw = value
+                                elif ("poissonratio" in lower_name or "poisson" in lower_name) and poisson_ratio_raw is None:
+                                    poisson_ratio_raw = value
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
 
             # Only convert values extracted from IFC (they're in project units).
             # Use SI defaults directly when not found.

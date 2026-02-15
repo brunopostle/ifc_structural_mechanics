@@ -401,6 +401,20 @@ class AreaLoad(Load):
         return result
 
 
+class GravityLoad:
+    """Gravity (self-weight) load applied to all elements."""
+
+    def __init__(self, magnitude: float = 9.81, direction: List[float] = None):
+        """Initialize a GravityLoad.
+
+        Args:
+            magnitude: Gravitational acceleration in m/s².
+            direction: Unit direction vector for gravity. Default is [0, 0, -1] (downward).
+        """
+        self.magnitude = magnitude
+        self.direction = direction or [0.0, 0.0, -1.0]
+
+
 class LoadGroup(DomainEntity):
     """A group of loads that are applied together."""
 

@@ -95,6 +95,7 @@ class TestEnhancedCLICommands:
                 json_output=False,
                 map_entities=True,
                 enhanced=True,  # Use the enhanced analysis option
+                gravity=False,
             )
             assert exit_code == 0  # Success
 
@@ -105,6 +106,7 @@ class TestEnhancedCLICommands:
                 analysis_type="linear_static",
                 mesh_size=0.1,
                 verbose=False,
+                gravity=False,
             )
 
     def test_analyze_custom_params(
@@ -124,6 +126,7 @@ class TestEnhancedCLICommands:
                 json_output=False,
                 map_entities=True,
                 enhanced=True,
+                gravity=False,
             )
             assert exit_code == 0  # Success
 
@@ -134,6 +137,7 @@ class TestEnhancedCLICommands:
                 analysis_type="linear_buckling",
                 mesh_size=0.2,
                 verbose=True,
+                gravity=False,
             )
 
     def test_analyze_with_warnings(

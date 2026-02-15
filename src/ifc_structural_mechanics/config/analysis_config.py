@@ -1,4 +1,4 @@
-from typing import Dict, Any, Union
+from typing import Dict, Any, List, Union
 from .base_config import BaseConfig
 
 
@@ -42,6 +42,8 @@ class AnalysisConfig(BaseConfig):
                 "strain": False,
                 "reaction_forces": False,
             },
+            "gravity": False,
+            "gravity_direction": [0.0, 0.0, -1.0],
         }
 
     def validate(self) -> None:
@@ -166,3 +168,11 @@ class AnalysisConfig(BaseConfig):
 
         # Update result output setting
         self._config["result_output"][result_type] = enabled
+
+    def get_gravity(self) -> bool:
+        """Get whether gravity loading is enabled."""
+        return self._config.get("gravity", False)
+
+    def get_gravity_direction(self) -> List[float]:
+        """Get the gravity direction vector."""
+        return self._config.get("gravity_direction", [0.0, 0.0, -1.0])

@@ -694,7 +694,7 @@ class MembersExtractor:
         mechProps = {}
         commonProps = {}
 
-        # Get mechanical properties
+        # First pass: standard pset names (preferred)
         for pset in psets:
             if (
                 pset.Name == "Pset_MaterialMechanical"
@@ -712,6 +712,23 @@ class MembersExtractor:
         density_raw = commonProps.get("massDensity")
         elastic_modulus_raw = mechProps.get("youngModulus")
         poisson_ratio = mechProps.get("poissonRatio", 0.3)
+
+        # Second pass: if key properties still missing, search all psets by property name
+        if elastic_modulus_raw is None or density_raw is None:
+            for pset in psets:
+                for prop in getattr(pset, "Properties", getattr(pset, "HasProperties", [])):
+                    prop_name = getattr(prop, "Name", "")
+                    lower_name = prop_name.lower()
+                    try:
+                        value = prop.NominalValue.wrappedValue
+                    except (AttributeError, TypeError):
+                        continue
+                    if ("youngmodulus" in lower_name or "elasticmodulus" in lower_name) and elastic_modulus_raw is None:
+                        elastic_modulus_raw = value
+                    elif ("massdensity" in lower_name or lower_name == "density") and density_raw is None:
+                        density_raw = value
+                    elif ("poissonratio" in lower_name or "poisson" in lower_name) and poisson_ratio == 0.3:
+                        poisson_ratio = value
 
         # Only convert values extracted from IFC (they're in project units).
         # Use SI defaults directly when not found.

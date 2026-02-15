@@ -86,6 +86,12 @@ def cli():
     show_default=True,
     help="Use enhanced boundary condition and load handling",
 )
+@click.option(
+    "--gravity",
+    is_flag=True,
+    default=False,
+    help="Include self-weight gravity loads",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -95,6 +101,7 @@ def analyze(
     json_output: bool = False,
     map_entities: bool = True,
     enhanced: bool = True,
+    gravity: bool = False,
 ):
     """
     Run structural analysis on an IFC file with enhanced boundary condition handling.
@@ -110,6 +117,7 @@ def analyze(
         json_output,
         map_entities,
         enhanced,
+        gravity,
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -124,6 +132,7 @@ def run_enhanced_analyze(
     json_output: bool = False,
     map_entities: bool = True,
     enhanced: bool = True,
+    gravity: bool = False,
 ) -> int:
     """
     Run the analysis with enhanced boundary condition handling and return the appropriate exit code.
@@ -188,6 +197,7 @@ def run_enhanced_analyze(
                 analysis_type=analysis_type,
                 mesh_size=mesh_size,
                 verbose=verbose,
+                gravity=gravity,
             )
         else:
             # Use the original analysis function
@@ -197,6 +207,7 @@ def run_enhanced_analyze(
                 analysis_type=analysis_type,
                 mesh_size=mesh_size,
                 verbose=verbose,
+                gravity=gravity,
             )
 
         # Format and display results
