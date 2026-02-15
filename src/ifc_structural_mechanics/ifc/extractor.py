@@ -112,6 +112,29 @@ class Extractor:
                         f"Could not determine scale for {unit_type}, using 1.0: {e}"
                     )
 
+            # Fix ifcopenshell bug: calculate_unit_scale for MASSUNIT with
+            # GRAM-based units (e.g. MEGA GRAM) returns prefix*1.0 instead
+            # of prefix*0.001 because GRAM != KILOGRAM (the SI base).
+            # Detect GRAM-based mass units and apply the missing 0.001 factor.
+            if "MASSUNIT" in unit_scales and unit_scales["MASSUNIT"] != 1.0:
+                try:
+                    for ua in self.ifc.by_type("IfcUnitAssignment"):
+                        for unit in ua.Units:
+                            if (
+                                hasattr(unit, "UnitType")
+                                and unit.UnitType == "MASSUNIT"
+                                and hasattr(unit, "Name")
+                                and unit.Name == "GRAM"
+                            ):
+                                unit_scales["MASSUNIT"] *= 0.001
+                                self.logger.info(
+                                    f"Corrected MASSUNIT scale for GRAM base: "
+                                    f"{unit_scales['MASSUNIT']}"
+                                )
+                                break
+                except Exception:
+                    pass
+
             # If we couldn't get any units, use defaults
             if not unit_scales:
                 unit_scales = {

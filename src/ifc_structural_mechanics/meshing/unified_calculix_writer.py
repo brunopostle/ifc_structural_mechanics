@@ -934,7 +934,12 @@ class UnifiedCalculixWriter:
         connection_nodes = self._find_connection_nodes(conn, member_ids)
 
         if len(connection_nodes) < 2:
-            logger.warning(f"Connection {conn.id}: Found only {len(connection_nodes)} nodes, need at least 2")
+            if len(connection_nodes) == 1:
+                # Conforming mesh: single shared node means members already share
+                # this node -- no equations needed.
+                logger.debug(f"Connection {conn.id}: single shared node {connection_nodes[0]}, no equations needed")
+            else:
+                logger.warning(f"Connection {conn.id}: Found no connection nodes")
             return
 
         conn_type = "HINGE" if is_hinge else "POINT"
@@ -1233,7 +1238,7 @@ def run_complete_analysis_workflow(
     try:
         # Step 1: Convert domain model to Gmsh geometry
         logger.info("Phase 1: Converting domain model to Gmsh geometry...")
-        geometry_converter = GmshGeometryConverter(meshing_config=meshing_config)
+        geometry_converter = GmshGeometryConverter(meshing_config=meshing_config, domain_model=domain_model)
         entity_map = geometry_converter.convert_model(domain_model)
         logger.info(f"Created Gmsh geometry with {len(entity_map)} entities")
 

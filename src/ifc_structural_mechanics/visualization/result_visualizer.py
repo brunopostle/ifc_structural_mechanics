@@ -155,22 +155,17 @@ class ResultVisualizer:
         inp_to_frd_mapping = {}
         tolerance = 0.15  # CalculiX refines mesh, so allow some distance
 
+        # Use KDTree for O(n log n) matching instead of O(n*m)
+        from scipy.spatial import cKDTree
+        frd_ids_list = list(frd_nodes.keys())
+        frd_coords = np.array([frd_nodes[nid] for nid in frd_ids_list])
+        tree = cKDTree(frd_coords)
+
         for inp_idx, inp_coord in enumerate(inp_mesh.points):
-            inp_node_id = inp_idx + 1  # INP uses 1-based indexing
-            min_dist = float('inf')
-            best_frd_id = None
-
-            # Find closest FRD node by coordinate
-            for frd_id, frd_coord in frd_nodes.items():
-                dist = np.linalg.norm(inp_coord - frd_coord)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_frd_id = frd_id
-
-            if min_dist < tolerance and best_frd_id is not None:
-                inp_to_frd_mapping[inp_node_id] = best_frd_id
-            elif min_dist < 0.5:  # Only warn for nearby misses
-                logger.debug(f"FRD match for INP node {inp_node_id}: dist={min_dist:.3f}m")
+            inp_node_id = inp_idx + 1
+            dist, idx = tree.query(inp_coord)
+            if dist < tolerance:
+                inp_to_frd_mapping[inp_node_id] = frd_ids_list[idx]
 
         logger.info(f"Mapped {len(inp_to_frd_mapping)} INP nodes to FRD nodes")
 

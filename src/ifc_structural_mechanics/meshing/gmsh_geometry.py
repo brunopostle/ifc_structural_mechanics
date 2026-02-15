@@ -3,9 +3,14 @@ Gmsh geometry conversion module for the IFC structural analysis extension.
 
 This module provides functionality to convert domain model geometric representations
 to Gmsh geometry objects, supporting various member types and applying meshing parameters.
+
+Supports conforming meshes via shared Gmsh topology: members that meet at
+connections share Gmsh points, and `gmsh.model.occ.fragment()` is used to
+produce shared topology at intersections so that the resulting mesh has
+coincident nodes without post-hoc constraints.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import gmsh
 import numpy as np
 import logging
@@ -15,6 +20,10 @@ from ..domain.structural_member import CurveMember, SurfaceMember
 
 logger = logging.getLogger(__name__)
 
+# Coordinate rounding precision for the shared point registry.
+# 6 decimal places gives ~micron tolerance for meter-scale models.
+COORD_PRECISION = 6
+
 
 class GmshGeometryConverter:
     """
@@ -23,6 +32,9 @@ class GmshGeometryConverter:
     This class handles the conversion of structural members from the domain model
     to Gmsh geometry, applying appropriate meshing parameters and preserving
     geometric properties.
+
+    When `convert_model()` is used, geometry is created with shared points at
+    connection locations and `fragment()` is called to produce conforming meshes.
     """
 
     def __init__(
@@ -54,6 +66,24 @@ class GmshGeometryConverter:
         # Maintain backward compatibility with _entity_map for existing tests
         self._entity_map = {}
 
+        # Shared point registry: rounded (x,y,z) -> Gmsh point tag
+        self._point_registry: Dict[Tuple[float, float, float], int] = {}
+
+        # Accumulators for bulk fragment operation
+        self._all_curve_dim_tags: List[Tuple[int, int]] = []
+        self._all_surface_dim_tags: List[Tuple[int, int]] = []
+
+        # Per-member tag tracking (member.id -> list of tags)
+        self._member_point_tags: Dict[str, List[int]] = {}
+        self._member_curve_tags: Dict[str, List[int]] = {}
+        self._member_surface_tags: Dict[str, List[int]] = {}
+
+        # Per-member mesh sizes (member.id -> element_size)
+        self._member_mesh_sizes: Dict[str, float] = {}
+
+        # Fragment results
+        self._fragment_map: Optional[List] = None
+
     def _ensure_gmsh_initialized(self):
         """
         Ensure Gmsh is initialized before performing operations.
@@ -70,7 +100,7 @@ class GmshGeometryConverter:
 
         # Use gmsh.isInitialized() for a reliable check.
         # Note: gmsh.option.getNumber() does NOT raise a Python exception
-        # when Gmsh is uninitialized — it just prints to stderr and returns 0.
+        # when Gmsh is uninitialized --- it just prints to stderr and returns 0.
         if not gmsh.isInitialized():
             try:
                 gmsh.initialize()
@@ -99,9 +129,307 @@ class GmshGeometryConverter:
         except Exception as e:
             logger.warning(f"Failed to set up Gmsh model: {e}")
 
+    # ------------------------------------------------------------------
+    # Shared point registry helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _coord_key(x: float, y: float, z: float) -> Tuple[float, float, float]:
+        """Round coordinates to a canonical key for the point registry."""
+        return (
+            round(float(x), COORD_PRECISION),
+            round(float(y), COORD_PRECISION),
+            round(float(z), COORD_PRECISION),
+        )
+
+    def _get_or_create_point(self, x: float, y: float, z: float) -> int:
+        """Reuse an existing Gmsh OCC point at this location, or create a new one."""
+        key = self._coord_key(x, y, z)
+        if key in self._point_registry:
+            return self._point_registry[key]
+        tag = gmsh.model.occ.addPoint(float(x), float(y), float(z))
+        self._point_registry[key] = tag
+        return tag
+
+    # ------------------------------------------------------------------
+    # Internal geometry creation (no synchronize, no mesh size)
+    # ------------------------------------------------------------------
+
+    def _create_curve_geometry(self, member: CurveMember) -> Tuple[List[int], List[int]]:
+        """
+        Create Gmsh OCC geometry for a curve member without synchronizing.
+
+        Uses the shared point registry so that members meeting at the same
+        location share Gmsh points.
+
+        Returns:
+            (line_tags, point_tags)
+        """
+        curve_points = self._convert_curve(member.geometry)
+
+        point_tags = []
+        for point in curve_points:
+            try:
+                pt = self._get_or_create_point(point[0], point[1], point[2])
+                point_tags.append(pt)
+            except Exception as e:
+                logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
+
+        line_tags = []
+        for i in range(len(point_tags) - 1):
+            try:
+                line_tag = gmsh.model.occ.addLine(point_tags[i], point_tags[i + 1])
+                line_tags.append(line_tag)
+            except Exception as e:
+                logger.warning(f"Error adding Gmsh line for member {member.id}: {e}")
+
+        # Accumulate for fragment
+        for tag in line_tags:
+            self._all_curve_dim_tags.append((1, tag))
+
+        # Store per-member tags
+        self._member_point_tags[member.id] = point_tags
+        self._member_curve_tags[member.id] = line_tags
+
+        # Store element type and mesh size
+        element_type = self.meshing_config.get_element_type("curve_members")
+        element_size = self.meshing_config.get_element_size("curve_members")
+        self._member_mesh_sizes[member.id] = element_size
+
+        # Update entity map
+        self._entity_map[member.id] = {
+            "type": "curve",
+            "gmsh_tags": line_tags,
+            "element_type": element_type,
+        }
+
+        logger.debug(
+            f"Created curve geometry for {member.id}: {len(line_tags)} lines, "
+            f"{len(point_tags)} points"
+        )
+        return line_tags, point_tags
+
+    def _create_surface_geometry(self, member: SurfaceMember) -> Tuple[Optional[int], List[int]]:
+        """
+        Create Gmsh OCC geometry for a surface member without synchronizing.
+
+        Uses the shared point registry so that members meeting at the same
+        location share Gmsh points.
+
+        Returns:
+            (surface_tag, point_tags)  -- surface_tag may be None on failure
+        """
+        surface_points = self._convert_surface(member.geometry)
+
+        point_tags = []
+        for point in surface_points:
+            try:
+                pt = self._get_or_create_point(point[0], point[1], point[2])
+                point_tags.append(pt)
+            except Exception as e:
+                logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
+
+        # Create lines forming a closed loop
+        line_tags = []
+        for i in range(len(point_tags)):
+            try:
+                line_tag = gmsh.model.occ.addLine(
+                    point_tags[i], point_tags[(i + 1) % len(point_tags)]
+                )
+                line_tags.append(line_tag)
+            except Exception as e:
+                logger.warning(f"Error adding Gmsh line for member {member.id}: {e}")
+
+        # Create curve loop and surface
+        surface_tag = None
+        try:
+            curve_loop_tag = gmsh.model.occ.addCurveLoop(line_tags)
+            surface_tag = gmsh.model.occ.addPlaneSurface([curve_loop_tag])
+        except Exception as e:
+            logger.warning(f"Error creating surface for member {member.id}: {e}")
+            return None, point_tags
+
+        # Accumulate for fragment
+        self._all_surface_dim_tags.append((2, surface_tag))
+
+        # Store per-member tags
+        self._member_point_tags[member.id] = point_tags
+        self._member_surface_tags[member.id] = [surface_tag]
+
+        # Store element type and mesh size
+        element_type = self.meshing_config.get_element_type("surface_members")
+        element_size = self.meshing_config.get_element_size("surface_members")
+        self._member_mesh_sizes[member.id] = element_size
+
+        # Update entity map
+        self._entity_map[member.id] = {
+            "type": "surface",
+            "gmsh_tags": [surface_tag],
+            "element_type": element_type,
+        }
+
+        logger.debug(
+            f"Created surface geometry for {member.id}: surface tag {surface_tag}, "
+            f"{len(point_tags)} points"
+        )
+        return surface_tag, point_tags
+
+    # ------------------------------------------------------------------
+    # Fragment and remap
+    # ------------------------------------------------------------------
+
+    def _fragment_all_entities(self) -> None:
+        """
+        Fragment all geometry entities against each other to create shared topology.
+
+        After fragment, entities that overlap or touch will share boundary points
+        and curves, so the resulting mesh will have conforming (shared) nodes.
+        """
+        all_dim_tags = self._all_curve_dim_tags + self._all_surface_dim_tags
+        if len(all_dim_tags) < 2:
+            logger.debug("Fewer than 2 entities, skipping fragment")
+            self._fragment_map = None
+            return
+
+        try:
+            out, out_map = gmsh.model.occ.fragment(all_dim_tags, [])
+            self._fragment_output = out
+            self._fragment_map = out_map  # out_map[i] = new dim_tags for input[i]
+            logger.info(
+                f"Fragment: {len(all_dim_tags)} input entities -> "
+                f"{len(out)} output entities"
+            )
+        except Exception as e:
+            logger.warning(f"Fragment failed: {e}. Trying removeAllDuplicates fallback.")
+            try:
+                gmsh.model.occ.removeAllDuplicates()
+            except Exception:
+                pass
+            self._fragment_map = None
+
+    def _remap_tags_after_fragment(self, domain_model: StructuralModel) -> None:
+        """
+        After fragment(), update entity_map and register traceability.
+
+        Fragment may change entity tags (renumber or split). We use the
+        out_map returned by fragment() to build old->new mappings.
+        """
+        if self._fragment_map is None:
+            # No fragment was done; register tags as-is
+            self._register_traceability_no_fragment(domain_model)
+            return
+
+        # Build old_dim_tag -> [new_dim_tags] mapping
+        input_dim_tags = self._all_curve_dim_tags + self._all_surface_dim_tags
+        old_to_new: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+        for i, old_dt in enumerate(input_dim_tags):
+            if i < len(self._fragment_map):
+                old_to_new[old_dt] = self._fragment_map[i]
+            else:
+                old_to_new[old_dt] = [old_dt]
+
+        # Update per-member curve tags
+        for member_id, old_tags in self._member_curve_tags.items():
+            new_tags = []
+            for old_tag in old_tags:
+                old_dt = (1, old_tag)
+                for new_dt in old_to_new.get(old_dt, [old_dt]):
+                    if new_dt[0] == 1:
+                        new_tags.append(new_dt[1])
+            self._member_curve_tags[member_id] = new_tags
+
+            # Update entity map
+            if member_id in self._entity_map:
+                self._entity_map[member_id]["gmsh_tags"] = new_tags
+
+        # Update per-member surface tags
+        for member_id, old_tags in self._member_surface_tags.items():
+            new_tags = []
+            for old_tag in old_tags:
+                old_dt = (2, old_tag)
+                for new_dt in old_to_new.get(old_dt, [old_dt]):
+                    if new_dt[0] == 2:
+                        new_tags.append(new_dt[1])
+            self._member_surface_tags[member_id] = new_tags
+
+            # Update entity map
+            if member_id in self._entity_map:
+                self._entity_map[member_id]["gmsh_tags"] = new_tags
+
+        # Register traceability
+        self._register_traceability(domain_model)
+
+    def _register_traceability_no_fragment(self, domain_model: StructuralModel) -> None:
+        """Register mesh entity traceability when no fragment was performed."""
+        self._register_traceability(domain_model)
+
+    def _register_traceability(self, domain_model: StructuralModel) -> None:
+        """Register mesh entity IDs in domain model for all members."""
+        dm = getattr(self, 'domain_model', None) or domain_model
+        if not dm:
+            return
+
+        for member_id, tags in self._member_curve_tags.items():
+            mesh_ids = [str(tag) for tag in tags]
+            dm.register_mesh_entities(member_id, mesh_ids, entity_type="member")
+
+        for member_id, tags in self._member_surface_tags.items():
+            mesh_ids = [str(tag) for tag in tags]
+            dm.register_mesh_entities(member_id, mesh_ids, entity_type="member")
+
+    # ------------------------------------------------------------------
+    # Mesh size application
+    # ------------------------------------------------------------------
+
+    def _apply_all_mesh_sizes(self, domain_model: StructuralModel) -> None:
+        """
+        Apply mesh sizes to all member points after synchronize.
+
+        For shared points (used by multiple members), use the minimum size.
+        """
+        # Build point -> min mesh size mapping
+        point_sizes: Dict[int, float] = {}
+
+        for member in domain_model.members:
+            size = self._member_mesh_sizes.get(member.id)
+            if size is None:
+                continue
+            pts = self._member_point_tags.get(member.id, [])
+            for pt in pts:
+                if pt in point_sizes:
+                    point_sizes[pt] = min(point_sizes[pt], size)
+                else:
+                    point_sizes[pt] = size
+
+        # Also collect points from post-fragment entities that may have new tags
+        # Get all points in the model after synchronize
+        try:
+            all_points = gmsh.model.getEntities(0)
+            # For any point not yet assigned a size, use a reasonable default
+            default_size = min(point_sizes.values()) if point_sizes else 1.0
+            for dim, tag in all_points:
+                if tag not in point_sizes:
+                    point_sizes[tag] = default_size
+        except Exception:
+            pass
+
+        # Apply sizes
+        for pt, size in point_sizes.items():
+            try:
+                gmsh.model.mesh.setSize([(0, pt)], size)
+            except Exception as e:
+                logger.debug(f"Could not set mesh size for point {pt}: {e}")
+
+    # ------------------------------------------------------------------
+    # Main entry point: convert_model with shared topology
+    # ------------------------------------------------------------------
+
     def convert_model(self, domain_model: StructuralModel) -> Dict[str, Any]:
         """
-        Convert an entire domain model to Gmsh geometry.
+        Convert an entire domain model to Gmsh geometry with conforming topology.
+
+        Uses shared points and fragment() to produce a mesh where connected
+        members share nodes automatically.
 
         Args:
             domain_model (StructuralModel): The structural model to convert.
@@ -112,23 +440,52 @@ class GmshGeometryConverter:
         # Ensure Gmsh is initialized
         self._ensure_gmsh_initialized()
 
-        # Clear the entity map for backward compatibility
+        # Clear state
         self._entity_map = {}
+        self._point_registry = {}
+        self._all_curve_dim_tags = []
+        self._all_surface_dim_tags = []
+        self._member_point_tags = {}
+        self._member_curve_tags = {}
+        self._member_surface_tags = {}
+        self._member_mesh_sizes = {}
+        self._fragment_map = None
 
-        # Convert members based on their type
+        # Phase 1: Create all geometry with shared points (no synchronize)
         for member in domain_model.members:
             if isinstance(member, CurveMember):
-                self.convert_curve_member(member)
+                self._create_curve_geometry(member)
             elif isinstance(member, SurfaceMember):
-                self.convert_surface_member(member)
+                self._create_surface_geometry(member)
 
-        # Return the domain to Gmsh mapping from the mapper
-        # But also maintain backward compatibility with _entity_map
+        # Phase 2: Fragment for shared topology
+        self._fragment_all_entities()
+
+        # Phase 3: Single synchronize
+        try:
+            gmsh.model.occ.synchronize()
+        except Exception as e:
+            logger.warning(f"Error synchronizing Gmsh model: {e}")
+
+        # Phase 4: Remap tags + traceability
+        self._remap_tags_after_fragment(domain_model)
+
+        # Phase 5: Apply mesh sizes
+        self._apply_all_mesh_sizes(domain_model)
+
+        logger.info(
+            f"Converted model with {len(self._entity_map)} members, "
+            f"{len(self._point_registry)} shared points"
+        )
         return self._entity_map
+
+    # ------------------------------------------------------------------
+    # Public standalone API (for individual member conversion and tests)
+    # ------------------------------------------------------------------
 
     def convert_curve_member(self, member: CurveMember) -> List[int]:
         """
-        Convert a curve member to Gmsh geometry.
+        Convert a curve member to Gmsh geometry (standalone, with synchronize).
 
         Args:
             member (CurveMember): The curve member to convert.
@@ -201,7 +558,7 @@ class GmshGeometryConverter:
 
     def convert_surface_member(self, member: SurfaceMember) -> List[int]:
         """
-        Convert a surface member to Gmsh geometry.
+        Convert a surface member to Gmsh geometry (standalone, with synchronize).
 
         Args:
             member (SurfaceMember): The surface member to convert.
@@ -309,9 +666,6 @@ class GmshGeometryConverter:
     def _convert_point(self, point: Any) -> np.ndarray:
         """
         Convert a point representation to a numpy array.
-
-        This is a placeholder method that should be overridden or extended
-        to handle different point representations from the domain model.
 
         Args:
             point (Any): Point representation from the domain model.
