@@ -570,6 +570,15 @@ class UnifiedCalculixWriter:
                 file.write("\n")
                 written_sets.add(set_name)
 
+        # Write EALL set containing all elements (needed for gravity DLOAD)
+        all_element_ids = sorted(self.elements.keys())
+        if all_element_ids:
+            file.write("*ELSET, ELSET=EALL\n")
+            for i in range(0, len(all_element_ids), 8):
+                line_elements = all_element_ids[i : i + 8]
+                file.write(", ".join(map(str, line_elements)) + "\n")
+            file.write("\n")
+
         logger.info(f"Wrote {len(written_sets)} element sets")
 
     def _write_materials(self, file: TextIO) -> None:
@@ -629,19 +638,24 @@ class UnifiedCalculixWriter:
             file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
 
         else:
-            # General beam section
-            file.write(
-                f"*BEAM GENERAL SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}\n"
-            )
+            # Non-standard section (I-beam, etc.): CalculiX B31 only supports
+            # RECT, CIRC, PIPE, BOX — not GENERAL. Use equivalent RECT that
+            # preserves area and strong-axis moment of inertia:
+            #   w*h = A, w*h³/12 = Iy → h = sqrt(12*Iy/A), w = A/h
             area = getattr(member.section, "area", 0.01)
             i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
-            i_zz = getattr(member.section, "moment_of_inertia_z", area * 0.01)
-            i_yz = 0.0
-            it = getattr(member.section, "torsional_constant", area * 0.01)
-            warping = getattr(member.section, "warping_constant", 0.0) or 0.0
+
+            if area > 0 and i_yy > 0:
+                height = (12.0 * i_yy / area) ** 0.5
+                width = area / height
+            else:
+                height = area ** 0.5 if area > 0 else 0.1
+                width = height
+
             file.write(
-                f"{area:.6e}, {i_yy:.6e}, {i_zz:.6e}, {i_yz:.6e}, {it:.6e}, {warping:.6e}\n"
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
             )
+            file.write(f"{width:.6e}, {height:.6e}\n")
             file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
 
     def _compute_element_normal(self, element_id: int) -> Tuple[float, float, float]:
