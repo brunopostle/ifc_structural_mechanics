@@ -61,6 +61,21 @@ ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static 
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
 
+### Visualization
+```bash
+# Visualize displacement results (auto-scales)
+python visualize.py building_01a
+
+# Visualize stress results
+python visualize.py slab_01 --field stress
+
+# Save screenshot (non-interactive)
+python visualize.py building_01a --screenshot result.png
+
+# Custom scale factor
+python visualize.py portal_01 --scale 500
+```
+
 ### Documentation
 ```bash
 # Build documentation
@@ -112,18 +127,29 @@ Stateless utility functions for type conversions:
 Generates finite element meshes:
 - `unified_calculix_writer.py`: **THE UNIFIED SOLUTION** - Single tool for writing CalculiX input files. This replaces dual systems and eliminates element writing conflicts. **Registers analysis element IDs** in domain model via `StructuralModel.register_analysis_elements()`
 - `gmsh_runner.py`: Executes Gmsh to generate meshes. Outputs `.msh` mesh files (not `.geo` script files).
-- `gmsh_geometry.py`: Creates Gmsh geometry from domain model. **Registers mesh entity IDs** in domain model via `StructuralModel.register_mesh_entities()`
+- `gmsh_geometry.py`: Creates Gmsh geometry from domain model using **conforming meshes via shared topology**. Uses a shared point registry and `gmsh.model.occ.fragment()` so connected members share mesh nodes automatically. **Registers mesh entity IDs** in domain model via `StructuralModel.register_mesh_entities()`
 - `gmsh_utils.py`: Gmsh utility functions
+
+**Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
+1. Create all geometry with shared points (no per-member synchronize)
+2. Call `fragment()` on all entities to create shared topology at intersections
+3. Single `synchronize()` call
+4. Remap entity tags after fragmentation
+5. Apply mesh sizes (minimum size for shared points)
 
 **Note**: The workflow uses Gmsh's `.msh` mesh format exclusively. `.geo` geometry script files are not used in production as they may have XAO dependencies in newer Gmsh versions.
 
 #### 5. Analysis (`src/ifc_structural_mechanics/analysis/`)
 Runs CalculiX and processes results:
 - `calculix_runner.py`: Executes CalculiX solver
-- `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`)
+- `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
 - `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
 - `file_writers.py`: Utilities for writing various analysis files
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
+
+#### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
+Interactive 3D result visualization using PyVista:
+- `result_visualizer.py`: `ResultVisualizer` class that loads mesh from FRD+INP files, maps displacement/stress results to mesh nodes via coordinate-based KDTree matching, and renders with PyVista. Displacement field displayed in mm.
 
 #### 6. Configuration (`src/ifc_structural_mechanics/config/`)
 Configuration system with three main classes:
@@ -186,6 +212,9 @@ Command-line interface:
 - **Unit tests** (`tests/unit/`): Test individual classes/functions in isolation with mocks
 - **Integration tests** (`tests/integration/`): Test workflows across multiple modules with real IFC files
   - `test_ifc_to_geo.py`: Tests IFC → Gmsh mesh conversion, outputs `.msh` files for inspection
+- **Validation tests** (`tests/validation/`): Numerical accuracy tests against analytical solutions
+  - Tier 1: Direct CalculiX input/output tests
+  - Tier 2: Full pipeline tests (IFC → results)
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
 
@@ -202,6 +231,7 @@ Command-line interface:
 
 ### Python Packages
 Core: numpy, scipy, ifcopenshell, gmsh, meshio, click, pyyaml, pandas
+Visualization: pyvista (optional, for result visualization)
 Dev: pytest, pytest-cov, black, isort, flake8, mypy
 
 ## Key File Locations
@@ -212,6 +242,8 @@ Dev: pytest, pytest-cov, black, isort, flake8, mypy
 - Configuration: `src/ifc_structural_mechanics/config/`
 - Traceability: `src/ifc_structural_mechanics/domain/structural_model.py` (see `register_*` and `trace_error_to_ifc` methods)
 - Type converters: `src/ifc_structural_mechanics/converters/calculix_types.py`
+- Result visualization: `src/ifc_structural_mechanics/visualization/result_visualizer.py`
+- Visualization script: `visualize.py` (convenience CLI for viewing results)
 - Test utilities: `tests/conftest.py`
 
 ## Code Style
