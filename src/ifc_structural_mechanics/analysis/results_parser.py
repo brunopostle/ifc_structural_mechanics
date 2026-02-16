@@ -25,6 +25,27 @@ from ..utils.error_handling import ResultProcessingError
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Regex for scientific notation values that may run together without spaces
+_FRD_VALUE_RE = re.compile(
+    r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
+)
+
+
+def _parse_frd_data_line(raw_line):
+    """Parse an FRD data line using fixed-width node ID and regex for values.
+
+    FRD format: chars 0-2 = " -1", chars 3-12 = node ID (10 chars),
+    chars 13+ = values (may run together without spaces when negative).
+
+    Returns:
+        Tuple of (node_id_str, list_of_float_values)
+    """
+    node_id = raw_line[3:13].strip()
+    values_str = raw_line[13:]
+    matches = _FRD_VALUE_RE.findall(values_str)
+    values = [float(m.replace('D', 'E').replace('d', 'e')) for m in matches]
+    return node_id, values
+
 
 class ResultsParser(BaseParser):
     """
@@ -102,7 +123,8 @@ class ResultsParser(BaseParser):
             i = 0
 
             while i < len(lines):
-                line = lines[i].strip()
+                raw_line = lines[i]
+                line = raw_line.strip()
 
                 # Look for the start of a displacement block (modern format: " -4  DISP")
                 if line.startswith("-4") and "DISP" in line:
@@ -125,43 +147,18 @@ class ResultsParser(BaseParser):
 
                     # Look for node data lines (format: " -1  node_id  dx  dy  dz")
                     if line.startswith("-1"):
-                        # FRD format uses fixed-width columns - values can run together
-                        # Extract node ID first (after the -1 marker)
+                        # FRD fixed-width format: node ID is in chars 3-12,
+                        # values follow starting at char 13.
+                        # Values can run together without spaces when negative.
                         try:
-                            # Split by spaces to get node ID
-                            parts = line.split()
-                            node_id = parts[1]
-
-                            # Get the rest of the line after node ID for value extraction
-                            # Find where node ID ends in the original line
-                            node_id_pos = line.find(node_id) + len(node_id)
-                            values_str = line[node_id_pos:].strip()
-
-                            # Parse values using regex to handle concatenated scientific notation
-                            # Match: decimal number with optional exponent OR integer with required exponent
-                            # This avoids matching plain integers (like node IDs)
-                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
-                            matches = re.findall(value_pattern, values_str)
-
-                            # Filter out empty matches and convert to floats
-                            values = []
-                            for m in matches:
-                                if m and m not in ['+', '-', '']:
-                                    try:
-                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
-                                    except ValueError:
-                                        pass
+                            node_id, values = _parse_frd_data_line(raw_line)
 
                             if len(values) >= 3:
-                                # Extract displacement values
                                 translations = values[0:3]
-
-                                # Extract rotations if available
                                 rotations = [0.0, 0.0, 0.0]
                                 if len(values) >= 6:
                                     rotations = values[3:6]
 
-                                # Create displacement result
                                 result = DisplacementResult(reference_element=node_id)
                                 result.set_translations(translations)
                                 result.set_rotations(rotations)
@@ -172,7 +169,7 @@ class ResultsParser(BaseParser):
                                 )
                         except (ValueError, IndexError) as e:
                             logger.warning(
-                                f"Error parsing displacement line: {line}, error: {e}"
+                                f"Error parsing displacement line: {raw_line}, error: {e}"
                             )
 
                 i += 1
@@ -339,7 +336,8 @@ class ResultsParser(BaseParser):
             in_stress_block = False
 
             while i < len(lines):
-                line = lines[i].strip()
+                raw_line = lines[i]
+                line = raw_line.strip()
 
                 # Look for stress block start (modern format: " -4  STRESS")
                 if line.startswith("-4") and "STRESS" in line:
@@ -363,38 +361,13 @@ class ResultsParser(BaseParser):
                     # Look for node data lines (format: " -1  node_id  sxx  syy  szz  sxy  syz  szx")
                     if line.startswith("-1"):
                         try:
-                            # Split by spaces to get node/element ID
-                            parts = line.split()
-                            element_id = parts[1]
-
-                            # Get the rest of the line after element ID
-                            elem_id_pos = line.find(element_id) + len(element_id)
-                            values_str = line[elem_id_pos:].strip()
-
-                            # Parse values using regex to handle concatenated scientific notation
-                            # Match: decimal number with optional exponent OR integer with required exponent
-                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
-                            matches = re.findall(value_pattern, values_str)
-
-                            # Convert to floats
-                            values = []
-                            for m in matches:
-                                if m and m not in ['+', '-', '']:
-                                    try:
-                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
-                                    except ValueError:
-                                        pass
+                            element_id, values = _parse_frd_data_line(raw_line)
 
                             if len(values) >= 6:
-                                # Create stress result
                                 result = StressResult(reference_element=element_id)
-
-                                # Normal stresses
                                 result.add_value("sxx", values[0])
                                 result.add_value("syy", values[1])
                                 result.add_value("szz", values[2])
-
-                                # Shear stresses
                                 result.add_value("sxy", values[3])
                                 result.add_value("syz", values[4])
                                 result.add_value("sxz", values[5])
@@ -403,7 +376,7 @@ class ResultsParser(BaseParser):
                                 logger.debug(f"Added stress for element {element_id}")
                         except (ValueError, IndexError) as e:
                             logger.warning(
-                                f"Error parsing stress line: {line}, error: {e}"
+                                f"Error parsing stress line: {raw_line}, error: {e}"
                             )
 
                 i += 1
@@ -448,7 +421,8 @@ class ResultsParser(BaseParser):
             in_strain_block = False
 
             while i < len(lines):
-                line = lines[i].strip()
+                raw_line = lines[i]
+                line = raw_line.strip()
 
                 # Look for strain block start (modern format: " -4  TOSTRAIN" or "STRAIN")
                 if line.startswith("-4") and ("STRAIN" in line or "TOSTRAIN" in line):
@@ -472,38 +446,13 @@ class ResultsParser(BaseParser):
                     # Look for node data lines (format: " -1  node_id  exx  eyy  ezz  exy  eyz  ezx")
                     if line.startswith("-1"):
                         try:
-                            # Split by spaces to get node/element ID
-                            parts = line.split()
-                            element_id = parts[1]
-
-                            # Get the rest of the line after element ID
-                            elem_id_pos = line.find(element_id) + len(element_id)
-                            values_str = line[elem_id_pos:].strip()
-
-                            # Parse values using regex to handle concatenated scientific notation
-                            # Match: decimal number with optional exponent OR integer with required exponent
-                            value_pattern = r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
-                            matches = re.findall(value_pattern, values_str)
-
-                            # Convert to floats
-                            values = []
-                            for m in matches:
-                                if m and m not in ['+', '-', '']:
-                                    try:
-                                        values.append(float(m.replace('D', 'E').replace('d', 'e')))
-                                    except ValueError:
-                                        pass
+                            element_id, values = _parse_frd_data_line(raw_line)
 
                             if len(values) >= 6:
-                                # Create strain result
                                 result = StrainResult(reference_element=element_id)
-
-                                # Normal strains
                                 result.add_value("exx", values[0])
                                 result.add_value("eyy", values[1])
                                 result.add_value("ezz", values[2])
-
-                                # Shear strains
                                 result.add_value("exy", values[3])
                                 result.add_value("eyz", values[4])
                                 result.add_value("exz", values[5])
@@ -512,7 +461,7 @@ class ResultsParser(BaseParser):
                                 logger.debug(f"Added strain for element {element_id}")
                         except (ValueError, IndexError) as e:
                             logger.warning(
-                                f"Error parsing strain line: {line}, error: {e}"
+                                f"Error parsing strain line: {raw_line}, error: {e}"
                             )
 
                 i += 1

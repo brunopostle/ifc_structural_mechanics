@@ -275,11 +275,12 @@ class ResultVisualizer:
         self.displaced_mesh = self.mesh.copy()
         self.displaced_mesh.points = displaced_points
 
-        # Add displacement magnitude as scalar field
-        self.displaced_mesh['Displacement'] = displacement_magnitude
+        # Add displacement magnitude as scalar field (in mm for readability)
+        displacement_magnitude_mm = displacement_magnitude * 1000.0
+        self.displaced_mesh['Displacement (mm)'] = displacement_magnitude_mm
 
         logger.info(f"Applied displacements with scale factor {scale_factor}")
-        logger.info(f"Max displacement: {displacement_magnitude.max():.6e}")
+        logger.info(f"Max displacement: {displacement_magnitude.max():.6e} m ({displacement_magnitude_mm.max():.4f} mm)")
 
         return self.displaced_mesh
 
@@ -377,8 +378,8 @@ class ResultVisualizer:
         if self.displaced_mesh is None:
             raise ValueError("Create displaced mesh first using apply_displacement_field()")
 
-        # Create plotter
-        plotter = pv.Plotter(window_size=window_size)
+        # Create plotter (off-screen when saving screenshot)
+        plotter = pv.Plotter(window_size=window_size, off_screen=bool(screenshot))
         plotter.add_title("Structural Analysis Results", font_size=14)
 
         # Add deformed mesh with color coding
@@ -394,7 +395,8 @@ class ResultVisualizer:
                     'title': field,
                     'vertical': True,
                     'position_x': 0.85,
-                    'position_y': 0.1
+                    'position_y': 0.1,
+                    'fmt': '%.3g',
                 }
             )
         else:
@@ -431,7 +433,7 @@ class ResultVisualizer:
         self,
         output_file: str,
         scale_factor: float = 1.0,
-        field: str = 'Displacement',
+        field: str = 'Displacement (mm)',
         cmap: str = 'jet'
     ) -> None:
         """
@@ -490,4 +492,4 @@ def visualize_analysis_results(
         viz.add_stress_field()
         viz.plot_deformed(scale_factor=scale_factor, field='Von Mises Stress', screenshot=screenshot)
     else:
-        viz.plot_deformed(scale_factor=scale_factor, field='Displacement', screenshot=screenshot)
+        viz.plot_deformed(scale_factor=scale_factor, field='Displacement (mm)', screenshot=screenshot)
