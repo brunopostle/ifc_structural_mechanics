@@ -132,10 +132,16 @@ Generates finite element meshes:
 
 **Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
 1. Create all geometry with shared points (no per-member synchronize)
-2. Call `fragment()` on all entities to create shared topology at intersections
+2. Call `fragment()` separately for curves and surfaces (separate point registries to avoid CalculiX KNOT generation when beam and shell elements share nodes)
 3. Single `synchronize()` call
 4. Remap entity tags after fragmentation
 5. Apply mesh sizes (minimum size for shared points)
+6. Create Gmsh physical groups — each member's geometry entities get a numbered physical group named by member ID, so mesh elements inherit their parent member identity
+
+**Element-to-Member Mapping** (`unified_calculix_writer.py`):
+- Uses `cell_data['gmsh:physical']` from meshio to correctly assign mesh elements to their parent structural members via `_map_elements_via_physical_groups()`
+- Falls back to spatial centroid matching for members whose geometry was merged during fragment (overlapping members)
+- **Important**: The old naive `_distribute_elements_to_members()` (round-robin assignment) is kept only as a last-resort fallback — it produces incorrect spatial mapping for multi-member models
 
 **Note**: The workflow uses Gmsh's `.msh` mesh format exclusively. `.geo` geometry script files are not used in production as they may have XAO dependencies in newer Gmsh versions.
 
@@ -243,7 +249,8 @@ Dev: pytest, pytest-cov, black, isort, flake8, mypy
 - Traceability: `src/ifc_structural_mechanics/domain/structural_model.py` (see `register_*` and `trace_error_to_ifc` methods)
 - Type converters: `src/ifc_structural_mechanics/converters/calculix_types.py`
 - Result visualization: `src/ifc_structural_mechanics/visualization/result_visualizer.py`
-- Visualization script: `visualize.py` (convenience CLI for viewing results)
+- Visualization CLI: `visualize.py` (general-purpose: any model, displacement/stress, screenshot/interactive)
+- FRD-only visualization: `visualize_from_frd.py` (reads mesh+results directly from FRD, no IFC needed)
 - Test utilities: `tests/conftest.py`
 
 ## Code Style
@@ -271,3 +278,10 @@ Use `entity_identifier.py` functions to classify IFC entities rather than direct
 ## Temporary Files
 
 The system uses `utils/temp_dir.py` for managing temporary files during analysis. Temporary files are automatically cleaned up unless `set_keep_temp_files(True)` is called (useful for debugging).
+
+## Known Limitations
+
+- **Load cases**: Only a subset of IFC load cases may be written to the INP. Models with multiple `IfcStructuralLoadCase` (e.g., Dead, Live, Wind, Earthquake) may only get some cases applied. Each load case should ideally map to a separate `*STEP`.
+- **Overlapping members**: Members with identical geometry (e.g., a short beam inside a longer beam) may lose their physical group during `fragment()`. These are logged as warnings and their loads/sections are skipped.
+- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. See `PLAN-cleanup-and-tests.md` for refactoring plan.
+- **Connection equations**: Beam endpoints offset from column centerlines (up to 0.5m) are handled by the connection node tolerance, but very large offsets may be missed.

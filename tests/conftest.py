@@ -20,6 +20,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: mark a test as an integration test"
     )
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
 
 
 # Define a consistent temp directory
