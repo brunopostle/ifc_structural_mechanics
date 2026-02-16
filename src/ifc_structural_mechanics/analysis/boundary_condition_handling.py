@@ -882,16 +882,24 @@ def _write_validated_loads_within_step(
                             f"Applied load {getattr(load, 'id', 'unknown')} to member {target_members[0].id}"
                         )
 
-                # Write the load if we found a valid element set
+                # Write the load if we found a valid element set that exists
                 if element_set_name:
-                    if isinstance(load, LineLoad):
+                    # Check if this element set actually exists (may be empty
+                    # if member was merged during fragment)
+                    if element_sets and element_set_name not in element_sets:
+                        logger.debug(
+                            f"Skipping DLOAD for {element_set_name} — element set not defined"
+                        )
+                    elif isinstance(load, LineLoad):
                         file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
+                        loads_written = True
                     elif isinstance(load, AreaLoad):
                         file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                        loads_written = True
                     else:
                         # Default to area load pressure
                         file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                    loads_written = True
+                        loads_written = True
                 else:
                     logger.warning(
                         f"Cannot determine element set for distributed load {getattr(load, 'id', 'unknown')}"
@@ -931,33 +939,42 @@ def _write_validated_loads_within_step(
             load for load in member_loads if not isinstance(load, PointLoad)
         ]
         if distributed_loads:
-            file.write("*DLOAD\n")
-            for load in distributed_loads:
-                # For loads directly on members, use the member's element set
+            # Use short ID for element set name
+            if short_id_map and member.id in short_id_map:
+                element_set_name = f"MEMBER_{short_id_map[member.id]}"
+            else:
                 element_set_name = f"MEMBER_{member.id}"
 
-                # Get magnitude
-                if hasattr(load, "get_force_vector"):
-                    force_vector = _get_validated_force_vector(load)
-                    magnitude = (
-                        force_vector[0] ** 2
-                        + force_vector[1] ** 2
-                        + force_vector[2] ** 2
-                    ) ** 0.5
-                else:
-                    magnitude = getattr(load, "magnitude", 1000.0)
+            # Skip if element set doesn't exist (member merged during fragment)
+            if element_sets and element_set_name not in element_sets:
+                logger.debug(
+                    f"Skipping member DLOAD for {member.id} — element set not defined"
+                )
+            else:
+                file.write("*DLOAD\n")
+                for load in distributed_loads:
+                    # Get magnitude
+                    if hasattr(load, "get_force_vector"):
+                        force_vector = _get_validated_force_vector(load)
+                        magnitude = (
+                            force_vector[0] ** 2
+                            + force_vector[1] ** 2
+                            + force_vector[2] ** 2
+                        ) ** 0.5
+                    else:
+                        magnitude = getattr(load, "magnitude", 1000.0)
 
-                if not isinstance(magnitude, (int, float)) or magnitude <= 0:
-                    magnitude = 1000.0
+                    if not isinstance(magnitude, (int, float)) or magnitude <= 0:
+                        magnitude = 1000.0
 
-                if isinstance(load, LineLoad):
-                    file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
-                elif isinstance(load, AreaLoad):
-                    file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                else:
-                    file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                loads_written = True
-            file.write("\n")
+                    if isinstance(load, LineLoad):
+                        file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
+                    elif isinstance(load, AreaLoad):
+                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                    else:
+                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
+                    loads_written = True
+                file.write("\n")
 
     # Log results
     if total_loads_attempted > 0:

@@ -257,6 +257,7 @@ class UnifiedCalculixWriter:
         Process Gmsh mesh data into internal structures.
 
         This is the ONLY place where elements are created from mesh data.
+        Also extracts physical group data for element-to-member mapping.
         """
         logger.info("Processing mesh data...")
 
@@ -264,21 +265,43 @@ class UnifiedCalculixWriter:
         self.nodes.clear()
         self.elements.clear()
         self.element_sets.clear()
+        self._element_physical_group = {}  # element_id -> physical_group_tag
 
         # Process nodes
         for i, (x, y, z) in enumerate(mesh.points):
             node_id = i + 1  # CalculiX uses 1-based indexing
             self.nodes[node_id] = (float(x), float(y), float(z))
 
+        # Extract physical group name mapping: name -> (tag, dim)
+        # meshio field_data format: {name: [tag, dim]}
+        self._physical_group_names = {}  # tag -> name (member_id)
+        if hasattr(mesh, 'field_data') and mesh.field_data:
+            for name, (tag, dim) in mesh.field_data.items():
+                self._physical_group_names[int(tag)] = name
+            logger.info(f"Found {len(self._physical_group_names)} physical groups in mesh")
+
+        # Extract physical group tags per cell block
+        # meshio cell_data format: {'gmsh:physical': [array_for_block0, array_for_block1, ...]}
+        phys_data = None
+        if hasattr(mesh, 'cell_data') and mesh.cell_data:
+            phys_data = mesh.cell_data.get('gmsh:physical')
+
         # Process elements
         element_id = 1
         element_type_counts = {}
+        block_idx = 0
 
         # Extract cell blocks in version-agnostic way
         cell_blocks = self._extract_cell_blocks(mesh)
 
         for block_name, block_cells in cell_blocks:
             calculix_type = self.ELEMENT_TYPE_MAPPING.get(block_name)
+
+            # Get physical group tags for this block (if available)
+            block_phys_tags = None
+            if phys_data is not None and block_idx < len(phys_data):
+                block_phys_tags = phys_data[block_idx]
+            block_idx += 1
 
             if not calculix_type:
                 # Skip non-structural element types (vertex, edge, etc.) silently
@@ -289,11 +312,12 @@ class UnifiedCalculixWriter:
 
             # Create element set for this block type
             set_name = f"ELSET_{block_name.upper()}"
-            self.element_sets[set_name] = []
-            self.defined_element_sets.add(set_name)
+            if set_name not in self.element_sets:
+                self.element_sets[set_name] = []
+                self.defined_element_sets.add(set_name)
 
             # Process each element in the block
-            for cell in block_cells:
+            for cell_idx, cell in enumerate(block_cells):
                 # Convert to 1-based indexing for CalculiX
                 node_indices = [idx + 1 for idx in cell]
 
@@ -303,6 +327,12 @@ class UnifiedCalculixWriter:
                     "nodes": node_indices,
                     "block_name": block_name,
                 }
+
+                # Store physical group tag for this element
+                if block_phys_tags is not None and cell_idx < len(block_phys_tags):
+                    ptag = int(block_phys_tags[cell_idx])
+                    if ptag > 0:
+                        self._element_physical_group[element_id] = ptag
 
                 # Add to element set
                 self.element_sets[set_name].append(element_id)
@@ -320,6 +350,8 @@ class UnifiedCalculixWriter:
         )
         for elem_type, count in element_type_counts.items():
             logger.info(f"  {elem_type}: {count} elements")
+        if self._element_physical_group:
+            logger.info(f"  {len(self._element_physical_group)} elements have physical group tags")
 
     def _extract_cell_blocks(self, mesh):
         """Extract cell blocks from mesh in version-agnostic way."""
@@ -337,22 +369,166 @@ class UnifiedCalculixWriter:
         """
         Map mesh elements to domain model members.
 
-        This creates member-specific element sets for material and section assignment.
+        Uses physical group tags from Gmsh (via meshio) to correctly assign
+        elements to their parent structural members. Falls back to naive
+        distribution if physical group data is not available.
         """
         logger.info("Mapping elements to domain members...")
 
-        # Separate elements by type
+        # Try physical group-based mapping first
+        if self._element_physical_group and self._physical_group_names:
+            self._map_elements_via_physical_groups()
+            return
+
+        logger.warning("No physical group data — falling back to naive element distribution")
+        self._map_elements_naive()
+
+    def _map_elements_via_physical_groups(self) -> None:
+        """
+        Map elements to members using Gmsh physical group tags.
+
+        Each element's physical group tag identifies which member it belongs to.
+        The physical group name is the member ID. For members that get no
+        elements (e.g., geometry merged during fragment), falls back to
+        spatial assignment using element centroids.
+        """
+        # Build member_id -> [element_ids] mapping
+        member_elements: Dict[str, List[int]] = {}
+        assigned_elements = set()
+
+        mapped = 0
+        unmapped = 0
+        for elem_id in self.elements:
+            ptag = self._element_physical_group.get(elem_id)
+            if ptag is not None:
+                member_id = self._physical_group_names.get(ptag)
+                if member_id:
+                    if member_id not in member_elements:
+                        member_elements[member_id] = []
+                    member_elements[member_id].append(elem_id)
+                    assigned_elements.add(elem_id)
+                    mapped += 1
+                    continue
+            unmapped += 1
+
+        logger.info(f"Physical group mapping: {mapped} elements mapped, {unmapped} unmapped")
+
+        # Create element sets for mapped members
+        unmapped_members = []
+        for member in self.domain_model.members:
+            elems = member_elements.get(member.id, [])
+            if not elems:
+                unmapped_members.append(member)
+                continue
+
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+            self.element_sets[member_set] = elems
+            self.defined_element_sets.add(member_set)
+
+            self.domain_model.register_analysis_elements(
+                member.id, elems, entity_type="member"
+            )
+
+        # For unmapped members, use spatial assignment from unassigned elements
+        if unmapped_members:
+            logger.info(
+                f"{len(unmapped_members)} members have no physical group elements — "
+                f"using spatial fallback"
+            )
+            self._assign_elements_spatially(unmapped_members, assigned_elements)
+
+        total_mapped = sum(1 for m in self.domain_model.members
+                          if f"MEMBER_{self._get_short_id(m.id)}" in self.element_sets)
+        logger.info(f"Mapped elements to {total_mapped} members total")
+
+    def _assign_elements_spatially(self, members: List, assigned_elements: set) -> None:
+        """
+        Assign unassigned elements to members based on spatial proximity.
+
+        For each unmapped member, compute its geometry centroid, then find
+        unassigned elements of matching type whose centroids are closest.
+        """
+        for member in members:
+            # Compute member centroid from geometry
+            geom = member.geometry
+            if not geom or not isinstance(geom, list):
+                continue
+            try:
+                pts = np.array(geom)
+                centroid = pts.mean(axis=0)
+            except Exception:
+                continue
+
+            # Determine element type to match
+            is_surface = member.entity_type == "surface"
+            target_types = {"S3", "S4", "S6", "S8", "S9"} if is_surface else {"B31", "B32"}
+
+            # Find unassigned elements of matching type and their centroids
+            best_elems = []
+            for elem_id, elem_data in self.elements.items():
+                if elem_id in assigned_elements:
+                    continue
+                if elem_data["type"] not in target_types:
+                    continue
+
+                # Compute element centroid
+                elem_nodes = elem_data["nodes"]
+                try:
+                    node_coords = [self.nodes[nid] for nid in elem_nodes if nid in self.nodes]
+                    if not node_coords:
+                        continue
+                    elem_centroid = np.mean(node_coords, axis=0)
+                    dist = np.linalg.norm(elem_centroid - centroid)
+                    best_elems.append((dist, elem_id))
+                except Exception:
+                    continue
+
+            if not best_elems:
+                logger.warning(f"No unassigned elements found for member {member.id}")
+                continue
+
+            # Sort by distance and assign the closest elements
+            # Use a distance threshold based on member bounding box size
+            bbox_size = np.linalg.norm(pts.max(axis=0) - pts.min(axis=0))
+            threshold = max(bbox_size * 0.6, 0.5)  # generous threshold
+
+            best_elems.sort()
+            member_elems = []
+            for dist, eid in best_elems:
+                if dist <= threshold:
+                    member_elems.append(eid)
+                    assigned_elements.add(eid)
+
+            if member_elems:
+                short_id = self._get_short_id(member.id)
+                member_set = f"MEMBER_{short_id}"
+                self.element_sets[member_set] = member_elems
+                self.defined_element_sets.add(member_set)
+                self.domain_model.register_analysis_elements(
+                    member.id, member_elems, entity_type="member"
+                )
+                logger.info(
+                    f"Spatially assigned {len(member_elems)} elements to member {member.id}"
+                )
+            else:
+                logger.warning(
+                    f"Could not spatially assign elements to member {member.id} "
+                    f"(centroid={centroid.tolist()}, bbox_size={bbox_size:.2f}m)"
+                )
+
+    def _map_elements_naive(self) -> None:
+        """Naive fallback: distribute elements equally among members by type."""
         surface_elements = []
         curve_elements = []
 
         for elem_id, elem_data in self.elements.items():
             elem_type = elem_data["type"]
-            if elem_type in ["S3", "S4", "S6", "S8", "S9"]:  # Shell elements
+            if elem_type in ["S3", "S4", "S6", "S8", "S9"]:
                 surface_elements.append(elem_id)
-            elif elem_type in ["B31", "B32"]:  # Beam elements
+            elif elem_type in ["B31", "B32"]:
                 curve_elements.append(elem_id)
 
-        # Get members by type
         surface_members = [
             m for m in self.domain_model.members if m.entity_type == "surface"
         ]
@@ -360,18 +536,15 @@ class UnifiedCalculixWriter:
             m for m in self.domain_model.members if m.entity_type == "curve"
         ]
 
-        # Distribute surface elements among surface members
         self._distribute_elements_to_members(
             surface_elements, surface_members, "surface"
         )
-
-        # Distribute curve elements among curve members
         self._distribute_elements_to_members(curve_elements, curve_members, "curve")
 
     def _distribute_elements_to_members(
         self, elements: List[int], members: List, member_type: str
     ):
-        """Distribute elements among members of the same type."""
+        """Distribute elements among members of the same type (naive fallback)."""
         if not elements or not members:
             logger.warning(f"No {member_type} elements or members to distribute")
             return
@@ -381,11 +554,9 @@ class UnifiedCalculixWriter:
 
         start_idx = 0
         for i, member in enumerate(members):
-            # Calculate elements for this member
             num_elements = elements_per_member + (1 if i < remainder else 0)
             end_idx = start_idx + num_elements
 
-            # Assign elements to member
             member_elements = elements[start_idx:end_idx]
             short_id = self._get_short_id(member.id)
             member_set = f"MEMBER_{short_id}"
@@ -393,7 +564,6 @@ class UnifiedCalculixWriter:
             self.element_sets[member_set] = member_elements
             self.defined_element_sets.add(member_set)
 
-            # Register analysis elements in domain model for traceability
             self.domain_model.register_analysis_elements(
                 member.id, member_elements, entity_type="member"
             )
@@ -931,7 +1101,7 @@ class UnifiedCalculixWriter:
             is_hinge: If True, only constrain translations, not rotations
         """
         # Find nodes at this connection point for each member
-        connection_nodes = self._find_connection_nodes(conn, member_ids)
+        connection_nodes = self._find_connection_nodes_at_location(conn, member_ids)
 
         if len(connection_nodes) < 2:
             if len(connection_nodes) == 1:
@@ -993,6 +1163,76 @@ class UnifiedCalculixWriter:
     def _write_rigid_connection(self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set) -> None:
         """Write a rigid connection (same as point connection for now)."""
         self._write_point_connection(file, conn, member_ids, constrained_node_dofs, is_hinge=False)
+
+    def _find_connection_nodes_at_location(self, conn, member_ids: List[str]) -> List[int]:
+        """
+        Find the nearest mesh node to the connection position for each member.
+
+        In building models, beams often terminate at column faces rather than
+        centerlines, so beam endpoints can be 150-400mm from the connection
+        position. We find the nearest node per member unconditionally (the IFC
+        model says these members are connected, so we trust it).
+
+        Args:
+            conn: Connection with .position attribute [x,y,z]
+            member_ids: List of member IDs to search
+
+        Returns:
+            List of node IDs (one per member that has an element set)
+        """
+        conn_pos = None
+        if hasattr(conn, 'position') and conn.position:
+            pos = conn.position
+            if isinstance(pos, (list, tuple)) and len(pos) >= 3:
+                conn_pos = np.array([float(pos[0]), float(pos[1]), float(pos[2])])
+
+        if conn_pos is None:
+            return self._find_connection_nodes(conn, member_ids)
+
+        # Build member node sets lazily (cached for repeated lookups)
+        if not hasattr(self, '_member_node_cache'):
+            self._member_node_cache = {}
+
+        # Tolerance for beam-to-connection offset: beams often terminate at
+        # column faces (150-300mm from centerline). 0.5m covers typical cases.
+        tolerance = 0.5
+
+        connection_node_ids = []
+        for member_id in member_ids:
+            short_id = self._get_short_id(member_id)
+            member_set = f"MEMBER_{short_id}"
+            if member_set not in self.element_sets:
+                continue
+
+            # Get or build node set for this member
+            if member_set not in self._member_node_cache:
+                node_set = set()
+                for elem_id in self.element_sets[member_set]:
+                    if elem_id in self.elements:
+                        node_set.update(self.elements[elem_id]['nodes'])
+                self._member_node_cache[member_set] = node_set
+            node_set = self._member_node_cache[member_set]
+
+            # Find nearest node within tolerance
+            best_node = None
+            best_dist = tolerance
+            for node_id in node_set:
+                if node_id in self.nodes:
+                    npos = self.nodes[node_id]
+                    dist = np.sqrt((npos[0] - conn_pos[0])**2 +
+                                   (npos[1] - conn_pos[1])**2 +
+                                   (npos[2] - conn_pos[2])**2)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_node = node_id
+
+            if best_node is not None and best_node not in connection_node_ids:
+                connection_node_ids.append(best_node)
+
+        if connection_node_ids:
+            logger.debug(f"Connection {conn.id}: Found {len(connection_node_ids)} nodes at location")
+
+        return connection_node_ids
 
     def _find_connection_nodes(self, conn, member_ids: List[str]) -> List[int]:
         """

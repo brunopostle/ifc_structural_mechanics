@@ -66,8 +66,11 @@ class GmshGeometryConverter:
         # Maintain backward compatibility with _entity_map for existing tests
         self._entity_map = {}
 
-        # Shared point registry: rounded (x,y,z) -> Gmsh point tag
-        self._point_registry: Dict[Tuple[float, float, float], int] = {}
+        # Separate point registries per dimension to avoid beam-shell node sharing
+        # which causes CalculiX KNOT overflow (gen3dnor) on large models.
+        # Key: rounded (x,y,z) -> Gmsh point tag
+        self._curve_point_registry: Dict[Tuple[float, float, float], int] = {}
+        self._surface_point_registry: Dict[Tuple[float, float, float], int] = {}
 
         # Accumulators for bulk fragment operation
         self._all_curve_dim_tags: List[Tuple[int, int]] = []
@@ -142,13 +145,26 @@ class GmshGeometryConverter:
             round(float(z), COORD_PRECISION),
         )
 
-    def _get_or_create_point(self, x: float, y: float, z: float) -> int:
-        """Reuse an existing Gmsh OCC point at this location, or create a new one."""
+    def _get_or_create_point(
+        self, x: float, y: float, z: float, dim: int = 1
+    ) -> int:
+        """Reuse an existing Gmsh OCC point at this location, or create a new one.
+
+        Args:
+            x, y, z: Coordinates.
+            dim: Owning entity dimension (1=curve, 2=surface). Points are only
+                 shared within the same dimension to avoid CalculiX KNOT
+                 generation at beam-shell shared nodes.
+        """
+        registry = (
+            self._curve_point_registry if dim == 1
+            else self._surface_point_registry
+        )
         key = self._coord_key(x, y, z)
-        if key in self._point_registry:
-            return self._point_registry[key]
+        if key in registry:
+            return registry[key]
         tag = gmsh.model.occ.addPoint(float(x), float(y), float(z))
-        self._point_registry[key] = tag
+        registry[key] = tag
         return tag
 
     # ------------------------------------------------------------------
@@ -170,7 +186,7 @@ class GmshGeometryConverter:
         point_tags = []
         for point in curve_points:
             try:
-                pt = self._get_or_create_point(point[0], point[1], point[2])
+                pt = self._get_or_create_point(point[0], point[1], point[2], dim=1)
                 point_tags.append(pt)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
@@ -224,7 +240,7 @@ class GmshGeometryConverter:
         point_tags = []
         for point in surface_points:
             try:
-                pt = self._get_or_create_point(point[0], point[1], point[2])
+                pt = self._get_or_create_point(point[0], point[1], point[2], dim=2)
                 point_tags.append(pt)
             except Exception as e:
                 logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
@@ -280,32 +296,61 @@ class GmshGeometryConverter:
 
     def _fragment_all_entities(self) -> None:
         """
-        Fragment all geometry entities against each other to create shared topology.
+        Fragment geometry entities to create shared topology.
 
-        After fragment, entities that overlap or touch will share boundary points
-        and curves, so the resulting mesh will have conforming (shared) nodes.
+        Fragments curves against curves and surfaces against surfaces
+        SEPARATELY, so beam-beam connections and slab-slab connections share
+        mesh nodes, but beam-shell connections do NOT share nodes.
+
+        This avoids CalculiX KNOT generation at beam-shell shared nodes,
+        which causes ``gen3dnor`` memory overflow on large models.
+        Beam-to-shell coupling is handled by ``*EQUATION`` constraints instead.
         """
-        all_dim_tags = self._all_curve_dim_tags + self._all_surface_dim_tags
-        if len(all_dim_tags) < 2:
-            logger.debug("Fewer than 2 entities, skipping fragment")
-            self._fragment_map = None
-            return
+        self._fragment_map = None
+        curve_map = None
+        surface_map = None
 
-        try:
-            out, out_map = gmsh.model.occ.fragment(all_dim_tags, [])
-            self._fragment_output = out
-            self._fragment_map = out_map  # out_map[i] = new dim_tags for input[i]
-            logger.info(
-                f"Fragment: {len(all_dim_tags)} input entities -> "
-                f"{len(out)} output entities"
-            )
-        except Exception as e:
-            logger.warning(f"Fragment failed: {e}. Trying removeAllDuplicates fallback.")
+        # Fragment curves against curves
+        if len(self._all_curve_dim_tags) >= 2:
             try:
-                gmsh.model.occ.removeAllDuplicates()
-            except Exception:
-                pass
-            self._fragment_map = None
+                out_c, map_c = gmsh.model.occ.fragment(
+                    self._all_curve_dim_tags, []
+                )
+                curve_map = map_c
+                logger.info(
+                    f"Fragment curves: {len(self._all_curve_dim_tags)} -> {len(out_c)}"
+                )
+            except Exception as e:
+                logger.warning(f"Curve fragment failed: {e}")
+
+        # Fragment surfaces against surfaces
+        if len(self._all_surface_dim_tags) >= 2:
+            try:
+                out_s, map_s = gmsh.model.occ.fragment(
+                    self._all_surface_dim_tags, []
+                )
+                surface_map = map_s
+                logger.info(
+                    f"Fragment surfaces: {len(self._all_surface_dim_tags)} -> {len(out_s)}"
+                )
+            except Exception as e:
+                logger.warning(f"Surface fragment failed: {e}")
+
+        # Build combined fragment_map aligned with the combined input list
+        # (curves first, then surfaces) so _remap_tags_after_fragment works
+        if curve_map is not None or surface_map is not None:
+            combined = []
+            for i in range(len(self._all_curve_dim_tags)):
+                if curve_map is not None and i < len(curve_map):
+                    combined.append(curve_map[i])
+                else:
+                    combined.append([self._all_curve_dim_tags[i]])
+            for i in range(len(self._all_surface_dim_tags)):
+                if surface_map is not None and i < len(surface_map):
+                    combined.append(surface_map[i])
+                else:
+                    combined.append([self._all_surface_dim_tags[i]])
+            self._fragment_map = combined
 
     def _remap_tags_after_fragment(self, domain_model: StructuralModel) -> None:
         """
@@ -378,6 +423,49 @@ class GmshGeometryConverter:
             dm.register_mesh_entities(member_id, mesh_ids, entity_type="member")
 
     # ------------------------------------------------------------------
+    # Physical groups for element-to-member mapping
+    # ------------------------------------------------------------------
+
+    def _create_physical_groups(self, domain_model: StructuralModel) -> None:
+        """
+        Create Gmsh physical groups so mesh elements inherit member ownership.
+
+        Each member gets a unique physical group tag. When Gmsh generates the
+        mesh, each element's parent geometry entity determines its physical
+        group, which meshio reads as cell_data['gmsh:physical']. The writer
+        uses this to map elements to domain members.
+
+        Stores mapping in self.physical_group_map: {phys_tag: member_id}
+        """
+        self.physical_group_map: Dict[int, str] = {}
+        phys_tag = 1
+
+        for member in domain_model.members:
+            mid = member.id
+            if isinstance(member, CurveMember):
+                tags = self._member_curve_tags.get(mid, [])
+                dim = 1
+            elif isinstance(member, SurfaceMember):
+                tags = self._member_surface_tags.get(mid, [])
+                dim = 2
+            else:
+                continue
+
+            if not tags:
+                continue
+
+            try:
+                dim_tags = [(dim, t) for t in tags]
+                gmsh.model.addPhysicalGroup(dim, tags, phys_tag)
+                gmsh.model.setPhysicalName(dim, phys_tag, mid)
+                self.physical_group_map[phys_tag] = mid
+                phys_tag += 1
+            except Exception as e:
+                logger.debug(f"Could not create physical group for {mid}: {e}")
+
+        logger.info(f"Created {len(self.physical_group_map)} physical groups")
+
+    # ------------------------------------------------------------------
     # Mesh size application
     # ------------------------------------------------------------------
 
@@ -442,7 +530,8 @@ class GmshGeometryConverter:
 
         # Clear state
         self._entity_map = {}
-        self._point_registry = {}
+        self._curve_point_registry = {}
+        self._surface_point_registry = {}
         self._all_curve_dim_tags = []
         self._all_surface_dim_tags = []
         self._member_point_tags = {}
@@ -473,9 +562,15 @@ class GmshGeometryConverter:
         # Phase 5: Apply mesh sizes
         self._apply_all_mesh_sizes(domain_model)
 
+        # Phase 6: Create physical groups for element-to-member mapping
+        self._create_physical_groups(domain_model)
+
+        shared_curve_pts = len(self._curve_point_registry)
+        shared_surface_pts = len(self._surface_point_registry)
         logger.info(
             f"Converted model with {len(self._entity_map)} members, "
-            f"{len(self._point_registry)} shared points"
+            f"{shared_curve_pts} shared curve points, "
+            f"{shared_surface_pts} shared surface points"
         )
         return self._entity_map
 

@@ -370,6 +370,10 @@ def create_meshing_config(mesh_size: float) -> MeshingConfig:
     # Update the default mesh size
     config._config["global_settings"]["default_element_size"] = mesh_size
 
+    # Ensure max_element_size is at least as large as mesh_size
+    if mesh_size > config._config["global_settings"]["max_element_size"]:
+        config._config["global_settings"]["max_element_size"] = mesh_size
+
     # Update member-specific mesh sizes
     for member_type in config._config["member_types"]:
         config._config["member_types"][member_type]["element_size"] = mesh_size
