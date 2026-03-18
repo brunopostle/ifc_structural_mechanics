@@ -9,18 +9,17 @@ field_data.
 Uses slab_01 (multi-member model with both curve and surface members).
 """
 
-import os
 import logging
-import shutil
+import os
 
-import pytest
 import gmsh
 import meshio
+import pytest
 
+from ifc_structural_mechanics.config.meshing_config import MeshingConfig
 from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
 from ifc_structural_mechanics.meshing.gmsh_runner import GmshRunner
-from ifc_structural_mechanics.config.meshing_config import MeshingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +62,7 @@ class TestPhysicalGroupMapping:
         converter._we_initialized_gmsh = False  # Don't let converter finalize
         converter.convert_model(model)
 
-        assert hasattr(converter, 'physical_group_map'), "physical_group_map not set"
+        assert hasattr(converter, "physical_group_map"), "physical_group_map not set"
         assert len(converter.physical_group_map) > 0, "No physical groups created"
 
     def test_all_members_have_physical_groups_slab(self):
@@ -112,9 +111,7 @@ class TestPhysicalGroupMapping:
         mesh = meshio.read(mesh_file)
 
         # Check field_data (physical group names → tags)
-        assert hasattr(mesh, 'field_data') and mesh.field_data, (
-            "No field_data in mesh"
-        )
+        assert hasattr(mesh, "field_data") and mesh.field_data, "No field_data in mesh"
         # field_data keys should be member IDs
         member_ids = {m.id for m in model.members}
         field_member_ids = set(mesh.field_data.keys())
@@ -124,14 +121,13 @@ class TestPhysicalGroupMapping:
         )
 
         # Check cell_data has gmsh:physical
-        assert hasattr(mesh, 'cell_data') and mesh.cell_data, (
-            "No cell_data in mesh"
-        )
-        phys = mesh.cell_data.get('gmsh:physical')
+        assert hasattr(mesh, "cell_data") and mesh.cell_data, "No cell_data in mesh"
+        phys = mesh.cell_data.get("gmsh:physical")
         assert phys is not None, "No 'gmsh:physical' in cell_data"
 
         # At least some elements should have non-zero physical group tags
         import numpy as np
+
         all_tags = np.concatenate(phys)
         nonzero = np.count_nonzero(all_tags)
         assert nonzero > 0, "All physical group tags are zero"
@@ -151,11 +147,9 @@ class TestPhysicalGroupMapping:
         pgmap = converter.physical_group_map
         # Tags should be unique (no two tags map to same member)
         member_ids = list(pgmap.values())
-        assert len(member_ids) == len(set(member_ids)), (
-            "Duplicate member IDs in physical_group_map"
-        )
+        assert len(member_ids) == len(
+            set(member_ids)
+        ), "Duplicate member IDs in physical_group_map"
         # Tags should also be unique
         tags = list(pgmap.keys())
-        assert len(tags) == len(set(tags)), (
-            "Duplicate tags in physical_group_map"
-        )
+        assert len(tags) == len(set(tags)), "Duplicate tags in physical_group_map"

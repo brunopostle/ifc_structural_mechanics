@@ -5,8 +5,8 @@ Unit tests for the structural member domain models.
 import pytest
 
 from ifc_structural_mechanics.domain.structural_member import (
-    StructuralMember,
     CurveMember,
+    StructuralMember,
     SurfaceMember,
 )
 

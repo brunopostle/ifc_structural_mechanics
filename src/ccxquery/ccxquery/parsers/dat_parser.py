@@ -38,9 +38,11 @@ def _parse_reactions(content: str) -> list[dict[str, Any]]:
 
         # Detect reaction force header: "forces (fx,fy,fz) for set ..."
         # but NOT "total force" lines
-        if ("forces" in stripped.lower()
-                and "total" not in stripped.lower()
-                and "(fx,fy,fz)" in stripped.lower()):
+        if (
+            "forces" in stripped.lower()
+            and "total" not in stripped.lower()
+            and "(fx,fy,fz)" in stripped.lower()
+        ):
             in_forces = True
             continue
 

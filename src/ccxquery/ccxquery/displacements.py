@@ -37,7 +37,9 @@ def displacements(
         if node_id not in data:
             return {"error": f"Node {node_id} not found in displacement results"}
         values = data[node_id]
-        magnitude = math.sqrt(sum(v * v for v in values[:3])) if len(values) >= 3 else 0.0
+        magnitude = (
+            math.sqrt(sum(v * v for v in values[:3])) if len(values) >= 3 else 0.0
+        )
         return _format_disp_entry(node_id, values, components, magnitude)
 
     if show_max or show_min:

@@ -11,15 +11,14 @@ FIXED: ImportError issue resolved by ensuring proper class definition and import
 
 import logging
 import uuid
-from typing import Optional, Union, Dict
+from typing import Dict, Optional, Union
 
 import ifcopenshell
 
 from ..domain.property import Material, Section, Thickness
 from ..utils.units import (
-    convert_length,
-    convert_elastic_modulus,
     convert_density,
+    convert_length,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,8 +261,9 @@ class PropertiesExtractor:
                 for pset in psets:
                     try:
                         properties = self._safe_get_attribute(
-                            pset, "Properties",
-                            self._safe_get_attribute(pset, "HasProperties", [])
+                            pset,
+                            "Properties",
+                            self._safe_get_attribute(pset, "HasProperties", []),
                         )
                         for prop in properties:
                             try:
@@ -274,11 +274,20 @@ class PropertiesExtractor:
                                 )
                                 if value is None:
                                     continue
-                                if ("youngmodulus" in lower_name or "elasticmodulus" in lower_name) and elastic_modulus_raw is None:
+                                if (
+                                    "youngmodulus" in lower_name
+                                    or "elasticmodulus" in lower_name
+                                ) and elastic_modulus_raw is None:
                                     elastic_modulus_raw = value
-                                elif ("massdensity" in lower_name or lower_name == "density") and density_raw is None:
+                                elif (
+                                    "massdensity" in lower_name
+                                    or lower_name == "density"
+                                ) and density_raw is None:
                                     density_raw = value
-                                elif ("poissonratio" in lower_name or "poisson" in lower_name) and poisson_ratio_raw is None:
+                                elif (
+                                    "poissonratio" in lower_name
+                                    or "poisson" in lower_name
+                                ) and poisson_ratio_raw is None:
                                     poisson_ratio_raw = value
                             except Exception:
                                 continue
@@ -455,12 +464,12 @@ class PropertiesExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia
-                Iy = (width * height ** 3) / 12 - (width - web_thick) * (
+                Iy = (width * height**3) / 12 - (width - web_thick) * (
                     (height - 2 * flange_thick) ** 3
                 ) / 12
-                Iz = (2 * flange_thick) * (width ** 3) / 12 + (
+                Iz = (2 * flange_thick) * (width**3) / 12 + (
                     height - 2 * flange_thick
-                ) * (web_thick ** 3) / 12
+                ) * (web_thick**3) / 12
 
                 # Ensure positive values
                 area = max(1e-6, area)
@@ -471,8 +480,8 @@ class PropertiesExtractor:
                 self.logger.warning(f"Error calculating I-section properties: {e}")
                 # Use simplified rectangular calculation
                 area = width * height
-                Iy = width * height ** 3 / 12
-                Iz = height * width ** 3 / 12
+                Iy = width * height**3 / 12
+                Iz = height * width**3 / 12
 
             profile_id = (
                 str(profile.id())

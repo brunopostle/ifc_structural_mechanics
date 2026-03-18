@@ -7,7 +7,7 @@ to the original IFC entities.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base_parser import BaseParser
 

@@ -5,11 +5,13 @@ This module improves the boundary condition and load handling in the conversion 
 from IFC structural models to CalculiX.
 """
 
-from typing import Dict, List, Optional, Tuple, Any, TextIO
 import logging
+from typing import Any, Dict, List, Optional, TextIO, Tuple
+
 import numpy as np
+
+from ..domain.load import AreaLoad, LineLoad, PointLoad
 from ..domain.structural_model import StructuralModel
-from ..domain.load import PointLoad, LineLoad, AreaLoad
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -40,7 +42,9 @@ def write_boundary_conditions(
 
     # Keep track of which nodes have been assigned to BCs
     bc_nodes_found = False
-    all_bc_nodes = set()  # Collect all nodes with boundary conditions for reaction output
+    all_bc_nodes = (
+        set()
+    )  # Collect all nodes with boundary conditions for reaction output
 
     # Process connections (which are often supports/boundary conditions)
     for connection in domain_model.connections:
@@ -99,8 +103,10 @@ def write_boundary_conditions(
                 elif bc_type == "point" and has_stiffness:
                     # Point with stiffness: use stiffness to determine DOFs
                     # If rigid behavior, fix all DOFs; otherwise fix translations
-                    if (hasattr(connection, "is_rigid_behavior")
-                            and connection.is_rigid_behavior()):
+                    if (
+                        hasattr(connection, "is_rigid_behavior")
+                        and connection.is_rigid_behavior()
+                    ):
                         file.write(f"{set_name}, 1, 6\n")
                     else:
                         file.write(f"{set_name}, 1, 3\n")
@@ -179,7 +185,9 @@ def write_boundary_conditions(
         if potential_support_nodes:
             set_name = "BC_AUTO"
             node_sets[set_name] = potential_support_nodes
-            all_bc_nodes.update(potential_support_nodes)  # Track for reaction force output
+            all_bc_nodes.update(
+                potential_support_nodes
+            )  # Track for reaction force output
 
             # Write the node set
             file.write(f"*NSET, NSET={set_name}\n")
@@ -210,7 +218,9 @@ def write_boundary_conditions(
             file.write(f"{line}\n")
         file.write("\n")
         node_sets["ALL_BC_NODES"] = bc_nodes_list
-        logger.info(f"Created ALL_BC_NODES set with {len(bc_nodes_list)} nodes for reaction force output")
+        logger.info(
+            f"Created ALL_BC_NODES set with {len(bc_nodes_list)} nodes for reaction force output"
+        )
 
     # If still no boundary conditions, add a warning comment
     if not bc_nodes_found:
@@ -763,7 +773,8 @@ def find_closest_node(
 
 
 def _write_validated_loads_within_step(
-    file: TextIO, domain_model: StructuralModel,
+    file: TextIO,
+    domain_model: StructuralModel,
     short_id_map: Optional[Dict[str, str]] = None,
     element_sets: Optional[Dict[str, List[int]]] = None,
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
@@ -789,7 +800,7 @@ def _write_validated_loads_within_step(
         # Process point loads (use *CLOAD)
         point_loads = [load for load in load_group.loads if isinstance(load, PointLoad)]
         # Deduplicate: skip loads already written (from another load group)
-        point_loads = [l for l in point_loads if l.id not in written_load_ids]
+        point_loads = [load for load in point_loads if load.id not in written_load_ids]
         if point_loads:
             file.write("*CLOAD\n")
             for load in point_loads:
@@ -841,14 +852,18 @@ def _write_validated_loads_within_step(
                     if load.surface_reference not in ("default", "default_surface"):
                         # Use short ID if available
                         if short_id_map and load.surface_reference in short_id_map:
-                            element_set_name = f"MEMBER_{short_id_map[load.surface_reference]}"
+                            element_set_name = (
+                                f"MEMBER_{short_id_map[load.surface_reference]}"
+                            )
                         else:
                             element_set_name = f"MEMBER_{load.surface_reference}"
                 elif hasattr(load, "member_reference") and load.member_reference:
                     if load.member_reference not in ("default", "default_surface"):
                         # Use short ID if available
                         if short_id_map and load.member_reference in short_id_map:
-                            element_set_name = f"MEMBER_{short_id_map[load.member_reference]}"
+                            element_set_name = (
+                                f"MEMBER_{short_id_map[load.member_reference]}"
+                            )
                         else:
                             element_set_name = f"MEMBER_{load.member_reference}"
                 elif hasattr(load, "applied_to") and load.applied_to:
@@ -868,14 +883,18 @@ def _write_validated_loads_within_step(
                         ]
                     else:
                         target_members = [
-                            m for m in domain_model.members if m.entity_type == "surface"
+                            m
+                            for m in domain_model.members
+                            if m.entity_type == "surface"
                         ]
                     if not target_members:
                         target_members = list(domain_model.members)
                     if target_members:
                         # Use short ID if available
                         if short_id_map and target_members[0].id in short_id_map:
-                            element_set_name = f"MEMBER_{short_id_map[target_members[0].id]}"
+                            element_set_name = (
+                                f"MEMBER_{short_id_map[target_members[0].id]}"
+                            )
                         else:
                             element_set_name = f"MEMBER_{target_members[0].id}"
                         logger.info(
@@ -918,7 +937,7 @@ def _write_validated_loads_within_step(
 
         # Process point loads on members
         point_loads = [load for load in member_loads if isinstance(load, PointLoad)]
-        point_loads = [l for l in point_loads if l.id not in written_load_ids]
+        point_loads = [load for load in point_loads if load.id not in written_load_ids]
         if point_loads:
             file.write("*CLOAD\n")
             for load in point_loads:

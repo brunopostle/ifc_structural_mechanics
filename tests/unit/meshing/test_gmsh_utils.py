@@ -9,14 +9,15 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+
 import numpy as np
 
 # Import the module under test
 from ifc_structural_mechanics.meshing.gmsh_utils import (
-    GmshResourceManager,
+    GmshExecutableRunner,
     GmshGeometryHelper,
     GmshMeshingHelper,
-    GmshExecutableRunner,
+    GmshResourceManager,
 )
 
 

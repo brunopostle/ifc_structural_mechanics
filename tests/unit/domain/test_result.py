@@ -3,13 +3,15 @@ Tests for the result domain model classes.
 """
 
 import math
+
 import pytest
+
 from ifc_structural_mechanics.domain.result import (
-    Result,
     DisplacementResult,
-    StressResult,
-    StrainResult,
     ReactionForceResult,
+    Result,
+    StrainResult,
+    StressResult,
 )
 
 

@@ -3,6 +3,7 @@ Tests for the surface geometry extraction utilities.
 """
 
 from unittest import mock
+
 import ifcopenshell
 
 from ifc_structural_mechanics.ifc.geometry import surface_geometry

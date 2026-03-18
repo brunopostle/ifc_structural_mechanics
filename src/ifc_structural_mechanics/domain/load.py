@@ -5,7 +5,8 @@ This module contains the domain model classes for representing loads, load group
 and load combinations in structural analysis.
 """
 
-from typing import List, Dict, Optional, Union, Any
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
 
 from ifc_structural_mechanics.domain.base_entity import (

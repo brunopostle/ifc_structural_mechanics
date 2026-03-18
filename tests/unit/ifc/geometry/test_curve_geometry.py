@@ -7,19 +7,19 @@ representation.
 """
 
 from unittest.mock import Mock, patch
-import numpy as np
 
-from ifc_structural_mechanics.ifc.geometry.curve_geometry import (
-    extract_curve_geometry,
-    get_representation,
-    extract_from_edge_representation,
-    extract_from_axis_representation,
-    extract_from_body_representation,
-)
+import numpy as np
 
 from ifc_structural_mechanics.ifc.entity_identifier import (
     get_coordinate,
     transform_vectors,
+)
+from ifc_structural_mechanics.ifc.geometry.curve_geometry import (
+    extract_curve_geometry,
+    extract_from_axis_representation,
+    extract_from_body_representation,
+    extract_from_edge_representation,
+    get_representation,
 )
 
 

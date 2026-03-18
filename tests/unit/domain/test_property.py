@@ -5,6 +5,7 @@ This module contains unit tests for Material, Section, and Thickness classes.
 """
 
 import math
+
 import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness

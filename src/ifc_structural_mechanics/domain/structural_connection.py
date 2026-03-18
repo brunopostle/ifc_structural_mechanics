@@ -6,8 +6,8 @@ in the domain model. These connections define how structural members are connect
 to each other.
 """
 
-from typing import List, Optional, Dict, Any
 import logging
+from typing import Any, Dict, List, Optional
 
 from ifc_structural_mechanics.domain.base_entity import DomainEntity
 
@@ -34,7 +34,9 @@ class StructuralConnection(DomainEntity):
         self.analysis_element_ids: List[int] = []
 
         # Then call parent constructor - bypass validation until members are connected
-        super().__init__(id=id, entity_type=connection_type, allow_validation_bypass=True)
+        super().__init__(
+            id=id, entity_type=connection_type, allow_validation_bypass=True
+        )
 
     def connect_member(self, member_id: str) -> None:
         """
@@ -281,7 +283,12 @@ class PointConnection(StructuralConnection):
 class RigidConnection(StructuralConnection):
     """A rigid connection between structural members."""
 
-    def __init__(self, id: str, position: Optional[List[float]] = None, ifc_guid: Optional[str] = None):
+    def __init__(
+        self,
+        id: str,
+        position: Optional[List[float]] = None,
+        ifc_guid: Optional[str] = None,
+    ):
         self.position = position
         super().__init__(id, "rigid", ifc_guid)
 
@@ -348,7 +355,13 @@ class HingeConnection(StructuralConnection):
 class SpringConnection(StructuralConnection):
     """A spring connection with explicit stiffness properties."""
 
-    def __init__(self, id: str, position: List[float], stiffness: Dict[str, float], ifc_guid: Optional[str] = None):
+    def __init__(
+        self,
+        id: str,
+        position: List[float],
+        stiffness: Dict[str, float],
+        ifc_guid: Optional[str] = None,
+    ):
         self.position = position
         super().__init__(id, "spring", ifc_guid)
         self.set_stiffness_properties(stiffness)

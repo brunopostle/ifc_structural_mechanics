@@ -1,22 +1,22 @@
 """
 Unit tests for the Gmsh Geometry Converter.
 
-These tests verify the functionality of converting domain model 
+These tests verify the functionality of converting domain model
 geometric representations to Gmsh geometry objects.
 """
 
 import uuid
 from unittest.mock import patch
 
-import pytest
-import numpy as np
 import gmsh
+import numpy as np
+import pytest
 
 from ifc_structural_mechanics.config.meshing_config import MeshingConfig
-from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
 
 
 @pytest.fixture(scope="module", autouse=True)

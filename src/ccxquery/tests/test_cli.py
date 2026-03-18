@@ -3,7 +3,6 @@
 import json
 import subprocess
 import sys
-import pytest
 
 
 def run_ccxquery(*args):
@@ -103,7 +102,9 @@ class TestCliInpCommands:
         assert data["x"] == 0.0
 
     def test_nodes_at(self, inp_file):
-        rc, out, err = run_ccxquery(inp_file, "nodes-at", "--x", "0.0", "--y", "0.0", "--z", "0.0")
+        rc, out, err = run_ccxquery(
+            inp_file, "nodes-at", "--x", "0.0", "--y", "0.0", "--z", "0.0"
+        )
         assert rc == 0
         data = json.loads(out)
         assert len(data) == 1

@@ -2,15 +2,15 @@
 Detailed test for debugging IFC simple beam parsing with extensive logging.
 """
 
-import os
-import pytest
 import logging
+import os
 
 import ifcopenshell
+import pytest
 
-from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.load import PointLoad
+from ifc_structural_mechanics.domain.structural_member import CurveMember
+from ifc_structural_mechanics.ifc.extractor import Extractor
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)

@@ -3,13 +3,14 @@ Unit tests for topology utilities.
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
 import ifcopenshell
 
 from ifc_structural_mechanics.ifc.geometry.topology import (
-    find_connected_elements,
-    analyze_connection_type,
     analyze_connection_restraints,
+    analyze_connection_type,
+    find_connected_elements,
     find_member_endpoints,
     find_surface_boundaries,
     find_topology_graph,

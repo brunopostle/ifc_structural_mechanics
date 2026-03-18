@@ -6,10 +6,10 @@ any state. These replace the type conversion logic previously in the mapping mod
 """
 
 import re
-from typing import Dict, List, Optional, Tuple, Pattern
-from ..domain.structural_member import CurveMember, SurfaceMember, StructuralMember
-from ..config.analysis_config import AnalysisConfig
+from typing import Dict, List, Optional, Pattern, Tuple
 
+from ..config.analysis_config import AnalysisConfig
+from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 
 # Element type mapping from Gmsh to CalculiX
 GMSH_TO_CALCULIX_ELEMENTS: Dict[str, str] = {
@@ -102,7 +102,7 @@ def get_element_set_name(member: StructuralMember) -> str:
         'ELSET_beam_123'
     """
     # Sanitize member ID for CalculiX (alphanumeric and underscore only)
-    sanitized_id = re.sub(r'[^a-zA-Z0-9_]', '_', member.id)
+    sanitized_id = re.sub(r"[^a-zA-Z0-9_]", "_", member.id)
     return f"ELSET_{sanitized_id}"
 
 
@@ -121,7 +121,7 @@ def get_node_set_name(entity_id: str) -> str:
         'NSET_support_1'
     """
     # Sanitize entity ID for CalculiX
-    sanitized_id = re.sub(r'[^a-zA-Z0-9_]', '_', entity_id)
+    sanitized_id = re.sub(r"[^a-zA-Z0-9_]", "_", entity_id)
     return f"NSET_{sanitized_id}"
 
 
@@ -140,7 +140,7 @@ def get_material_name(material_id: str) -> str:
         'MAT_steel_s355'
     """
     # Sanitize material ID for CalculiX
-    sanitized_id = re.sub(r'[^a-zA-Z0-9_]', '_', material_id)
+    sanitized_id = re.sub(r"[^a-zA-Z0-9_]", "_", material_id)
     return f"MAT_{sanitized_id}"
 
 
@@ -196,7 +196,7 @@ def sanitize_calculix_name(name: str, max_length: int = 80) -> str:
         'N_123_beam'
     """
     # Replace invalid characters with underscore
-    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
     # Ensure doesn't start with number
     if sanitized and sanitized[0].isdigit():

@@ -2,13 +2,14 @@
 Unit tests for the connections extractor module.
 """
 
-import numpy as np
 from unittest.mock import MagicMock, patch
 
-from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
+import numpy as np
+
 from ifc_structural_mechanics.domain.structural_connection import (
     RigidConnection,
 )
+from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
 
 
 class TestConnectionsExtractor:

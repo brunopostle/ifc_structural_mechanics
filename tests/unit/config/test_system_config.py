@@ -1,5 +1,6 @@
 import os
 import tempfile
+
 import yaml
 
 
@@ -119,6 +120,7 @@ def test_system_config_logging():
     Test the logging configuration.
     """
     import logging
+
     from ifc_structural_mechanics.config.system_config import SystemConfig
 
     # Create a config

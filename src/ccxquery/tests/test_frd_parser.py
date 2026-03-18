@@ -1,13 +1,13 @@
 """Tests for the .frd file parser."""
 
-import math
 import pytest
+
 from ccxquery.parsers.frd_parser import (
-    parse_frd,
+    get_displacements,
     get_node_coords,
     get_result_blocks,
-    get_displacements,
     get_stresses,
+    parse_frd,
 )
 
 
@@ -99,7 +99,8 @@ class TestGetStresses:
     def test_no_stresses_returns_none(self, tmp_path):
         """FRD file with only displacements returns None for stresses."""
         frd = tmp_path / "no_stress.frd"
-        frd.write_text("""\
+        frd.write_text(
+            """\
     1C
     2C                             2                                     1
  -1         1 0.00000E+00 0.00000E+00 0.00000E+00
@@ -114,7 +115,8 @@ class TestGetStresses:
  -1         2 1.00000E-03 0.00000E+00 0.00000E+00
  -3
  9999
-""")
+"""
+        )
         data = parse_frd(str(frd))
         assert get_stresses(data) is None
         assert get_displacements(data) is not None
@@ -126,7 +128,8 @@ class TestConcatenatedValues:
     def test_negative_sign_concatenation(self, tmp_path):
         """Values like '2.80000E-04-1.20000E-03' should parse correctly."""
         frd = tmp_path / "concat.frd"
-        frd.write_text("""\
+        frd.write_text(
+            """\
     1C
     2C                             2                                     1
  -1         1 0.00000E+00 0.00000E+00 0.00000E+00
@@ -141,7 +144,8 @@ class TestConcatenatedValues:
  -1         2 2.80000E-04-1.20000E-03 5.00000E-05
  -3
  9999
-""")
+"""
+        )
         data = parse_frd(str(frd))
         disp = get_displacements(data)
         assert disp is not None

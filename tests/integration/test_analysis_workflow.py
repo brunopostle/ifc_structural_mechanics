@@ -4,29 +4,30 @@ Updated integration tests for the analysis workflow using the unified CalculiX w
 This test demonstrates the complete simplified workflow from domain model to analysis results.
 """
 
-import os
 import logging
-import pytest
-from unittest.mock import patch, MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
-from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
-    run_complete_analysis_workflow,
-    generate_calculix_input,
-)
+import pytest
+
 from src.ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
 from src.ifc_structural_mechanics.analysis.results_parser import ResultsParser
-from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
-from src.ifc_structural_mechanics.domain.structural_member import CurveMember
-from src.ifc_structural_mechanics.domain.property import Material, Section
-from src.ifc_structural_mechanics.domain.load import PointLoad, LoadGroup
 from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from src.ifc_structural_mechanics.domain.load import LoadGroup, PointLoad
+from src.ifc_structural_mechanics.domain.property import Material, Section
+from src.ifc_structural_mechanics.domain.structural_member import CurveMember
+from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
+from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    generate_calculix_input,
+    run_complete_analysis_workflow,
+)
+from src.ifc_structural_mechanics.utils.error_handling import AnalysisError
 from src.ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
     cleanup_temp_dir,
     create_temp_subdir,
     set_keep_temp_files,
+    setup_temp_dir,
 )
-from src.ifc_structural_mechanics.utils.error_handling import AnalysisError
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -376,7 +377,7 @@ class TestUnifiedAnalysisWorkflow:
 
         with patch("meshio.read", return_value=mock_mesh), patch(
             "builtins.open", MagicMock()
-        ) as mock_open:
+        ):
 
             # Test the function
             result = generate_calculix_input(
@@ -794,6 +795,6 @@ class TestUnifiedWorkflowBenefits:
             UnifiedCalculixWriter,
         )
 
-        writer = UnifiedCalculixWriter(domain_model=model)
+        UnifiedCalculixWriter(domain_model=model)
 
         # Create

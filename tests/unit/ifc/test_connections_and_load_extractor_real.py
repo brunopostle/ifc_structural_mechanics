@@ -6,21 +6,22 @@ and load combinations from IFC files, ensuring they're correctly mapped to domai
 """
 
 import os
-import pytest
-import ifcopenshell
 
-from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
-from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
+import ifcopenshell
+import pytest
+
+from ifc_structural_mechanics.domain.load import (
+    AreaLoad,
+    LineLoad,
+    PointLoad,
+)
 from ifc_structural_mechanics.domain.structural_connection import (
+    HingeConnection,
     PointConnection,
     RigidConnection,
-    HingeConnection,
 )
-from ifc_structural_mechanics.domain.load import (
-    PointLoad,
-    LineLoad,
-    AreaLoad,
-)
+from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
+from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
 
 
 class TestConnectionExtraction:
@@ -202,9 +203,9 @@ class TestLoadExtraction:
         print(f"Extracted {len(loads)} structural loads")
 
         # Check types of loads
-        point_loads = [l for l in loads if isinstance(l, PointLoad)]
-        line_loads = [l for l in loads if isinstance(l, LineLoad)]
-        area_loads = [l for l in loads if isinstance(l, AreaLoad)]
+        point_loads = [load for load in loads if isinstance(load, PointLoad)]
+        line_loads = [load for load in loads if isinstance(load, LineLoad)]
+        area_loads = [load for load in loads if isinstance(load, AreaLoad)]
 
         print(f"  - Point loads: {len(point_loads)}")
         print(f"  - Line loads: {len(line_loads)}")

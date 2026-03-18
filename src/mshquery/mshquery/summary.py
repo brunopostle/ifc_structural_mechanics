@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import meshio
-import numpy as np
 
 
 def summary(mesh: meshio.Mesh) -> dict[str, Any]:
@@ -25,8 +24,16 @@ def summary(mesh: meshio.Mesh) -> dict[str, Any]:
     # Bounding box
     if node_count > 0:
         bbox = {
-            "min": {"x": float(points[:, 0].min()), "y": float(points[:, 1].min()), "z": float(points[:, 2].min()) if points.shape[1] > 2 else 0.0},
-            "max": {"x": float(points[:, 0].max()), "y": float(points[:, 1].max()), "z": float(points[:, 2].max()) if points.shape[1] > 2 else 0.0},
+            "min": {
+                "x": float(points[:, 0].min()),
+                "y": float(points[:, 1].min()),
+                "z": float(points[:, 2].min()) if points.shape[1] > 2 else 0.0,
+            },
+            "max": {
+                "x": float(points[:, 0].max()),
+                "y": float(points[:, 1].max()),
+                "z": float(points[:, 2].max()) if points.shape[1] > 2 else 0.0,
+            },
         }
     else:
         bbox = None

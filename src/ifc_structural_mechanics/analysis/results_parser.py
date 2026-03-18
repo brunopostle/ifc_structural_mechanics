@@ -11,24 +11,22 @@ import re
 import traceback
 from typing import Dict, List, Optional
 
-from .base_parser import BaseParser
 from ..domain.result import (
-    Result,
     DisplacementResult,
-    StressResult,
-    StrainResult,
     ReactionForceResult,
+    Result,
+    StrainResult,
+    StressResult,
 )
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
+from .base_parser import BaseParser
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Regex for scientific notation values that may run together without spaces
-_FRD_VALUE_RE = re.compile(
-    r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
-)
+_FRD_VALUE_RE = re.compile(r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)")
 
 
 def _parse_frd_data_line(raw_line):
@@ -43,7 +41,7 @@ def _parse_frd_data_line(raw_line):
     node_id = raw_line[3:13].strip()
     values_str = raw_line[13:]
     matches = _FRD_VALUE_RE.findall(values_str)
-    values = [float(m.replace('D', 'E').replace('d', 'e')) for m in matches]
+    values = [float(m.replace("D", "E").replace("d", "e")) for m in matches]
     return node_id, values
 
 
@@ -585,7 +583,9 @@ class ResultsParser(BaseParser):
 
             # If no results found, try to parse total reactions (TOTALS=ONLY format)
             if not reactions:
-                logger.debug("No individual nodal reactions found, trying to parse total reactions")
+                logger.debug(
+                    "No individual nodal reactions found, trying to parse total reactions"
+                )
                 reactions = self._parse_total_reactions(lines)
 
             # If still no results, try alternative formats
@@ -633,7 +633,9 @@ class ResultsParser(BaseParser):
             line_lower = line.lower()
 
             # Look for total force line
-            if "total force" in line_lower and ("fx" in line_lower or "fy" in line_lower or "fz" in line_lower):
+            if "total force" in line_lower and (
+                "fx" in line_lower or "fy" in line_lower or "fz" in line_lower
+            ):
                 logger.debug(f"Found total force line at {i}: {line.strip()}")
 
                 # The next non-empty line should have the force values
@@ -653,13 +655,17 @@ class ResultsParser(BaseParser):
                             # Use "TOTAL" as reference element to indicate this is summed
                             result = ReactionForceResult(reference_element="TOTAL")
                             result.set_forces(forces)
-                            result.set_moments([0.0, 0.0, 0.0])  # Totals don't include moments typically
+                            result.set_moments(
+                                [0.0, 0.0, 0.0]
+                            )  # Totals don't include moments typically
 
                             reactions.append(result)
                             logger.info(f"Parsed total reaction forces: {forces}")
                             break
                     except (ValueError, IndexError) as e:
-                        logger.warning(f"Error parsing total force values: {value_line}, error: {e}")
+                        logger.warning(
+                            f"Error parsing total force values: {value_line}, error: {e}"
+                        )
 
                 # We found the total force section, no need to continue
                 break

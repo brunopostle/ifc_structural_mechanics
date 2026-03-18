@@ -8,18 +8,18 @@ and converting them into domain model objects with proper unit conversion.
 
 import logging
 import uuid
-import numpy as np
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import ifcopenshell
+import numpy as np
 
 from ..domain.load import (
-    Load,
-    PointLoad,
-    LineLoad,
     AreaLoad,
-    LoadGroup,
+    LineLoad,
+    Load,
     LoadCombination,
+    LoadGroup,
+    PointLoad,
 )
 from .entity_identifier import find_member_endpoints
 
@@ -121,9 +121,9 @@ class LoadsExtractor:
                 if load:
                     loads.append(load)
                     # Cache the load for future reference
-                    self._load_cache[
-                        getattr(entity, "GlobalId", str(uuid.uuid4()))
-                    ] = load
+                    self._load_cache[getattr(entity, "GlobalId", str(uuid.uuid4()))] = (
+                        load
+                    )
             except Exception as e:
                 self.logger.error(
                     f"Error extracting load {getattr(entity, 'GlobalId', 'unknown')}: {e}"
@@ -520,7 +520,9 @@ class LoadsExtractor:
                 )
 
             # For line loads (IfcStructuralLinearAction or IfcStructuralCurveAction)
-            elif ifc_load.is_a("IfcStructuralLinearAction") or ifc_load.is_a("IfcStructuralCurveAction"):
+            elif ifc_load.is_a("IfcStructuralLinearAction") or ifc_load.is_a(
+                "IfcStructuralCurveAction"
+            ):
                 # Similar to point loads but with line geometry
                 applied_load = getattr(ifc_load, "AppliedLoad", None)
                 if applied_load is None:
@@ -529,7 +531,9 @@ class LoadsExtractor:
                 # Extract force components
                 force_vector = [0.0, 0.0, 0.0]  # Default
 
-                force_vector, is_per_length = self._extract_line_force_vector(applied_load)
+                force_vector, is_per_length = self._extract_line_force_vector(
+                    applied_load
+                )
 
                 # Apply appropriate unit scale
                 if is_per_length:
@@ -587,7 +591,7 @@ class LoadsExtractor:
                     force_vector = [force_x, force_y, force_z]
 
                     # Planar force is force/area: scale = force_scale / length_scale^2
-                    area_scale = self.force_scale / (self.length_scale ** 2)
+                    area_scale = self.force_scale / (self.length_scale**2)
                     force_vector = [f * area_scale for f in force_vector]
                 elif hasattr(applied_load, "ForceX"):
                     # Fallback: IfcStructuralLoadSingleForce uses ForceX/Y/Z
@@ -706,18 +710,22 @@ class LoadsExtractor:
                         if hasattr(rel, "RelatingElement") and rel.RelatingElement:
                             element = rel.RelatingElement
                             if hasattr(element, "GlobalId"):
-                                self.logger.debug(f"Found surface reference via AssignedToStructuralItem: {element.GlobalId}")
+                                self.logger.debug(
+                                    f"Found surface reference via AssignedToStructuralItem: {element.GlobalId}"
+                                )
                                 return element.GlobalId
 
             # Method 2: Use inverse relationships to find IfcRelConnectsStructuralActivity
-            if hasattr(self.ifc_file, 'get_inverse'):
+            if hasattr(self.ifc_file, "get_inverse"):
                 inverse_rels = self.ifc_file.get_inverse(ifc_load)
                 for rel in inverse_rels:
                     if rel.is_a("IfcRelConnectsStructuralActivity"):
                         if hasattr(rel, "RelatingElement") and rel.RelatingElement:
                             element = rel.RelatingElement
                             if hasattr(element, "GlobalId"):
-                                self.logger.debug(f"Found surface reference via inverse relationship: {element.GlobalId}")
+                                self.logger.debug(
+                                    f"Found surface reference via inverse relationship: {element.GlobalId}"
+                                )
                                 return element.GlobalId
 
             # Fallback to a default reference

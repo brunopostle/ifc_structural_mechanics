@@ -11,16 +11,16 @@ from unittest.mock import MagicMock
 
 # Import the module under test
 from ifc_structural_mechanics.utils.error_handling import (
-    ErrorSeverity,
-    EntityType,
-    StructuralAnalysisError,
-    ModelExtractionError,
-    MeshingError,
     AnalysisError,
-    ResultProcessingError,
+    EntityType,
+    ErrorDetector,
     ErrorPattern,
     ErrorPatternRegistry,
-    ErrorDetector,
+    ErrorSeverity,
+    MeshingError,
+    ModelExtractionError,
+    ResultProcessingError,
+    StructuralAnalysisError,
 )
 
 

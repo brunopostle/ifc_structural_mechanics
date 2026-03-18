@@ -64,7 +64,8 @@ def _write_cantilever_inp(inp_path: str) -> None:
     Fixed BC at node 1, concentrated load at node 11.
     Requests nodal displacements in .frd and reaction forces in .dat.
     """
-    inp_content = textwrap.dedent("""\
+    inp_content = textwrap.dedent(
+        """\
         *HEADING
         Cantilever beam benchmark: tip load, 10 B31 elements
         *NODE
@@ -113,7 +114,8 @@ def _write_cantilever_inp(inp_path: str) -> None:
         *NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY
         RF
         *END STEP
-    """)
+    """
+    )
     with open(inp_path, "w") as f:
         f.write(inp_content)
 
@@ -140,22 +142,23 @@ def _parse_frd_node_coordinates(frd_path):
                 parts = stripped.split()
                 node_id = parts[1]
                 # Coordinates can run together in scientific notation — use regex
-                rest = stripped[stripped.index(node_id) + len(node_id):]
+                rest = stripped[stripped.index(node_id) + len(node_id) :]
                 value_pattern = (
-                    r'[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)'
+                    r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)"
                 )
                 matches = re.findall(value_pattern, rest)
                 if len(matches) >= 3:
-                    x, y, z = [float(m.replace('D', 'E').replace('d', 'e'))
-                               for m in matches[:3]]
+                    x, y, z = [
+                        float(m.replace("D", "E").replace("d", "e"))
+                        for m in matches[:3]
+                    ]
                     coords[node_id] = (x, y, z)
     return coords
 
 
 def _find_nodes_at_x(node_coords, target_x, tol=1e-6):
     """Find all node IDs whose x-coordinate matches target_x within tolerance."""
-    return [nid for nid, (x, y, z) in node_coords.items()
-            if abs(x - target_x) < tol]
+    return [nid for nid, (x, y, z) in node_coords.items() if abs(x - target_x) < tol]
 
 
 @pytest.mark.skipif(not CCX_AVAILABLE, reason="CalculiX (ccx) not installed")
@@ -183,9 +186,9 @@ class TestDirectCalculixValidation:
 
         # Parse FRD node coordinates for position-based node lookup
         frd_path = self.result_files.get("results")
-        assert frd_path and os.path.exists(frd_path), (
-            f"FRD results file not found in {self.result_files}"
-        )
+        assert frd_path and os.path.exists(
+            frd_path
+        ), f"FRD results file not found in {self.result_files}"
         self.node_coords = _parse_frd_node_coordinates(frd_path)
 
         # Parse results
@@ -210,9 +213,9 @@ class TestDirectCalculixValidation:
         becomes 4 cross-section corner nodes. All should have the same
         y-displacement (rigid section assumption).
         """
-        assert len(self.displacements) > 0, (
-            "No displacement results parsed from FRD file"
-        )
+        assert (
+            len(self.displacements) > 0
+        ), "No displacement results parsed from FRD file"
 
         # Find expanded nodes at the tip (x = 1.0)
         tip_node_ids = _find_nodes_at_x(self.node_coords, BEAM_LENGTH)
@@ -228,9 +231,9 @@ class TestDirectCalculixValidation:
                 ty = self.disp_by_node[nid].get_translations()[1]
                 tip_ty_values.append(ty)
 
-        assert len(tip_ty_values) > 0, (
-            f"No displacement results for tip nodes {tip_node_ids}"
-        )
+        assert (
+            len(tip_ty_values) > 0
+        ), f"No displacement results for tip nodes {tip_node_ids}"
 
         # Average y-displacement across cross-section corners
         avg_ty = sum(tip_ty_values) / len(tip_ty_values)
@@ -251,9 +254,9 @@ class TestDirectCalculixValidation:
 
     def test_cantilever_fixed_end_zero_displacement(self):
         """Fixed end nodes (x=0.0) should have near-zero displacement."""
-        assert len(self.displacements) > 0, (
-            "No displacement results parsed from FRD file"
-        )
+        assert (
+            len(self.displacements) > 0
+        ), "No displacement results parsed from FRD file"
 
         # Find expanded nodes at the fixed end (x = 0.0)
         fixed_node_ids = _find_nodes_at_x(self.node_coords, 0.0)
@@ -342,9 +345,11 @@ class TestFullPipelineValidation:
         """analyze_ifc() on simple_beam.ifc should complete without crashing."""
         result = self._run_pipeline()
 
-        assert result["status"] in ("success", "completed_with_errors", "failed"), (
-            f"Unexpected status: {result['status']}"
-        )
+        assert result["status"] in (
+            "success",
+            "completed_with_errors",
+            "failed",
+        ), f"Unexpected status: {result['status']}"
 
         # Print diagnostics regardless of status
         if result.get("errors"):
@@ -368,14 +373,14 @@ class TestFullPipelineValidation:
 
         # At least one node should have non-zero displacement
         max_magnitude = max(d.get_magnitude() for d in displacements)
-        assert max_magnitude > 0, (
-            "All displacement magnitudes are zero — load may not have been applied"
-        )
+        assert (
+            max_magnitude > 0
+        ), "All displacement magnitudes are zero — load may not have been applied"
 
         # Displacement should be physically reasonable (< 1 m for a building beam)
-        assert max_magnitude < 1.0, (
-            f"Max displacement {max_magnitude:.3f} m seems unreasonably large"
-        )
+        assert (
+            max_magnitude < 1.0
+        ), f"Max displacement {max_magnitude:.3f} m seems unreasonably large"
 
     def test_simple_beam_equilibrium(self):
         """Total reaction forces should approximately balance applied loads."""
@@ -398,9 +403,9 @@ class TestFullPipelineValidation:
         # The simple_beam.ifc has a -20 kN point load.
         # At minimum, the reaction force magnitude should be non-zero.
         reaction_magnitude = (total_fx**2 + total_fy**2 + total_fz**2) ** 0.5
-        assert reaction_magnitude > 0, (
-            "Total reaction force magnitude is zero — boundary conditions may be wrong"
-        )
+        assert (
+            reaction_magnitude > 0
+        ), "Total reaction force magnitude is zero — boundary conditions may be wrong"
 
         print(
             f"  Total reactions: Fx={total_fx:.1f}, Fy={total_fy:.1f}, "

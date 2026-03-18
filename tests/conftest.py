@@ -5,10 +5,11 @@ This file is automatically loaded by pytest and contains configuration and fixtu
 for the test suite.
 """
 
-import sys
-import pytest
 import shutil
+import sys
 from pathlib import Path
+
+import pytest
 
 # Add the src directory to the Python path so that we can import our package
 src_dir = Path(__file__).parent.parent / "src"

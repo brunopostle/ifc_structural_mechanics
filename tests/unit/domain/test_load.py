@@ -3,14 +3,16 @@ Unit tests for the load module in the domain model.
 """
 
 import unittest
+
 import numpy as np
+
 from ifc_structural_mechanics.domain.load import (
-    Load,
-    PointLoad,
-    LineLoad,
     AreaLoad,
-    LoadGroup,
+    LineLoad,
+    Load,
     LoadCombination,
+    LoadGroup,
+    PointLoad,
 )
 
 

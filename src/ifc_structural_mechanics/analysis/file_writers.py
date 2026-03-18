@@ -16,14 +16,13 @@ structural mechanics analysis package.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple, Any, TextIO
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 
-from ..domain.structural_model import StructuralModel
+from ..domain.load import AreaLoad, LineLoad, PointLoad
 from ..domain.structural_member import CurveMember, SurfaceMember
-from ..domain.load import PointLoad, LineLoad, AreaLoad
-
+from ..domain.structural_model import StructuralModel
 
 # Configure logging
 logger = logging.getLogger(__name__)

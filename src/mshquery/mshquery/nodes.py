@@ -31,7 +31,11 @@ def list_nodes(mesh: meshio.Mesh, range_str: str | None = None) -> list[dict[str
     for nid in range(start, end + 1):
         idx = nid - 1
         coords = mesh.points[idx]
-        entry: dict[str, Any] = {"id": nid, "x": float(coords[0]), "y": float(coords[1])}
+        entry: dict[str, Any] = {
+            "id": nid,
+            "x": float(coords[0]),
+            "y": float(coords[1]),
+        }
         entry["z"] = float(coords[2]) if len(coords) > 2 else 0.0
         results.append(entry)
 

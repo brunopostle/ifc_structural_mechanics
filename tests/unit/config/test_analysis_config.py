@@ -1,7 +1,8 @@
 import os
 import tempfile
-import yaml
+
 import pytest
+import yaml
 
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
 

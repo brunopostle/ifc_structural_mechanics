@@ -2,42 +2,42 @@
 Comprehensive test suite for the UnifiedCalculixWriter.
 
 This test suite verifies that the unified approach correctly:
-1. Processes Gmsh mesh data 
+1. Processes Gmsh mesh data
 2. Writes CalculiX input files
 3. Preserves triangular element topology
 4. Maps elements to domain model members
 5. Eliminates dual element writing conflicts
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, mock_open, patch
 
-import numpy as np
 import meshio
+import numpy as np
+import pytest
 
+from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from src.ifc_structural_mechanics.config.system_config import SystemConfig
+from src.ifc_structural_mechanics.domain.load import AreaLoad, LoadGroup, PointLoad
+from src.ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from src.ifc_structural_mechanics.domain.structural_member import (
+    CurveMember,
+    SurfaceMember,
+)
+from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
 from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
     generate_calculix_input,
     run_complete_analysis_workflow,
 )
-from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
-from src.ifc_structural_mechanics.domain.structural_member import (
-    CurveMember,
-    SurfaceMember,
-)
-from src.ifc_structural_mechanics.domain.property import Material, Section, Thickness
-from src.ifc_structural_mechanics.domain.load import PointLoad, AreaLoad, LoadGroup
-from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
-from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
-from src.ifc_structural_mechanics.config.system_config import SystemConfig
 from src.ifc_structural_mechanics.utils.error_handling import (
     AnalysisError,
 )
 from src.ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
     cleanup_temp_dir,
     create_temp_file,
     set_keep_temp_files,
+    setup_temp_dir,
 )
 
 # Configure for debugging
@@ -609,12 +609,12 @@ class TestUnifiedWorkflowFunctions:
         """Test error handling in the workflow functions - simplified version."""
         # Test with invalid domain model
         with pytest.raises(AnalysisError):
-            writer = UnifiedCalculixWriter(domain_model=None)
+            UnifiedCalculixWriter(domain_model=None)
 
         # Test with empty domain model
         empty_model = StructuralModel(id="empty", name="Empty")
         with pytest.raises(AnalysisError):
-            writer = UnifiedCalculixWriter(domain_model=empty_model)
+            UnifiedCalculixWriter(domain_model=empty_model)
 
     def test_workflow_function_exists(self):
         """Test that workflow functions exist and are callable."""

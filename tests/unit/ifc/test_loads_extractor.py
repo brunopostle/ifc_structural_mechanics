@@ -5,15 +5,16 @@ Updated to work with the actual public interface of the LoadsExtractor class
 and match the IFC specification for load hierarchies.
 """
 
-import numpy as np
 from unittest.mock import MagicMock, patch
 
-from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
+import numpy as np
+
 from ifc_structural_mechanics.domain.load import (
-    PointLoad,
-    LineLoad,
     AreaLoad,
+    LineLoad,
+    PointLoad,
 )
+from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
 
 
 class TestLoadsExtractor:
@@ -198,7 +199,7 @@ class TestLoadsExtractor:
         # Verify results
         assert len(loads) == 3
 
-        point_load = next((l for l in loads if l.id == "pl1"), None)
+        point_load = next((load for load in loads if load.id == "pl1"), None)
         assert isinstance(point_load, PointLoad)
         # Check force components with our simplified implementation
         assert np.array_equal(point_load.magnitude, np.array([1000.0, 0.0, -2000.0]))
@@ -207,7 +208,7 @@ class TestLoadsExtractor:
             point_load.direction, np.array([0.4472, 0.0, -0.8944]), atol=1e-4
         )
 
-        line_load = next((l for l in loads if l.id == "ll1"), None)
+        line_load = next((load for load in loads if load.id == "ll1"), None)
         assert isinstance(line_load, LineLoad)
         # Check force components with our simplified implementation
         assert np.array_equal(line_load.magnitude, np.array([0.0, 0.0, -5000.0]))
@@ -220,7 +221,7 @@ class TestLoadsExtractor:
             [10.0, 0.0, 0.0]
         ) or line_load.end_position == [10.0, 0.0, 0.0]
 
-        area_load = next((l for l in loads if l.id == "al1"), None)
+        area_load = next((load for load in loads if load.id == "al1"), None)
         assert isinstance(area_load, AreaLoad)
         # Check force components with our simplified implementation
         assert np.array_equal(area_load.magnitude, np.array([0.0, 0.0, -2000.0]))
@@ -287,7 +288,7 @@ class TestLoadsExtractor:
         """Test point load is created correctly from IFC."""
         # Use the extract_all_loads method to get a point load
         loads = self.extractor.extract_all_loads()
-        point_load = next((l for l in loads if l.id == "pl1"), None)
+        point_load = next((load for load in loads if load.id == "pl1"), None)
 
         # Verify the point load properties
         assert isinstance(point_load, PointLoad)
@@ -301,7 +302,7 @@ class TestLoadsExtractor:
         """Test line load is created correctly from IFC."""
         # Use the extract_all_loads method to get a line load
         loads = self.extractor.extract_all_loads()
-        line_load = next((l for l in loads if l.id == "ll1"), None)
+        line_load = next((load for load in loads if load.id == "ll1"), None)
 
         # Verify the line load properties
         assert isinstance(line_load, LineLoad)
@@ -324,7 +325,7 @@ class TestLoadsExtractor:
         ):
             # Use the extract_all_loads method to get an area load
             loads = self.extractor.extract_all_loads()
-            area_load = next((l for l in loads if l.id == "al1"), None)
+            area_load = next((load for load in loads if load.id == "al1"), None)
 
             # Verify the area load properties
             assert isinstance(area_load, AreaLoad)

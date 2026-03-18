@@ -1,8 +1,8 @@
 """Tests for mshquery command modules."""
 
-import pytest
 import meshio
-from mshquery import summary, info, nodes, select, groups
+
+from mshquery import groups, info, nodes, select, summary
 
 
 class TestSummary:

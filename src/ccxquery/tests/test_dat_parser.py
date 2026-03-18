@@ -1,9 +1,9 @@
 """Tests for the .dat file parser."""
 
 import pytest
-from ccxquery.parsers.dat_parser import parse_dat
+from conftest import SAMPLE_DAT_MINIMAL, SAMPLE_DAT_NO_CONVERGENCE
 
-from conftest import SAMPLE_DAT, SAMPLE_DAT_NO_CONVERGENCE, SAMPLE_DAT_MINIMAL
+from ccxquery.parsers.dat_parser import parse_dat
 
 
 class TestParseDat:
@@ -54,14 +54,16 @@ class TestTotals:
     def test_values_on_next_line(self, tmp_path):
         """Total force with values on the line after header + blank line."""
         dat = tmp_path / "totals.dat"
-        dat.write_text("""\
+        dat.write_text(
+            """\
 
                         S T E P       1
 
  total force (fx,fy,fz) for set ALL and time  0.1000000E+01
 
         1.23456E+03  7.89012E+02  3.45678E+01
-""")
+"""
+        )
         data = parse_dat(str(dat))
         assert data["totals"] is not None
         assert data["totals"]["fx"] == pytest.approx(1234.56)

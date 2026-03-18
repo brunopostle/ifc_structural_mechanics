@@ -11,12 +11,12 @@ import tempfile
 import unittest
 
 from ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
-    get_temp_dir,
     cleanup_temp_dir,
-    set_keep_temp_files,
     create_temp_file,
     create_temp_subdir,
+    get_temp_dir,
+    set_keep_temp_files,
+    setup_temp_dir,
 )
 
 
@@ -94,9 +94,7 @@ class TestTempDirManagement(unittest.TestCase):
     def test_keep_temp_files_setting(self):
         """Test the keep_temp_files setting."""
         # Get the current setting
-        current_keep = hasattr(self.__class__, "temp_dir") and os.path.exists(
-            self.__class__.temp_dir
-        )
+        hasattr(self.__class__, "temp_dir") and os.path.exists(self.__class__.temp_dir)
 
         # Change the setting temporarily
         set_keep_temp_files(True)

@@ -6,7 +6,7 @@ all structural elements, connections, loads, and other entities in the structura
 analysis model.
 """
 
-from typing import List, Optional, Dict, Union
+from typing import Dict, List, Optional, Union
 
 
 class StructuralModel:
@@ -56,7 +56,9 @@ class StructuralModel:
 
         # NEW: Reverse lookup indices for error propagation (IFC GUID traceability)
         self.analysis_element_to_member: Dict[int, str] = {}  # element_id → member.id
-        self.analysis_element_to_connection: Dict[int, str] = {}  # element_id → connection.id
+        self.analysis_element_to_connection: Dict[int, str] = (
+            {}
+        )  # element_id → connection.id
         self.mesh_entity_to_member: Dict[str, str] = {}  # gmsh_id → member.id
         self.mesh_entity_to_connection: Dict[str, str] = {}  # gmsh_id → connection.id
 
@@ -334,7 +336,9 @@ class StructuralModel:
             for mesh_id in mesh_ids:
                 self.mesh_entity_to_connection[mesh_id] = entity_id
         else:
-            raise ValueError(f"Invalid entity_type: {entity_type}. Must be 'member' or 'connection'")
+            raise ValueError(
+                f"Invalid entity_type: {entity_type}. Must be 'member' or 'connection'"
+            )
 
     def register_analysis_elements(
         self, entity_id: str, element_ids: List[int], entity_type: str = "member"
@@ -368,7 +372,9 @@ class StructuralModel:
             for elem_id in element_ids:
                 self.analysis_element_to_connection[elem_id] = entity_id
         else:
-            raise ValueError(f"Invalid entity_type: {entity_type}. Must be 'member' or 'connection'")
+            raise ValueError(
+                f"Invalid entity_type: {entity_type}. Must be 'member' or 'connection'"
+            )
 
     def trace_error_to_ifc(self, analysis_element_id: int) -> Optional[str]:
         """
@@ -409,12 +415,12 @@ class StructuralModel:
         """
         # Search members
         for member in self.members:
-            if hasattr(member, 'ifc_guid') and member.ifc_guid == ifc_guid:
+            if hasattr(member, "ifc_guid") and member.ifc_guid == ifc_guid:
                 return member
 
         # Search connections
         for connection in self.connections:
-            if hasattr(connection, 'ifc_guid') and connection.ifc_guid == ifc_guid:
+            if hasattr(connection, "ifc_guid") and connection.ifc_guid == ifc_guid:
                 return connection
 
         return None

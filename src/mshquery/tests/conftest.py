@@ -1,8 +1,6 @@
 """Shared fixtures for mshquery tests."""
 
-import numpy as np
 import pytest
-
 
 MSH_BEAM = """\
 $MeshFormat

@@ -7,9 +7,9 @@ focusing on pattern matching, error/warning classification, result organization,
 and entity mapping.
 """
 
-import re
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 # Configure logging
 logger = logging.getLogger(__name__)

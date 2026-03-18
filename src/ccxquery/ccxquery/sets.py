@@ -7,7 +7,9 @@ from typing import Any
 from .parsers import inp_parser
 
 
-def list_sets(sections: list[dict[str, Any]], set_type: str | None = None) -> list[dict[str, Any]]:
+def list_sets(
+    sections: list[dict[str, Any]], set_type: str | None = None
+) -> list[dict[str, Any]]:
     """List all node/element sets with their sizes.
 
     Args:
@@ -32,10 +34,20 @@ def show_set(sections: list[dict[str, Any]], name: str) -> dict[str, Any]:
     """Show contents of a specific set."""
     nsets = inp_parser.parse_node_sets(sections)
     if name in nsets:
-        return {"name": name, "type": "node", "count": len(nsets[name]), "ids": nsets[name]}
+        return {
+            "name": name,
+            "type": "node",
+            "count": len(nsets[name]),
+            "ids": nsets[name],
+        }
 
     elsets = inp_parser.parse_element_sets(sections)
     if name in elsets:
-        return {"name": name, "type": "element", "count": len(elsets[name]), "ids": elsets[name]}
+        return {
+            "name": name,
+            "type": "element",
+            "count": len(elsets[name]),
+            "ids": elsets[name],
+        }
 
     return {"error": f"Set '{name}' not found"}

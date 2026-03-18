@@ -8,25 +8,24 @@ different parts of the model.
 
 import logging
 import os
-from typing import List, Optional, Union, Dict
 import uuid
+from typing import Dict, List, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.unit
 
 from ..domain.structural_model import StructuralModel
-
-from .members_extractor import MembersExtractor
-from .properties_extractor import PropertiesExtractor
 from .connections_extractor import ConnectionsExtractor
-from .loads_extractor import LoadsExtractor
 from .entity_identifier import (
-    is_structural_member,
     is_structural_connection,
-    is_structural_load,
     is_structural_curve_member,
+    is_structural_load,
+    is_structural_member,
     is_structural_surface_member,
 )
+from .loads_extractor import LoadsExtractor
+from .members_extractor import MembersExtractor
+from .properties_extractor import PropertiesExtractor
 
 
 class Extractor:
@@ -394,8 +393,9 @@ class Extractor:
                 all_loads = self.loads_extractor.extract_all_loads()
                 if all_loads:
                     # Create a default group for these loads
-                    from ..domain.load import LoadGroup
                     import uuid
+
+                    from ..domain.load import LoadGroup
 
                     default_group = LoadGroup(
                         id=str(uuid.uuid4()),

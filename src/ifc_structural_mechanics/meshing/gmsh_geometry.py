@@ -10,13 +10,15 @@ produce shared topology at intersections so that the resulting mesh has
 coincident nodes without post-hoc constraints.
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
+
 import gmsh
 import numpy as np
-import logging
+
 from ..config.meshing_config import MeshingConfig
-from ..domain.structural_model import StructuralModel
 from ..domain.structural_member import CurveMember, SurfaceMember
+from ..domain.structural_model import StructuralModel
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +147,7 @@ class GmshGeometryConverter:
             round(float(z), COORD_PRECISION),
         )
 
-    def _get_or_create_point(
-        self, x: float, y: float, z: float, dim: int = 1
-    ) -> int:
+    def _get_or_create_point(self, x: float, y: float, z: float, dim: int = 1) -> int:
         """Reuse an existing Gmsh OCC point at this location, or create a new one.
 
         Args:
@@ -157,8 +157,7 @@ class GmshGeometryConverter:
                  generation at beam-shell shared nodes.
         """
         registry = (
-            self._curve_point_registry if dim == 1
-            else self._surface_point_registry
+            self._curve_point_registry if dim == 1 else self._surface_point_registry
         )
         key = self._coord_key(x, y, z)
         if key in registry:
@@ -171,7 +170,9 @@ class GmshGeometryConverter:
     # Internal geometry creation (no synchronize, no mesh size)
     # ------------------------------------------------------------------
 
-    def _create_curve_geometry(self, member: CurveMember) -> Tuple[List[int], List[int]]:
+    def _create_curve_geometry(
+        self, member: CurveMember
+    ) -> Tuple[List[int], List[int]]:
         """
         Create Gmsh OCC geometry for a curve member without synchronizing.
 
@@ -225,7 +226,9 @@ class GmshGeometryConverter:
         )
         return line_tags, point_tags
 
-    def _create_surface_geometry(self, member: SurfaceMember) -> Tuple[Optional[int], List[int]]:
+    def _create_surface_geometry(
+        self, member: SurfaceMember
+    ) -> Tuple[Optional[int], List[int]]:
         """
         Create Gmsh OCC geometry for a surface member without synchronizing.
 
@@ -313,9 +316,7 @@ class GmshGeometryConverter:
         # Fragment curves against curves
         if len(self._all_curve_dim_tags) >= 2:
             try:
-                out_c, map_c = gmsh.model.occ.fragment(
-                    self._all_curve_dim_tags, []
-                )
+                out_c, map_c = gmsh.model.occ.fragment(self._all_curve_dim_tags, [])
                 curve_map = map_c
                 logger.info(
                     f"Fragment curves: {len(self._all_curve_dim_tags)} -> {len(out_c)}"
@@ -326,9 +327,7 @@ class GmshGeometryConverter:
         # Fragment surfaces against surfaces
         if len(self._all_surface_dim_tags) >= 2:
             try:
-                out_s, map_s = gmsh.model.occ.fragment(
-                    self._all_surface_dim_tags, []
-                )
+                out_s, map_s = gmsh.model.occ.fragment(self._all_surface_dim_tags, [])
                 surface_map = map_s
                 logger.info(
                     f"Fragment surfaces: {len(self._all_surface_dim_tags)} -> {len(out_s)}"
@@ -410,7 +409,7 @@ class GmshGeometryConverter:
 
     def _register_traceability(self, domain_model: StructuralModel) -> None:
         """Register mesh entity IDs in domain model for all members."""
-        dm = getattr(self, 'domain_model', None) or domain_model
+        dm = getattr(self, "domain_model", None) or domain_model
         if not dm:
             return
 
@@ -455,7 +454,6 @@ class GmshGeometryConverter:
                 continue
 
             try:
-                dim_tags = [(dim, t) for t in tags]
                 gmsh.model.addPhysicalGroup(dim, tags, phys_tag)
                 gmsh.model.setPhysicalName(dim, phys_tag, mid)
                 self.physical_group_map[phys_tag] = mid
@@ -632,7 +630,7 @@ class GmshGeometryConverter:
                 logger.warning(f"Error setting mesh size: {e}")
 
         # Register mesh entities in domain model for traceability
-        if hasattr(self, 'domain_model') and self.domain_model:
+        if hasattr(self, "domain_model") and self.domain_model:
             # Convert tags to strings for consistent ID format
             mesh_ids = [str(tag) for tag in line_tags]
             self.domain_model.register_mesh_entities(
@@ -719,7 +717,7 @@ class GmshGeometryConverter:
                 logger.warning(f"Error setting mesh size: {e}")
 
         # Register mesh entities in domain model for traceability
-        if hasattr(self, 'domain_model') and self.domain_model:
+        if hasattr(self, "domain_model") and self.domain_model:
             # Convert tag to string for consistent ID format
             mesh_ids = [str(surface_tag)]
             self.domain_model.register_mesh_entities(
@@ -930,11 +928,15 @@ class GmshGeometryConverter:
 
     def save_mapping(self, file_path: str) -> None:
         """Save mapping (deprecated - traceability is now in domain model)."""
-        logger.warning("Mapping file generation deprecated - traceability is in domain model")
+        logger.warning(
+            "Mapping file generation deprecated - traceability is in domain model"
+        )
 
     def load_mapping(self, file_path: str) -> None:
         """Load mapping (deprecated - traceability is now in domain model)."""
-        logger.warning("Mapping file loading deprecated - traceability is in domain model")
+        logger.warning(
+            "Mapping file loading deprecated - traceability is in domain model"
+        )
 
     def __del__(self):
         """

@@ -3,7 +3,6 @@ Tests for the CalculiX output parser module.
 """
 
 import unittest
-from unittest.mock import Mock
 
 from src.ifc_structural_mechanics.analysis.output_parser import OutputParser
 
@@ -85,7 +84,7 @@ class TestOutputParser(unittest.TestCase):
         """Test parsing complex output with both errors and warnings."""
         output = """
         CalculiX Version 2.18
-        
+
         *WARNING in meshq: distorted element 14
         *INFO in preiter: 11% of the iterations done
         *INFO in preiter: 23% of the iterations done
@@ -93,7 +92,7 @@ class TestOutputParser(unittest.TestCase):
         *INFO in preiter: 46% of the iterations done
         *WARNING in stressrecovery: unreasonable deformation in element 78
         *ERROR in arpack: no convergence
-        
+
         ANALYSIS ABORTED
         """
         result = self.parser.parse_output(output)
@@ -124,13 +123,13 @@ class TestOutputParser(unittest.TestCase):
         """Test parsing output from a successful analysis."""
         output = """
         CalculiX Version 2.18
-        
+
         *INFO in preiter: 12% of the iterations done
         *INFO in preiter: 34% of the iterations done
         *INFO in preiter: 56% of the iterations done
         *INFO in preiter: 78% of the iterations done
         *INFO in preiter: 100% of the iterations done
-        
+
         ANALYSIS COMPLETED
         """
         result = self.parser.parse_output(output)

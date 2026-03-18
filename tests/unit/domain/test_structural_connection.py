@@ -3,10 +3,10 @@ Tests for the structural connection domain model classes.
 """
 
 from ifc_structural_mechanics.domain.structural_connection import (
-    StructuralConnection,
+    HingeConnection,
     PointConnection,
     RigidConnection,
-    HingeConnection,
+    StructuralConnection,
 )
 
 

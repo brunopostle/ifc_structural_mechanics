@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import meshio
-import numpy as np
 
 
 def nodes_at(
@@ -46,11 +45,13 @@ def elements_with_node(mesh: meshio.Mesh, node_id: int) -> list[dict[str, Any]]:
         for local_idx in range(len(block.data)):
             if node_idx in block.data[local_idx]:
                 connectivity = [int(n) + 1 for n in block.data[local_idx]]
-                results.append({
-                    "id": eid + local_idx,
-                    "type": block.type,
-                    "connectivity": connectivity,
-                })
+                results.append(
+                    {
+                        "id": eid + local_idx,
+                        "type": block.type,
+                        "connectivity": connectivity,
+                    }
+                )
         eid += len(block.data)
 
     return results
@@ -65,11 +66,13 @@ def elements_by_type(mesh: meshio.Mesh, cell_type: str) -> list[dict[str, Any]]:
         if block.type == cell_type:
             for local_idx in range(len(block.data)):
                 connectivity = [int(n) + 1 for n in block.data[local_idx]]
-                results.append({
-                    "id": eid + local_idx,
-                    "type": block.type,
-                    "connectivity": connectivity,
-                })
+                results.append(
+                    {
+                        "id": eid + local_idx,
+                        "type": block.type,
+                        "connectivity": connectivity,
+                    }
+                )
         eid += len(block.data)
 
     return results

@@ -3,30 +3,30 @@ Enhanced end-to-end test with improved error handling and debugging.
 Updated to use the unified CalculiX writer architecture.
 """
 
+# Verbose logging and debugging
+import logging
 import os
-import pytest
 from unittest.mock import patch
+
 import numpy as np
+import pytest
 
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.property import Material, Section
+from ifc_structural_mechanics.domain.structural_member import CurveMember
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
-    cleanup_temp_dir,
-    create_temp_file,
-    create_temp_subdir,
-)
 
 # Updated import for unified writer
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
 )
-
-# Verbose logging and debugging
-import logging
+from ifc_structural_mechanics.utils.temp_dir import (
+    cleanup_temp_dir,
+    create_temp_file,
+    create_temp_subdir,
+    setup_temp_dir,
+)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -212,10 +212,10 @@ def test_unified_writer_writes_correct_element_types():
     Test that UnifiedCalculixWriter writes element types correctly.
     Updated to use the new unified architecture.
     """
-    from ifc_structural_mechanics.domain.structural_model import StructuralModel
-    from ifc_structural_mechanics.domain.structural_member import CurveMember
-    from ifc_structural_mechanics.domain.property import Material, Section
     from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+    from ifc_structural_mechanics.domain.property import Material, Section
+    from ifc_structural_mechanics.domain.structural_member import CurveMember
+    from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
     # Create a simple domain model with a beam
     model = StructuralModel(id="test_model", name="Test Model")
@@ -306,10 +306,10 @@ def test_unified_writer_element_preservation():
     Test that the unified writer preserves triangular element topology correctly.
     This is the key validation that replaces the old dual-system coordination tests.
     """
-    from ifc_structural_mechanics.domain.structural_model import StructuralModel
-    from ifc_structural_mechanics.domain.structural_member import SurfaceMember
-    from ifc_structural_mechanics.domain.property import Material, Thickness
     from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+    from ifc_structural_mechanics.domain.property import Material, Thickness
+    from ifc_structural_mechanics.domain.structural_member import SurfaceMember
+    from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
     # Create a surface model that will generate triangular elements
     model = StructuralModel(id="test_model", name="Test Model")
@@ -360,7 +360,7 @@ $EndMeshFormat
 $Nodes
 3
 1 0 0 0
-2 1 0 0  
+2 1 0 0
 3 0 1 0
 $EndNodes
 $Elements
@@ -416,14 +416,15 @@ def test_unified_writer_direct_mesh_processing():
     Test the unified writer's mesh processing capabilities directly.
     This validates the core functionality that replaces the dual system.
     """
-    from ifc_structural_mechanics.domain.structural_model import StructuralModel
+    from unittest.mock import MagicMock
+
+    from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+    from ifc_structural_mechanics.domain.property import Material, Section, Thickness
     from ifc_structural_mechanics.domain.structural_member import (
         CurveMember,
         SurfaceMember,
     )
-    from ifc_structural_mechanics.domain.property import Material, Section, Thickness
-    from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
-    from unittest.mock import MagicMock
+    from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
     # Create a model with both curve and surface members
     model = StructuralModel(id="test_model", name="Test Model")

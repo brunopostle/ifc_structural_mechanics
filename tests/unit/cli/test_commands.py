@@ -2,19 +2,18 @@
 Updated unit tests for the CLI commands module to work with enhanced analysis.
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 from click.testing import CliRunner
 
-# Update these imports to match your enhanced implementation
-from ifc_structural_mechanics.cli.commands import cli
-
 # We'll use run_enhanced_analyze from original commands.py to maintain compatibility
-from ifc_structural_mechanics.cli.commands import run_enhanced_analyze
+# Update these imports to match your enhanced implementation
+from ifc_structural_mechanics.cli.commands import cli, run_enhanced_analyze
 from ifc_structural_mechanics.utils.error_handling import (
-    ModelExtractionError,
-    MeshingError,
     AnalysisError,
+    MeshingError,
+    ModelExtractionError,
 )
 
 

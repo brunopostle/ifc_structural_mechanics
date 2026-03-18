@@ -7,13 +7,14 @@ file sections according to expected formats and requirements.
 
 import io
 import unittest
-from unittest.mock import Mock, patch, PropertyMock
+from unittest.mock import Mock, PropertyMock, patch
+
 import numpy as np
 
 from ifc_structural_mechanics.analysis import file_writers
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.domain.load import AreaLoad, LineLoad, PointLoad
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
-from ifc_structural_mechanics.domain.load import PointLoad, LineLoad, AreaLoad
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
 
 class TestFileWriters(unittest.TestCase):

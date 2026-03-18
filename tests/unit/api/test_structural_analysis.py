@@ -4,28 +4,29 @@ Updated unit tests for the structural analysis API using the unified CalculiX wr
 These tests verify the simplified workflow that eliminates dual element writing.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from ifc_structural_mechanics.api.structural_analysis import (
     analyze_ifc,
-    extract_model,
+    analyze_ifc_simple,
     create_analysis_config,
     create_meshing_config,
-    analyze_ifc_simple,
+    extract_model,
     run_enhanced_analysis,
-)
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
-from ifc_structural_mechanics.domain.property import Material, Section, Thickness
-from ifc_structural_mechanics.utils.error_handling import (
-    ModelExtractionError,
-    MeshingError,
-    AnalysisError,
-    StructuralAnalysisError,
 )
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
 from ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.utils.error_handling import (
+    AnalysisError,
+    MeshingError,
+    ModelExtractionError,
+    StructuralAnalysisError,
+)
 
 
 # Mock the domain model for tests

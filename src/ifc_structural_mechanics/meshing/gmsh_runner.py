@@ -5,11 +5,11 @@ This module provides functionality to run the Gmsh meshing process,
 either via the Python API or by executing the Gmsh executable as a subprocess.
 """
 
-import os
-import sys
-import subprocess
 import logging
+import os
 import shutil
+import subprocess
+import sys
 from typing import List, Optional
 
 import gmsh
@@ -266,7 +266,7 @@ class GmshRunner:
                 Point(6) = {1, 0, 1, 1.0};
                 Point(7) = {1, 1, 1, 1.0};
                 Point(8) = {0, 1, 1, 1.0};
-                
+
                 Line(1) = {1, 2};
                 Line(2) = {2, 3};
                 Line(3) = {3, 4};
@@ -279,7 +279,7 @@ class GmshRunner:
                 Line(10) = {2, 6};
                 Line(11) = {3, 7};
                 Line(12) = {4, 8};
-                
+
                 Curve Loop(1) = {1, 2, 3, 4};
                 Plane Surface(1) = {1};
                 Curve Loop(2) = {5, 6, 7, 8};
@@ -292,7 +292,7 @@ class GmshRunner:
                 Plane Surface(5) = {5};
                 Curve Loop(6) = {4, 9, -8, -12};
                 Plane Surface(6) = {6};
-                
+
                 Surface Loop(1) = {1, 2, 3, 4, 5, 6};
                 Volume(1) = {1};
                 """
@@ -428,7 +428,7 @@ class GmshRunner:
                 # Check if we have a mesh - if not, generate one
                 try:
                     _, _, _ = gmsh.model.mesh.getNodes()
-                except:
+                except Exception:
                     # No nodes in the mesh, need to run meshing first
                     logger.info("No mesh found, running meshing process")
                     success = self.run_meshing()

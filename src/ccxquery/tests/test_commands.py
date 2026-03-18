@@ -1,11 +1,29 @@
 """Tests for ccxquery command modules."""
 
 import math
+
 import pytest
-from ccxquery.parsers.inp_parser import parse_inp
-from ccxquery.parsers.frd_parser import parse_frd
+
+from ccxquery import (
+    bcs,
+    displacements,
+    loads,
+    materials,
+    node,
+    reactions,
+    results,
+)
+from ccxquery import sections as sections_mod
+from ccxquery import (
+    sets,
+    status,
+    steps,
+    stresses,
+    summary,
+)
 from ccxquery.parsers.dat_parser import parse_dat
-from ccxquery import summary, sets, materials, sections as sections_mod, bcs, loads, steps, node, displacements, stresses, reactions, results, status
+from ccxquery.parsers.frd_parser import parse_frd
+from ccxquery.parsers.inp_parser import parse_inp
 
 
 class TestSummaryInp:
@@ -234,7 +252,8 @@ class TestStresses:
 
     def test_no_stress_data(self, tmp_path):
         frd = tmp_path / "no_stress.frd"
-        frd.write_text("""\
+        frd.write_text(
+            """\
     1C
     2C                             1                                     1
  -1         1 0.00000E+00 0.00000E+00 0.00000E+00
@@ -247,7 +266,8 @@ class TestStresses:
  -1         1 0.00000E+00 0.00000E+00 0.00000E+00
  -3
  9999
-""")
+"""
+        )
         data = parse_frd(str(frd))
         result = stresses.stresses(data)
         assert "error" in result

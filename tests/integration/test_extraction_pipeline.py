@@ -6,14 +6,14 @@ verifying that all components are correctly extracted and linked.
 """
 
 import os
-import pytest
-import ifcopenshell
-import numpy as np
-from unittest.mock import patch, Mock, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
-from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
+import ifcopenshell
+import pytest
+
 from ifc_structural_mechanics.domain.structural_member import CurveMember
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.ifc.extractor import Extractor
 
 # Define paths to test data
 TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test_data")
@@ -311,13 +311,6 @@ class TestExtractionPipeline:
             side_effect=lambda point, unit_scale=1.0: list(point.Coordinates),
         ):
 
-            # Create a mock transformation that can work with numpy operations
-            mock_rotation = np.eye(3)
-            mock_transformation = {
-                "location": np.array([0.0, 0.0, 0.0]),
-                "rotationMatrix": mock_rotation,
-            }
-
             with patch(
                 "ifc_structural_mechanics.ifc.entity_identifier.get_transformation",
                 return_value=None,
@@ -403,7 +396,7 @@ def create_test_ifc_file():
             file = ifcopenshell.file(schema="IFC4")
 
             # Create project
-            project = file.create_entity(
+            file.create_entity(
                 "IfcProject",
                 GlobalId=ifcopenshell.guid.new(),
                 Name="Simple Beam Project",

@@ -7,9 +7,9 @@ import pytest
 from ifc_structural_mechanics.analysis.results_parser import ResultsParser
 from ifc_structural_mechanics.domain.result import (
     DisplacementResult,
-    StressResult,
-    StrainResult,
     ReactionForceResult,
+    StrainResult,
+    StressResult,
 )
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
@@ -167,7 +167,7 @@ total forces (fx,fy,fz) and moments (mx,my,mz)
         parser = ResultsParser(domain_model=mock_domain_model)
         result_files = {"results": mock_frd_file, "data": mock_dat_file}
 
-        parsed_results = parser.parse_results(result_files)
+        parser.parse_results(result_files)
 
         # Check that results were added to the domain model
         assert len(mock_domain_model.results) > 0

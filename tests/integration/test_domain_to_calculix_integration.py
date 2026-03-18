@@ -8,24 +8,24 @@ and validates the complete workflow from domain model to CalculiX analysis.
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
+from src.ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
+from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from src.ifc_structural_mechanics.config.system_config import SystemConfig
+from src.ifc_structural_mechanics.domain.property import Material, Section, Thickness
 from src.ifc_structural_mechanics.domain.structural_member import (
     CurveMember,
     SurfaceMember,
 )
-from src.ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
 
 # Updated import to use unified writer instead of removed MeshConverter
 from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
     run_complete_analysis_workflow,
 )
-from src.ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
-from src.ifc_structural_mechanics.config.analysis_config import AnalysisConfig
-from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
-from src.ifc_structural_mechanics.config.system_config import SystemConfig
 
 
 class TestDomainToCalculixUnifiedWorkflow(unittest.TestCase):
@@ -353,7 +353,7 @@ $EndElements
 2.2 0 8
 $EndMeshFormat
 $Nodes
-4  
+4
 1 0 0 0
 2 5 0 0
 3 1 0 0
@@ -615,6 +615,7 @@ $EndElements
         This validates the core element processing logic.
         """
         from unittest.mock import MagicMock
+
         import numpy as np
 
         # Create unified writer

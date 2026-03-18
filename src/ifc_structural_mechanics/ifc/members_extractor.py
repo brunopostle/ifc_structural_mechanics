@@ -7,29 +7,25 @@ members from IFC files and converts them to domain model objects.
 
 import logging
 import uuid
-from typing import List, Optional, Union, Dict
+from typing import Dict, List, Optional, Union
 
 import ifcopenshell
 
-from ..domain.structural_member import StructuralMember, CurveMember, SurfaceMember
 from ..domain.property import Material, Section, Thickness
+from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
-    is_structural_member,
-    is_structural_curve_member,
-    is_structural_surface_member,
+    get_1D_orientation,
+    get_2D_orientation,
+    get_coordinate,
     get_representation,
     get_transformation,
     transform_vectors,
-    get_coordinate,
-    get_1D_orientation,
-    get_2D_orientation,
 )
 from ..utils.units import (
+    convert_area,
+    convert_density,
     convert_length,
     convert_moment_of_inertia,
-    convert_area,
-    convert_elastic_modulus,
-    convert_density,
 )
 
 logger = logging.getLogger(__name__)
@@ -332,7 +328,7 @@ class MembersExtractor:
                     geometry=geometry,
                     material=domain_material,
                     section=domain_section,
-                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
                     local_axis=tuple(orientation) if orientation is not None else None,
                 )
             else:
@@ -359,7 +355,7 @@ class MembersExtractor:
                         width=default_width,
                         height=default_height,
                     ),
-                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
                     local_axis=tuple(orientation) if orientation is not None else None,
                 )
 
@@ -496,7 +492,7 @@ class MembersExtractor:
                     geometry=geometry,
                     material=domain_material,
                     thickness=domain_thickness,
-                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
                 )
             else:
                 # Create with default material (SI units)
@@ -518,7 +514,7 @@ class MembersExtractor:
                         name="Surface Thickness",
                         value=thickness_value,
                     ),
-                    ifc_guid=entity.GlobalId if hasattr(entity, 'GlobalId') else None,
+                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
                 )
 
         except Exception as e:
@@ -716,18 +712,26 @@ class MembersExtractor:
         # Second pass: if key properties still missing, search all psets by property name
         if elastic_modulus_raw is None or density_raw is None:
             for pset in psets:
-                for prop in getattr(pset, "Properties", getattr(pset, "HasProperties", [])):
+                for prop in getattr(
+                    pset, "Properties", getattr(pset, "HasProperties", [])
+                ):
                     prop_name = getattr(prop, "Name", "")
                     lower_name = prop_name.lower()
                     try:
                         value = prop.NominalValue.wrappedValue
                     except (AttributeError, TypeError):
                         continue
-                    if ("youngmodulus" in lower_name or "elasticmodulus" in lower_name) and elastic_modulus_raw is None:
+                    if (
+                        "youngmodulus" in lower_name or "elasticmodulus" in lower_name
+                    ) and elastic_modulus_raw is None:
                         elastic_modulus_raw = value
-                    elif ("massdensity" in lower_name or lower_name == "density") and density_raw is None:
+                    elif (
+                        "massdensity" in lower_name or lower_name == "density"
+                    ) and density_raw is None:
                         density_raw = value
-                    elif ("poissonratio" in lower_name or "poisson" in lower_name) and poisson_ratio == 0.3:
+                    elif (
+                        "poissonratio" in lower_name or "poisson" in lower_name
+                    ) and poisson_ratio == 0.3:
                         poisson_ratio = value
 
         # Only convert values extracted from IFC (they're in project units).
@@ -820,18 +824,18 @@ class MembersExtractor:
                 area = flange_area + web_area
 
                 # Calculate moments of inertia (already in SI units since dimensions are converted)
-                Iy = (width * height ** 3) / 12 - (width - web_thickness) * (
+                Iy = (width * height**3) / 12 - (width - web_thickness) * (
                     (height - 2 * flange_thickness) ** 3
                 ) / 12
-                Iz = (2 * flange_thickness) * (width ** 3) / 12 + (
+                Iz = (2 * flange_thickness) * (width**3) / 12 + (
                     height - 2 * flange_thickness
-                ) * (web_thickness ** 3) / 12
+                ) * (web_thickness**3) / 12
                 Jx = (
                     1
                     / 3
                     * (
-                        (height - flange_thickness) * (web_thickness ** 3)
-                        + 2 * width * (flange_thickness ** 3)
+                        (height - flange_thickness) * (web_thickness**3)
+                        + 2 * width * (flange_thickness**3)
                     )
                 )
 

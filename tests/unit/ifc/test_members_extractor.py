@@ -6,12 +6,13 @@ curve members (beams, columns) and surface members (walls, slabs).
 """
 
 import os
-import pytest
-import ifcopenshell
 
-from ifc_structural_mechanics.ifc.members_extractor import MembersExtractor
-from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+import ifcopenshell
+import pytest
+
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+from ifc_structural_mechanics.ifc.members_extractor import MembersExtractor
 
 
 class TestMemberExtraction:

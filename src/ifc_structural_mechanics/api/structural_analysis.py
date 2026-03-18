@@ -5,25 +5,25 @@ This module provides the simplified public API for performing structural analysi
 on IFC models using the unified workflow that eliminates dual element writing.
 """
 
-import os
 import logging
+import os
 import shutil
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from ..ifc.extractor import Extractor
-from ..domain.structural_model import StructuralModel
-from ..meshing.unified_calculix_writer import run_complete_analysis_workflow
 from ..analysis.calculix_runner import CalculixRunner
-from ..analysis.results_parser import ResultsParser
 from ..analysis.output_parser import OutputParser
+from ..analysis.results_parser import ResultsParser
 from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
+from ..domain.structural_model import StructuralModel
+from ..ifc.extractor import Extractor
+from ..meshing.unified_calculix_writer import run_complete_analysis_workflow
 from ..utils.error_handling import (
-    StructuralAnalysisError,
-    ModelExtractionError,
-    MeshingError,
     AnalysisError,
+    MeshingError,
+    ModelExtractionError,
+    StructuralAnalysisError,
 )
 from ..utils.file_utils import ensure_directory
 

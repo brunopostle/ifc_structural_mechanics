@@ -6,15 +6,15 @@ the structural model to Gmsh geometry, generates a mesh, and saves the result
 as a .msh file for inspection and validation.
 """
 
-import os
-import pytest
 import logging
+import os
 
 import gmsh
+import pytest
 
+from ifc_structural_mechanics.config.meshing_config import MeshingConfig
 from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
-from ifc_structural_mechanics.config.meshing_config import MeshingConfig
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -55,9 +55,9 @@ class TestIFCToMeshConversion:
             try:
                 if not gmsh.isInitialized():
                     gmsh.initialize()
-                    gmsh_initialized = True
+                    pass  # gmsh initialized
                 else:
-                    gmsh_initialized = False
+                    pass  # already initialized
 
                 # Verify Gmsh is working by checking a simple operation
                 gmsh.option.getNumber("General.Terminal")
@@ -143,10 +143,14 @@ class TestIFCToMeshConversion:
                 node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
                 assert len(node_tags) > 0, "Mesh file contains no nodes"
 
-                element_types, element_tags, element_node_tags = gmsh.model.mesh.getElements()
+                element_types, element_tags, element_node_tags = (
+                    gmsh.model.mesh.getElements()
+                )
                 assert len(element_types) > 0, "Mesh file contains no elements"
 
-                logger.info(f"Mesh file is valid: {len(node_tags)} nodes, {sum(len(tags) for tags in element_tags)} elements")
+                logger.info(
+                    f"Mesh file is valid: {len(node_tags)} nodes, {sum(len(tags) for tags in element_tags)} elements"
+                )
 
             except Exception as e:
                 logger.error(f"Error validating .msh file: {e}")

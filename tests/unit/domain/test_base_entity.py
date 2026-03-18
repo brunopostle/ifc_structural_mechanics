@@ -5,13 +5,12 @@ This module contains test cases for the DomainEntity base class and related
 functionality in the domain model.
 """
 
+import os
+import sys
 import unittest
 import uuid
-from typing import Dict, Any
-
-import sys
-import os
 from pathlib import Path
+from typing import Any, Dict
 
 # Add the project root to the Python path so we can import modules
 project_root = Path(__file__).parent.parent.parent.parent
@@ -21,7 +20,7 @@ sys.path.append(str(project_root))
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
-from ifc_structural_mechanics.domain.base_entity import (
+from ifc_structural_mechanics.domain.base_entity import (  # noqa: E402
     DomainEntity,
     DomainEntityCollection,
 )

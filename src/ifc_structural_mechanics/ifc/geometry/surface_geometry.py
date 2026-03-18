@@ -8,8 +8,9 @@ for various IFC representation types and geometric operations on surfaces.
 
 import logging
 from typing import Any, Dict, Optional
-import numpy as np
+
 import ifcopenshell
+import numpy as np
 
 from ..entity_identifier import get_coordinate, get_transformation, transform_vectors
 

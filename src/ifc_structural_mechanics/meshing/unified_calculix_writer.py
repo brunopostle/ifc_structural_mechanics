@@ -11,24 +11,23 @@ This eliminates the architectural problem at its source by having only ONE syste
 responsible for writing elements to CalculiX input files.
 """
 
-import os
 import logging
-from typing import Dict, List, Optional, Tuple, Any, TextIO
+import os
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 
-import numpy as np
 import meshio
-
-from ..domain.structural_model import StructuralModel
-from ..domain.structural_member import CurveMember, SurfaceMember
-from ..config.analysis_config import AnalysisConfig
-from ..utils.error_handling import AnalysisError, MeshingError
-from ..utils.temp_dir import get_temp_dir, create_temp_subdir
+import numpy as np
 
 # Import boundary condition and load handling
 from ..analysis.boundary_condition_handling import (
-    write_boundary_conditions,
     write_analysis_steps,
+    write_boundary_conditions,
 )
+from ..config.analysis_config import AnalysisConfig
+from ..domain.structural_member import CurveMember, SurfaceMember
+from ..domain.structural_model import StructuralModel
+from ..utils.error_handling import AnalysisError, MeshingError
+from ..utils.temp_dir import create_temp_subdir, get_temp_dir
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -148,16 +147,22 @@ class UnifiedCalculixWriter:
             Tuple[float, float, float]: Normal vector (nx, ny, nz)
         """
         # Use local axis from IFC if available
-        if hasattr(member, 'local_axis') and member.local_axis is not None:
+        if hasattr(member, "local_axis") and member.local_axis is not None:
             # local_axis is (xAxis, yAxis, zAxis) - try xAxis for beam normal
-            if isinstance(member.local_axis, (tuple, list)) and len(member.local_axis) == 3:
+            if (
+                isinstance(member.local_axis, (tuple, list))
+                and len(member.local_axis) == 3
+            ):
                 x_axis = member.local_axis[0]  # Get xAxis
                 logger.info(f"Using x-axis from IFC local coordinate system: {x_axis}")
                 return tuple(x_axis)
             else:
                 logger.warning(f"Unexpected local_axis format: {member.local_axis}")
                 # Try to use it directly if it's already a 3-element vector
-                if isinstance(member.local_axis, (tuple, list)) and len(member.local_axis) == 3:
+                if (
+                    isinstance(member.local_axis, (tuple, list))
+                    and len(member.local_axis) == 3
+                ):
                     return tuple(member.local_axis)
 
         # Fallback: compute from geometry if no local axis
@@ -173,7 +178,9 @@ class UnifiedCalculixWriter:
             start_point = np.array(curve_geometry[0], dtype=float)
             end_point = np.array(curve_geometry[-1], dtype=float)
         else:
-            logger.warning("Unable to extract beam geometry points, using default normal")
+            logger.warning(
+                "Unable to extract beam geometry points, using default normal"
+            )
             return (0.0, 1.0, 0.0)
 
         # Compute beam axis direction
@@ -200,7 +207,11 @@ class UnifiedCalculixWriter:
 
             if normal_length > 1e-6:
                 normal_normalized = normal / normal_length
-                return (float(normal_normalized[0]), float(normal_normalized[1]), float(normal_normalized[2]))
+                return (
+                    float(normal_normalized[0]),
+                    float(normal_normalized[1]),
+                    float(normal_normalized[2]),
+                )
 
         logger.warning("Could not compute perpendicular normal, using default")
         return (0.0, 1.0, 0.0)
@@ -275,16 +286,18 @@ class UnifiedCalculixWriter:
         # Extract physical group name mapping: name -> (tag, dim)
         # meshio field_data format: {name: [tag, dim]}
         self._physical_group_names = {}  # tag -> name (member_id)
-        if hasattr(mesh, 'field_data') and mesh.field_data:
+        if hasattr(mesh, "field_data") and mesh.field_data:
             for name, (tag, dim) in mesh.field_data.items():
                 self._physical_group_names[int(tag)] = name
-            logger.info(f"Found {len(self._physical_group_names)} physical groups in mesh")
+            logger.info(
+                f"Found {len(self._physical_group_names)} physical groups in mesh"
+            )
 
         # Extract physical group tags per cell block
         # meshio cell_data format: {'gmsh:physical': [array_for_block0, array_for_block1, ...]}
         phys_data = None
-        if hasattr(mesh, 'cell_data') and mesh.cell_data:
-            phys_data = mesh.cell_data.get('gmsh:physical')
+        if hasattr(mesh, "cell_data") and mesh.cell_data:
+            phys_data = mesh.cell_data.get("gmsh:physical")
 
         # Process elements
         element_id = 1
@@ -306,7 +319,7 @@ class UnifiedCalculixWriter:
             if not calculix_type:
                 # Skip non-structural element types (vertex, edge, etc.) silently
                 # These are geometric entities from Gmsh, not FEA elements
-                if block_name not in ['vertex', 'edge', 'point']:
+                if block_name not in ["vertex", "edge", "point"]:
                     logger.warning(f"Unknown element type: {block_name}")
                 continue
 
@@ -351,7 +364,9 @@ class UnifiedCalculixWriter:
         for elem_type, count in element_type_counts.items():
             logger.info(f"  {elem_type}: {count} elements")
         if self._element_physical_group:
-            logger.info(f"  {len(self._element_physical_group)} elements have physical group tags")
+            logger.info(
+                f"  {len(self._element_physical_group)} elements have physical group tags"
+            )
 
     def _extract_cell_blocks(self, mesh):
         """Extract cell blocks from mesh in version-agnostic way."""
@@ -380,7 +395,9 @@ class UnifiedCalculixWriter:
             self._map_elements_via_physical_groups()
             return
 
-        logger.warning("No physical group data — falling back to naive element distribution")
+        logger.warning(
+            "No physical group data — falling back to naive element distribution"
+        )
         self._map_elements_naive()
 
     def _map_elements_via_physical_groups(self) -> None:
@@ -411,7 +428,9 @@ class UnifiedCalculixWriter:
                     continue
             unmapped += 1
 
-        logger.info(f"Physical group mapping: {mapped} elements mapped, {unmapped} unmapped")
+        logger.info(
+            f"Physical group mapping: {mapped} elements mapped, {unmapped} unmapped"
+        )
 
         # Create element sets for mapped members
         unmapped_members = []
@@ -438,8 +457,11 @@ class UnifiedCalculixWriter:
             )
             self._assign_elements_spatially(unmapped_members, assigned_elements)
 
-        total_mapped = sum(1 for m in self.domain_model.members
-                          if f"MEMBER_{self._get_short_id(m.id)}" in self.element_sets)
+        total_mapped = sum(
+            1
+            for m in self.domain_model.members
+            if f"MEMBER_{self._get_short_id(m.id)}" in self.element_sets
+        )
         logger.info(f"Mapped elements to {total_mapped} members total")
 
     def _assign_elements_spatially(self, members: List, assigned_elements: set) -> None:
@@ -462,7 +484,9 @@ class UnifiedCalculixWriter:
 
             # Determine element type to match
             is_surface = member.entity_type == "surface"
-            target_types = {"S3", "S4", "S6", "S8", "S9"} if is_surface else {"B31", "B32"}
+            target_types = (
+                {"S3", "S4", "S6", "S8", "S9"} if is_surface else {"B31", "B32"}
+            )
 
             # Find unassigned elements of matching type and their centroids
             best_elems = []
@@ -475,7 +499,9 @@ class UnifiedCalculixWriter:
                 # Compute element centroid
                 elem_nodes = elem_data["nodes"]
                 try:
-                    node_coords = [self.nodes[nid] for nid in elem_nodes if nid in self.nodes]
+                    node_coords = [
+                        self.nodes[nid] for nid in elem_nodes if nid in self.nodes
+                    ]
                     if not node_coords:
                         continue
                     elem_centroid = np.mean(node_coords, axis=0)
@@ -615,8 +641,12 @@ class UnifiedCalculixWriter:
 
             # Analysis steps
             write_analysis_steps(
-                f, self.domain_model, self.analysis_config.get_analysis_type(),
-                self.short_id_map, self.element_sets, dict(self.nodes),
+                f,
+                self.domain_model,
+                self.analysis_config.get_analysis_type(),
+                self.short_id_map,
+                self.element_sets,
+                dict(self.nodes),
                 gravity=self.analysis_config.get_gravity(),
                 gravity_direction=self.analysis_config.get_gravity_direction(),
             )
@@ -644,7 +674,11 @@ class UnifiedCalculixWriter:
         nodal_thickness_map = {}  # node_id -> thickness
 
         for member in self.domain_model.members:
-            if isinstance(member, SurfaceMember) and hasattr(member, "thickness") and member.thickness:
+            if (
+                isinstance(member, SurfaceMember)
+                and hasattr(member, "thickness")
+                and member.thickness
+            ):
                 thickness_value = getattr(member.thickness, "value", None)
                 if thickness_value is None or thickness_value <= 0:
                     continue
@@ -655,14 +689,15 @@ class UnifiedCalculixWriter:
                     # Get all nodes in this member's shell elements only
                     for elem_id in self.element_sets[member_set]:
                         if elem_id in self.elements:
-                            elem_type = self.elements[elem_id]['type']
+                            elem_type = self.elements[elem_id]["type"]
                             # Only add thickness for shell elements (S3, S4, S6, S8, etc.)
-                            if elem_type.startswith('S'):
-                                for node_id in self.elements[elem_id]['nodes']:
+                            if elem_type.startswith("S"):
+                                for node_id in self.elements[elem_id]["nodes"]:
                                     # Use maximum thickness if node belongs to multiple members
                                     if node_id in nodal_thickness_map:
                                         nodal_thickness_map[node_id] = max(
-                                            nodal_thickness_map[node_id], thickness_value
+                                            nodal_thickness_map[node_id],
+                                            thickness_value,
                                         )
                                     else:
                                         nodal_thickness_map[node_id] = thickness_value
@@ -770,10 +805,12 @@ class UnifiedCalculixWriter:
                 file.write(f"{material.density:.6e}\n")
             file.write("\n")
 
-    def _write_list_in_chunks(self, file: TextIO, items: List[int], chunk_size: int = 16) -> None:
+    def _write_list_in_chunks(
+        self, file: TextIO, items: List[int], chunk_size: int = 16
+    ) -> None:
         """Write a list of integers in chunks with proper formatting."""
         for i in range(0, len(items), chunk_size):
-            chunk = items[i:i+chunk_size]
+            chunk = items[i : i + chunk_size]
             file.write(", ".join(str(x) for x in chunk))
             if i + chunk_size < len(items):
                 file.write(",\n")
@@ -781,7 +818,12 @@ class UnifiedCalculixWriter:
                 file.write("\n")
 
     def _write_beam_section_for_set(
-        self, file: TextIO, member: CurveMember, elset_name: str, material_id: str, beam_normal: tuple
+        self,
+        file: TextIO,
+        member: CurveMember,
+        elset_name: str,
+        material_id: str,
+        beam_normal: tuple,
     ) -> None:
         """Write a beam section definition for a given element set."""
         if (
@@ -794,7 +836,9 @@ class UnifiedCalculixWriter:
             width = member.section.dimensions.get("width", 0.1)
             height = member.section.dimensions.get("height", 0.2)
             file.write(f"{width:.6e}, {height:.6e}\n")
-            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+            )
 
         elif (
             hasattr(member.section, "section_type")
@@ -805,7 +849,9 @@ class UnifiedCalculixWriter:
             )
             radius = member.section.dimensions.get("radius", 0.1)
             file.write(f"{radius:.6e}\n")
-            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+            )
 
         else:
             # Non-standard section (I-beam, etc.): CalculiX B31 only supports
@@ -819,14 +865,16 @@ class UnifiedCalculixWriter:
                 height = (12.0 * i_yy / area) ** 0.5
                 width = area / height
             else:
-                height = area ** 0.5 if area > 0 else 0.1
+                height = area**0.5 if area > 0 else 0.1
                 width = height
 
             file.write(
                 f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
             )
             file.write(f"{width:.6e}, {height:.6e}\n")
-            file.write(f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+            )
 
     def _compute_element_normal(self, element_id: int) -> Tuple[float, float, float]:
         """
@@ -843,7 +891,7 @@ class UnifiedCalculixWriter:
             return (0.0, 1.0, 0.0)
 
         element = self.elements[element_id]
-        connectivity = element.get('nodes', [])
+        connectivity = element.get("nodes", [])
 
         if len(connectivity) < 2:
             logger.warning(f"Element {element_id} has insufficient nodes")
@@ -882,7 +930,11 @@ class UnifiedCalculixWriter:
 
             if normal_length > 1e-6:
                 normal_normalized = normal / normal_length
-                return (float(normal_normalized[0]), float(normal_normalized[1]), float(normal_normalized[2]))
+                return (
+                    float(normal_normalized[0]),
+                    float(normal_normalized[1]),
+                    float(normal_normalized[2]),
+                )
 
         return (0.0, 1.0, 0.0)
 
@@ -917,7 +969,9 @@ class UnifiedCalculixWriter:
                     orientation_groups = beam_orientation_groups[member_set]
 
                     # Write a section for each orientation group
-                    for ori_idx, (normal_key, element_ids) in enumerate(orientation_groups.items()):
+                    for ori_idx, (normal_key, element_ids) in enumerate(
+                        orientation_groups.items()
+                    ):
                         # Create sub-element-set for this orientation
                         subset_name = f"{member_set}_ORI{ori_idx+1}"
 
@@ -930,12 +984,16 @@ class UnifiedCalculixWriter:
                         beam_normal = normal_key
 
                         # Write beam section for this subset
-                        self._write_beam_section_for_set(file, member, subset_name, material_id, beam_normal)
+                        self._write_beam_section_for_set(
+                            file, member, subset_name, material_id, beam_normal
+                        )
                         sections_written += 1
                 else:
                     # No orientation groups (shouldn't happen, but fallback to single section)
                     beam_normal = self._get_beam_normal(member)
-                    self._write_beam_section_for_set(file, member, member_set, material_id, beam_normal)
+                    self._write_beam_section_for_set(
+                        file, member, member_set, material_id, beam_normal
+                    )
                     sections_written += 1
 
             # Write shell sections
@@ -974,7 +1032,9 @@ class UnifiedCalculixWriter:
 
         for conn in self.domain_model.connections:
             # Determine BC type
-            bc_type = getattr(conn, "connection_type", getattr(conn, "entity_type", "point"))
+            bc_type = getattr(
+                conn, "connection_type", getattr(conn, "entity_type", "point")
+            )
 
             # Skip non-support connections (same logic as write_boundary_conditions)
             has_stiffness = (
@@ -1007,8 +1067,7 @@ class UnifiedCalculixWriter:
 
                 elif bc_type == "point" and has_stiffness:
                     # Point with stiffness: check behavior
-                    if (hasattr(conn, "is_rigid_behavior")
-                            and conn.is_rigid_behavior()):
+                    if hasattr(conn, "is_rigid_behavior") and conn.is_rigid_behavior():
                         for node in bc_nodes:
                             for dof in [1, 2, 3, 4, 5, 6]:
                                 bc_node_dofs.add((node, dof))
@@ -1060,34 +1119,54 @@ class UnifiedCalculixWriter:
 
         for conn in self.domain_model.connections:
             # Skip connections with dummy members (boundary conditions)
-            real_members = [m for m in conn.connected_members if not m.startswith('dummy_member_')]
+            real_members = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
             if len(real_members) < 2:
-                logger.debug(f"Skipping connection {conn.id} - only {len(real_members)} real members (boundary condition)")
+                logger.debug(
+                    f"Skipping connection {conn.id} - only {len(real_members)} real members (boundary condition)"
+                )
                 continue
 
             # Get connection type
             if conn.entity_type == "point":
-                self._write_point_connection(file, conn, real_members, constrained_node_dofs)
+                self._write_point_connection(
+                    file, conn, real_members, constrained_node_dofs
+                )
                 connections_written += 1
             elif conn.entity_type == "rigid":
-                self._write_rigid_connection(file, conn, real_members, constrained_node_dofs)
+                self._write_rigid_connection(
+                    file, conn, real_members, constrained_node_dofs
+                )
                 connections_written += 1
             elif conn.entity_type == "hinge":
                 # Hinges with multiple members could be modeled differently
                 # For now, treat as point connection with note
                 if len(real_members) >= 2:
-                    logger.debug(f"Hinge connection {conn.id} with {len(real_members)} members - treating as pinned joint")
-                    self._write_point_connection(file, conn, real_members, constrained_node_dofs, is_hinge=True)
+                    logger.debug(
+                        f"Hinge connection {conn.id} with {len(real_members)} members - treating as pinned joint"
+                    )
+                    self._write_point_connection(
+                        file, conn, real_members, constrained_node_dofs, is_hinge=True
+                    )
                     connections_written += 1
             elif conn.entity_type == "spring":
                 logger.warning(f"Spring connections not yet implemented: {conn.id}")
             else:
-                logger.warning(f"Unknown connection type '{conn.entity_type}' for {conn.id}")
+                logger.warning(
+                    f"Unknown connection type '{conn.entity_type}' for {conn.id}"
+                )
 
         logger.info(f"Wrote {connections_written} structural connections")
 
-    def _write_point_connection(self, file: TextIO, conn, member_ids: List[str],
-                                 constrained_node_dofs: set, is_hinge: bool = False) -> None:
+    def _write_point_connection(
+        self,
+        file: TextIO,
+        conn,
+        member_ids: List[str],
+        constrained_node_dofs: set,
+        is_hinge: bool = False,
+    ) -> None:
         """
         Write a point connection using CalculiX *EQUATION constraints.
 
@@ -1107,14 +1186,18 @@ class UnifiedCalculixWriter:
             if len(connection_nodes) == 1:
                 # Conforming mesh: single shared node means members already share
                 # this node -- no equations needed.
-                logger.debug(f"Connection {conn.id}: single shared node {connection_nodes[0]}, no equations needed")
+                logger.debug(
+                    f"Connection {conn.id}: single shared node {connection_nodes[0]}, no equations needed"
+                )
             else:
                 logger.warning(f"Connection {conn.id}: Found no connection nodes")
             return
 
         conn_type = "HINGE" if is_hinge else "POINT"
         file.write(f"** {conn_type} Connection: {conn.id}\n")
-        file.write(f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n")
+        file.write(
+            f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n"
+        )
 
         # Check if all connected elements support rotational DOFs
         has_rotational_dofs = self._check_rotational_dofs_at_nodes(connection_nodes)
@@ -1133,7 +1216,9 @@ class UnifiedCalculixWriter:
         if not is_hinge and has_rotational_dofs:
             dofs.extend([4, 5, 6])  # Add rotations for rigid connection
         elif not is_hinge and not has_rotational_dofs:
-            logger.debug(f"Connection {conn.id}: Skipping rotational constraints (shell elements present)")
+            logger.debug(
+                f"Connection {conn.id}: Skipping rotational constraints (shell elements present)"
+            )
 
         equations_written = 0
         equations_skipped = 0
@@ -1142,13 +1227,15 @@ class UnifiedCalculixWriter:
             for node in connection_nodes[1:]:
                 # Check if this (node, DOF) is already constrained
                 if (node, dof) in constrained_node_dofs:
-                    logger.debug(f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)")
+                    logger.debug(
+                        f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)"
+                    )
                     equations_skipped += 1
                     continue
 
                 # Write the equation
-                file.write(f"*EQUATION\n")
-                file.write(f"2\n")
+                file.write("*EQUATION\n")
+                file.write("2\n")
                 file.write(f"{node},{dof},1.0,{ref_node},{dof},-1.0\n")
 
                 # Mark this (node, DOF) as constrained
@@ -1156,15 +1243,23 @@ class UnifiedCalculixWriter:
                 equations_written += 1
 
         if equations_skipped > 0:
-            logger.info(f"Connection {conn.id}: Wrote {equations_written} equations, skipped {equations_skipped} (shared nodes)")
+            logger.info(
+                f"Connection {conn.id}: Wrote {equations_written} equations, skipped {equations_skipped} (shared nodes)"
+            )
 
         file.write("**\n")
 
-    def _write_rigid_connection(self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set) -> None:
+    def _write_rigid_connection(
+        self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set
+    ) -> None:
         """Write a rigid connection (same as point connection for now)."""
-        self._write_point_connection(file, conn, member_ids, constrained_node_dofs, is_hinge=False)
+        self._write_point_connection(
+            file, conn, member_ids, constrained_node_dofs, is_hinge=False
+        )
 
-    def _find_connection_nodes_at_location(self, conn, member_ids: List[str]) -> List[int]:
+    def _find_connection_nodes_at_location(
+        self, conn, member_ids: List[str]
+    ) -> List[int]:
         """
         Find the nearest mesh node to the connection position for each member.
 
@@ -1181,7 +1276,7 @@ class UnifiedCalculixWriter:
             List of node IDs (one per member that has an element set)
         """
         conn_pos = None
-        if hasattr(conn, 'position') and conn.position:
+        if hasattr(conn, "position") and conn.position:
             pos = conn.position
             if isinstance(pos, (list, tuple)) and len(pos) >= 3:
                 conn_pos = np.array([float(pos[0]), float(pos[1]), float(pos[2])])
@@ -1190,7 +1285,7 @@ class UnifiedCalculixWriter:
             return self._find_connection_nodes(conn, member_ids)
 
         # Build member node sets lazily (cached for repeated lookups)
-        if not hasattr(self, '_member_node_cache'):
+        if not hasattr(self, "_member_node_cache"):
             self._member_node_cache = {}
 
         # Tolerance for beam-to-connection offset: beams often terminate at
@@ -1209,7 +1304,7 @@ class UnifiedCalculixWriter:
                 node_set = set()
                 for elem_id in self.element_sets[member_set]:
                     if elem_id in self.elements:
-                        node_set.update(self.elements[elem_id]['nodes'])
+                        node_set.update(self.elements[elem_id]["nodes"])
                 self._member_node_cache[member_set] = node_set
             node_set = self._member_node_cache[member_set]
 
@@ -1219,9 +1314,11 @@ class UnifiedCalculixWriter:
             for node_id in node_set:
                 if node_id in self.nodes:
                     npos = self.nodes[node_id]
-                    dist = np.sqrt((npos[0] - conn_pos[0])**2 +
-                                   (npos[1] - conn_pos[1])**2 +
-                                   (npos[2] - conn_pos[2])**2)
+                    dist = np.sqrt(
+                        (npos[0] - conn_pos[0]) ** 2
+                        + (npos[1] - conn_pos[1]) ** 2
+                        + (npos[2] - conn_pos[2]) ** 2
+                    )
                     if dist < best_dist:
                         best_dist = dist
                         best_node = node_id
@@ -1230,7 +1327,9 @@ class UnifiedCalculixWriter:
                 connection_node_ids.append(best_node)
 
         if connection_node_ids:
-            logger.debug(f"Connection {conn.id}: Found {len(connection_node_ids)} nodes at location")
+            logger.debug(
+                f"Connection {conn.id}: Found {len(connection_node_ids)} nodes at location"
+            )
 
         return connection_node_ids
 
@@ -1252,20 +1351,24 @@ class UnifiedCalculixWriter:
             member_set = f"MEMBER_{short_id}"
 
             if member_set not in self.element_sets:
-                logger.warning(f"Connection {conn.id}: Member {member_id} has no element set {member_set}")
+                logger.warning(
+                    f"Connection {conn.id}: Member {member_id} has no element set {member_set}"
+                )
                 continue
 
             # Get all nodes from this member's elements
             nodes = set()
             for elem_id in self.element_sets[member_set]:
                 if elem_id in self.elements:
-                    elem_nodes = self.elements[elem_id]['nodes']
+                    elem_nodes = self.elements[elem_id]["nodes"]
                     nodes.update(elem_nodes)
 
             member_nodes[member_id] = nodes
 
         if len(member_nodes) < 2:
-            logger.warning(f"Connection {conn.id}: Could not find nodes for enough members ({len(member_nodes)} < 2)")
+            logger.warning(
+                f"Connection {conn.id}: Could not find nodes for enough members ({len(member_nodes)} < 2)"
+            )
             return []
 
         # Find coincident nodes: nodes that appear in multiple members
@@ -1294,26 +1397,32 @@ class UnifiedCalculixWriter:
                     continue
 
                 other_pos = self.nodes[other_id]
-                dist = np.sqrt(sum((node_pos[i] - other_pos[i])**2 for i in range(3)))
+                dist = np.sqrt(sum((node_pos[i] - other_pos[i]) ** 2 for i in range(3)))
 
                 if dist < tolerance:
                     group.append(other_id)
                     processed.add(other_id)
 
-            if len(group) > 1 or self._node_connects_multiple_members(group[0], member_nodes):
+            if len(group) > 1 or self._node_connects_multiple_members(
+                group[0], member_nodes
+            ):
                 node_groups.append(group)
 
         # Find the largest group (most likely the connection point)
         if node_groups:
             largest_group = max(node_groups, key=len)
             connection_node_ids = largest_group
-            logger.debug(f"Connection {conn.id}: Found {len(connection_node_ids)} coincident nodes")
+            logger.debug(
+                f"Connection {conn.id}: Found {len(connection_node_ids)} coincident nodes"
+            )
         else:
             logger.warning(f"Connection {conn.id}: No coincident nodes found")
 
         return connection_node_ids
 
-    def _node_connects_multiple_members(self, node_id: int, member_nodes: Dict[str, set]) -> bool:
+    def _node_connects_multiple_members(
+        self, node_id: int, member_nodes: Dict[str, set]
+    ) -> bool:
         """Check if a node belongs to elements from multiple members."""
         count = sum(1 for nodes in member_nodes.values() if node_id in nodes)
         return count >= 2
@@ -1326,16 +1435,18 @@ class UnifiedCalculixWriter:
             True if all elements support rotations (beam elements), False otherwise
         """
         # Element types that support rotational DOFs in CalculiX
-        rotational_types = {'B31', 'B32', 'B33'}  # Beam elements
+        rotational_types = {"B31", "B32", "B33"}  # Beam elements
 
         for node_id in node_ids:
             # Find all elements using this node
             for elem_id, elem_data in self.elements.items():
-                if node_id in elem_data['nodes']:
-                    elem_type = elem_data['type']
+                if node_id in elem_data["nodes"]:
+                    elem_type = elem_data["type"]
                     if elem_type not in rotational_types:
                         # Found an element that doesn't support rotations (e.g., shell)
-                        logger.debug(f"Node {node_id} has element {elem_id} of type {elem_type} (no rotational DOFs)")
+                        logger.debug(
+                            f"Node {node_id} has element {elem_id} of type {elem_type} (no rotational DOFs)"
+                        )
                         return False
 
         return True
@@ -1375,7 +1486,9 @@ class UnifiedCalculixWriter:
 
     def _save_mapping(self, mapping_file: str) -> None:
         """Save domain to CalculiX mapping (deprecated - now in domain model)."""
-        logger.warning("Mapping file generation deprecated - traceability is in domain model")
+        logger.warning(
+            "Mapping file generation deprecated - traceability is in domain model"
+        )
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get processing statistics."""
@@ -1460,10 +1573,12 @@ def run_complete_analysis_workflow(
     Returns:
         str: Path to generated CalculiX input file
     """
+    from pathlib import Path
+
+    import gmsh
+
     from .gmsh_geometry import GmshGeometryConverter
     from .gmsh_runner import GmshRunner
-    from pathlib import Path
-    import gmsh
 
     logger.info("Starting complete unified analysis workflow...")
 
@@ -1478,7 +1593,9 @@ def run_complete_analysis_workflow(
     try:
         # Step 1: Convert domain model to Gmsh geometry
         logger.info("Phase 1: Converting domain model to Gmsh geometry...")
-        geometry_converter = GmshGeometryConverter(meshing_config=meshing_config, domain_model=domain_model)
+        geometry_converter = GmshGeometryConverter(
+            meshing_config=meshing_config, domain_model=domain_model
+        )
         entity_map = geometry_converter.convert_model(domain_model)
         logger.info(f"Created Gmsh geometry with {len(entity_map)} entities")
 
@@ -1501,9 +1618,7 @@ def run_complete_analysis_workflow(
             intermediate_dir = Path(intermediate_files_dir)
             intermediate_dir.mkdir(exist_ok=True)
             mesh_file = str(intermediate_dir / f"mesh_{domain_model.id}.msh")
-            mapping_file = str(
-                intermediate_dir / f"mapping_{domain_model.id}.json"
-            )
+            mapping_file = str(intermediate_dir / f"mapping_{domain_model.id}.json")
         else:
             temp_dir = get_temp_dir()
             mesh_file = str(Path(temp_dir) / f"mesh_{domain_model.id}.msh")

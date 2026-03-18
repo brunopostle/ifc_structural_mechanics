@@ -3,7 +3,6 @@
 import json
 import subprocess
 import sys
-import pytest
 
 
 def run_mshquery(*args):
@@ -70,7 +69,9 @@ class TestCliCommands:
         assert len(data) == 3
 
     def test_select_nodes_at(self, msh_file):
-        rc, out, err = run_mshquery(msh_file, "select", "nodes-at", "--x", "0.0", "--y", "0.0", "--z", "0.0")
+        rc, out, err = run_mshquery(
+            msh_file, "select", "nodes-at", "--x", "0.0", "--y", "0.0", "--z", "0.0"
+        )
         assert rc == 0
         data = json.loads(out)
         assert len(data) == 1
@@ -95,7 +96,9 @@ class TestCliCommands:
 
     def test_format_flag_position(self, msh_file):
         """--format should work after the subcommand."""
-        rc, out, err = run_mshquery(msh_file, "nodes", "--range", "1-2", "--format", "json")
+        rc, out, err = run_mshquery(
+            msh_file, "nodes", "--range", "1-2", "--format", "json"
+        )
         assert rc == 0
         data = json.loads(out)
         assert len(data) == 2

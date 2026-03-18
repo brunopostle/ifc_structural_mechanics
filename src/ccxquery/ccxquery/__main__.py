@@ -86,27 +86,42 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # summary
-    subparsers.add_parser("summary", help="File overview (nodes, elements, results)", parents=[fmt])
+    subparsers.add_parser(
+        "summary", help="File overview (nodes, elements, results)", parents=[fmt]
+    )
 
     # sets
-    sets_parser = subparsers.add_parser("sets", help="List node/element sets", parents=[fmt])
-    sets_parser.add_argument("--type", choices=["node", "element"], dest="set_type", help="Filter by set type")
+    sets_parser = subparsers.add_parser(
+        "sets", help="List node/element sets", parents=[fmt]
+    )
+    sets_parser.add_argument(
+        "--type",
+        choices=["node", "element"],
+        dest="set_type",
+        help="Filter by set type",
+    )
 
     # set <name>
-    set_parser = subparsers.add_parser("set", help="Show contents of a specific set", parents=[fmt])
+    set_parser = subparsers.add_parser(
+        "set", help="Show contents of a specific set", parents=[fmt]
+    )
     set_parser.add_argument("name", help="Set name")
 
     # materials
     subparsers.add_parser("materials", help="Material definitions", parents=[fmt])
 
     # sections
-    subparsers.add_parser("sections", help="Section definitions (beam/shell)", parents=[fmt])
+    subparsers.add_parser(
+        "sections", help="Section definitions (beam/shell)", parents=[fmt]
+    )
 
     # bcs
     subparsers.add_parser("bcs", help="Boundary conditions", parents=[fmt])
 
     # loads
-    subparsers.add_parser("loads", help="Concentrated and distributed loads", parents=[fmt])
+    subparsers.add_parser(
+        "loads", help="Concentrated and distributed loads", parents=[fmt]
+    )
 
     # steps
     subparsers.add_parser("steps", help="Analysis steps", parents=[fmt])
@@ -116,32 +131,54 @@ def main() -> None:
     node_parser.add_argument("node_id", type=int, help="Node ID")
 
     # nodes-at
-    nodes_at_parser = subparsers.add_parser("nodes-at", help="Find nodes near a position", parents=[fmt])
+    nodes_at_parser = subparsers.add_parser(
+        "nodes-at", help="Find nodes near a position", parents=[fmt]
+    )
     nodes_at_parser.add_argument("--x", type=float, default=None, help="X coordinate")
     nodes_at_parser.add_argument("--y", type=float, default=None, help="Y coordinate")
     nodes_at_parser.add_argument("--z", type=float, default=None, help="Z coordinate")
-    nodes_at_parser.add_argument("--tol", type=float, default=1e-6, help="Tolerance (default: 1e-6)")
+    nodes_at_parser.add_argument(
+        "--tol", type=float, default=1e-6, help="Tolerance (default: 1e-6)"
+    )
 
     # results
-    subparsers.add_parser("results", help="Available result blocks from .frd", parents=[fmt])
+    subparsers.add_parser(
+        "results", help="Available result blocks from .frd", parents=[fmt]
+    )
 
     # displacements
-    disp_parser = subparsers.add_parser("displacements", help="Displacement results from .frd", parents=[fmt])
+    disp_parser = subparsers.add_parser(
+        "displacements", help="Displacement results from .frd", parents=[fmt]
+    )
     disp_parser.add_argument("--node", type=int, default=None, help="Specific node ID")
-    disp_parser.add_argument("--max", action="store_true", dest="show_max", help="Show max displacement")
-    disp_parser.add_argument("--min", action="store_true", dest="show_min", help="Show min displacement")
+    disp_parser.add_argument(
+        "--max", action="store_true", dest="show_max", help="Show max displacement"
+    )
+    disp_parser.add_argument(
+        "--min", action="store_true", dest="show_min", help="Show min displacement"
+    )
 
     # stresses
-    stress_parser = subparsers.add_parser("stresses", help="Stress results from .frd", parents=[fmt])
-    stress_parser.add_argument("--node", type=int, default=None, help="Specific node ID")
-    stress_parser.add_argument("--max", action="store_true", dest="show_max", help="Show max stress")
-    stress_parser.add_argument("--min", action="store_true", dest="show_min", help="Show min stress")
+    stress_parser = subparsers.add_parser(
+        "stresses", help="Stress results from .frd", parents=[fmt]
+    )
+    stress_parser.add_argument(
+        "--node", type=int, default=None, help="Specific node ID"
+    )
+    stress_parser.add_argument(
+        "--max", action="store_true", dest="show_max", help="Show max stress"
+    )
+    stress_parser.add_argument(
+        "--min", action="store_true", dest="show_min", help="Show min stress"
+    )
 
     # reactions
     subparsers.add_parser("reactions", help="Reaction forces from .dat", parents=[fmt])
 
     # status
-    subparsers.add_parser("status", help="Analysis completion status from .dat", parents=[fmt])
+    subparsers.add_parser(
+        "status", help="Analysis completion status from .dat", parents=[fmt]
+    )
 
     args = parser.parse_args()
 
@@ -166,7 +203,16 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
     cmd = args.command
 
     # Commands that need .inp data
-    if cmd in ("summary", "sets", "set", "materials", "sections", "bcs", "loads", "steps"):
+    if cmd in (
+        "summary",
+        "sets",
+        "set",
+        "materials",
+        "sections",
+        "bcs",
+        "loads",
+        "steps",
+    ):
         if file_type == "inp":
             inp_path = args.file
         else:
@@ -176,13 +222,15 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
 
         if cmd == "summary":
             if file_type == "frd":
-                from .parsers import frd_parser
                 from . import summary as summary_mod
+                from .parsers import frd_parser
+
                 frd_data = frd_parser.parse_frd(args.file)
                 return summary_mod.summary_frd(frd_data)
             elif file_type == "inp" or inp_path:
-                from .parsers import inp_parser
                 from . import summary as summary_mod
+                from .parsers import inp_parser
+
                 sections = inp_parser.parse_inp(inp_path or args.file)
                 return summary_mod.summary_inp(sections)
             else:
@@ -190,28 +238,36 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
 
         # All other .inp commands
         from .parsers import inp_parser
+
         sections = inp_parser.parse_inp(inp_path or args.file)
 
         if cmd == "sets":
             from . import sets as sets_mod
+
             return sets_mod.list_sets(sections, getattr(args, "set_type", None))
         elif cmd == "set":
             from . import sets as sets_mod
+
             return sets_mod.show_set(sections, args.name)
         elif cmd == "materials":
             from . import materials as mat_mod
+
             return mat_mod.materials(sections)
         elif cmd == "sections":
             from . import sections as sec_mod
+
             return sec_mod.sections(sections)
         elif cmd == "bcs":
             from . import bcs as bcs_mod
+
             return bcs_mod.bcs(sections)
         elif cmd == "loads":
             from . import loads as loads_mod
+
             return loads_mod.loads(sections)
         elif cmd == "steps":
             from . import steps as steps_mod
+
             return steps_mod.steps(sections)
 
     # Commands that need node data (from .inp or .frd)
@@ -220,10 +276,12 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
 
         if file_type == "frd":
             from .parsers import frd_parser
+
             frd_data = frd_parser.parse_frd(args.file)
             nodes = node_mod.get_nodes_from_frd(frd_data)
         elif file_type == "inp":
             from .parsers import inp_parser
+
             sections = inp_parser.parse_inp(args.file)
             nodes = node_mod.get_nodes_from_inp(sections)
         else:
@@ -232,10 +290,12 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
             inp_path = _resolve_sibling(args.file, ".inp")
             if frd_path:
                 from .parsers import frd_parser
+
                 frd_data = frd_parser.parse_frd(frd_path)
                 nodes = node_mod.get_nodes_from_frd(frd_data)
             elif inp_path:
                 from .parsers import inp_parser
+
                 sections = inp_parser.parse_inp(inp_path)
                 nodes = node_mod.get_nodes_from_inp(sections)
             else:
@@ -256,17 +316,31 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
                 raise FileNotFoundError(f"No .frd file found for {args.file}")
 
         from .parsers import frd_parser
+
         frd_data = frd_parser.parse_frd(frd_path)
 
         if cmd == "results":
             from . import results as results_mod
+
             return results_mod.results(frd_data)
         elif cmd == "displacements":
             from . import displacements as disp_mod
-            return disp_mod.displacements(frd_data, node_id=args.node, show_max=args.show_max, show_min=args.show_min)
+
+            return disp_mod.displacements(
+                frd_data,
+                node_id=args.node,
+                show_max=args.show_max,
+                show_min=args.show_min,
+            )
         elif cmd == "stresses":
             from . import stresses as stress_mod
-            return stress_mod.stresses(frd_data, node_id=args.node, show_max=args.show_max, show_min=args.show_min)
+
+            return stress_mod.stresses(
+                frd_data,
+                node_id=args.node,
+                show_max=args.show_max,
+                show_min=args.show_min,
+            )
 
     # Commands that need .dat data
     elif cmd in ("reactions", "status"):
@@ -278,13 +352,16 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
                 raise FileNotFoundError(f"No .dat file found for {args.file}")
 
         from .parsers import dat_parser
+
         dat_data = dat_parser.parse_dat(dat_path)
 
         if cmd == "reactions":
             from . import reactions as react_mod
+
             return react_mod.reactions(dat_data)
         elif cmd == "status":
             from . import status as status_mod
+
             return status_mod.status(dat_data)
 
     raise ValueError(f"Unknown command: {cmd}")

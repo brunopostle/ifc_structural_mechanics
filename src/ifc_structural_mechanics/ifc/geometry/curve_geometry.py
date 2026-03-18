@@ -8,8 +8,9 @@ representation.
 
 import logging
 from typing import Optional, Tuple
-import numpy as np
+
 import ifcopenshell
+import numpy as np
 
 from ..entity_identifier import get_coordinate, get_transformation, transform_vectors
 

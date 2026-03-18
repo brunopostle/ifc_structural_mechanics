@@ -2,7 +2,6 @@
 
 import pytest
 
-
 SAMPLE_INP = """\
 ** CalculiX Input File
 ** Generated for testing

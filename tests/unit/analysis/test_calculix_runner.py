@@ -3,19 +3,20 @@ Tests for the CalculiX runner module.
 """
 
 import os
-import pytest
 import shutil
 import subprocess
 from unittest import mock
 
+import pytest
+
 from ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
-from ifc_structural_mechanics.config.system_config import SystemConfig
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from ifc_structural_mechanics.config.system_config import SystemConfig
 from ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
     cleanup_temp_dir,
     create_temp_file,
     create_temp_subdir,
+    setup_temp_dir,
 )
 
 # Rest of the existing imports...

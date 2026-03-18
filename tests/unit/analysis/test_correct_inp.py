@@ -1,7 +1,8 @@
 import os
-import pytest
-from unittest.mock import patch, MagicMock
 import shutil
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
 from ifc_structural_mechanics.utils.temp_dir import create_temp_subdir
@@ -41,7 +42,7 @@ class TestCalculixRunner:
         """Clean up after test."""
         try:
             shutil.rmtree(self.temp_dir)
-        except:
+        except Exception:
             pass
 
     @patch("ifc_structural_mechanics.analysis.calculix_runner.run_subprocess")
@@ -168,8 +169,6 @@ class TestCalculixRunner:
         mock_run_subprocess.return_value = mock_result
 
         # Create a non-existent input file path
-        nonexistent_file = os.path.join(self.temp_dir, "nonexistent.inp")
-
         # Create a CalculixRunner with a file that exists at initialization but will be deleted before run
         runner = CalculixRunner(
             input_file_path=self.analysis_inp,

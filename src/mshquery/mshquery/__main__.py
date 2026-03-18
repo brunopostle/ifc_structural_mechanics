@@ -64,7 +64,11 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # summary
-    subparsers.add_parser("summary", help="Mesh overview (nodes, elements, groups, bounding box)", parents=[fmt])
+    subparsers.add_parser(
+        "summary",
+        help="Mesh overview (nodes, elements, groups, bounding box)",
+        parents=[fmt],
+    )
 
     # info node/element
     info_parser = subparsers.add_parser("info", help="Inspect a node or element")
@@ -76,26 +80,38 @@ def main() -> None:
 
     # nodes
     nodes_parser = subparsers.add_parser("nodes", help="List nodes", parents=[fmt])
-    nodes_parser.add_argument("--range", dest="node_range", help="Node ID range, e.g. 1-10")
+    nodes_parser.add_argument(
+        "--range", dest="node_range", help="Node ID range, e.g. 1-10"
+    )
 
     # select
     select_parser = subparsers.add_parser("select", help="Filter nodes/elements")
     select_sub = select_parser.add_subparsers(dest="select_type", required=True)
 
-    nodes_at_p = select_sub.add_parser("nodes-at", help="Nodes near a position", parents=[fmt])
+    nodes_at_p = select_sub.add_parser(
+        "nodes-at", help="Nodes near a position", parents=[fmt]
+    )
     nodes_at_p.add_argument("--x", type=float, default=None, help="X coordinate")
     nodes_at_p.add_argument("--y", type=float, default=None, help="Y coordinate")
     nodes_at_p.add_argument("--z", type=float, default=None, help="Z coordinate")
-    nodes_at_p.add_argument("--tol", type=float, default=1e-6, help="Tolerance (default: 1e-6)")
+    nodes_at_p.add_argument(
+        "--tol", type=float, default=1e-6, help="Tolerance (default: 1e-6)"
+    )
 
-    ewn_p = select_sub.add_parser("elements-with-node", help="Elements containing a node", parents=[fmt])
+    ewn_p = select_sub.add_parser(
+        "elements-with-node", help="Elements containing a node", parents=[fmt]
+    )
     ewn_p.add_argument("id", type=int, help="Node ID (1-based)")
 
-    ebt_p = select_sub.add_parser("elements-by-type", help="Elements of a given type", parents=[fmt])
+    ebt_p = select_sub.add_parser(
+        "elements-by-type", help="Elements of a given type", parents=[fmt]
+    )
     ebt_p.add_argument("type", help="Element type (e.g. line, triangle)")
 
     # groups
-    subparsers.add_parser("groups", help="Physical groups with entity counts", parents=[fmt])
+    subparsers.add_parser(
+        "groups", help="Physical groups with entity counts", parents=[fmt]
+    )
 
     args = parser.parse_args()
 
@@ -105,6 +121,7 @@ def main() -> None:
 
     try:
         import meshio
+
         mesh = meshio.read(args.msh_file)
     except Exception as e:
         print(f"Error: Could not read mesh file: {e}", file=sys.stderr)
@@ -119,16 +136,18 @@ def main() -> None:
     print(format_output(result, args.output_format))
 
 
-def _dispatch(mesh: "meshio.Mesh", args: argparse.Namespace) -> Any:
+def _dispatch(mesh: Any, args: argparse.Namespace) -> Any:
     """Route command to the appropriate handler."""
     cmd = args.command
 
     if cmd == "summary":
         from . import summary as summary_mod
+
         return summary_mod.summary(mesh)
 
     elif cmd == "info":
         from . import info as info_mod
+
         if args.info_type == "node":
             return info_mod.node_info(mesh, args.id)
         elif args.info_type == "element":
@@ -136,10 +155,12 @@ def _dispatch(mesh: "meshio.Mesh", args: argparse.Namespace) -> Any:
 
     elif cmd == "nodes":
         from . import nodes as nodes_mod
+
         return nodes_mod.list_nodes(mesh, range_str=getattr(args, "node_range", None))
 
     elif cmd == "select":
         from . import select as select_mod
+
         if args.select_type == "nodes-at":
             return select_mod.nodes_at(mesh, x=args.x, y=args.y, z=args.z, tol=args.tol)
         elif args.select_type == "elements-with-node":
@@ -149,6 +170,7 @@ def _dispatch(mesh: "meshio.Mesh", args: argparse.Namespace) -> Any:
 
     elif cmd == "groups":
         from . import groups as groups_mod
+
         return groups_mod.groups(mesh)
 
     raise ValueError(f"Unknown command: {cmd}")

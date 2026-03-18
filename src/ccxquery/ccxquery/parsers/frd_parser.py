@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import numpy as np
-
 # Proven regex for concatenated scientific notation values in FRD files.
 # Handles values that run together without spaces.
 VALUE_RE = re.compile(r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)")
@@ -82,7 +80,7 @@ def _parse_node_line(line: str) -> tuple[int | None, tuple[float, float, float]]
         if not nid_match:
             return None, (0.0, 0.0, 0.0)
         nid = int(nid_match.group(1))
-        coord_str = rest[nid_match.end():]
+        coord_str = rest[nid_match.end() :]
         values = VALUE_RE.findall(coord_str)
         if len(values) >= 3:
             coords = [float(v.replace("D", "E").replace("d", "e")) for v in values[:3]]
@@ -146,7 +144,9 @@ def _parse_result_header(lines: list[str], start: int) -> tuple[str, list[str], 
     return block_name, components, i
 
 
-def _parse_result_data(lines: list[str], start: int) -> tuple[dict[int, list[float]], int]:
+def _parse_result_data(
+    lines: list[str], start: int
+) -> tuple[dict[int, list[float]], int]:
     """Parse result data lines until -3 marker.
 
     Returns (node_id -> values, next_line_index).
@@ -186,13 +186,17 @@ def _parse_result_line(line: str) -> tuple[int | None, list[float]]:
             value_str = " ".join(parts[1:])
             raw_values = VALUE_RE.findall(value_str)
             if raw_values:
-                values = [float(v.replace("D", "E").replace("d", "e")) for v in raw_values]
+                values = [
+                    float(v.replace("D", "E").replace("d", "e")) for v in raw_values
+                ]
                 return nid, values
 
             # Try the whole rest as concatenated
-            raw_values = VALUE_RE.findall(rest[len(parts[0]):])
+            raw_values = VALUE_RE.findall(rest[len(parts[0]) :])
             if raw_values:
-                values = [float(v.replace("D", "E").replace("d", "e")) for v in raw_values]
+                values = [
+                    float(v.replace("D", "E").replace("d", "e")) for v in raw_values
+                ]
                 return nid, values
 
         return None, []

@@ -6,18 +6,18 @@ the structural analysis extension.
 """
 
 from .error_handling import (
-    StructuralAnalysisError,
-    ModelExtractionError,
-    MeshingError,
     AnalysisError,
+    MeshingError,
+    ModelExtractionError,
     ResultProcessingError,
+    StructuralAnalysisError,
 )
 from .subprocess_utils import (
-    run_subprocess,
     capture_output,
-    terminate_gracefully,
     check_executable,
     parse_error_output,
+    run_subprocess,
+    terminate_gracefully,
 )
 
 __all__ = [

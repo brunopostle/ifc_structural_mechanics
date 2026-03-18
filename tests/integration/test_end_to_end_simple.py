@@ -2,16 +2,17 @@
 Enhanced end-to-end test with improved error handling and debugging.
 """
 
-import os
-import pytest
 import logging
+import os
 from pathlib import Path
+
+import pytest
 
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
 from ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
     cleanup_temp_dir,
     create_temp_subdir,
+    setup_temp_dir,
 )
 
 # Verbose logging and debugging
@@ -80,9 +81,9 @@ class TestEndToEnd:
         End-to-end test that requires real Gmsh and CalculiX functionality.
         """
         # Import here to allow skipping if Gmsh is not available
+        import datetime
         import os
         import shutil
-        import datetime
 
         # Create a unique, persistent test directory
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

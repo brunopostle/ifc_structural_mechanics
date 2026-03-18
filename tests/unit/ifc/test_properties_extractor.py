@@ -6,11 +6,12 @@ from IFC4 files, ensuring they're correctly mapped to domain objects.
 """
 
 import os
-import pytest
-import ifcopenshell
 
-from ifc_structural_mechanics.ifc.properties_extractor import PropertiesExtractor
+import ifcopenshell
+import pytest
+
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
+from ifc_structural_mechanics.ifc.properties_extractor import PropertiesExtractor
 
 
 class TestPropertyExtraction:

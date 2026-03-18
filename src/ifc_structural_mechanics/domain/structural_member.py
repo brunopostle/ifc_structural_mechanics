@@ -1,8 +1,8 @@
 """
 Structural member domain models for the IFC structural analysis extension.
 
-This module defines the structural member domain models that represent 
-structural elements in the intermediate representation between IFC and 
+This module defines the structural member domain models that represent
+structural elements in the intermediate representation between IFC and
 analysis formats.
 """
 

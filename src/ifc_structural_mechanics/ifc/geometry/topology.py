@@ -10,20 +10,19 @@ This code is optimized for IFC4 only.
 
 import logging
 import math
-from typing import List, Dict, Tuple, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import ifcopenshell
 import numpy as np
 
-from . import network  # Import the network module
 from ..entity_identifier import (
-    is_structural_member,
     is_structural_connection,
     is_structural_curve_member,
+    is_structural_member,
     is_structural_surface_member,
 )
-from . import curve_geometry
-from . import surface_geometry
+from . import network  # Import the network module
+from . import curve_geometry, surface_geometry
 
 # Type aliases for better readability
 Point = Tuple[float, float, float]

@@ -6,19 +6,21 @@ deformed meshes, displacement fields, stress/strain contours, and more.
 """
 
 import logging
-import numpy as np
-from typing import Optional, Dict, List, Tuple
 from pathlib import Path
+from typing import List, Optional, Tuple
+
+import numpy as np
 
 try:
-    import pyvista as pv
     import meshio
+    import pyvista as pv
+
     PYVISTA_AVAILABLE = True
 except ImportError:
     PYVISTA_AVAILABLE = False
 
+from ..domain.result import DisplacementResult, StressResult
 from ..domain.structural_model import StructuralModel
-from ..domain.result import DisplacementResult, StressResult, StrainResult
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +74,17 @@ class ResultVisualizer:
 
         # Map meshio cell types to VTK cell types
         vtk_type_map = {
-            'line': pv.CellType.LINE,
-            'line3': pv.CellType.QUADRATIC_EDGE,
-            'triangle': pv.CellType.TRIANGLE,
-            'triangle6': pv.CellType.QUADRATIC_TRIANGLE,
-            'quad': pv.CellType.QUAD,
-            'quad8': pv.CellType.QUADRATIC_QUAD,
-            'tetra': pv.CellType.TETRA,
-            'tetra10': pv.CellType.QUADRATIC_TETRA,
-            'hexahedron': pv.CellType.HEXAHEDRON,
-            'hexahedron20': pv.CellType.QUADRATIC_HEXAHEDRON,
-            'wedge': pv.CellType.WEDGE,
+            "line": pv.CellType.LINE,
+            "line3": pv.CellType.QUADRATIC_EDGE,
+            "triangle": pv.CellType.TRIANGLE,
+            "triangle6": pv.CellType.QUADRATIC_TRIANGLE,
+            "quad": pv.CellType.QUAD,
+            "quad8": pv.CellType.QUADRATIC_QUAD,
+            "tetra": pv.CellType.TETRA,
+            "tetra10": pv.CellType.QUADRATIC_TETRA,
+            "hexahedron": pv.CellType.HEXAHEDRON,
+            "hexahedron20": pv.CellType.QUADRATIC_HEXAHEDRON,
+            "wedge": pv.CellType.WEDGE,
         }
 
         for cell_block in mesh_data.cells:
@@ -97,10 +99,14 @@ class ResultVisualizer:
         cells_array = np.hstack(cells)
         self.mesh = pv.UnstructuredGrid(cells_array, cell_types, mesh_data.points)
 
-        logger.info(f"Loaded mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements")
+        logger.info(
+            f"Loaded mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements"
+        )
         return self.mesh
 
-    def load_mesh_from_frd(self, frd_file: str, inp_file: Optional[str] = None) -> pv.UnstructuredGrid:
+    def load_mesh_from_frd(
+        self, frd_file: str, inp_file: Optional[str] = None
+    ) -> pv.UnstructuredGrid:
         """
         Load mesh from CalculiX FRD and INP files.
 
@@ -120,17 +126,17 @@ class ResultVisualizer:
         # Default inp_file location
         if inp_file is None:
             frd_path = Path(frd_file)
-            inp_file = str(frd_path.parent / frd_path.stem) + '.inp'
+            inp_file = str(frd_path.parent / frd_path.stem) + ".inp"
 
         logger.info(f"Reading mesh structure from INP: {inp_file}")
 
         # Read FRD file for node coordinates (CalculiX renumbered nodes)
         frd_nodes = {}  # node_id -> [x, y, z]
-        with open(frd_file, 'r') as f:
+        with open(frd_file, "r") as f:
             for line in f:
-                if 'PSTEP' in line:
+                if "PSTEP" in line:
                     break
-                if line.startswith(' -1') and len(line) >= 37:
+                if line.startswith(" -1") and len(line) >= 37:
                     try:
                         node_id = int(line[3:13].strip())
                         x = float(line[13:25].strip())
@@ -148,7 +154,9 @@ class ResultVisualizer:
         except Exception as e:
             raise ValueError(f"Failed to read INP file: {e}")
 
-        logger.info(f"Read INP mesh: {len(inp_mesh.points)} nodes, {sum(len(c.data) for c in inp_mesh.cells)} elements")
+        logger.info(
+            f"Read INP mesh: {len(inp_mesh.points)} nodes, {sum(len(c.data) for c in inp_mesh.cells)} elements"
+        )
 
         # Build coordinate-based mapping from INP nodes to FRD nodes
         # INP nodes are 1-based indexed, so inp_mesh.points[i] corresponds to node ID i+1
@@ -157,6 +165,7 @@ class ResultVisualizer:
 
         # Use KDTree for O(n log n) matching instead of O(n*m)
         from scipy.spatial import cKDTree
+
         frd_ids_list = list(frd_nodes.keys())
         frd_coords = np.array([frd_nodes[nid] for nid in frd_ids_list])
         tree = cKDTree(frd_coords)
@@ -177,17 +186,17 @@ class ResultVisualizer:
         cell_types = []
 
         vtk_type_map = {
-            'line': pv.CellType.LINE,
-            'line3': pv.CellType.QUADRATIC_EDGE,
-            'triangle': pv.CellType.TRIANGLE,
-            'triangle6': pv.CellType.QUADRATIC_TRIANGLE,
-            'quad': pv.CellType.QUAD,
-            'quad8': pv.CellType.QUADRATIC_QUAD,
-            'tetra': pv.CellType.TETRA,
-            'tetra10': pv.CellType.QUADRATIC_TETRA,
-            'hexahedron': pv.CellType.HEXAHEDRON,
-            'hexahedron20': pv.CellType.QUADRATIC_HEXAHEDRON,
-            'wedge': pv.CellType.WEDGE,
+            "line": pv.CellType.LINE,
+            "line3": pv.CellType.QUADRATIC_EDGE,
+            "triangle": pv.CellType.TRIANGLE,
+            "triangle6": pv.CellType.QUADRATIC_TRIANGLE,
+            "quad": pv.CellType.QUAD,
+            "quad8": pv.CellType.QUADRATIC_QUAD,
+            "tetra": pv.CellType.TETRA,
+            "tetra10": pv.CellType.QUADRATIC_TETRA,
+            "hexahedron": pv.CellType.HEXAHEDRON,
+            "hexahedron20": pv.CellType.QUADRATIC_HEXAHEDRON,
+            "wedge": pv.CellType.WEDGE,
         }
 
         for cell_block in inp_mesh.cells:
@@ -201,13 +210,15 @@ class ResultVisualizer:
         cells_array = np.hstack(cells)
         self.mesh = pv.UnstructuredGrid(cells_array, cell_types, inp_mesh.points)
 
-        logger.info(f"Created mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements")
+        logger.info(
+            f"Created mesh: {self.mesh.n_points} nodes, {self.mesh.n_cells} elements"
+        )
         return self.mesh
 
     def apply_displacement_field(
         self,
         scale_factor: float = 1.0,
-        displacement_results: Optional[List[DisplacementResult]] = None
+        displacement_results: Optional[List[DisplacementResult]] = None,
     ) -> pv.UnstructuredGrid:
         """
         Create displaced mesh by applying displacement field.
@@ -226,7 +237,9 @@ class ResultVisualizer:
         if displacement_results is None:
             if self.model is None:
                 raise ValueError("No model or displacement results provided")
-            displacement_results = [r for r in self.model.results if isinstance(r, DisplacementResult)]
+            displacement_results = [
+                r for r in self.model.results if isinstance(r, DisplacementResult)
+            ]
 
         if not displacement_results:
             logger.warning("No displacement results found")
@@ -244,7 +257,7 @@ class ResultVisualizer:
             frd_result_map[frd_node_id] = result
 
         # Apply results using coordinate mapping if available
-        if hasattr(self, '_inp_node_to_frd_node'):
+        if hasattr(self, "_inp_node_to_frd_node"):
             logger.info("Using INP-to-FRD mapping for displacement field")
             mapped_count = 0
             for mesh_idx in range(n_points):
@@ -256,7 +269,9 @@ class ResultVisualizer:
                     displacements[mesh_idx] = trans
                     displacement_magnitude[mesh_idx] = result.get_magnitude()
                     mapped_count += 1
-            logger.info(f"Mapped {mapped_count}/{n_points} nodes to displacement results")
+            logger.info(
+                f"Mapped {mapped_count}/{n_points} nodes to displacement results"
+            )
         else:
             # Fallback: assume sequential node IDs (1-based)
             logger.info("Using direct node ID mapping (1-based)")
@@ -268,7 +283,9 @@ class ResultVisualizer:
                         displacements[node_id] = trans
                         displacement_magnitude[node_id] = result.get_magnitude()
                 except (ValueError, IndexError) as e:
-                    logger.warning(f"Error processing displacement for node {result.reference_element}: {e}")
+                    logger.warning(
+                        f"Error processing displacement for node {result.reference_element}: {e}"
+                    )
 
         # Create displaced mesh
         displaced_points = self.mesh.points + scale_factor * displacements
@@ -277,14 +294,18 @@ class ResultVisualizer:
 
         # Add displacement magnitude as scalar field (in mm for readability)
         displacement_magnitude_mm = displacement_magnitude * 1000.0
-        self.displaced_mesh['Displacement (mm)'] = displacement_magnitude_mm
+        self.displaced_mesh["Displacement (mm)"] = displacement_magnitude_mm
 
         logger.info(f"Applied displacements with scale factor {scale_factor}")
-        logger.info(f"Max displacement: {displacement_magnitude.max():.6e} m ({displacement_magnitude_mm.max():.4f} mm)")
+        logger.info(
+            f"Max displacement: {displacement_magnitude.max():.6e} m ({displacement_magnitude_mm.max():.4f} mm)"
+        )
 
         return self.displaced_mesh
 
-    def add_stress_field(self, stress_results: Optional[List[StressResult]] = None) -> None:
+    def add_stress_field(
+        self, stress_results: Optional[List[StressResult]] = None
+    ) -> None:
         """
         Add stress field to mesh for visualization.
 
@@ -295,13 +316,17 @@ class ResultVisualizer:
             stress_results: List of stress results (or use model.results)
         """
         if self.displaced_mesh is None:
-            raise ValueError("Create displaced mesh first using apply_displacement_field()")
+            raise ValueError(
+                "Create displaced mesh first using apply_displacement_field()"
+            )
 
         # Get stress results
         if stress_results is None:
             if self.model is None:
                 raise ValueError("No model or stress results provided")
-            stress_results = [r for r in self.model.results if isinstance(r, StressResult)]
+            stress_results = [
+                r for r in self.model.results if isinstance(r, StressResult)
+            ]
 
         if not stress_results:
             logger.warning("No stress results found")
@@ -323,7 +348,7 @@ class ResultVisualizer:
         logger.info(f"Parsed {len(frd_stress_map)} stress results from FRD")
 
         # Apply stress using coordinate mapping if available
-        if hasattr(self, '_inp_node_to_frd_node'):
+        if hasattr(self, "_inp_node_to_frd_node"):
             logger.info("Using INP-to-FRD mapping for stress field")
             mapped_count = 0
             for mesh_idx in range(n_points):
@@ -339,7 +364,9 @@ class ResultVisualizer:
             stress_ids = list(frd_stress_map.keys())
             min_id = min(stress_ids)
             max_id = max(stress_ids)
-            logger.info(f"Stress IDs range: {min_id} to {max_id}, mesh has {n_points} nodes")
+            logger.info(
+                f"Stress IDs range: {min_id} to {max_id}, mesh has {n_points} nodes"
+            )
 
             if max_id <= n_points:
                 # Direct mapping possible
@@ -348,10 +375,12 @@ class ResultVisualizer:
                     if 0 <= node_idx < n_points:
                         von_mises[node_idx] = vm_stress
             else:
-                logger.warning(f"Cannot map stress: FRD IDs ({min_id}-{max_id}) don't match mesh nodes (1-{n_points})")
+                logger.warning(
+                    f"Cannot map stress: FRD IDs ({min_id}-{max_id}) don't match mesh nodes (1-{n_points})"
+                )
 
         # Add stress field to mesh
-        self.displaced_mesh['Von Mises Stress'] = von_mises
+        self.displaced_mesh["Von Mises Stress"] = von_mises
         max_stress = von_mises.max()
         logger.info(f"Added stress field, max von Mises: {max_stress:.6e}")
 
@@ -359,10 +388,10 @@ class ResultVisualizer:
         self,
         scale_factor: float = 1.0,
         show_undeformed: bool = True,
-        field: str = 'Displacement',
-        cmap: str = 'jet',
+        field: str = "Displacement",
+        cmap: str = "jet",
         screenshot: Optional[str] = None,
-        window_size: Tuple[int, int] = (1024, 768)
+        window_size: Tuple[int, int] = (1024, 768),
     ) -> None:
         """
         Create interactive 3D plot of deformed mesh.
@@ -376,7 +405,9 @@ class ResultVisualizer:
             window_size: Window size (width, height)
         """
         if self.displaced_mesh is None:
-            raise ValueError("Create displaced mesh first using apply_displacement_field()")
+            raise ValueError(
+                "Create displaced mesh first using apply_displacement_field()"
+            )
 
         # Create plotter (off-screen when saving screenshot)
         plotter = pv.Plotter(window_size=window_size, off_screen=bool(screenshot))
@@ -389,33 +420,33 @@ class ResultVisualizer:
                 scalars=field,
                 cmap=cmap,
                 show_edges=True,
-                edge_color='gray',
+                edge_color="gray",
                 line_width=0.5,
                 scalar_bar_args={
-                    'title': field,
-                    'vertical': True,
-                    'position_x': 0.85,
-                    'position_y': 0.1,
-                    'fmt': '%.3g',
-                }
+                    "title": field,
+                    "vertical": True,
+                    "position_x": 0.85,
+                    "position_y": 0.1,
+                    "fmt": "%.3g",
+                },
             )
         else:
             logger.warning(f"Field '{field}' not found, showing without coloring")
-            plotter.add_mesh(self.displaced_mesh, show_edges=True, color='lightblue')
+            plotter.add_mesh(self.displaced_mesh, show_edges=True, color="lightblue")
 
         # Add undeformed mesh as wireframe
         if show_undeformed and self.mesh is not None:
             plotter.add_mesh(
                 self.mesh,
-                style='wireframe',
-                color='gray',
+                style="wireframe",
+                color="gray",
                 opacity=0.3,
                 line_width=1.0,
-                label='Undeformed'
+                label="Undeformed",
             )
 
         # Add axes
-        plotter.add_axes(xlabel='X', ylabel='Y', zlabel='Z')
+        plotter.add_axes(xlabel="X", ylabel="Y", zlabel="Z")
 
         # Add legend if showing undeformed
         if show_undeformed:
@@ -433,8 +464,8 @@ class ResultVisualizer:
         self,
         output_file: str,
         scale_factor: float = 1.0,
-        field: str = 'Displacement (mm)',
-        cmap: str = 'jet'
+        field: str = "Displacement (mm)",
+        cmap: str = "jet",
     ) -> None:
         """
         Export interactive 3D visualization to HTML file.
@@ -446,7 +477,9 @@ class ResultVisualizer:
             cmap: Colormap name
         """
         if self.displaced_mesh is None:
-            raise ValueError("Create displaced mesh first using apply_displacement_field()")
+            raise ValueError(
+                "Create displaced mesh first using apply_displacement_field()"
+            )
 
         # Create plotter for export
         plotter = pv.Plotter(off_screen=True)
@@ -454,13 +487,10 @@ class ResultVisualizer:
         # Add mesh
         if field in self.displaced_mesh.array_names:
             plotter.add_mesh(
-                self.displaced_mesh,
-                scalars=field,
-                cmap=cmap,
-                show_edges=True
+                self.displaced_mesh, scalars=field, cmap=cmap, show_edges=True
             )
         else:
-            plotter.add_mesh(self.displaced_mesh, show_edges=True, color='lightblue')
+            plotter.add_mesh(self.displaced_mesh, show_edges=True, color="lightblue")
 
         # Export to HTML
         plotter.export_html(output_file)
@@ -472,7 +502,7 @@ def visualize_analysis_results(
     model: StructuralModel,
     scale_factor: float = 1.0,
     show_stress: bool = False,
-    screenshot: Optional[str] = None
+    screenshot: Optional[str] = None,
 ) -> None:
     """
     Convenience function to visualize analysis results.
@@ -490,6 +520,10 @@ def visualize_analysis_results(
 
     if show_stress:
         viz.add_stress_field()
-        viz.plot_deformed(scale_factor=scale_factor, field='Von Mises Stress', screenshot=screenshot)
+        viz.plot_deformed(
+            scale_factor=scale_factor, field="Von Mises Stress", screenshot=screenshot
+        )
     else:
-        viz.plot_deformed(scale_factor=scale_factor, field='Displacement (mm)', screenshot=screenshot)
+        viz.plot_deformed(
+            scale_factor=scale_factor, field="Displacement (mm)", screenshot=screenshot
+        )

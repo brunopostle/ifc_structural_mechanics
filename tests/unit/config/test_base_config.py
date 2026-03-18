@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from typing import Dict, Any
+from typing import Any, Dict
 
 try:
     from ifc_structural_mechanics.config.base_config import BaseConfig

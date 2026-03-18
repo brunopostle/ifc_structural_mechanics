@@ -6,9 +6,8 @@ domain entities in the structural analysis model, including validation,
 property access, and serialization.
 """
 
-from typing import Any, Dict, List, Optional, Union, TypeVar, Generic, Type, Callable
 import uuid
-
+from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar, Union
 
 T = TypeVar("T", bound="DomainEntity")
 

@@ -5,10 +5,10 @@ This module provides robust functions for managing subprocesses,
 capturing their output, and handling errors.
 """
 
+import logging
 import os
 import re
 import subprocess
-import logging
 from typing import Dict, List, Optional, Tuple
 
 from .error_handling import StructuralAnalysisError

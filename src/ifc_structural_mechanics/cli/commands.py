@@ -5,10 +5,11 @@ This module provides an enhanced CLI that incorporates improved boundary conditi
 and load handling for structural analysis of IFC files.
 """
 
-import os
-import sys
 import json
 import logging
+import os
+import sys
+
 import click
 
 from ifc_structural_mechanics.api.structural_analysis import (
@@ -16,10 +17,10 @@ from ifc_structural_mechanics.api.structural_analysis import (
     run_enhanced_analysis,
 )
 from ifc_structural_mechanics.utils.error_handling import (
-    StructuralAnalysisError,
-    ModelExtractionError,
-    MeshingError,
     AnalysisError,
+    MeshingError,
+    ModelExtractionError,
+    StructuralAnalysisError,
 )
 from ifc_structural_mechanics.utils.temp_dir import set_keep_temp_files
 

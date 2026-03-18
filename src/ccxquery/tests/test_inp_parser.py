@@ -1,19 +1,18 @@
 """Tests for the .inp file parser."""
 
-import pytest
 from ccxquery.parsers.inp_parser import (
-    parse_inp,
     get_sections_by_keyword,
-    parse_nodes,
-    parse_elements,
-    parse_node_sets,
-    parse_element_sets,
-    parse_materials,
     parse_boundary_conditions,
     parse_cloads,
     parse_dloads,
-    parse_steps,
+    parse_element_sets,
+    parse_elements,
+    parse_inp,
+    parse_materials,
+    parse_node_sets,
+    parse_nodes,
     parse_sections,
+    parse_steps,
 )
 
 
@@ -131,7 +130,7 @@ class TestParseMaterials:
         sections = parse_inp(inp_file)
         mats = parse_materials(sections)
         elastic = mats[0]["properties"]["elastic"]
-        assert elastic["youngs_modulus"] == 2.1e+11
+        assert elastic["youngs_modulus"] == 2.1e11
         assert elastic["poissons_ratio"] == 0.3
 
     def test_density(self, inp_file):

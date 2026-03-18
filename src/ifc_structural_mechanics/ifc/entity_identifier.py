@@ -1,12 +1,12 @@
 """
 Entity identification and relationship navigation utilities for IFC structural analysis.
 
-This module provides functions to identify and extract information about 
+This module provides functions to identify and extract information about
 structural analysis-related IFC entities.
 """
 
 import logging
-from typing import Optional, List, Any
+from typing import Any, List, Optional
 
 import ifcopenshell
 import numpy as np
@@ -408,7 +408,9 @@ def get_representation(element, rep_type):
             and representation.RepresentationType == "MappedRepresentation"
         ):
             # Try to find the representation type inside the MappedRepresentation
-            mapped_rep = get_specific_representation(representation, "Reference", rep_type)
+            mapped_rep = get_specific_representation(
+                representation, "Reference", rep_type
+            )
             if mapped_rep:
                 return mapped_rep
 

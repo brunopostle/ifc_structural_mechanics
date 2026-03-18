@@ -9,21 +9,20 @@ parent structural members using physical group tags. Checks:
 - The spatial fallback works for unmapped members
 """
 
-import os
 import logging
+import os
 
 import numpy as np
 import pytest
 
-from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.meshing.unified_calculix_writer import (
-    UnifiedCalculixWriter,
-    run_complete_analysis_workflow,
-)
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
 from ifc_structural_mechanics.config.meshing_config import MeshingConfig
 from ifc_structural_mechanics.config.system_config import SystemConfig
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+from ifc_structural_mechanics.ifc.extractor import Extractor
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    run_complete_analysis_workflow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,9 +157,7 @@ class TestElementMemberMapping:
                 if elem_id not in elements:
                     continue
                 elem_nodes = elements[elem_id]
-                centroid = np.mean(
-                    [nodes[n] for n in elem_nodes if n in nodes], axis=0
-                )
+                centroid = np.mean([nodes[n] for n in elem_nodes if n in nodes], axis=0)
                 total_checked += 1
                 if np.any(centroid < bbox_min) or np.any(centroid > bbox_max):
                     bad_elements += 1
@@ -171,15 +168,15 @@ class TestElementMemberMapping:
                 f"Checked {total_checked} elements: "
                 f"{bad_elements} outside member bbox ({bad_pct:.1%})"
             )
-            assert bad_pct < 0.05, (
-                f"{bad_pct:.1%} of elements are outside their member's bounding box"
-            )
+            assert (
+                bad_pct < 0.05
+            ), f"{bad_pct:.1%} of elements are outside their member's bounding box"
 
 
 def _get_short_id(member_id: str) -> str:
     """Extract short member ID (e.g. 'M43' from '2Su8k...M43')."""
-    if '_M' in member_id:
-        return member_id.split('_M')[-1]
+    if "_M" in member_id:
+        return member_id.split("_M")[-1]
     return member_id[:8]
 
 
@@ -187,12 +184,12 @@ def _get_member_coords(member) -> list:
     """Extract defining coordinates from a member."""
     coords = []
     if isinstance(member, CurveMember):
-        if hasattr(member, 'start_point') and member.start_point:
+        if hasattr(member, "start_point") and member.start_point:
             coords.append(list(member.start_point))
-        if hasattr(member, 'end_point') and member.end_point:
+        if hasattr(member, "end_point") and member.end_point:
             coords.append(list(member.end_point))
     elif isinstance(member, SurfaceMember):
-        if hasattr(member, 'vertices') and member.vertices:
+        if hasattr(member, "vertices") and member.vertices:
             coords.extend([list(v) for v in member.vertices])
     return coords
 
@@ -204,21 +201,21 @@ def _parse_member_element_sets(inp_path: str) -> dict:
     with open(inp_path) as f:
         for line in f:
             line = line.strip()
-            if line.startswith('*ELSET') and 'MEMBER_' in line:
+            if line.startswith("*ELSET") and "MEMBER_" in line:
                 # Extract set name
-                for part in line.split(','):
+                for part in line.split(","):
                     part = part.strip()
-                    if part.startswith('ELSET='):
-                        current_set = part.split('=')[1].strip()
+                    if part.startswith("ELSET="):
+                        current_set = part.split("=")[1].strip()
                         sets[current_set] = []
                         break
-            elif current_set and not line.startswith('*') and line:
+            elif current_set and not line.startswith("*") and line:
                 # Parse element IDs
-                for token in line.split(','):
+                for token in line.split(","):
                     token = token.strip()
                     if token.isdigit():
                         sets[current_set].append(int(token))
-            elif line.startswith('*'):
+            elif line.startswith("*"):
                 current_set = None
     return sets
 
@@ -230,14 +227,14 @@ def _parse_nodes(inp_path: str) -> dict:
     with open(inp_path) as f:
         for line in f:
             line = line.strip()
-            if line.startswith('*NODE'):
+            if line.startswith("*NODE"):
                 in_nodes = True
                 continue
             if in_nodes:
-                if line.startswith('*'):
+                if line.startswith("*"):
                     in_nodes = False
                     continue
-                parts = line.split(',')
+                parts = line.split(",")
                 if len(parts) >= 4:
                     try:
                         nid = int(parts[0].strip())
@@ -255,14 +252,14 @@ def _parse_elements(inp_path: str) -> dict:
     with open(inp_path) as f:
         for line in f:
             line = line.strip()
-            if line.startswith('*ELEMENT'):
+            if line.startswith("*ELEMENT"):
                 in_elements = True
                 continue
             if in_elements:
-                if line.startswith('*'):
+                if line.startswith("*"):
                     in_elements = False
                     continue
-                parts = line.split(',')
+                parts = line.split(",")
                 if len(parts) >= 2:
                     try:
                         eid = int(parts[0].strip())

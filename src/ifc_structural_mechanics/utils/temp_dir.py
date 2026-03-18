@@ -5,11 +5,11 @@ This module provides functions to create, get, and clean up a shared temporary d
 that can be used consistently across different components of the library.
 """
 
-import os
-import tempfile
-import logging
 import atexit
+import logging
+import os
 import shutil
+import tempfile
 from typing import Optional
 
 # Set up logger
@@ -103,7 +103,7 @@ def create_temp_file(
                 f.write(content)
         else:
             os.close(fd)
-    except:
+    except Exception:
         os.close(fd)
         raise
 
@@ -169,7 +169,7 @@ def set_keep_temp_files(keep_files: bool) -> None:
     if keep_files:
         try:
             atexit.unregister(_cleanup_temp_dir)
-        except:
+        except Exception:
             # It's okay if the function wasn't registered
             pass
 

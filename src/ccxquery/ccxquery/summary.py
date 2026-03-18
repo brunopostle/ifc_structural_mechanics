@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .parsers import inp_parser, frd_parser
+from .parsers import inp_parser
 
 
 def summary_inp(sections: list[dict[str, Any]]) -> dict[str, Any]:

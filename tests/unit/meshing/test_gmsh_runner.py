@@ -4,18 +4,19 @@ Unit tests for the Gmsh runner module.
 
 import subprocess
 from unittest import mock
-import pytest
 
 import gmsh
+import pytest
+
 from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
 from src.ifc_structural_mechanics.config.system_config import SystemConfig
 from src.ifc_structural_mechanics.meshing.gmsh_runner import GmshRunner
 from src.ifc_structural_mechanics.utils.error_handling import MeshingError
 from src.ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
-    get_temp_dir,
     cleanup_temp_dir,
     create_temp_file,
+    get_temp_dir,
+    setup_temp_dir,
 )
 
 

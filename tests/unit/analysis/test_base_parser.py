@@ -6,7 +6,7 @@ which provides common parsing functionality for output and result files.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import MagicMock, mock_open, patch
 
 from ifc_structural_mechanics.analysis.base_parser import BaseParser
 

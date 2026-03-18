@@ -6,13 +6,14 @@ using actual IFC test files instead of mocks.
 """
 
 import os
-import pytest
-import ifcopenshell
 
-from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
+import ifcopenshell
+import pytest
+
+from ifc_structural_mechanics.domain.load import AreaLoad, LineLoad, PointLoad
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
-from ifc_structural_mechanics.domain.load import PointLoad, LineLoad, AreaLoad
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.ifc.extractor import Extractor
 
 
 class TestIFCExtraction:

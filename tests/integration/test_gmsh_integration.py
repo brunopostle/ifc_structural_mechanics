@@ -6,16 +6,17 @@ These tests will only run if Gmsh is available on the system.
 
 import os
 import subprocess
-import pytest
+
 import gmsh
+import pytest
 
 from src.ifc_structural_mechanics.config.meshing_config import MeshingConfig
 from src.ifc_structural_mechanics.config.system_config import SystemConfig
 from src.ifc_structural_mechanics.meshing.gmsh_runner import GmshRunner
 from src.ifc_structural_mechanics.utils.temp_dir import (
-    setup_temp_dir,
     cleanup_temp_dir,
     create_temp_subdir,
+    setup_temp_dir,
 )
 
 
@@ -32,7 +33,7 @@ def is_gmsh_available():
             gmsh.initialize()
             gmsh.finalize()
         return True
-    except:
+    except Exception:
         # Try to find the executable
         try:
             result = subprocess.run(
@@ -42,7 +43,7 @@ def is_gmsh_available():
                 timeout=5,
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
 
 
@@ -178,7 +179,7 @@ class TestGmshIntegration:
             Point(6) = {1, 0, 1, 1.0};
             Point(7) = {1, 1, 1, 1.0};
             Point(8) = {0, 1, 1, 1.0};
-            
+
             Line(1) = {1, 2};
             Line(2) = {2, 3};
             Line(3) = {3, 4};
@@ -191,7 +192,7 @@ class TestGmshIntegration:
             Line(10) = {2, 6};
             Line(11) = {3, 7};
             Line(12) = {4, 8};
-            
+
             Curve Loop(1) = {1, 2, 3, 4};
             Plane Surface(1) = {1};
             Curve Loop(2) = {5, 6, 7, 8};
@@ -204,7 +205,7 @@ class TestGmshIntegration:
             Plane Surface(5) = {5};
             Curve Loop(6) = {4, 9, -8, -12};
             Plane Surface(6) = {6};
-            
+
             Surface Loop(1) = {1, 2, 3, 4, 5, 6};
             Volume(1) = {1};
             """
@@ -268,15 +269,14 @@ class TestGmshIntegration:
             assert os.path.getsize(mesh_file) > 0
 
             # Check if mapping file was created
-            mapping_file = os.path.splitext(output_file)[0] + ".map.json"
             # Note: in this test, the mapping might be empty since we didn't use GmshGeometryConverter
 
     def test_full_workflow_with_domain_model(self):
         """
         Test the full workflow with a domain model, geometry converter, and meshing.
         """
-        from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
         from src.ifc_structural_mechanics.domain.structural_member import CurveMember
+        from src.ifc_structural_mechanics.domain.structural_model import StructuralModel
         from src.ifc_structural_mechanics.meshing.gmsh_geometry import (
             GmshGeometryConverter,
         )
@@ -302,9 +302,7 @@ class TestGmshIntegration:
         model.add_member(beam)
 
         # Convert domain model to Gmsh geometry
-        geometry_converter = GmshGeometryConverter(
-            meshing_config=self.meshing_config
-        )
+        geometry_converter = GmshGeometryConverter(meshing_config=self.meshing_config)
 
         entity_map = geometry_converter.convert_model(model)
 

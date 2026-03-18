@@ -5,17 +5,17 @@ This module provides functionality to run CalculiX analyses, monitor the executi
 handle errors, and collect result files.
 """
 
+import logging
 import os
 import re
-import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from ..config.analysis_config import AnalysisConfig
 from ..config.system_config import SystemConfig
-from ..utils.subprocess_utils import run_subprocess
 from ..utils.error_handling import AnalysisError
+from ..utils.subprocess_utils import run_subprocess
 from ..utils.temp_dir import create_temp_subdir
 
 # Set up logger

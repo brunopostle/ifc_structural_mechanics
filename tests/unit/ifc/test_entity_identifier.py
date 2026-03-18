@@ -2,24 +2,25 @@
 Unit tests for IFC entity identification and relationship navigation utilities.
 """
 
-import ifcopenshell
 from unittest.mock import Mock
 
+import ifcopenshell
+
 from ifc_structural_mechanics.ifc.entity_identifier import (
-    is_structural_member,
-    is_structural_curve_member,
-    is_structural_surface_member,
-    is_structural_connection,
-    is_structural_load,
-    is_structural_boundary_condition,
-    find_related_properties,
+    analyze_connection_type,
+    find_applied_loads,
+    find_connected_elements,
     find_related_material,
     find_related_profile,
+    find_related_properties,
     find_structural_connections,
-    find_connected_elements,
-    find_applied_loads,
     get_coordinate,
-    analyze_connection_type,
+    is_structural_boundary_condition,
+    is_structural_connection,
+    is_structural_curve_member,
+    is_structural_load,
+    is_structural_member,
+    is_structural_surface_member,
 )
 
 

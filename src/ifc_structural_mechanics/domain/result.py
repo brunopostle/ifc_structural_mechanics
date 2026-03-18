@@ -2,11 +2,11 @@
 Result classes for the IFC structural analysis extension.
 
 This module provides classes for representing different types of analysis results
-in the domain model. These results are associated with structural elements and 
+in the domain model. These results are associated with structural elements and
 contain values from analyses.
 """
 
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 
 class Result:
@@ -300,7 +300,7 @@ class StressResult(Result):
                     (sxx - syy) ** 2
                     + (syy - szz) ** 2
                     + (szz - sxx) ** 2
-                    + 6 * (sxy ** 2 + syz ** 2 + sxz ** 2)
+                    + 6 * (sxy**2 + syz**2 + sxz**2)
                 )
             )
         else:
@@ -420,7 +420,7 @@ class StrainResult(Result):
                     (exx - eyy) ** 2
                     + (eyy - ezz) ** 2
                     + (ezz - exx) ** 2
-                    + 6 * (exy ** 2 + eyz ** 2 + exz ** 2)
+                    + 6 * (exy**2 + eyz**2 + exz**2)
                 )
             )
         else:

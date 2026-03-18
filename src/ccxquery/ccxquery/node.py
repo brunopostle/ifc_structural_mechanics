@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
-from .parsers import inp_parser, frd_parser
+from .parsers import inp_parser
 
 
-def node_info(node_id: int, nodes: dict[int, tuple[float, float, float]]) -> dict[str, Any]:
+def node_info(
+    node_id: int, nodes: dict[int, tuple[float, float, float]]
+) -> dict[str, Any]:
     """Return coordinates for a specific node."""
     if node_id not in nodes:
         return {"error": f"Node {node_id} not found"}
@@ -38,11 +39,15 @@ def nodes_at(
     return results
 
 
-def get_nodes_from_inp(sections: list[dict[str, Any]]) -> dict[int, tuple[float, float, float]]:
+def get_nodes_from_inp(
+    sections: list[dict[str, Any]],
+) -> dict[int, tuple[float, float, float]]:
     """Extract nodes from parsed .inp sections."""
     return inp_parser.parse_nodes(sections)
 
 
-def get_nodes_from_frd(frd_data: dict[str, Any]) -> dict[int, tuple[float, float, float]]:
+def get_nodes_from_frd(
+    frd_data: dict[str, Any],
+) -> dict[int, tuple[float, float, float]]:
     """Extract nodes from parsed .frd data."""
     return frd_data["nodes"]

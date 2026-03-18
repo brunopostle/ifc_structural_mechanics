@@ -7,20 +7,19 @@ catches the bug where wrong element-to-member mapping caused equations to
 connect nodes on opposite sides of the building (16+ meters apart).
 """
 
-import os
-import re
 import logging
+import os
 
 import numpy as np
 import pytest
 
+from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
+from ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from ifc_structural_mechanics.config.system_config import SystemConfig
 from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     run_complete_analysis_workflow,
 )
-from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
-from ifc_structural_mechanics.config.meshing_config import MeshingConfig
-from ifc_structural_mechanics.config.system_config import SystemConfig
 
 logger = logging.getLogger(__name__)
 
@@ -77,16 +76,16 @@ def _parse_equation_pairs(inp_path: str) -> list:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        if line == '*EQUATION':
+        if line == "*EQUATION":
             # Next line is the number of terms (should be 2)
             i += 1
             if i < len(lines):
                 nterms = lines[i].strip()
-                if nterms == '2':
+                if nterms == "2":
                     i += 1
                     if i < len(lines):
                         data = lines[i].strip()
-                        parts = data.split(',')
+                        parts = data.split(",")
                         if len(parts) >= 6:
                             try:
                                 n1 = int(parts[0])
@@ -107,13 +106,13 @@ def _parse_nodes(inp_path: str) -> dict:
     with open(inp_path) as f:
         for line in f:
             line = line.strip()
-            if line.startswith('*NODE'):
+            if line.startswith("*NODE"):
                 in_nodes = True
                 continue
             if in_nodes:
-                if line.startswith('*'):
+                if line.startswith("*"):
                     break
-                parts = line.split(',')
+                parts = line.split(",")
                 if len(parts) >= 4:
                     try:
                         nid = int(parts[0].strip())
@@ -195,9 +194,7 @@ class TestConnectionEquations:
             f"Max equation distance {max_dist:.2f}m > 2.0m — "
             f"possible element-to-member mapping regression"
         )
-        assert median_dist < 0.5, (
-            f"Median equation distance {median_dist:.3f}m > 0.5m"
-        )
+        assert median_dist < 0.5, f"Median equation distance {median_dist:.3f}m > 0.5m"
 
     @pytest.mark.slow
     def test_connection_count_building(self, tmp_path):
@@ -211,8 +208,7 @@ class TestConnectionEquations:
         real_connections = 0
         for conn in model.connections:
             real_members = [
-                m for m in conn.connected_members
-                if not m.startswith('dummy_member_')
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
             ]
             if len(real_members) >= 2:
                 real_connections += 1
@@ -225,6 +221,6 @@ class TestConnectionEquations:
         # Should have at least some equations written
         # (exact count depends on shared nodes vs equations needed)
         if real_connections > 0:
-            assert len(pairs) > 0, (
-                f"No equations written despite {real_connections} connections with 2+ members"
-            )
+            assert (
+                len(pairs) > 0
+            ), f"No equations written despite {real_connections} connections with 2+ members"

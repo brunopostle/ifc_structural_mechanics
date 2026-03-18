@@ -8,9 +8,9 @@ regressions like the mesh disconnectivity bug (6.74e+11 m displacements).
 Also includes a faster slab_01 test for use without the @slow marker.
 """
 
+import logging
 import os
 import shutil
-import logging
 
 import numpy as np
 import pytest
@@ -49,9 +49,9 @@ class TestSlabAnalysis:
             gravity=True,
         )
 
-        assert result["status"] == "success", (
-            f"Analysis failed: {result.get('errors', [])}"
-        )
+        assert (
+            result["status"] == "success"
+        ), f"Analysis failed: {result.get('errors', [])}"
 
     def test_slab_displacement_reasonable(self, tmp_path):
         """slab_01 max displacement should be < 1m (physically reasonable)."""
@@ -75,7 +75,11 @@ class TestSlabAnalysis:
             max_disp = 0.0
             for node_id, disp_data in displacements.items():
                 if isinstance(disp_data, dict):
-                    vals = [disp_data.get('ux', 0), disp_data.get('uy', 0), disp_data.get('uz', 0)]
+                    vals = [
+                        disp_data.get("ux", 0),
+                        disp_data.get("uy", 0),
+                        disp_data.get("uz", 0),
+                    ]
                 elif isinstance(disp_data, (list, tuple)):
                     vals = list(disp_data[:3])
                 else:
@@ -84,9 +88,9 @@ class TestSlabAnalysis:
                 max_disp = max(max_disp, mag)
 
             logger.info(f"slab_01 max displacement: {max_disp:.4f} m")
-            assert max_disp < 1.0, (
-                f"Max displacement {max_disp:.2f}m > 1.0m — not physically reasonable"
-            )
+            assert (
+                max_disp < 1.0
+            ), f"Max displacement {max_disp:.2f}m > 1.0m — not physically reasonable"
             assert max_disp > 0, "Zero displacement — analysis may not have run"
 
     def test_slab_reactions_nonzero(self, tmp_path):
@@ -111,7 +115,7 @@ class TestSlabAnalysis:
             total_fz = 0.0
             for node_id, rxn in reactions.items():
                 if isinstance(rxn, dict):
-                    total_fz += rxn.get('fz', 0) or 0
+                    total_fz += rxn.get("fz", 0) or 0
                 elif isinstance(rxn, (list, tuple)) and len(rxn) >= 3:
                     total_fz += rxn[2]
 
@@ -137,9 +141,9 @@ class TestBuildingAnalysis:
             gravity=True,
         )
 
-        assert result["status"] == "success", (
-            f"Analysis failed: {result.get('errors', [])}"
-        )
+        assert (
+            result["status"] == "success"
+        ), f"Analysis failed: {result.get('errors', [])}"
 
     def test_building_displacement_reasonable(self, tmp_path):
         """building_01a max displacement should be < 1.0m (not billions)."""
@@ -162,7 +166,11 @@ class TestBuildingAnalysis:
             max_disp = 0.0
             for node_id, disp_data in displacements.items():
                 if isinstance(disp_data, dict):
-                    vals = [disp_data.get('ux', 0), disp_data.get('uy', 0), disp_data.get('uz', 0)]
+                    vals = [
+                        disp_data.get("ux", 0),
+                        disp_data.get("uy", 0),
+                        disp_data.get("uz", 0),
+                    ]
                 elif isinstance(disp_data, (list, tuple)):
                     vals = list(disp_data[:3])
                 else:
@@ -198,9 +206,9 @@ class TestBuildingAnalysis:
             total_f = np.zeros(3)
             for node_id, rxn in reactions.items():
                 if isinstance(rxn, dict):
-                    total_f[0] += rxn.get('fx', 0) or 0
-                    total_f[1] += rxn.get('fy', 0) or 0
-                    total_f[2] += rxn.get('fz', 0) or 0
+                    total_f[0] += rxn.get("fx", 0) or 0
+                    total_f[1] += rxn.get("fy", 0) or 0
+                    total_f[2] += rxn.get("fz", 0) or 0
                 elif isinstance(rxn, (list, tuple)) and len(rxn) >= 3:
                     for k in range(3):
                         total_f[k] += rxn[k]
@@ -211,6 +219,6 @@ class TestBuildingAnalysis:
                 f"magnitude={fmag:.0f} N"
             )
             # Should have significant reaction (building self-weight)
-            assert fmag > 100, (
-                f"Total reaction force magnitude {fmag:.1f}N is suspiciously small"
-            )
+            assert (
+                fmag > 100
+            ), f"Total reaction force magnitude {fmag:.1f}N is suspiciously small"

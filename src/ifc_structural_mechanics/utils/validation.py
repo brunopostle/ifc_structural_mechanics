@@ -6,11 +6,12 @@ equilibrium conditions.
 """
 
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple
+
 import numpy as np
 
-from ..domain.structural_model import StructuralModel
 from ..domain.result import ReactionForceResult
+from ..domain.structural_model import StructuralModel
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,7 @@ def sum_reaction_forces(model: StructuralModel) -> np.ndarray:
 
 
 def check_equilibrium(
-    model: StructuralModel,
-    tolerance: float = 1e-6,
-    relative_tolerance: float = 1e-3
+    model: StructuralModel, tolerance: float = 1e-6, relative_tolerance: float = 1e-3
 ) -> Tuple[bool, Dict[str, any]]:
     """
     Check if the analysis satisfies force equilibrium.
@@ -141,13 +140,13 @@ def check_equilibrium(
 
     # Prepare detailed results
     details = {
-        'input_loads': input_loads.tolist(),
-        'reaction_forces': reaction_forces.tolist(),
-        'difference': difference.tolist(),
-        'max_difference': float(max_difference),
-        'max_force': float(max_force),
-        'tolerance_used': float(tolerance_used),
-        'equilibrium_satisfied': equilibrium_satisfied,
+        "input_loads": input_loads.tolist(),
+        "reaction_forces": reaction_forces.tolist(),
+        "difference": difference.tolist(),
+        "max_difference": float(max_difference),
+        "max_force": float(max_force),
+        "tolerance_used": float(tolerance_used),
+        "equilibrium_satisfied": equilibrium_satisfied,
     }
 
     # Log results
@@ -161,9 +160,15 @@ def check_equilibrium(
             f"Equilibrium check FAILED: max difference = {max_difference:.3e}, "
             f"tolerance = {tolerance_used:.3e}"
         )
-        logger.warning(f"  Input loads:      [{input_loads[0]:.3e}, {input_loads[1]:.3e}, {input_loads[2]:.3e}]")
-        logger.warning(f"  Reaction forces:  [{reaction_forces[0]:.3e}, {reaction_forces[1]:.3e}, {reaction_forces[2]:.3e}]")
-        logger.warning(f"  Difference:       [{difference[0]:.3e}, {difference[1]:.3e}, {difference[2]:.3e}]")
+        logger.warning(
+            f"  Input loads:      [{input_loads[0]:.3e}, {input_loads[1]:.3e}, {input_loads[2]:.3e}]"
+        )
+        logger.warning(
+            f"  Reaction forces:  [{reaction_forces[0]:.3e}, {reaction_forces[1]:.3e}, {reaction_forces[2]:.3e}]"
+        )
+        logger.warning(
+            f"  Difference:       [{difference[0]:.3e}, {difference[1]:.3e}, {difference[2]:.3e}]"
+        )
 
     return equilibrium_satisfied, details
 
@@ -178,9 +183,9 @@ def format_equilibrium_report(details: Dict[str, any]) -> str:
     Returns:
         Formatted string report
     """
-    input_loads = details['input_loads']
-    reaction_forces = details['reaction_forces']
-    difference = details['difference']
+    input_loads = details["input_loads"]
+    reaction_forces = details["reaction_forces"]
+    difference = details["difference"]
 
     report = []
     report.append("=" * 60)
@@ -188,19 +193,25 @@ def format_equilibrium_report(details: Dict[str, any]) -> str:
     report.append("=" * 60)
     report.append("")
     report.append("Input Loads (X, Y, Z):")
-    report.append(f"  [{input_loads[0]:>12.4e}, {input_loads[1]:>12.4e}, {input_loads[2]:>12.4e}]")
+    report.append(
+        f"  [{input_loads[0]:>12.4e}, {input_loads[1]:>12.4e}, {input_loads[2]:>12.4e}]"
+    )
     report.append("")
     report.append("Reaction Forces (X, Y, Z):")
-    report.append(f"  [{reaction_forces[0]:>12.4e}, {reaction_forces[1]:>12.4e}, {reaction_forces[2]:>12.4e}]")
+    report.append(
+        f"  [{reaction_forces[0]:>12.4e}, {reaction_forces[1]:>12.4e}, {reaction_forces[2]:>12.4e}]"
+    )
     report.append("")
     report.append("Difference (X, Y, Z):")
-    report.append(f"  [{difference[0]:>12.4e}, {difference[1]:>12.4e}, {difference[2]:>12.4e}]")
+    report.append(
+        f"  [{difference[0]:>12.4e}, {difference[1]:>12.4e}, {difference[2]:>12.4e}]"
+    )
     report.append("")
     report.append(f"Maximum Difference:  {details['max_difference']:.4e}")
     report.append(f"Tolerance Used:      {details['tolerance_used']:.4e}")
     report.append("")
 
-    if details['equilibrium_satisfied']:
+    if details["equilibrium_satisfied"]:
         report.append("Result: PASSED ✓")
     else:
         report.append("Result: FAILED ✗")

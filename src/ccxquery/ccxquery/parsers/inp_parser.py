@@ -7,7 +7,6 @@ name and parameter dict.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
@@ -75,13 +74,17 @@ def _parse_keyword_line(line: str) -> tuple[str, dict[str, str]]:
     return keyword, params
 
 
-def get_sections_by_keyword(sections: list[dict[str, Any]], keyword: str) -> list[dict[str, Any]]:
+def get_sections_by_keyword(
+    sections: list[dict[str, Any]], keyword: str
+) -> list[dict[str, Any]]:
     """Filter sections by keyword name (case-insensitive)."""
     keyword = keyword.upper()
     return [s for s in sections if s["keyword"] == keyword]
 
 
-def parse_nodes(sections: list[dict[str, Any]]) -> dict[int, tuple[float, float, float]]:
+def parse_nodes(
+    sections: list[dict[str, Any]],
+) -> dict[int, tuple[float, float, float]]:
     """Extract node coordinates from parsed sections."""
     nodes: dict[int, tuple[float, float, float]] = {}
     for sec in get_sections_by_keyword(sections, "NODE"):
@@ -109,12 +112,14 @@ def parse_elements(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if len(parts) >= 2:
                 eid = int(parts[0])
                 connectivity = [int(p) for p in parts[1:]]
-                elements.append({
-                    "id": eid,
-                    "type": etype,
-                    "elset": elset,
-                    "connectivity": connectivity,
-                })
+                elements.append(
+                    {
+                        "id": eid,
+                        "type": etype,
+                        "elset": elset,
+                        "connectivity": connectivity,
+                    }
+                )
     return elements
 
 
@@ -166,7 +171,10 @@ def parse_materials(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if kw == "MATERIAL":
             if current_mat is not None:
                 materials.append(current_mat)
-            current_mat = {"name": sec["params"].get("NAME", "unnamed"), "properties": {}}
+            current_mat = {
+                "name": sec["params"].get("NAME", "unnamed"),
+                "properties": {},
+            }
         elif current_mat is not None:
             if kw == "ELASTIC":
                 if sec["data"]:
@@ -208,7 +216,11 @@ def parse_boundary_conditions(sections: list[dict[str, Any]]) -> list[dict[str, 
                     bc["value"] = float(parts[3])
                 bcs.append(bc)
             elif len(parts) == 2:
-                bc = {"target": parts[0], "first_dof": int(parts[1]), "last_dof": int(parts[1])}
+                bc = {
+                    "target": parts[0],
+                    "first_dof": int(parts[1]),
+                    "last_dof": int(parts[1]),
+                }
                 bcs.append(bc)
     return bcs
 
@@ -220,11 +232,13 @@ def parse_cloads(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for line in sec["data"]:
             parts = [p.strip() for p in line.split(",") if p.strip()]
             if len(parts) >= 3:
-                loads.append({
-                    "node": parts[0],
-                    "dof": int(parts[1]),
-                    "magnitude": float(parts[2]),
-                })
+                loads.append(
+                    {
+                        "node": parts[0],
+                        "dof": int(parts[1]),
+                        "magnitude": float(parts[2]),
+                    }
+                )
     return loads
 
 
@@ -235,11 +249,13 @@ def parse_dloads(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for line in sec["data"]:
             parts = [p.strip() for p in line.split(",") if p.strip()]
             if len(parts) >= 3:
-                loads.append({
-                    "element": parts[0],
-                    "type": parts[1],
-                    "magnitude": float(parts[2]),
-                })
+                loads.append(
+                    {
+                        "element": parts[0],
+                        "type": parts[1],
+                        "magnitude": float(parts[2]),
+                    }
+                )
     return loads
 
 
@@ -253,7 +269,11 @@ def parse_steps(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kw = sec["keyword"]
         if kw == "STEP":
             in_step = True
-            current_step = {"params": sec["params"], "keywords": [], "line": sec["line"]}
+            current_step = {
+                "params": sec["params"],
+                "keywords": [],
+                "line": sec["line"],
+            }
         elif kw == "END STEP" or kw == "ENDSTEP":
             if current_step is not None:
                 steps.append(current_step)
