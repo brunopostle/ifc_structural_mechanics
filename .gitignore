@@ -70,16 +70,11 @@ results*/
 *_02/
 verify_*/
 intermediate/
+_analysis_output/
 spooles.out
 *.12d
 *.cvg
 *.sta
-
-# Temporary files
-complexity-reduction-brief.md
-prompt_plan*.md
-library.txt
-downloads
 
 # OS specific files
 .DS_Store

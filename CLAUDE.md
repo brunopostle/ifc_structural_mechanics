@@ -11,7 +11,10 @@ IFC Structural Mechanics is a Python library for structural analysis of IFC (Ind
 ### Development Setup
 ```bash
 # Install in development mode with all dependencies
-pip install -e ".[dev,docs]"
+pip install -e ".[dev]"
+
+# Install visualization dependencies (optional)
+pip install -e ".[viz]"
 ```
 
 ### Testing
@@ -19,12 +22,16 @@ pip install -e ".[dev,docs]"
 # Run all tests
 pytest
 
+# Skip slow end-to-end tests (building_01a etc.)
+pytest -m "not slow"
+
 # Run with coverage
 pytest --cov=ifc_structural_mechanics --cov-report=html
 
 # Run specific test categories
 pytest tests/unit/
 pytest tests/integration/
+pytest tests/validation/
 
 # Run a single test file
 pytest tests/unit/ifc/test_entity_identifier.py
@@ -39,11 +46,14 @@ pytest tests/unit/ifc/test_entity_identifier.py::TestClassName::test_method_name
 black src/ tests/
 isort src/ tests/
 
+# Linting (flake8 config in .flake8: max-line-length=88, extend-ignore=E203,E501)
+flake8 src/ tests/
+
+# Fast linting + unused import detection
+ruff check src/ tests/
+
 # Type checking
 mypy src/
-
-# Linting
-flake8 src/
 ```
 
 ### Running Analysis
@@ -74,15 +84,6 @@ python visualize.py building_01a --screenshot result.png
 
 # Custom scale factor
 python visualize.py portal_01 --scale 500
-```
-
-### Documentation
-```bash
-# Build documentation
-mkdocs build
-
-# Serve documentation locally
-mkdocs serve
 ```
 
 ## Architecture Overview
@@ -165,7 +166,7 @@ Configuration system with three main classes:
 
 #### 7. API (`src/ifc_structural_mechanics/api/`)
 Public-facing API for users:
-- `structural_analysis.py`: Main entry point with `analyze_ifc()` function
+- `structural_analysis.py`: Main entry point with `run_enhanced_analysis()` (preferred) and `analyze_ifc()` functions
 - `structural_model.py`: Model extraction API
 
 #### 8. CLI (`src/ifc_structural_mechanics/cli/`)
@@ -210,19 +211,20 @@ Command-line interface:
 ### Adding a New Load Type
 1. Extend `Load` class in `domain/load.py`
 2. Add extraction in `ifc/loads_extractor.py`
-3. Update `domain_to_calculix.py` mapping
-4. Update boundary condition writing in `analysis/boundary_condition_handling.py`
+3. Update boundary condition writing in `analysis/boundary_condition_handling.py`
 
 ## Testing Strategy
 
 - **Unit tests** (`tests/unit/`): Test individual classes/functions in isolation with mocks
 - **Integration tests** (`tests/integration/`): Test workflows across multiple modules with real IFC files
   - `test_ifc_to_geo.py`: Tests IFC → Gmsh mesh conversion, outputs `.msh` files for inspection
+  - `test_building_analysis.py`, `test_physical_group_mapping.py`, etc.: Regression tests for mesh connectivity fixes
 - **Validation tests** (`tests/validation/`): Numerical accuracy tests against analytical solutions
   - Tier 1: Direct CalculiX input/output tests
   - Tier 2: Full pipeline tests (IFC → results)
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
+- **Slow tests**: End-to-end building model tests are marked `@pytest.mark.slow`. Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -238,7 +240,7 @@ Command-line interface:
 ### Python Packages
 Core: numpy, scipy, ifcopenshell, gmsh, meshio, click, pyyaml, pandas
 Visualization: pyvista (optional, for result visualization)
-Dev: pytest, pytest-cov, black, isort, flake8, mypy
+Dev: pytest, pytest-cov, black, isort, flake8, ruff, mypy
 
 ## Key File Locations
 
@@ -260,6 +262,8 @@ Dev: pytest, pytest-cov, black, isort, flake8, mypy
 - Type hints: Required for public APIs (enforced by mypy)
 - Docstrings: Required for all public classes and functions (Google style)
 - Import order: isort with Black profile
+- Linting: flake8 config in `.flake8` (max-line-length=88, extend-ignore=E203,E501); ruff for additional checks
+- All four tools must pass cleanly: `black`, `isort`, `flake8`, `ruff`
 
 ## Working with IFC Files
 
@@ -282,6 +286,7 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 ## Known Limitations
 
 - **Load cases**: Only a subset of IFC load cases may be written to the INP. Models with multiple `IfcStructuralLoadCase` (e.g., Dead, Live, Wind, Earthquake) may only get some cases applied. Each load case should ideally map to a separate `*STEP`.
+- **Connection geometry**: Structural connections are resolved by geometric proximity (0.5 m tolerance in `_find_connection_nodes_at_location()`) rather than using the `IfcRelConnectsStructuralMember` relationship topology from the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
 - **Overlapping members**: Members with identical geometry (e.g., a short beam inside a longer beam) may lose their physical group during `fragment()`. These are logged as warnings and their loads/sections are skipped.
-- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. See `PLAN-cleanup-and-tests.md` for refactoring plan.
-- **Connection equations**: Beam endpoints offset from column centerlines (up to 0.5m) are handled by the connection node tolerance, but very large offsets may be missed.
+- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. Refactoring opportunity.
+- **Linear buckling**: The `linear_buckling` analysis type exists in the CLI but has not been validated against known solutions.

@@ -1,33 +1,40 @@
 # IFC Structural Mechanics
 
-A comprehensive Python library for structural analysis of IFC (Industry Foundation Classes) building models using CalculiX finite element solver.
+A Python library for structural analysis of IFC (Industry Foundation Classes) building models using the CalculiX finite element solver.
+
+> **Development Status**: This is early-stage, experimental software. It has been tested against a small set of example models and produces plausible results, but has known limitations described below. It is not suitable for production use without independent verification of results.
 
 ## Overview
 
-IFC Structural Mechanics provides a complete workflow for performing structural analysis on IFC building models. The library extracts structural information from IFC files, generates finite element meshes using Gmsh, performs structural analysis with CalculiX, and processes results for visualization and further analysis.
+IFC Structural Mechanics provides a workflow for performing structural analysis on IFC building models. The library extracts structural information from IFC files, generates finite element meshes using Gmsh, performs structural analysis with CalculiX, and provides tools for visualizing results.
 
-### Key Features
+### Capabilities
 
-- **IFC Model Extraction**: Extract structural members, connections, loads, and properties from IFC files
-- **Automated Meshing**: Generate high-quality finite element meshes using Gmsh
-- **Structural Analysis**: Perform linear static and linear buckling analysis using CalculiX
-- **Result Processing**: Parse and process analysis results with error detection and mapping
-- **Interactive Visualization**: 3D visualization of deformed meshes and stress fields using PyVista
-- **Equilibrium Validation**: Automatic checking of load/reaction equilibrium
-- **Flexible Configuration**: Comprehensive configuration system for analysis, meshing, and system settings
-- **Command-Line Interface**: Easy-to-use CLI for batch processing and automation
-- **Error Handling**: Robust error detection with mapping back to original IFC entities
+- **IFC Model Extraction**: Extract structural members (beams, columns, slabs, walls), connections, loads, and material/section properties from IFC files using `IfcStructuralAnalysisModel`
+- **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections)
+- **Structural Analysis**: Linear static analysis using CalculiX (CCX)
+- **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista
 
+### Known Limitations
 
+This software is under active development. The following limitations are known:
+
+- **Multiple load cases**: Only one load case is applied per analysis run. IFC models with multiple `IfcStructuralLoadCase` entities (e.g., Dead, Live, Wind, Earthquake) will have only some cases included. Each load case should map to a separate CalculiX `*STEP`, but this is not yet implemented.
+- **Connection geometry**: Structural connections between members are resolved by geometric proximity (0.5 m tolerance) rather than using the `IfcRelConnectsStructuralMember` relationship topology defined in the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
+- **Overlapping members**: Members with identical or overlapping geometry may lose their physical group assignment during mesh fragmentation. Their loads and sections will be skipped with a warning.
+- **Linear buckling**: The `linear_buckling` analysis type option exists in the CLI but has not been validated against known solutions.
+- **Section types**: Only rectangular, circular, pipe, and box cross-sections are fully supported in CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8 or later
-- CalculiX (CCX executable)
-- Gmsh with Python API
-- IfcOpenShell
+Install these separately before installing this library:
+
+- **Python 3.8 or later**
+- **CalculiX** (`ccx` executable) — finite element solver
+- **Gmsh with Python API** — mesh generation (`pip install gmsh`)
+- **IfcOpenShell** — IFC file parsing (`pip install ifcopenshell`)
 
 ### Install from Source
 
@@ -42,13 +49,10 @@ cd ifc_structural_mechanics
 # Install in development mode
 pip install -e .
 
-# Install development dependencies
+# Install with development dependencies
 pip install -e ".[dev]"
 
-# Install documentation dependencies
-pip install -e ".[docs]"
-
-# Install visualization dependencies
+# Install visualization dependencies (PyVista — optional)
 pip install -e ".[viz]"
 ```
 
@@ -56,239 +60,120 @@ pip install -e ".[viz]"
 
 ### Command Line Interface
 
-The easiest way to perform structural analysis is through the command-line interface:
-
 ```bash
-# Basic analysis (using installed command)
+# Basic analysis
 ifc-analysis analyze model.ifc --output ./results
 
-# Or run as a module (useful for development)
-python -m ifc_structural_mechanics.cli analyze model.ifc --output ./results
+# Specify mesh size (in metres, default: 1.0)
+ifc-analysis analyze model.ifc --output ./results --mesh-size 0.5
 
-# Specify analysis type and mesh size
-ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static --mesh-size 0.2
+# Include self-weight gravity loads
+ifc-analysis analyze model.ifc --output ./results --gravity
 
-# Enable verbose output and JSON results
-ifc-analysis analyze model.ifc --output ./results --verbose --json-output
+# Enable verbose output
+ifc-analysis analyze model.ifc --output ./results --verbose
+
+# Output results as JSON
+ifc-analysis analyze model.ifc --output ./results --json-output
 ```
 
 **Available Options:**
-- `--output DIR`: Output directory for analysis results (required)
-- `--analysis-type TYPE`: Analysis type: `linear_static` (default) or `linear_buckling`
-- `--mesh-size FLOAT`: Element size for mesh generation (default: 0.1)
-- `--verbose`: Enable verbose logging output
-- `--json-output`: Write results in JSON format
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output DIR` | Output directory for analysis results (required) | — |
+| `--analysis-type TYPE` | `linear_static` or `linear_buckling` | `linear_static` |
+| `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
+| `--gravity` | Include self-weight gravity loads | off |
+| `--verbose` | Enable verbose logging | off |
+| `--json-output` | Write results in JSON format | off |
+| `--enhanced/--no-enhanced` | Use enhanced boundary condition handling | on |
+| `--map-entities/--no-map-entities` | Map errors back to IFC entities | on |
 
 ### Python API
 
-For programmatic use, the library provides a clean Python API:
-
 ```python
-from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
+from ifc_structural_mechanics.api.structural_analysis import run_enhanced_analysis
 
-# Perform structural analysis
-result = analyze_ifc(
+result = run_enhanced_analysis(
     ifc_path="path/to/model.ifc",
     output_dir="./results",
     analysis_type="linear_static",
-    mesh_size=0.1,
-    verbose=True
+    mesh_size=0.5,
+    verbose=True,
+    gravity=False,
 )
 
-# Check results
 if result["status"] == "success":
-    print("Analysis completed successfully!")
     print(f"Output files: {result['output_files']}")
 else:
-    print(f"Analysis failed: {result['errors']}")
-```
-
-### Advanced Usage
-
-For more control over the analysis process:
-
-```python
-from ifc_structural_mechanics.api.structural_analysis import (
-    extract_model,
-    create_analysis_config,
-    create_meshing_config
-)
-from ifc_structural_mechanics.config import SystemConfig
-from ifc_structural_mechanics.meshing.unified_calculix_writer import (
-    run_complete_analysis_workflow
-)
-
-# Extract structural model
-model = extract_model("path/to/model.ifc")
-
-# Create custom configurations
-analysis_config = create_analysis_config("linear_static")
-meshing_config = create_meshing_config(mesh_size=0.05)
-system_config = SystemConfig()
-
-# Run unified analysis workflow
-inp_file = run_complete_analysis_workflow(
-    domain_model=model,
-    output_inp_file="./analysis.inp",
-    analysis_config=analysis_config,
-    meshing_config=meshing_config,
-    system_config=system_config
-)
+    print(f"Errors: {result['errors']}")
 ```
 
 ### Visualization
 
-#### Interactive Command-Line Tool
-
-The easiest way to visualize results is with the interactive CLI tool:
+Results can be visualized using the `visualize.py` script. This requires PyVista (`pip install -e ".[viz]"`). Results must be in the `_analysis_output/<model_name>/` directory (the default output location when running the CLI).
 
 ```bash
-# Visualize displacement (with auto-scaled deformation)
-python visualize_interactive.py \
-    examples/analysis-models/ifcFiles/building_01.ifc \
-    ./results_building_01 \
-    ./results_building_01/mesh_*.msh \
-    --field displacement
+# Visualize displacement (interactive, auto-scaled)
+python visualize.py slab_01
 
 # Visualize stress distribution
-python visualize_interactive.py \
-    model.ifc \
-    ./results \
-    ./results/mesh_*.msh \
-    --field stress \
-    --scale 10000
+python visualize.py building_01a --field stress
 
-# Save screenshot instead of interactive view
-python visualize_interactive.py \
-    model.ifc \
-    ./results \
-    ./results/mesh_*.msh \
-    --field displacement \
-    --screenshot output.png
+# Save screenshot (non-interactive)
+python visualize.py portal_01 --screenshot result.png
+
+# Custom displacement scale factor
+python visualize.py beam_01 --scale 500
+
+# Use a different output directory
+python visualize.py mymodel --output-dir /path/to/results
+
+# Export to interactive HTML
+python visualize.py slab_01 --html slab_results.html
 ```
 
 **Options:**
-- `--field {displacement,stress}`: Choose what to visualize (default: displacement)
-- `--scale FACTOR`: Displacement scale factor (auto-calculated if not specified)
-- `--no-undeformed`: Hide undeformed mesh overlay
-- `--screenshot FILE`: Save screenshot and exit (non-interactive)
-- `--time-step N`: Visualize specific time step (for multi-step analyses)
 
-#### Python API
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--field {displacement,stress}` | Field to visualize | `displacement` |
+| `--scale FACTOR` | Displacement scale factor | auto |
+| `--screenshot FILE` | Save screenshot and exit | — |
+| `--html FILE` | Export interactive HTML | — |
+| `--output-dir DIR` | Override results directory | `_analysis_output/<model>` |
+| `--no-undeformed` | Hide undeformed wireframe overlay | off |
+| `--cmap COLORMAP` | Matplotlib colormap name | `jet` |
 
-For programmatic use:
+The script expects:
+- IFC file at `examples/analysis-models/ifcFiles/<model_name>.ifc`
+- Analysis results at `_analysis_output/<model_name>/analysis.frd` and `analysis.inp`
 
-```python
-from ifc_structural_mechanics.visualization import ResultVisualizer
-from ifc_structural_mechanics.ifc.extractor import Extractor
-from ifc_structural_mechanics.analysis.results_parser import ResultsParser
+## Example Models
 
-# Extract model and parse results
-extractor = Extractor("model.ifc")
-model = extractor.extract_model()
+The repository includes example IFC structural models (as a git submodule in `examples/analysis-models/`):
 
-parser = ResultsParser(domain_model=model)
-results = parser.parse_results({
-    "results": "results/analysis.frd",
-    "data": "results/analysis.dat"
-})
+| Model | Description | Status |
+|-------|-------------|--------|
+| `beam_01` | Simply supported beam, point load | Working |
+| `cantilever_01` | Cantilever beam, gravity | Working |
+| `portal_01` | Portal frame, distributed load | Working |
+| `grid_of_beams` | Grid of beams, gravity | Working (near-zero reactions if no density in IFC) |
+| `slab_01` | Flat slab, gravity | Working |
+| `structure_01` | Mixed structure, gravity | Working |
+| `building_01` | Multi-storey building, planar forces | Working |
+| `building_02` | Larger multi-storey building | Working |
 
-# Create visualization
-viz = ResultVisualizer(model)
-viz.load_mesh_from_file("results/mesh.msh")
+To run an example:
 
-# Auto-calculate scale factor for visibility
-displacements = results['displacement']
-max_disp = max(d.get_magnitude() for d in displacements)
-scale_factor = 0.01 / max_disp  # ~1% of model size
-
-viz.apply_displacement_field(scale_factor=scale_factor)
-
-# Show displacement or stress
-viz.plot_deformed(field='Displacement', show_undeformed=True)
-
-# Or show stress
-viz.add_stress_field()
-viz.plot_deformed(field='Von Mises Stress', show_undeformed=True)
-
-# Or export to HTML
-viz.export_to_html("results.html")
-```
-
-**Visualization Features:**
-- Interactive 3D deformed mesh with rotation, zoom, pan
-- Color-coded displacement magnitude visualization
-- Von Mises stress distribution with proper element-to-node mapping
-- Side-by-side undeformed/deformed mesh comparison
-- Auto-scaling for tiny displacements (typical in building structures)
-- Export to HTML for sharing
-- Save high-resolution screenshots
-- Multiple time step/load case support
-
-**Installation:**
 ```bash
-pip install -e ".[viz]"
-```
-
-## Configuration
-
-The library uses a comprehensive configuration system with three main configuration classes:
-
-### Analysis Configuration
-```python
-from ifc_structural_mechanics.config import AnalysisConfig
-
-config = AnalysisConfig()
-config.set_analysis_type("linear_static")
-config.set_solver_params({"max_iterations": 200})
-```
-
-### Meshing Configuration
-```python
-from ifc_structural_mechanics.config import MeshingConfig
-
-config = MeshingConfig()
-config.set_element_size("curve_members", 0.1)
-config.set_element_type("surface_members", "2D_linear_triangle")
-```
-
-### System Configuration
-```python
-from ifc_structural_mechanics.config import SystemConfig
-
-config = SystemConfig()
-calculix_path = config.get_calculix_path()
-gmsh_path = config.get_gmsh_path()
-```
-
-## Supported Analysis Types
-
-- **Linear Static**: Standard linear static structural analysis
-- **Linear Buckling**: Linear buckling analysis for stability assessment
-
-## Error Handling and Debugging
-
-The library provides comprehensive error handling with mapping back to original IFC entities:
-
-```python
-result = analyze_ifc("model.ifc", "./results")
-
-# Check for errors
-if result["errors"]:
-    for error in result["errors"]:
-        print(f"Error: {error['message']}")
-        if error.get("domain_id"):
-            print(f"Related to entity: {error['entity_type']} {error['domain_id']}")
-
-# Check for warnings
-if result["warnings"]:
-    for warning in result["warnings"]:
-        print(f"Warning: {warning['message']}")
+ifc-analysis analyze examples/analysis-models/ifcFiles/slab_01.ifc \
+    --output _analysis_output/slab_01 --mesh-size 0.5
+python visualize.py slab_01
 ```
 
 ## Testing
-
-Run the test suite:
 
 ```bash
 # Run all tests
@@ -297,57 +182,56 @@ pytest
 # Run with coverage
 pytest --cov=ifc_structural_mechanics --cov-report=html
 
+# Skip slow end-to-end tests
+pytest -m "not slow"
+
 # Run specific test categories
 pytest tests/unit/
 pytest tests/integration/
+pytest tests/validation/
 ```
 
 ## Development
 
-### Setting Up Development Environment
-
 ```bash
 # Install in development mode with all dependencies
-pip install -e ".[dev,docs]"
+pip install -e ".[dev]"
 
-# Run code formatting
+# Format code
 black src/ tests/
 isort src/ tests/
 
-# Run type checking
+# Type checking
 mypy src/
 
-# Run linting
+# Linting
 flake8 src/
 ```
 
-### Building Documentation
+## Architecture
 
-```bash
-# Build documentation
-mkdocs build
+The analysis pipeline:
 
-# Serve documentation locally
-mkdocs serve
-```
+1. **IFC Extraction** — reads `IfcStructuralAnalysisModel` and related entities
+2. **Domain Model** — language-neutral representation of members, connections, loads, sections
+3. **Gmsh Meshing** — conforming finite element mesh (shared nodes at intersections)
+4. **CalculiX Input** — writes `.inp` file with elements, boundary conditions, loads
+5. **CalculiX Analysis** — runs `ccx` solver
+6. **Results Parsing** — reads `.frd` and `.dat` output files
 
-
-
-## Contributing
-
-We welcome contributions! Please see our contributing guidelines and submit pull requests for any improvements.
+Each structural entity carries traceability fields (`ifc_guid`, `mesh_entity_ids`, `analysis_element_ids`) so that solver errors can be mapped back to the originating IFC entity.
 
 ## License
 
-This project is licensed under GPLv3 or later - see the LICENSE file for details.
+GPLv3 or later — see the LICENSE file for details.
 
 ## Disclaimer
 
-The code in this project was primarily written using a large language model (LLM) as a development tool. While the code has been reviewed and tested, users should be aware of this development approach and exercise appropriate caution when using the software for critical applications.
+The code in this project was primarily written using a large language model (LLM) as a development tool. While the code has been reviewed and tested against example models, users should exercise appropriate caution and independently verify results before using for any engineering purpose.
 
 ## Acknowledgments
 
-- Built on top of IfcOpenShell for IFC processing
-- Uses Gmsh for mesh generation
-- Integrates with CalculiX for finite element analysis
-- Inspired by the open-source structural analysis community
+- [IfcOpenShell](https://ifcopenshell.org/) for IFC processing
+- [Gmsh](https://gmsh.info/) for mesh generation
+- [CalculiX](http://www.calculix.de/) for finite element analysis
+- [PyVista](https://pyvista.org/) for visualization

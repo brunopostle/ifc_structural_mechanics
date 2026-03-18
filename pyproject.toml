@@ -10,12 +10,12 @@ readme = "README.md"
 authors = [
     {name = "Bruno Postle", email = "bruno@postle.net"}
 ]
-license = {text = "MIT"}
+license = {text = "GPL-3.0-or-later"}
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -53,9 +53,8 @@ viz = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/example/ifc_structural_mechanics"
-"Bug Tracker" = "https://github.com/example/ifc_structural_mechanics/issues"
-"Documentation" = "https://example.github.io/ifc_structural_mechanics"
+"Homepage" = "https://github.com/brunopostle/ifc_structural_mechanics"
+"Bug Tracker" = "https://github.com/brunopostle/ifc_structural_mechanics/issues"
 
 [tool.black]
 line-length = 88
@@ -71,6 +70,10 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
