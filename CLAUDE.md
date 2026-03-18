@@ -279,6 +279,56 @@ IFC entities commonly encountered:
 
 Use `entity_identifier.py` functions to classify IFC entities rather than direct `is_a()` checks.
 
+## Debugging Tools for LLM Agents
+
+Two CLI query tools are provided so that an LLM agent can inspect analysis files without parsing raw binary or fixed-width formats directly.
+
+### `ccxquery` — Query CalculiX files (`.inp`, `.frd`, `.dat`)
+
+```bash
+# Overview of a CalculiX input or result file
+python -m ccxquery analysis.inp summary
+python -m ccxquery analysis.frd summary
+
+# Inspect mesh: node/element sets, materials, sections, boundary conditions, loads
+python -m ccxquery analysis.inp sets
+python -m ccxquery analysis.inp materials
+python -m ccxquery analysis.inp sections
+python -m ccxquery analysis.inp bcs
+python -m ccxquery analysis.inp loads
+
+# Inspect results
+python -m ccxquery analysis.frd results
+python -m ccxquery analysis.frd displacements
+python -m ccxquery analysis.frd stresses
+python -m ccxquery analysis.dat reactions
+
+# Find a specific node
+python -m ccxquery analysis.frd node 42
+python -m ccxquery analysis.inp nodes-at 1.0 2.5 0.0
+
+# Check if analysis completed successfully
+python -m ccxquery analysis.dat status
+```
+
+### `mshquery` — Query Gmsh mesh files (`.msh`)
+
+```bash
+# Overview: node/element counts, physical groups, bounding box
+python -m mshquery mesh.msh summary
+
+# Physical groups (member ID → element count mapping)
+python -m mshquery mesh.msh groups
+
+# Inspect a specific node or element
+python -m mshquery mesh.msh info 42
+
+# Filter nodes/elements
+python -m mshquery mesh.msh select --near 1.0 2.5 0.0 --radius 0.5
+```
+
+Both tools are located in `src/ccxquery/` and `src/mshquery/` and have their own `pyproject.toml`. They share no code with the main library — their FRD/DAT parsing is an independent implementation.
+
 ## Temporary Files
 
 The system uses `utils/temp_dir.py` for managing temporary files during analysis. Temporary files are automatically cleaned up unless `set_keep_temp_files(True)` is called (useful for debugging).
@@ -288,5 +338,5 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 - **Load cases**: Only a subset of IFC load cases may be written to the INP. Models with multiple `IfcStructuralLoadCase` (e.g., Dead, Live, Wind, Earthquake) may only get some cases applied. Each load case should ideally map to a separate `*STEP`.
 - **Connection geometry**: Structural connections are resolved by geometric proximity (0.5 m tolerance in `_find_connection_nodes_at_location()`) rather than using the `IfcRelConnectsStructuralMember` relationship topology from the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
 - **Overlapping members**: Members with identical geometry (e.g., a short beam inside a longer beam) may lose their physical group during `fragment()`. These are logged as warnings and their loads/sections are skipped.
-- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. Refactoring opportunity.
+- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. `ccxquery` is intentionally standalone (a debugging tool for LLM agents), so this duplication is by design.
 - **Linear buckling**: The `linear_buckling` analysis type exists in the CLI but has not been validated against known solutions.

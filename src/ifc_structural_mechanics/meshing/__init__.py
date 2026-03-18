@@ -8,4 +8,4 @@ suitable for analysis with CalculiX.
 from .gmsh_geometry import GmshGeometryConverter
 from .gmsh_runner import GmshRunner
 
-__all__ = ["GmshGeometryConverter", "GmshRunner", "MeshConverter"]
+__all__ = ["GmshGeometryConverter", "GmshRunner"]
