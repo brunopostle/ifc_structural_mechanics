@@ -12,18 +12,21 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 
 - **IFC Model Extraction**: Extract structural members (beams, columns, slabs, walls), connections, loads, and material/section properties from IFC files using `IfcStructuralAnalysisModel`
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections)
-- **Structural Analysis**: Linear static analysis using CalculiX (CCX)
-- **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista
+- **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
+- **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
+- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections extracted directly from IFC profile definitions
+- **Connection End-Releases**: Rotational releases read from `IfcRelConnectsStructuralMember.AppliedCondition` and modelled as pinned connections
+- **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
 ### Known Limitations
 
 This software is under active development. The following limitations are known:
 
-- **Multiple load cases**: Only one load case is applied per analysis run. IFC models with multiple `IfcStructuralLoadCase` entities (e.g., Dead, Live, Wind, Earthquake) will have only some cases included. Each load case should map to a separate CalculiX `*STEP`, but this is not yet implemented.
 - **Connection geometry**: Structural connections between members are resolved by geometric proximity (0.5 m tolerance) rather than using the `IfcRelConnectsStructuralMember` relationship topology defined in the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
-- **Overlapping members**: Members with identical or overlapping geometry may lose their physical group assignment during mesh fragmentation. Their loads and sections will be skipped with a warning.
-- **Linear buckling**: The `linear_buckling` analysis type option exists in the CLI but has not been validated against known solutions.
-- **Section types**: Only rectangular, circular, pipe, and box cross-sections are fully supported in CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
+- **Overlapping members**: Members with identical or overlapping geometry may lose their physical group assignment during mesh fragmentation. Their sections will be skipped with a warning; a fallback assigns the nearest elements by spatial proximity (shared ownership).
+- **Linear buckling**: The `linear_buckling` analysis type produces two CalculiX steps (static pre-stress + perturbation buckle) and parses eigenvalue multipliers from the `.dat` file, but results have not been validated against published benchmarks.
+- **Section types**: Only rectangular, circular, pipe (hollow circle), and box (hollow rectangle) cross-sections are supported for CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
+- **Partial end-releases**: Connection end-releases read from `IfcRelConnectsStructuralMember.AppliedCondition` are modelled as full pins (all three rotational DOFs released). Partial releases — where only one member or one rotation axis is released — are not yet supported.
 
 ## Installation
 
@@ -140,6 +143,7 @@ python visualize.py slab_01 --html slab_results.html
 |--------|-------------|---------|
 | `--field {displacement,stress}` | Field to visualize | `displacement` |
 | `--scale FACTOR` | Displacement scale factor | auto |
+| `--step NAME` | Filter results to a specific load case / step name | all steps |
 | `--screenshot FILE` | Save screenshot and exit | — |
 | `--html FILE` | Export interactive HTML | — |
 | `--output-dir DIR` | Override results directory | `_analysis_output/<model>` |
