@@ -461,6 +461,17 @@ def write_area_load(
     return True
 
 
+def _write_step_output_requests(file: TextIO) -> None:
+    """Write standard output requests for a single analysis step."""
+    file.write("*NODE FILE\n")
+    file.write("U\n")
+    file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY\n")
+    file.write("RF\n")
+    file.write("*EL FILE\n")
+    file.write("S, E\n")
+    file.write("*END STEP\n\n")
+
+
 def write_analysis_steps(
     file: TextIO,
     domain_model: Optional[StructuralModel] = None,
@@ -472,10 +483,11 @@ def write_analysis_steps(
     gravity_direction: Optional[List[float]] = None,
 ) -> None:
     """
-    Write comprehensive analysis step definitions to the CalculiX input file.
+    Write analysis step definitions to the CalculiX input file.
 
-    ENHANCED VERSION: Fixes Bug #3 by ensuring complete analysis steps with
-    proper validation, comprehensive load writing, and enhanced output requests.
+    When explicit load cases are present, writes one *STEP per load case plus
+    an optional gravity step. Falls back to a single combined step when there
+    are no load cases or for buckling analysis.
 
     Args:
         file (TextIO): The file object to write to.
@@ -483,6 +495,9 @@ def write_analysis_steps(
         analysis_type (str): Type of analysis to perform. Default is "linear_static".
         short_id_map (Optional[Dict[str, str]]): Mapping from full IFC GUIDs to short IDs.
         element_sets (Optional[Dict[str, List[int]]]): Available element sets.
+        node_coords: Dictionary of node coordinates for load placement.
+        gravity (bool): Whether to include gravity load.
+        gravity_direction (Optional[List[float]]): Gravity direction vector.
     """
     if not domain_model:
         logger.error("Cannot write analysis steps without domain model")
@@ -494,104 +509,134 @@ def write_analysis_steps(
     validation_errors = []
     validation_warnings = []
 
-    # Check for loads
     total_loads = sum(len(lg.loads) for lg in domain_model.load_groups)
     total_loads += sum(len(getattr(m, "loads", [])) for m in domain_model.members)
 
-    if total_loads == 0:
+    if total_loads == 0 and not gravity:
         validation_errors.append("No loads defined in the model")
 
-    # Check for boundary conditions
     has_connections = len(domain_model.connections) > 0
     has_member_bc = any(
         hasattr(m, "boundary_conditions") and m.boundary_conditions
         for m in domain_model.members
     )
-
     if not (has_connections or has_member_bc):
         validation_warnings.append(
             "No explicit boundary conditions found - will attempt auto-generation"
         )
 
-    # Check for materials
     members_without_material = [m.id for m in domain_model.members if not m.material]
     if members_without_material:
         validation_errors.append(
             f"Members without materials: {members_without_material}"
         )
 
-    # Write validation results
     file.write("** Analysis Validation Results\n")
     if validation_errors:
         file.write("** VALIDATION ERRORS:\n")
         for error in validation_errors:
             file.write(f"** ERROR: {error}\n")
         file.write("** Analysis may fail due to above errors\n")
-
     if validation_warnings:
         file.write("** VALIDATION WARNINGS:\n")
         for warning in validation_warnings:
             file.write(f"** WARNING: {warning}\n")
-
     if not validation_errors:
         file.write("** Validation PASSED - Analysis should execute successfully\n")
     file.write("\n")
 
-    # Write analysis steps
     file.write("** Analysis Steps\n")
 
-    if analysis_type == "linear_static":
+    # Linear buckling: two-step (static pre-stress + perturbation buckle)
+    if analysis_type == "linear_buckling":
+        # Step 1: static pre-stress with all loads
         file.write("*STEP\n")
         file.write("*STATIC\n")
         file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
-
-    elif analysis_type == "linear_buckling":
-        file.write("*STEP\n")
+        file.write("** Loads within step\n")
+        loads_written = _write_validated_loads_within_step(
+            file, domain_model, short_id_map, element_sets, node_coords
+        )
+        if gravity:
+            gdir = gravity_direction or [0.0, 0.0, -1.0]
+            file.write("*DLOAD\n")
+            file.write(
+                f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
+            )
+            loads_written = True
+        if not loads_written:
+            file.write("** CRITICAL WARNING: No loads written to pre-stress step\n\n")
+        file.write("*NODE FILE\n")
+        file.write("U\n")
+        file.write("*EL FILE\n")
+        file.write("S, E\n")
+        file.write("*END STEP\n\n")
+        # Step 2: eigenvalue buckling (no loads — perturbation uses previous stress state)
+        file.write("*STEP, PERTURBATION\n")
         file.write("*BUCKLE\n")
-        file.write("10\n\n")  # Increased number of eigenvalues
+        file.write("10\n\n")
+        file.write("*NODE FILE\n")
+        file.write("U\n")
+        file.write("*END STEP\n\n")
+        return
 
+    # For linear static: use one step per load case if any exist
+    load_cases = [g for g in domain_model.load_groups if g.is_load_case and g.loads]
+
+    if load_cases:
+        # One step per load case
+        for load_case in load_cases:
+            file.write("*STEP\n")
+            file.write("*STATIC\n")
+            file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
+            file.write(f"** Load Case: {load_case.name}\n")
+            loads_written = _write_validated_loads_within_step(
+                file,
+                domain_model,
+                short_id_map,
+                element_sets,
+                node_coords,
+                target_group_id=load_case.id,
+            )
+            if not loads_written:
+                file.write(
+                    f"** WARNING: No loads written for load case {load_case.name}\n\n"
+                )
+            _write_step_output_requests(file)
+
+        # Gravity as a separate step (self-weight applies once, not per load case)
+        if gravity:
+            gdir = gravity_direction or [0.0, 0.0, -1.0]
+            file.write("*STEP\n")
+            file.write("*STATIC\n")
+            file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
+            file.write("** Gravity (self-weight)\n")
+            file.write("*DLOAD\n")
+            file.write(
+                f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
+            )
+            _write_step_output_requests(file)
     else:
-        logger.warning(f"Unknown analysis type: {analysis_type}, defaulting to static")
+        # No explicit load cases — single combined step (backward-compatible)
         file.write("*STEP\n")
         file.write("*STATIC\n")
         file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
-
-    # ENHANCED: Write loads within the step with comprehensive validation
-    file.write("** Loads within step\n")
-    loads_written = _write_validated_loads_within_step(
-        file, domain_model, short_id_map, element_sets, node_coords
-    )
-
-    # Write gravity load if enabled
-    if gravity:
-        gdir = gravity_direction or [0.0, 0.0, -1.0]
-        file.write("** Gravity (self-weight) load\n")
-        file.write("*DLOAD\n")
-        file.write(f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n")
-        file.write("\n")
-        loads_written = True
-
-    if not loads_written:
-        file.write("** CRITICAL WARNING: No loads written to analysis step\n")
-        file.write("** Analysis will execute but produce no meaningful results\n")
-        file.write("** Add loads to your structural model\n")
-    file.write("\n")
-
-    # ENHANCED: Comprehensive output requests
-    file.write("** Output Requests\n")
-    file.write("*NODE FILE\n")
-    file.write("U\n")  # Displacements
-
-    # Request reaction forces for all nodes with boundary conditions
-    # Note: RF (reaction forces) are only calculated at nodes with constraints
-    file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY\n")
-    file.write("RF\n")  # Reaction forces - outputs to .dat file
-
-    file.write("*EL FILE\n")
-    file.write("S, E\n")  # Stresses and strains
-
-    # End step
-    file.write("*END STEP\n\n")
+        file.write("** Loads within step\n")
+        loads_written = _write_validated_loads_within_step(
+            file, domain_model, short_id_map, element_sets, node_coords
+        )
+        if gravity:
+            gdir = gravity_direction or [0.0, 0.0, -1.0]
+            file.write("** Gravity (self-weight) load\n")
+            file.write("*DLOAD\n")
+            file.write(
+                f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
+            )
+            loads_written = True
+        if not loads_written:
+            file.write("** CRITICAL WARNING: No loads written to analysis step\n")
+            file.write("** Analysis will execute but produce no meaningful results\n\n")
+        _write_step_output_requests(file)
 
 
 def _write_loads_within_step(file: TextIO, domain_model: StructuralModel) -> None:
@@ -778,9 +823,13 @@ def _write_validated_loads_within_step(
     short_id_map: Optional[Dict[str, str]] = None,
     element_sets: Optional[Dict[str, List[int]]] = None,
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
+    target_group_id: Optional[str] = None,
 ) -> bool:
     """
     Enhanced load writing with validation and deduplication.
+
+    When ``target_group_id`` is given, only loads whose parent group ID matches
+    are written (used for per-load-case steps).
 
     Returns:
         bool: True if any loads were successfully written, False otherwise.
@@ -791,6 +840,9 @@ def _write_validated_loads_within_step(
 
     # Process load groups
     for load_group in domain_model.load_groups:
+        # If we're writing a specific load case, skip non-matching groups
+        if target_group_id is not None and load_group.id != target_group_id:
+            continue
         if not load_group.loads:
             continue
 

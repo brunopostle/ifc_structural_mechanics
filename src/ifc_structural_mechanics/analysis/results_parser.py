@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import traceback
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..domain.result import (
     DisplacementResult,
@@ -53,16 +53,24 @@ class ResultsParser(BaseParser):
     results into domain model result objects.
     """
 
-    def __init__(self, domain_model: Optional[StructuralModel] = None):
+    def __init__(
+        self,
+        domain_model: Optional[StructuralModel] = None,
+        load_case_names: Optional[List[str]] = None,
+    ):
         """
         Initialize the results parser.
 
         Args:
             domain_model (Optional[StructuralModel]): The domain model to associate
                 results with. If provided, results will be mapped to domain entities.
+            load_case_names (Optional[List[str]]): Ordered list of load case names,
+                one per *STEP in the FRD file. Used to tag results with their load
+                case label.
         """
         super().__init__(mapper=None)
         self.domain_model = domain_model
+        self.load_case_names: Optional[List[str]] = load_case_names
 
         # Define mappings from CalculiX result codes to domain result properties
         self.result_type_mappings = {
@@ -119,6 +127,7 @@ class ResultsParser(BaseParser):
             in_disp_block = False
             node_id = None
             i = 0
+            step_index = 0  # Tracks which *STEP we are in (for load case labelling)
 
             while i < len(lines):
                 raw_line = lines[i]
@@ -140,6 +149,7 @@ class ResultsParser(BaseParser):
                     if line.startswith("-3"):
                         logger.debug(f"End of displacement block at line {i}")
                         in_disp_block = False
+                        step_index += 1
                         i += 1
                         continue
 
@@ -160,6 +170,19 @@ class ResultsParser(BaseParser):
                                 result = DisplacementResult(reference_element=node_id)
                                 result.set_translations(translations)
                                 result.set_rotations(rotations)
+
+                                # Tag with load case name if available
+                                if self.load_case_names and step_index < len(
+                                    self.load_case_names
+                                ):
+                                    result.add_metadata(
+                                        "load_case",
+                                        self.load_case_names[step_index],
+                                    )
+                                else:
+                                    result.add_metadata(
+                                        "load_case", f"step_{step_index + 1}"
+                                    )
 
                                 displacements.append(result)
                                 logger.debug(
@@ -749,6 +772,47 @@ class ResultsParser(BaseParser):
 
         return reactions
 
+    def parse_buckling_eigenvalues(self, dat_file: str) -> List[Tuple[int, float]]:
+        """Parse buckling eigenvalue multipliers from a CalculiX .dat file.
+
+        CalculiX writes the buckling factors under the header line that contains
+        ``"BUCKLING FACTOR"``.  Each data line has two whitespace-separated
+        fields: mode number (int) and eigenvalue multiplier (float).
+
+        Args:
+            dat_file: Path to the .dat file produced by CalculiX.
+
+        Returns:
+            List of (mode_number, eigenvalue) tuples, sorted by mode number.
+        """
+        eigenvalues: List[Tuple[int, float]] = []
+        if not os.path.exists(dat_file):
+            logger.warning(f"DAT file not found: {dat_file}")
+            return eigenvalues
+
+        try:
+            with open(dat_file) as f:
+                in_block = False
+                for line in f:
+                    if "BUCKLING FACTOR" in line:
+                        in_block = True
+                        continue
+                    if in_block:
+                        parts = line.split()
+                        if len(parts) == 2:
+                            try:
+                                eigenvalues.append((int(parts[0]), float(parts[1])))
+                            except ValueError:
+                                in_block = False
+                        elif parts:
+                            # Non-empty, non-data line — end of block
+                            in_block = False
+        except (IOError, OSError) as e:
+            logger.warning(f"Error reading DAT file {dat_file}: {e}")
+
+        logger.info(f"Parsed {len(eigenvalues)} buckling eigenvalues from {dat_file}")
+        return eigenvalues
+
     def parse_results(self, result_files: Dict[str, str]) -> Dict[str, List[Result]]:
         """
         Parse all result files and create domain model result objects.
@@ -767,6 +831,7 @@ class ResultsParser(BaseParser):
             "stress": [],
             "strain": [],
             "reaction": [],
+            "buckling": [],
         }
 
         try:
@@ -787,7 +852,7 @@ class ResultsParser(BaseParser):
                 strains = self.parse_strains(frd_file)
                 parsed_results["strain"].extend(strains)
 
-            # Parse DAT file for reaction forces
+            # Parse DAT file for reaction forces and buckling eigenvalues
             if "data" in result_files:
                 dat_file = result_files["data"]
                 logger.info(f"Parsing DAT file: {dat_file}")
@@ -795,6 +860,10 @@ class ResultsParser(BaseParser):
                 # Parse reaction forces
                 reactions = self.parse_reactions(dat_file)
                 parsed_results["reaction"].extend(reactions)
+
+                # Parse buckling eigenvalues (non-empty only for buckling analyses)
+                eigenvalues = self.parse_buckling_eigenvalues(dat_file)
+                parsed_results["buckling"].extend(eigenvalues)
 
             # Map results to domain model entities if a model is provided
             if self.domain_model:

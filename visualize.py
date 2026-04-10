@@ -97,6 +97,10 @@ def main():
     parser.add_argument("--screenshot", help="Save screenshot to file instead of interactive view")
     parser.add_argument("--html", help="Export interactive HTML to file")
     parser.add_argument("--no-undeformed", action="store_true", help="Hide undeformed wireframe")
+    parser.add_argument(
+        "--step", default=None,
+        help="Load case / step name to visualize (default: all steps combined)",
+    )
 
     args = parser.parse_args()
 
@@ -124,6 +128,25 @@ def main():
     n_disp = len(parsed.get("displacement", []))
     n_stress = len(parsed.get("stress", []))
     print(f"  {n_disp} displacement results, {n_stress} stress results")
+
+    # Filter by step/load-case name if requested
+    if args.step:
+        filtered = [
+            r for r in parsed.get("displacement", [])
+            if r.get_metadata("load_case") == args.step
+        ]
+        if not filtered:
+            available = sorted(set(
+                r.get_metadata("load_case") for r in parsed.get("displacement", [])
+                if r.get_metadata("load_case")
+            ))
+            sys.exit(
+                f"No results for step '{args.step}'. "
+                f"Available: {available or ['(no load case tags)']}"
+            )
+        parsed["displacement"] = filtered
+        n_disp = len(filtered)
+        print(f"  Filtered to {n_disp} results for step '{args.step}'")
 
     if n_disp == 0:
         sys.exit("No displacement results found — nothing to visualize.")

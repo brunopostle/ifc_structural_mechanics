@@ -425,6 +425,7 @@ class LoadGroup(DomainEntity):
         name: Optional[str] = None,
         description: Optional[str] = None,
         loads: Optional[List[Load]] = None,
+        is_load_case: bool = False,
     ):
         """Initialize a LoadGroup object."""
         # Initialize base entity
@@ -434,6 +435,7 @@ class LoadGroup(DomainEntity):
         self.name = name if name is not None else f"LoadGroup-{self.id[:8]}"
         self.description = description
         self.loads = loads if loads is not None else []
+        self.is_load_case: bool = is_load_case
 
     def add_load(self, load: Load) -> None:
         """Add a load to the group."""

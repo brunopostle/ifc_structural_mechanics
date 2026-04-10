@@ -297,7 +297,8 @@ class LoadsExtractor:
 
             # Create the domain load case (which is also a LoadGroup)
             load_case = LoadGroup(
-                id=case_id, name=case_name, description=case_description
+                id=case_id, name=case_name, description=case_description,
+                is_load_case=True,
             )
             all_groups[case_id] = load_case
 
