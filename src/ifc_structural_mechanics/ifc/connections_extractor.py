@@ -312,6 +312,13 @@ class ConnectionsExtractor:
                 f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
             )
 
+            # Check for end-releases from IfcRelConnectsStructuralMember.AppliedCondition
+            if self._has_rotational_releases(ifc_connection):
+                connection.has_end_releases = True
+                self.logger.debug(
+                    f"Connection {connection_id} has rotational end-releases"
+                )
+
             # NOW VALIDATION SHOULD ALWAYS SUCCEED (connection has >= 2 members)
             try:
                 if connection.validate():
@@ -338,6 +345,34 @@ class ConnectionsExtractor:
                 f"Error creating domain connection {getattr(ifc_connection, 'GlobalId', 'unknown')}: {e}"
             )
             return None
+
+    def _has_rotational_releases(self, ifc_connection) -> bool:
+        """Return True if any connected member has any rotational DOF free or zero.
+
+        Reads ``IfcRelConnectsStructuralMember.AppliedCondition`` for each
+        relationship attached to this connection.  A DOF is considered released
+        when its stiffness value is ``False`` (explicitly free) or ``0.0`` (zero
+        spring, transmits no force/moment).
+        """
+        if not hasattr(ifc_connection, "ConnectsStructuralMembers"):
+            return False
+        for rel in ifc_connection.ConnectsStructuralMembers:
+            condition = getattr(rel, "AppliedCondition", None)
+            if condition is None:
+                continue
+            for attr_name in (
+                "RotationalStiffnessX",
+                "RotationalStiffnessY",
+                "RotationalStiffnessZ",
+            ):
+                attr = getattr(condition, attr_name, None)
+                if attr is None:
+                    continue
+                wrapped = getattr(attr, "wrappedValue", attr)
+                # False = explicitly free; 0.0 = zero-stiffness spring (also released)
+                if wrapped is False or wrapped == 0.0:
+                    return True
+        return False
 
     def _determine_geometry_type(self, ifc_connection) -> str:
         """

@@ -33,6 +33,10 @@ class StructuralConnection(DomainEntity):
         self.mesh_entity_ids: List[str] = []
         self.analysis_element_ids: List[int] = []
 
+        # End-release flag: True when any connected member has a rotational DOF
+        # free at this connection (read from IfcRelConnectsStructuralMember.AppliedCondition)
+        self.has_end_releases: bool = False
+
         # Then call parent constructor - bypass validation until members are connected
         super().__init__(
             id=id, entity_type=connection_type, allow_validation_bypass=True
