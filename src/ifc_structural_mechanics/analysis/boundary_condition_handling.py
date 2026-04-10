@@ -16,6 +16,47 @@ from ..domain.structural_model import StructuralModel
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Stiffness value above which a DOF is considered rigidly constrained
+_RIGID_STIFFNESS_THRESHOLD = 1e12
+
+
+def get_constrained_dofs(connection) -> List[int]:
+    """
+    Return the CalculiX DOF numbers that should be constrained for a connection.
+
+    Reads per-DOF stiffness from the connection's stiffness_properties dict when
+    available (keys dx/dy/dz/drx/dry/drz).  A DOF is constrained when its
+    stiffness >= _RIGID_STIFFNESS_THRESHOLD.  Falls back to entity_type when
+    no stiffness properties are present.
+
+    DOF mapping:  1=UX(dx)  2=UY(dy)  3=UZ(dz)
+                  4=ROTX(drx)  5=ROTY(dry)  6=ROTZ(drz)
+    """
+    has_stiffness = (
+        hasattr(connection, "has_stiffness_properties")
+        and connection.has_stiffness_properties()
+    )
+
+    if has_stiffness:
+        stiff = connection.get_stiffness_properties() or {}
+        dof_map = [
+            (1, stiff.get("dx", 0.0)),
+            (2, stiff.get("dy", 0.0)),
+            (3, stiff.get("dz", 0.0)),
+            (4, stiff.get("drx", 0.0)),
+            (5, stiff.get("dry", 0.0)),
+            (6, stiff.get("drz", 0.0)),
+        ]
+        return [dof for dof, val in dof_map if val >= _RIGID_STIFFNESS_THRESHOLD]
+
+    # Fallback: entity_type-based defaults
+    entity_type = getattr(connection, "entity_type", "point")
+    if entity_type in ("rigid", "fixed"):
+        return [1, 2, 3, 4, 5, 6]
+    if entity_type == "hinge":
+        return [1, 2, 3]
+    return []
+
 
 def write_boundary_conditions(
     file: TextIO,
@@ -57,19 +98,12 @@ def write_boundary_conditions(
         else:
             bc_type = getattr(connection, "entity_type", "point")
 
-        # Skip connections that are NOT supports:
-        # - "point" connections without stiffness properties are purely geometric
-        #   (e.g., load application points), not boundary conditions.
-        # - Only connections with actual stiffness or explicit support type get BCs.
-        has_stiffness = (
-            hasattr(connection, "has_stiffness_properties")
-            and connection.has_stiffness_properties()
-        )
-        if bc_type == "point" and not has_stiffness:
-            logger.debug(
-                f"Skipping connection {connection_id} — 'point' type without "
-                f"stiffness properties (not a support)"
-            )
+        # Determine which DOFs to constrain for this connection
+        dofs_to_fix = get_constrained_dofs(connection)
+
+        # Skip connections that constrain nothing (purely geometric / load-application points)
+        if not dofs_to_fix:
+            logger.debug(f"Skipping connection {connection_id} — no DOFs to constrain")
             continue
 
         # Find nodes that correspond to this connection's position
@@ -91,25 +125,19 @@ def write_boundary_conditions(
                     line = ", ".join(map(str, line_nodes))
                     file.write(f"{line}\n")
 
-                # Write the boundary condition
+                # Write the boundary condition — one line per contiguous DOF range
                 file.write("*BOUNDARY\n")
-
-                if bc_type == "rigid" or bc_type == "fixed":
-                    # Fixed: constrain all 6 DOF (1-6)
-                    file.write(f"{set_name}, 1, 6\n")
-                elif bc_type == "hinge":
-                    # Pinned: constrain translations (1-3), but not rotations
-                    file.write(f"{set_name}, 1, 3\n")
-                elif bc_type == "point" and has_stiffness:
-                    # Point with stiffness: use stiffness to determine DOFs
-                    # If rigid behavior, fix all DOFs; otherwise fix translations
-                    if (
-                        hasattr(connection, "is_rigid_behavior")
-                        and connection.is_rigid_behavior()
-                    ):
-                        file.write(f"{set_name}, 1, 6\n")
+                # Write contiguous DOF ranges (e.g. 1,3 or 1,6) for efficiency
+                first = dofs_to_fix[0]
+                prev = first
+                for dof in dofs_to_fix[1:]:
+                    if dof == prev + 1:
+                        prev = dof
                     else:
-                        file.write(f"{set_name}, 1, 3\n")
+                        file.write(f"{set_name}, {first}, {prev}\n")
+                        first = dof
+                        prev = dof
+                file.write(f"{set_name}, {first}, {prev}\n")
 
                 bc_nodes_found = True
                 file.write("\n")

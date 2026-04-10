@@ -27,6 +27,8 @@ This software is under active development. The following limitations are known:
 - **Linear buckling**: The `linear_buckling` analysis type produces two CalculiX steps (static pre-stress + perturbation buckle) and parses eigenvalue multipliers from the `.dat` file, but results have not been validated against published benchmarks.
 - **Section types**: Only rectangular, circular, pipe (hollow circle), and box (hollow rectangle) cross-sections are supported for CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
 - **Partial end-releases**: Connection end-releases read from `IfcRelConnectsStructuralMember.AppliedCondition` are modelled as full pins (all three rotational DOFs released). Partial releases — where only one member or one rotation axis is released — are not yet supported.
+- **Self-weight loads**: Models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) rely entirely on self-weight. Pass `--gravity` to include it; without that flag, no loads are applied and displacements will be zero.
+- **Intermediate support positions**: If a support connection is at an intermediate point on a beam (not at a beam endpoint), Gmsh may not place a mesh node at that exact location, causing the support to be silently omitted.
 
 ## Installation
 
@@ -158,22 +160,29 @@ The script expects:
 
 The repository includes example IFC structural models (as a git submodule in `examples/analysis-models/`):
 
-| Model | Description | Status |
-|-------|-------------|--------|
-| `beam_01` | Simply supported beam, point load | Working |
-| `cantilever_01` | Cantilever beam, gravity | Working |
-| `portal_01` | Portal frame, distributed load | Working |
-| `grid_of_beams` | Grid of beams, gravity | Working (near-zero reactions if no density in IFC) |
-| `slab_01` | Flat slab, gravity | Working |
-| `structure_01` | Mixed structure, gravity | Working |
-| `building_01` | Multi-storey building, planar forces | Working |
-| `building_02` | Larger multi-storey building | Working |
+| Model | Description | `--gravity` | Status |
+|-------|-------------|-------------|--------|
+| `beam_01` | Simply supported beam, point load | No | Working — 0.26 mm max disp, 20 kN reaction |
+| `cantilever_01` | Cantilever beam, self-weight | **Yes** | Working — 1.1 mm tip deflection |
+| `portal_01` | Portal frame, distributed load | No | Working — 0.55 mm max disp |
+| `grid_of_beams` | Grid of beams, self-weight | **Yes** | Partial — near-zero reactions (no density in IFC); corner supports at intermediate beam positions not located by node search |
+| `slab_01` | Flat slab, self-weight | **Yes** | Working — 0.39 mm max disp, 198 kN reaction |
+| `structure_01` | Mixed structure, self-weight | **Yes** | Working — 2.8 mm max disp, 634 kN reaction |
+| `building_01` | Multi-storey building, lateral planar forces | No | Unstable — pinned column bases with no moment connections creates a near-mechanism under lateral load |
+| `building_01a` | Multi-storey building, self-weight | **Yes** | Working — 14 mm max disp, 275 kN reaction |
+| `building_02` | Larger multi-storey building, planar forces | No | Working — 80 mm max disp, 29 MN reaction |
 
 To run an example:
 
 ```bash
+# Model with explicit load cases — no --gravity needed
+ifc-analysis analyze examples/analysis-models/ifcFiles/portal_01.ifc \
+    --output _analysis_output/portal_01
+python visualize.py portal_01
+
+# Model with self-weight only — requires --gravity
 ifc-analysis analyze examples/analysis-models/ifcFiles/slab_01.ifc \
-    --output _analysis_output/slab_01 --mesh-size 0.5
+    --output _analysis_output/slab_01 --gravity --mesh-size 0.5
 python visualize.py slab_01
 ```
 

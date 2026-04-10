@@ -1111,20 +1111,14 @@ class UnifiedCalculixWriter:
         bc_node_dofs = set()
         node_coords = dict(self.nodes)
 
-        from ..analysis.boundary_condition_handling import find_nodes_at_position
+        from ..analysis.boundary_condition_handling import (
+            find_nodes_at_position,
+            get_constrained_dofs,
+        )
 
         for conn in self.domain_model.connections:
-            # Determine BC type
-            bc_type = getattr(
-                conn, "connection_type", getattr(conn, "entity_type", "point")
-            )
-
-            # Skip non-support connections (same logic as write_boundary_conditions)
-            has_stiffness = (
-                hasattr(conn, "has_stiffness_properties")
-                and conn.has_stiffness_properties()
-            )
-            if bc_type == "point" and not has_stiffness:
+            dofs = get_constrained_dofs(conn)
+            if not dofs:
                 continue
 
             # Find nodes at this connection's position
@@ -1136,28 +1130,9 @@ class UnifiedCalculixWriter:
                 if not bc_nodes:
                     continue
 
-                if bc_type == "rigid" or bc_type == "fixed":
-                    # Fixed: constrain all 6 DOF (1-6)
-                    for node in bc_nodes:
-                        for dof in [1, 2, 3, 4, 5, 6]:
-                            bc_node_dofs.add((node, dof))
-
-                elif bc_type == "hinge":
-                    # Pinned: constrain translations (1-3), but not rotations
-                    for node in bc_nodes:
-                        for dof in [1, 2, 3]:
-                            bc_node_dofs.add((node, dof))
-
-                elif bc_type == "point" and has_stiffness:
-                    # Point with stiffness: check behavior
-                    if hasattr(conn, "is_rigid_behavior") and conn.is_rigid_behavior():
-                        for node in bc_nodes:
-                            for dof in [1, 2, 3, 4, 5, 6]:
-                                bc_node_dofs.add((node, dof))
-                    else:
-                        for node in bc_nodes:
-                            for dof in [1, 2, 3]:
-                                bc_node_dofs.add((node, dof))
+                for node in bc_nodes:
+                    for dof in dofs:
+                        bc_node_dofs.add((node, dof))
 
         logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
         if logger.isEnabledFor(logging.DEBUG):
@@ -1285,26 +1260,16 @@ class UnifiedCalculixWriter:
             f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n"
         )
 
-        # Check if all connected elements support rotational DOFs
-        has_rotational_dofs = self._check_rotational_dofs_at_nodes(connection_nodes)
-
         # Use first node as reference, constrain all others to it
         ref_node = connection_nodes[0]
 
-        # For each DOF, create equation: node_i.dof = ref_node.dof
-        # Equation format: *EQUATION
-        #                  2
-        #                  node1, dof1, coef1, node2, dof2, coef2
-
+        # Translations are always coupled for rigid/hinge connections.
+        # Rotations are also coupled for rigid connections — writing DOF 4-6 EQUATION
+        # constraints between separate nodes does NOT trigger CalculiX KNOT generation
+        # (KNOT only occurs when beam and shell elements share a node).
         dofs = [1, 2, 3]  # X, Y, Z translations (always constrained)
-
-        # Only constrain rotations if all elements support them AND it's not a hinge
-        if not is_hinge and has_rotational_dofs:
-            dofs.extend([4, 5, 6])  # Add rotations for rigid connection
-        elif not is_hinge and not has_rotational_dofs:
-            logger.debug(
-                f"Connection {conn.id}: Skipping rotational constraints (shell elements present)"
-            )
+        if not is_hinge:
+            dofs.extend([4, 5, 6])  # Rotations for rigid connection
 
         equations_written = 0
         equations_skipped = 0

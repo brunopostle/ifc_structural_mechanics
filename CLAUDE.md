@@ -133,7 +133,7 @@ Generates finite element meshes:
 
 **Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
 1. Create all geometry with shared points (no per-member synchronize)
-2. Call `fragment()` separately for curves and surfaces (separate point registries to avoid CalculiX KNOT generation when beam and shell elements share nodes)
+2. Call `fragment()` separately for curves and surfaces (separate point registries so beam and shell elements never share a node — this avoids CalculiX KNOT generation, which occurs only for shared nodes, not for EQUATION constraints)
 3. Single `synchronize()` call
 4. Remap entity tags after fragmentation
 5. Apply mesh sizes (minimum size for shared points)
@@ -337,6 +337,20 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 
 - **Load cases**: Only a subset of IFC load cases may be written to the INP. Models with multiple `IfcStructuralLoadCase` (e.g., Dead, Live, Wind, Earthquake) may only get some cases applied. Each load case should ideally map to a separate `*STEP`.
 - **Connection geometry**: Structural connections are resolved by geometric proximity (0.5 m tolerance in `_find_connection_nodes_at_location()`) rather than using the `IfcRelConnectsStructuralMember` relationship topology from the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
+- **Intermediate support positions**: `write_boundary_conditions()` finds support nodes via `find_nodes_at_position()` with a 0.1 m tolerance. If a support connection is not at a beam endpoint (e.g. it is an intermediate point along the beam), Gmsh may not place a mesh node there and the support is silently omitted. `grid_of_beams` is an example — its corner supports are 0.1 m inside the beam span.
 - **Overlapping members**: Members with identical geometry (e.g., a short beam inside a longer beam) may lose their physical group during `fragment()`. These are logged as warnings and their loads/sections are skipped.
+- **Self-weight models**: IFC models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) produce zero loads unless `--gravity` is passed to the CLI. The library has no way to auto-detect that gravity is the intended load; it must be requested explicitly.
+- **Mixed beam+shell instability**: When B31 beam elements and shell elements are connected only via DOF 1-3 EQUATION constraints and column bases are pinned (DOF 1-3 only from `IfcBoundaryNodeCondition`), the structure may have rotational zero-energy modes under lateral load. `building_01` demonstrates this: lateral planar forces on a pinned-base frame with no moment-resisting connections produce a near-mechanism. The gravity-loaded variant (`building_01a`) is stable.
 - **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. `ccxquery` is intentionally standalone (a debugging tool for LLM agents), so this duplication is by design.
 - **Linear buckling**: The `linear_buckling` analysis type exists in the CLI but has not been validated against known solutions.
+
+## Boundary Condition Handling
+
+`IfcBoundaryNodeCondition` uses three value types for each stiffness component:
+- `IfcBoolean(True)` — rigid/fixed (treated as 1e20 N/m or N·m/rad)
+- `IfcBoolean(False)` — free/released (treated as 0.0)
+- Numeric measure — spring stiffness in project units
+
+The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this. After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
+
+Connection EQUATION constraints: rigid connections always write DOF 1-6 equations (translations + rotations). CalculiX KNOT generation is triggered only by *shared nodes* between beam and shell elements, not by EQUATION constraints between separate nodes — so DOF 4-6 equations between beam nodes and shell nodes are safe.

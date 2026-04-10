@@ -1014,6 +1014,23 @@ def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) 
         return "point"
 
 
+def _ifc_stiffness_to_float(
+    raw_value, convert_fn, force_scale: float, unit_scale: float
+) -> float:
+    """
+    Convert an IFC stiffness value (numeric or IfcBoolean) to SI float.
+
+    ``IfcBoundaryNodeCondition`` allows stiffness attributes to be either a
+    numeric measure *or* an ``IfcBoolean``:
+      - ``True``  → rigid/fixed  → treat as effectively infinite stiffness (1e20)
+      - ``False`` → free/released → treat as 0.0
+      - numeric   → apply the supplied unit-conversion function normally
+    """
+    if isinstance(raw_value, bool):
+        return 1e20 if raw_value else 0.0
+    return convert_fn(raw_value, force_scale, unit_scale)
+
+
 def get_connection_input(
     connection, geometryType, unit_scale: float = 1.0, force_scale: float = 1.0
 ):
@@ -1038,37 +1055,49 @@ def get_connection_input(
         if geometryType == "point":
             if hasattr(connection.AppliedCondition, "TranslationalStiffnessX"):
                 dx = connection.AppliedCondition.TranslationalStiffnessX.wrappedValue
-                dx = convert_linear_stiffness(dx, force_scale, unit_scale)
+                dx = _ifc_stiffness_to_float(
+                    dx, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dx = 0.0
 
             if hasattr(connection.AppliedCondition, "TranslationalStiffnessY"):
                 dy = connection.AppliedCondition.TranslationalStiffnessY.wrappedValue
-                dy = convert_linear_stiffness(dy, force_scale, unit_scale)
+                dy = _ifc_stiffness_to_float(
+                    dy, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dy = 0.0
 
             if hasattr(connection.AppliedCondition, "TranslationalStiffnessZ"):
                 dz = connection.AppliedCondition.TranslationalStiffnessZ.wrappedValue
-                dz = convert_linear_stiffness(dz, force_scale, unit_scale)
+                dz = _ifc_stiffness_to_float(
+                    dz, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dz = 0.0
 
             if hasattr(connection.AppliedCondition, "RotationalStiffnessX"):
                 drx = connection.AppliedCondition.RotationalStiffnessX.wrappedValue
-                drx = convert_rotational_stiffness(drx, force_scale, unit_scale)
+                drx = _ifc_stiffness_to_float(
+                    drx, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 drx = 0.0
 
             if hasattr(connection.AppliedCondition, "RotationalStiffnessY"):
                 dry = connection.AppliedCondition.RotationalStiffnessY.wrappedValue
-                dry = convert_rotational_stiffness(dry, force_scale, unit_scale)
+                dry = _ifc_stiffness_to_float(
+                    dry, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 dry = 0.0
 
             if hasattr(connection.AppliedCondition, "RotationalStiffnessZ"):
                 drz = connection.AppliedCondition.RotationalStiffnessZ.wrappedValue
-                drz = convert_rotational_stiffness(drz, force_scale, unit_scale)
+                drz = _ifc_stiffness_to_float(
+                    drz, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 drz = 0.0
 
@@ -1079,7 +1108,9 @@ def get_connection_input(
                 dx = (
                     connection.AppliedCondition.TranslationalStiffnessByLengthX.wrappedValue
                 )
-                dx = convert_linear_stiffness(dx, force_scale, unit_scale)
+                dx = _ifc_stiffness_to_float(
+                    dx, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dx = 0.0
 
@@ -1087,7 +1118,9 @@ def get_connection_input(
                 dy = (
                     connection.AppliedCondition.TranslationalStiffnessByLengthY.wrappedValue
                 )
-                dy = convert_linear_stiffness(dy, force_scale, unit_scale)
+                dy = _ifc_stiffness_to_float(
+                    dy, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dy = 0.0
 
@@ -1095,7 +1128,9 @@ def get_connection_input(
                 dz = (
                     connection.AppliedCondition.TranslationalStiffnessByLengthZ.wrappedValue
                 )
-                dz = convert_linear_stiffness(dz, force_scale, unit_scale)
+                dz = _ifc_stiffness_to_float(
+                    dz, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dz = 0.0
 
@@ -1103,7 +1138,9 @@ def get_connection_input(
                 drx = (
                     connection.AppliedCondition.RotationalStiffnessByLengthX.wrappedValue
                 )
-                drx = convert_rotational_stiffness(drx, force_scale, unit_scale)
+                drx = _ifc_stiffness_to_float(
+                    drx, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 drx = 0.0
 
@@ -1111,7 +1148,9 @@ def get_connection_input(
                 dry = (
                     connection.AppliedCondition.RotationalStiffnessByLengthY.wrappedValue
                 )
-                dry = convert_rotational_stiffness(dry, force_scale, unit_scale)
+                dry = _ifc_stiffness_to_float(
+                    dry, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 dry = 0.0
 
@@ -1119,7 +1158,9 @@ def get_connection_input(
                 drz = (
                     connection.AppliedCondition.RotationalStiffnessByLengthZ.wrappedValue
                 )
-                drz = convert_rotational_stiffness(drz, force_scale, unit_scale)
+                drz = _ifc_stiffness_to_float(
+                    drz, convert_rotational_stiffness, force_scale, unit_scale
+                )
             else:
                 drz = 0.0
 
@@ -1130,7 +1171,9 @@ def get_connection_input(
                 dx = (
                     connection.AppliedCondition.TranslationalStiffnessByAreaX.wrappedValue
                 )
-                dx = convert_linear_stiffness(dx, force_scale, unit_scale)
+                dx = _ifc_stiffness_to_float(
+                    dx, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dx = 0.0
 
@@ -1138,7 +1181,9 @@ def get_connection_input(
                 dy = (
                     connection.AppliedCondition.TranslationalStiffnessByAreaY.wrappedValue
                 )
-                dy = convert_linear_stiffness(dy, force_scale, unit_scale)
+                dy = _ifc_stiffness_to_float(
+                    dy, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dy = 0.0
 
@@ -1146,7 +1191,9 @@ def get_connection_input(
                 dz = (
                     connection.AppliedCondition.TranslationalStiffnessByAreaZ.wrappedValue
                 )
-                dz = convert_linear_stiffness(dz, force_scale, unit_scale)
+                dz = _ifc_stiffness_to_float(
+                    dz, convert_linear_stiffness, force_scale, unit_scale
+                )
             else:
                 dz = 0.0
             return {"dx": dx, "dy": dy, "dz": dz}
