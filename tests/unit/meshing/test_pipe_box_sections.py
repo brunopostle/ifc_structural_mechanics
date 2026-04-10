@@ -3,7 +3,6 @@
 import io
 from unittest.mock import MagicMock
 
-
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
@@ -71,9 +70,9 @@ class TestPipeSectionWriting:
             buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
         )
         text = buf.getvalue()
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         # Data line immediately after *BEAM SECTION line
-        section_line_idx = next(i for i, l in enumerate(lines) if "SECTION=PIPE" in l)
+        section_line_idx = next(i for i, ln in enumerate(lines) if "SECTION=PIPE" in ln)
         data_line = lines[section_line_idx + 1]
         parts = [float(x) for x in data_line.split(",")]
         assert abs(parts[0] - outer_r) < 1e-6
@@ -124,8 +123,8 @@ class TestBoxSectionWriting:
             buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL
         )
         text = buf.getvalue()
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
-        section_line_idx = next(i for i, l in enumerate(lines) if "SECTION=BOX" in l)
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        section_line_idx = next(i for i, ln in enumerate(lines) if "SECTION=BOX" in ln)
         data_line = lines[section_line_idx + 1]
         parts = [float(x) for x in data_line.split(",")]
         # CalculiX BOX: a (height), b (width), t1 t2 t3 t4

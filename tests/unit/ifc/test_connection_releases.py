@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock
 
-
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
 
 

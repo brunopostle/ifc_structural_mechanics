@@ -2,7 +2,6 @@
 
 import io
 
-
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     write_analysis_steps,
 )
@@ -54,20 +53,20 @@ class TestBucklingStepWriting:
         """First step must be *STATIC (pre-stress)."""
         text = self._get_text()
         lines = text.splitlines()
-        step_lines = [l for l in lines if l.strip().startswith("*STEP")]
+        step_lines = [ln for ln in lines if ln.strip().startswith("*STEP")]
         assert step_lines[0].strip() == "*STEP"
         # Next non-empty/non-comment line after *STEP should be *STATIC
         idx = lines.index(step_lines[0])
-        for l in lines[idx + 1 :]:
-            if l.strip() and not l.strip().startswith("**"):
-                assert l.strip() == "*STATIC"
+        for ln in lines[idx + 1 :]:
+            if ln.strip() and not ln.strip().startswith("**"):
+                assert ln.strip() == "*STATIC"
                 break
 
     def test_second_step_has_perturbation(self):
         """Second step must carry PERTURBATION keyword."""
         text = self._get_text()
         step_lines = [
-            l.strip() for l in text.splitlines() if l.strip().startswith("*STEP")
+            ln.strip() for ln in text.splitlines() if ln.strip().startswith("*STEP")
         ]
         assert len(step_lines) == 2
         assert "PERTURBATION" in step_lines[1]

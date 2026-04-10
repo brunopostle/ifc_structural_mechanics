@@ -2,7 +2,6 @@
 
 import io
 
-
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     write_analysis_steps,
 )
