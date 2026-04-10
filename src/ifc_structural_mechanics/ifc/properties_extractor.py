@@ -10,6 +10,7 @@ FIXED: ImportError issue resolved by ensuring proper class definition and import
 """
 
 import logging
+import math
 import uuid
 from typing import Dict, Optional, Union
 
@@ -406,6 +407,66 @@ class PropertiesExtractor:
                     name=profile_name,
                     width=width,
                     height=height,
+                )
+
+            # Handle hollow circular profile (pipe/tube)
+            elif profile.is_a("IfcCircleHollowProfileDef"):
+                outer_r = self._safe_get_attribute(profile, "Radius", 0.05)
+                wall_t = self._safe_get_attribute(profile, "WallThickness", 0.005)
+                outer_r = max(0.001, float(outer_r)) if outer_r else 0.05
+                wall_t = max(0.0001, float(wall_t)) if wall_t else 0.005
+                try:
+                    outer_r = convert_length(outer_r, self.length_scale)
+                    wall_t = convert_length(wall_t, self.length_scale)
+                except Exception as e:
+                    self.logger.warning(f"Error converting pipe dimensions: {e}")
+                inner_r = outer_r - wall_t
+                area = math.pi * (outer_r ** 2 - inner_r ** 2)
+                profile_id = (
+                    str(profile.id())
+                    if hasattr(profile, "id") and callable(profile.id)
+                    else str(uuid.uuid4())
+                )
+                profile_name = self._safe_get_attribute(
+                    profile, "ProfileName", "Pipe Section"
+                )
+                return Section(
+                    id=profile_id,
+                    name=profile_name,
+                    section_type="pipe",
+                    area=area,
+                    dimensions={"outer_radius": outer_r, "inner_radius": inner_r},
+                )
+
+            # Handle hollow rectangular profile (RHS/box)
+            elif profile.is_a("IfcRectangleHollowProfileDef"):
+                w = self._safe_get_attribute(profile, "XDim", 0.1)
+                h = self._safe_get_attribute(profile, "YDim", 0.2)
+                t = self._safe_get_attribute(profile, "WallThickness", 0.005)
+                w = max(0.001, float(w)) if w else 0.1
+                h = max(0.001, float(h)) if h else 0.2
+                t = max(0.0001, float(t)) if t else 0.005
+                try:
+                    w = convert_length(w, self.length_scale)
+                    h = convert_length(h, self.length_scale)
+                    t = convert_length(t, self.length_scale)
+                except Exception as e:
+                    self.logger.warning(f"Error converting box dimensions: {e}")
+                area = w * h - (w - 2 * t) * (h - 2 * t)
+                profile_id = (
+                    str(profile.id())
+                    if hasattr(profile, "id") and callable(profile.id)
+                    else str(uuid.uuid4())
+                )
+                profile_name = self._safe_get_attribute(
+                    profile, "ProfileName", "Box Section"
+                )
+                return Section(
+                    id=profile_id,
+                    name=profile_name,
+                    section_type="box",
+                    area=area,
+                    dimensions={"width": w, "height": h, "wall_thickness": t},
                 )
 
             # Handle I-shape profile
