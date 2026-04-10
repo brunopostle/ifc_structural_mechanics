@@ -19,19 +19,16 @@ jobs:
           python-version: "3.10"
 
       - name: Install lint tools
-        run: pip install black isort flake8 ruff
+        run: pip install "black==25.1.0" isort flake8 ruff
 
-      - name: black
-        run: black --check src/ tests/
-
-      - name: isort
-        run: isort --check src/ tests/
-
-      - name: flake8
-        run: flake8 src/ tests/
-
-      - name: ruff
-        run: ruff check src/ tests/
+      - name: Run all lint checks
+        run: |
+          failures=0
+          black --check src/ tests/ || failures=$((failures+1))
+          isort --check src/ tests/ || failures=$((failures+1))
+          flake8 src/ tests/ || failures=$((failures+1))
+          ruff check src/ tests/ || failures=$((failures+1))
+          exit $failures
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -51,10 +48,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install CalculiX
+      - name: Install system dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y calculix-ccx
+          sudo apt-get install -y calculix-ccx libglu1-mesa
 
       - name: Install Python dependencies
         run: |
