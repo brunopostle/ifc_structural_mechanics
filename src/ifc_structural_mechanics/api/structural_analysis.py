@@ -197,7 +197,9 @@ def analyze_ifc(
                     load_case_names.append("Gravity")
                 if not load_case_names:
                     load_case_names = None
-                results_parser = ResultsParser(domain_model, load_case_names=load_case_names)
+                results_parser = ResultsParser(
+                    domain_model, load_case_names=load_case_names
+                )
                 parsed_results = results_parser.parse_results(calculix_output_files)
                 result["parsed_results"] = parsed_results
                 logger.info("Successfully parsed analysis results")

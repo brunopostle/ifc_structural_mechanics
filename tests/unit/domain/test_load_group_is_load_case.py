@@ -1,7 +1,6 @@
 """Tests for LoadGroup.is_load_case flag."""
 
 from ifc_structural_mechanics.domain.load import LoadGroup, PointLoad
-import numpy as np
 
 
 class TestLoadGroupIsLoadCase:

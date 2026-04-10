@@ -461,7 +461,8 @@ class UnifiedCalculixWriter:
         # geometry where all nearby elements are already owned by another member),
         # allow element sharing.
         still_empty = [
-            m for m in self.domain_model.members
+            m
+            for m in self.domain_model.members
             if f"MEMBER_{self._get_short_id(m.id)}" not in self.element_sets
         ]
         if still_empty:

@@ -2,7 +2,6 @@
 
 import io
 
-import pytest
 
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     write_analysis_steps,
@@ -16,8 +15,16 @@ from ifc_structural_mechanics.domain.structural_model import StructuralModel
 def _buckling_model():
     """Minimal model with one load for buckling tests."""
     model = StructuralModel(id="buckle_model")
-    mat = Material(id="mat1", name="Steel", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
-    sec = Section.create_rectangular_section(id="sec1", name="Rect", width=0.05, height=0.05)
+    mat = Material(
+        id="mat1",
+        name="Steel",
+        density=7850.0,
+        elastic_modulus=210e9,
+        poisson_ratio=0.3,
+    )
+    sec = Section.create_rectangular_section(
+        id="sec1", name="Rect", width=0.05, height=0.05
+    )
     model.add_member(
         CurveMember(id="m1", geometry=[[0, 0, 0], [0, 0, 2]], material=mat, section=sec)
     )
@@ -51,7 +58,7 @@ class TestBucklingStepWriting:
         assert step_lines[0].strip() == "*STEP"
         # Next non-empty/non-comment line after *STEP should be *STATIC
         idx = lines.index(step_lines[0])
-        for l in lines[idx + 1:]:
+        for l in lines[idx + 1 :]:
             if l.strip() and not l.strip().startswith("**"):
                 assert l.strip() == "*STATIC"
                 break
@@ -59,7 +66,9 @@ class TestBucklingStepWriting:
     def test_second_step_has_perturbation(self):
         """Second step must carry PERTURBATION keyword."""
         text = self._get_text()
-        step_lines = [l.strip() for l in text.splitlines() if l.strip().startswith("*STEP")]
+        step_lines = [
+            l.strip() for l in text.splitlines() if l.strip().startswith("*STEP")
+        ]
         assert len(step_lines) == 2
         assert "PERTURBATION" in step_lines[1]
 

@@ -5,11 +5,12 @@ import re
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from ifc_structural_mechanics.domain.structural_connection import StructuralConnection
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.meshing.unified_calculix_writer import UnifiedCalculixWriter
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    UnifiedCalculixWriter,
+)
 
 
 def _make_conn(has_end_releases: bool = True) -> StructuralConnection:
@@ -88,9 +89,9 @@ class TestHingeFromEndReleases:
         if "*EQUATION" in text:
             dofs = _get_equations(text)
             rotational = [d for d in dofs if d in (4, 5, 6)]
-            assert rotational == [], (
-                f"Rotational DOFs {rotational} found in hinge equations:\n{text}"
-            )
+            assert (
+                rotational == []
+            ), f"Rotational DOFs {rotational} found in hinge equations:\n{text}"
 
     def test_hinge_label_in_output(self):
         """Hinge connection should be labelled differently from rigid."""
@@ -99,7 +100,9 @@ class TestHingeFromEndReleases:
 
     def test_point_connection_dispatch_uses_has_end_releases(self):
         """_write_connections() passes has_end_releases as is_hinge for point connections."""
-        from ifc_structural_mechanics.domain.structural_connection import PointConnection
+        from ifc_structural_mechanics.domain.structural_connection import (
+            PointConnection,
+        )
         from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
         model = StructuralModel(id="test")
@@ -107,7 +110,9 @@ class TestHingeFromEndReleases:
         writer.domain_model = model
         writer._write_point_connection = MagicMock()
         writer._write_rigid_connection = MagicMock()
-        writer._write_connections = UnifiedCalculixWriter._write_connections.__get__(writer)
+        writer._write_connections = UnifiedCalculixWriter._write_connections.__get__(
+            writer
+        )
 
         conn = PointConnection("conn1", (0, 0, 0))
         conn.has_end_releases = True

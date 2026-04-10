@@ -799,7 +799,7 @@ class MembersExtractor:
             outer_r = convert_length(profile.Radius, self.length_scale)
             wall_t = convert_length(profile.WallThickness, self.length_scale)
             inner_r = outer_r - wall_t
-            area = math.pi * (outer_r ** 2 - inner_r ** 2)
+            area = math.pi * (outer_r**2 - inner_r**2)
             return Section(
                 id=(
                     profile.id()

@@ -2,8 +2,6 @@
 
 import io
 
-import numpy as np
-import pytest
 
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     write_analysis_steps,
@@ -19,8 +17,16 @@ def _make_model_with_load_cases(n_cases: int = 2, gravity: bool = False):
     model = StructuralModel(id="test_model")
 
     # Add a minimal curve member so material validation passes
-    mat = Material(id="mat1", name="Steel", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
-    sec = Section.create_rectangular_section(id="sec1", name="Rect", width=0.1, height=0.2)
+    mat = Material(
+        id="mat1",
+        name="Steel",
+        density=7850.0,
+        elastic_modulus=210e9,
+        poisson_ratio=0.3,
+    )
+    sec = Section.create_rectangular_section(
+        id="sec1", name="Rect", width=0.1, height=0.2
+    )
     member = CurveMember(
         id="m1",
         geometry=[[0, 0, 0], [1, 0, 0]],
@@ -96,14 +102,26 @@ class TestMultiStepWriting:
     def test_no_load_cases_falls_back_to_single_step(self):
         """Without load cases, a single combined step is written (backward compat)."""
         model = StructuralModel(id="test_model")
-        mat = Material(id="mat1", name="Steel", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
-        sec = Section.create_rectangular_section(id="s1", name="R", width=0.1, height=0.2)
-        member = CurveMember(id="m1", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec)
+        mat = Material(
+            id="mat1",
+            name="Steel",
+            density=7850.0,
+            elastic_modulus=210e9,
+            poisson_ratio=0.3,
+        )
+        sec = Section.create_rectangular_section(
+            id="s1", name="R", width=0.1, height=0.2
+        )
+        member = CurveMember(
+            id="m1", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec
+        )
         model.add_member(member)
 
         # Add a non-load-case group
         sub = LoadGroup(id="sg1", name="Sub-group", is_load_case=False)
-        load = PointLoad(id="p1", magnitude=500.0, direction=[0, 0, -1], position=[0.5, 0, 0])
+        load = PointLoad(
+            id="p1", magnitude=500.0, direction=[0, 0, -1], position=[0.5, 0, 0]
+        )
         sub.add_load(load)
         model.load_groups.append(sub)
 
@@ -117,9 +135,17 @@ class TestMultiStepWriting:
     def test_gravity_only_single_step(self):
         """gravity=True with no load cases → single step with GRAV."""
         model = StructuralModel(id="test_model")
-        mat = Material(id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
-        sec = Section.create_rectangular_section(id="s1", name="R", width=0.1, height=0.2)
-        model.add_member(CurveMember(id="c1", geometry=[[0,0,0],[1,0,0]], material=mat, section=sec))
+        mat = Material(
+            id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3
+        )
+        sec = Section.create_rectangular_section(
+            id="s1", name="R", width=0.1, height=0.2
+        )
+        model.add_member(
+            CurveMember(
+                id="c1", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec
+            )
+        )
 
         buf = io.StringIO()
         write_analysis_steps(buf, model, gravity=True)

@@ -3,9 +3,7 @@
 import math
 from unittest.mock import MagicMock
 
-import pytest
 
-from ifc_structural_mechanics.domain.property import Section
 
 
 def _make_hollow_circle_profile(radius, wall_thickness, name="HSS 60.3x3.2"):
@@ -36,6 +34,7 @@ class TestHollowSectionExtractionFromMembersExtractor:
 
     def _make_extractor(self, length_scale=1.0):
         from ifc_structural_mechanics.ifc.members_extractor import MembersExtractor
+
         extractor = MagicMock(spec=MembersExtractor)
         extractor.length_scale = length_scale
         extractor._create_section = MembersExtractor._create_section.__get__(extractor)
@@ -105,15 +104,22 @@ class TestHollowSectionExtractionFromPropertiesExtractor:
     """Verify section extraction in PropertiesExtractor handles hollow profiles."""
 
     def _extractor_section_from_profile(self, profile, length_scale=1.0):
-        from ifc_structural_mechanics.ifc.properties_extractor import PropertiesExtractor
+        from ifc_structural_mechanics.ifc.properties_extractor import (
+            PropertiesExtractor,
+        )
+
         extractor = MagicMock(spec=PropertiesExtractor)
         extractor.length_scale = length_scale
         extractor.logger = MagicMock()
-        extractor._safe_get_attribute = lambda obj, attr, default=None: getattr(obj, attr, default)
+        extractor._safe_get_attribute = lambda obj, attr, default=None: getattr(
+            obj, attr, default
+        )
         extractor._create_default_section = lambda: None
         extractor._find_related_profile = MagicMock(return_value=profile)
         extractor._create_i_section = MagicMock(return_value=None)
-        extractor.extract_section = PropertiesExtractor.extract_section.__get__(extractor)
+        extractor.extract_section = PropertiesExtractor.extract_section.__get__(
+            extractor
+        )
 
         entity = MagicMock()
         return extractor.extract_section(entity)

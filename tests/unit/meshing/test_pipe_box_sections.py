@@ -3,12 +3,13 @@
 import io
 from unittest.mock import MagicMock
 
-import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.meshing.unified_calculix_writer import UnifiedCalculixWriter
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    UnifiedCalculixWriter,
+)
 
 
 def _make_writer(member):
@@ -24,7 +25,13 @@ def _make_writer(member):
 
 
 def _make_mat():
-    return Material(id="mat1", name="Steel", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
+    return Material(
+        id="mat1",
+        name="Steel",
+        density=7850.0,
+        elastic_modulus=210e9,
+        poisson_ratio=0.3,
+    )
 
 
 BEAM_NORMAL = (0.0, 1.0, 0.0)
@@ -50,7 +57,9 @@ class TestPipeSectionWriting:
         member, _ = self._member_and_section()
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
+        )
         assert "SECTION=PIPE" in buf.getvalue()
 
     def test_pipe_radii_on_data_line(self):
@@ -58,7 +67,9 @@ class TestPipeSectionWriting:
         member, _ = self._member_and_section(outer_r=outer_r, inner_r=inner_r)
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
+        )
         text = buf.getvalue()
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         # Data line immediately after *BEAM SECTION line
@@ -72,7 +83,9 @@ class TestPipeSectionWriting:
         member, _ = self._member_and_section()
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
+        )
         assert "SECTION=RECT" not in buf.getvalue()
 
 
@@ -97,7 +110,9 @@ class TestBoxSectionWriting:
         member, _ = self._member_and_section()
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL
+        )
         assert "SECTION=BOX" in buf.getvalue()
 
     def test_box_dimensions_on_data_line(self):
@@ -105,7 +120,9 @@ class TestBoxSectionWriting:
         member, _ = self._member_and_section(w=w, h=h, t=t)
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL
+        )
         text = buf.getvalue()
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         section_line_idx = next(i for i, l in enumerate(lines) if "SECTION=BOX" in l)
@@ -123,5 +140,7 @@ class TestBoxSectionWriting:
         member, _ = self._member_and_section()
         writer = _make_writer(member)
         buf = io.StringIO()
-        writer._write_beam_section_for_set(buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL)
+        writer._write_beam_section_for_set(
+            buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL
+        )
         assert "SECTION=RECT" not in buf.getvalue()

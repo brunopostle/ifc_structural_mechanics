@@ -421,7 +421,7 @@ class PropertiesExtractor:
                 except Exception as e:
                     self.logger.warning(f"Error converting pipe dimensions: {e}")
                 inner_r = outer_r - wall_t
-                area = math.pi * (outer_r ** 2 - inner_r ** 2)
+                area = math.pi * (outer_r**2 - inner_r**2)
                 profile_id = (
                     str(profile.id())
                     if hasattr(profile, "id") and callable(profile.id)

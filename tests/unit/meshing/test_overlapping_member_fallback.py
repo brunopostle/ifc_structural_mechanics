@@ -2,22 +2,31 @@
 
 import io
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.meshing.unified_calculix_writer import UnifiedCalculixWriter
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (
+    UnifiedCalculixWriter,
+)
 
 
 def _make_curve_member(id_, start, end, mat=None, sec=None):
     if mat is None:
-        mat = Material(id="mat1", name="Steel", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
+        mat = Material(
+            id="mat1",
+            name="Steel",
+            density=7850.0,
+            elastic_modulus=210e9,
+            poisson_ratio=0.3,
+        )
     if sec is None:
-        sec = Section.create_rectangular_section(id="sec1", name="R", width=0.1, height=0.2)
+        sec = Section.create_rectangular_section(
+            id="sec1", name="R", width=0.1, height=0.2
+        )
     return CurveMember(id=id_, geometry=[start, end], material=mat, section=sec)
 
 
@@ -53,7 +62,9 @@ class TestSpatialFallback:
     def test_no_sharing_leaves_empty_member(self):
         """Without sharing, a member whose elements are all assigned stays empty."""
         ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mb = _make_curve_member("member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])  # overlapping
+        mb = _make_curve_member(
+            "member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]
+        )  # overlapping
         writer = _make_writer_with_two_members(ma, mb)
 
         # Assign all elements to member_a first
@@ -105,10 +116,18 @@ class TestSectionDeduplication:
     def test_duplicate_section_skipped(self, caplog):
         """When two members share elements, only the first section is written."""
         model = StructuralModel(id="test")
-        mat = Material(id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3)
-        sec = Section.create_rectangular_section(id="s1", name="R", width=0.1, height=0.2)
-        ma = CurveMember(id="ma", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec)
-        mb = CurveMember(id="mb", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec)
+        mat = Material(
+            id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3
+        )
+        sec = Section.create_rectangular_section(
+            id="s1", name="R", width=0.1, height=0.2
+        )
+        ma = CurveMember(
+            id="ma", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec
+        )
+        mb = CurveMember(
+            id="mb", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec
+        )
         model.add_member(ma)
         model.add_member(mb)
 

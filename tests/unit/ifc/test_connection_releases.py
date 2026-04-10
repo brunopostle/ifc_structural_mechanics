@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
 
@@ -30,9 +29,15 @@ def _make_connection_with_condition(rot_x=None, rot_y=None, rot_z=None):
         return attr
 
     condition = MagicMock()
-    condition.RotationalStiffnessX = _make_stiffness(rot_x) if rot_x is not None else None
-    condition.RotationalStiffnessY = _make_stiffness(rot_y) if rot_y is not None else None
-    condition.RotationalStiffnessZ = _make_stiffness(rot_z) if rot_z is not None else None
+    condition.RotationalStiffnessX = (
+        _make_stiffness(rot_x) if rot_x is not None else None
+    )
+    condition.RotationalStiffnessY = (
+        _make_stiffness(rot_y) if rot_y is not None else None
+    )
+    condition.RotationalStiffnessZ = (
+        _make_stiffness(rot_z) if rot_z is not None else None
+    )
 
     rel = MagicMock()
     rel.AppliedCondition = condition
