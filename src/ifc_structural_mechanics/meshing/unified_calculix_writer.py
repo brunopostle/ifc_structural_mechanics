@@ -457,6 +457,22 @@ class UnifiedCalculixWriter:
             )
             self._assign_elements_spatially(unmapped_members, assigned_elements)
 
+        # Second-chance: for members that still have no elements (e.g. overlapping
+        # geometry where all nearby elements are already owned by another member),
+        # allow element sharing.
+        still_empty = [
+            m for m in self.domain_model.members
+            if f"MEMBER_{self._get_short_id(m.id)}" not in self.element_sets
+        ]
+        if still_empty:
+            logger.warning(
+                f"{len(still_empty)} members still have no elements after spatial "
+                f"fallback; attempting shared-element assignment"
+            )
+            self._assign_elements_spatially(
+                still_empty, assigned_elements, allow_sharing=True
+            )
+
         total_mapped = sum(
             1
             for m in self.domain_model.members
@@ -464,12 +480,26 @@ class UnifiedCalculixWriter:
         )
         logger.info(f"Mapped elements to {total_mapped} members total")
 
-    def _assign_elements_spatially(self, members: List, assigned_elements: set) -> None:
+    def _assign_elements_spatially(
+        self,
+        members: List,
+        assigned_elements: set,
+        allow_sharing: bool = False,
+    ) -> None:
         """
-        Assign unassigned elements to members based on spatial proximity.
+        Assign elements to members based on spatial proximity.
 
         For each unmapped member, compute its geometry centroid, then find
-        unassigned elements of matching type whose centroids are closest.
+        elements of matching type whose centroids are closest.
+
+        Args:
+            members: Members that need element assignment.
+            assigned_elements: Set of already-assigned element IDs.  When
+                ``allow_sharing`` is False, only elements *not* in this set are
+                considered.  When True, all elements are considered (shared
+                ownership — used as a last resort for overlapping geometry).
+            allow_sharing: If True, allow elements already owned by another
+                member to be shared with this member.
         """
         for member in members:
             # Compute member centroid from geometry
@@ -488,10 +518,10 @@ class UnifiedCalculixWriter:
                 {"S3", "S4", "S6", "S8", "S9"} if is_surface else {"B31", "B32"}
             )
 
-            # Find unassigned elements of matching type and their centroids
+            # Find candidate elements of matching type and their centroids
             best_elems = []
             for elem_id, elem_data in self.elements.items():
-                if elem_id in assigned_elements:
+                if not allow_sharing and elem_id in assigned_elements:
                     continue
                 if elem_data["type"] not in target_types:
                     continue
@@ -511,7 +541,10 @@ class UnifiedCalculixWriter:
                     continue
 
             if not best_elems:
-                logger.warning(f"No unassigned elements found for member {member.id}")
+                logger.warning(
+                    f"No {'candidate' if allow_sharing else 'unassigned'} "
+                    f"elements found for member {member.id}"
+                )
                 continue
 
             # Sort by distance and assign the closest elements
@@ -524,7 +557,14 @@ class UnifiedCalculixWriter:
             for dist, eid in best_elems:
                 if dist <= threshold:
                     member_elems.append(eid)
-                    assigned_elements.add(eid)
+                    if not allow_sharing:
+                        assigned_elements.add(eid)
+
+            if allow_sharing and member_elems:
+                logger.warning(
+                    f"Member {member.id}: sharing {len(member_elems)} elements "
+                    f"with another member (overlapping geometry)"
+                )
 
             if member_elems:
                 short_id = self._get_short_id(member.id)
@@ -853,6 +893,36 @@ class UnifiedCalculixWriter:
                 f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
             )
 
+        elif (
+            hasattr(member.section, "section_type")
+            and member.section.section_type == "pipe"
+        ):
+            outer_r = member.section.dimensions.get("outer_radius", 0.05)
+            inner_r = member.section.dimensions.get("inner_radius", 0.04)
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=PIPE\n"
+            )
+            file.write(f"{outer_r:.6e}, {inner_r:.6e}\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+            )
+
+        elif (
+            hasattr(member.section, "section_type")
+            and member.section.section_type == "box"
+        ):
+            h = member.section.dimensions.get("height", 0.2)
+            w = member.section.dimensions.get("width", 0.1)
+            t = member.section.dimensions.get("wall_thickness", 0.005)
+            # CalculiX BOX: a (height, local-1), b (width, local-2), t1 t2 t3 t4
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=BOX\n"
+            )
+            file.write(f"{h:.6e}, {w:.6e}, {t:.6e}, {t:.6e}, {t:.6e}, {t:.6e}\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+            )
+
         else:
             # Non-standard section (I-beam, etc.): CalculiX B31 only supports
             # RECT, CIRC, PIPE, BOX — not GENERAL. Use equivalent RECT that
@@ -943,6 +1013,7 @@ class UnifiedCalculixWriter:
         file.write("** Section Definitions\n")
 
         sections_written = 0
+        already_sectioned_elements: set = set()
 
         # Split beam element sets by orientation
         beam_orientation_groups = self._split_beam_sets_by_orientation()
@@ -955,6 +1026,17 @@ class UnifiedCalculixWriter:
             if member_set not in self.element_sets or not self.element_sets[member_set]:
                 logger.warning(f"No elements for member {member.id}, skipping section")
                 continue
+
+            # Deduplication guard: skip members whose elements are already covered
+            # by a previously written section (overlapping geometry).
+            member_elems = set(self.element_sets[member_set])
+            if member_elems & already_sectioned_elements:
+                logger.warning(
+                    f"Member {member.id}: elements already assigned to another "
+                    f"section (geometry overlap) — skipping duplicate section"
+                )
+                continue
+            already_sectioned_elements.update(member_elems)
 
             material_id = member.material.id if member.material else "DEFAULT"
 
@@ -1130,8 +1212,11 @@ class UnifiedCalculixWriter:
 
             # Get connection type
             if conn.entity_type == "point":
+                # Use is_hinge if either the connection type says so OR the IFC
+                # AppliedCondition indicates rotational end-releases
+                is_hinge = getattr(conn, "has_end_releases", False)
                 self._write_point_connection(
-                    file, conn, real_members, constrained_node_dofs
+                    file, conn, real_members, constrained_node_dofs, is_hinge=is_hinge
                 )
                 connections_written += 1
             elif conn.entity_type == "rigid":
