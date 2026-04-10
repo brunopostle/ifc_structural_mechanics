@@ -27,12 +27,12 @@ def main():
     print("=" * 80)
 
     # Extract model (for metadata)
-    print(f"\n1. Loading model...")
+    print("\n1. Loading model...")
     extractor = Extractor(ifc_file)
     model = extractor.extract_model()
 
     # Parse results
-    print(f"2. Parsing results from FRD...")
+    print("2. Parsing results from FRD...")
     result_files = {
         "results": frd_file,
         "data": f"{results_dir}/analysis.dat",
@@ -44,16 +44,16 @@ def main():
     print(f"   Stresses: {len(parsed_results.get('stress', []))}")
 
     # Create visualizer and load mesh from FRD
-    print(f"\n3. Loading mesh from FRD file...")
+    print("\n3. Loading mesh from FRD file...")
     viz = ResultVisualizer(model)
     viz.load_mesh_from_frd(frd_file)
 
     # Apply displacement field (scale=1 for undeformed visualization)
-    print(f"\n4. Mapping results to mesh...")
+    print("\n4. Mapping results to mesh...")
     viz.apply_displacement_field(scale_factor=1.0)
 
     # Visualize
-    print(f"\n5. Creating visualization...")
+    print("\n5. Creating visualization...")
     print("   Showing displacement magnitude on undeformed mesh")
     print("   Controls:")
     print("   - Left click + drag: Rotate")
@@ -65,9 +65,9 @@ def main():
     viz.plot_deformed(
         scale_factor=1.0,
         show_undeformed=False,
-        field='Displacement',
-        cmap='jet',
-        window_size=(1400, 900)
+        field="Displacement",
+        cmap="jet",
+        window_size=(1400, 900),
     )
 
     return 0
@@ -82,5 +82,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

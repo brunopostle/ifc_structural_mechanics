@@ -54,7 +54,7 @@ jobs:
       - name: Install CalculiX
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y calculix
+          sudo apt-get install -y calculix-ccx
 
       - name: Install Python dependencies
         run: |

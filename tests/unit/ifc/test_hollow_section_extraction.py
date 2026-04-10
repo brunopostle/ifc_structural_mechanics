@@ -4,8 +4,6 @@ import math
 from unittest.mock import MagicMock
 
 
-
-
 def _make_hollow_circle_profile(radius, wall_thickness, name="HSS 60.3x3.2"):
     """Create a mock IfcCircleHollowProfileDef."""
     p = MagicMock()

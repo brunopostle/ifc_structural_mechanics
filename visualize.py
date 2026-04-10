@@ -68,8 +68,7 @@ def auto_scale(displacements):
     if not displacements:
         return 1.0
     max_disp = max(
-        (sum(c ** 2 for c in r.get_translations()) ** 0.5)
-        for r in displacements
+        (sum(c**2 for c in r.get_translations()) ** 0.5) for r in displacements
     )
     if max_disp < 1e-12:
         return 1.0
@@ -82,23 +81,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("model", help="Model name (e.g. slab_01, portal_01, building_02)")
+    parser.add_argument(
+        "model", help="Model name (e.g. slab_01, portal_01, building_02)"
+    )
     parser.add_argument("--output-dir", "-d", help="Override output directory path")
     parser.add_argument(
-        "--scale", "-s", type=float, default=None,
+        "--scale",
+        "-s",
+        type=float,
+        default=None,
         help="Displacement scale factor (default: auto)",
     )
     parser.add_argument(
-        "--field", "-f", default="displacement",
+        "--field",
+        "-f",
+        default="displacement",
         choices=["displacement", "stress"],
         help="Field to visualize (default: displacement)",
     )
     parser.add_argument("--cmap", "-c", default="jet", help="Colormap (default: jet)")
-    parser.add_argument("--screenshot", help="Save screenshot to file instead of interactive view")
-    parser.add_argument("--html", help="Export interactive HTML to file")
-    parser.add_argument("--no-undeformed", action="store_true", help="Hide undeformed wireframe")
     parser.add_argument(
-        "--step", default=None,
+        "--screenshot", help="Save screenshot to file instead of interactive view"
+    )
+    parser.add_argument("--html", help="Export interactive HTML to file")
+    parser.add_argument(
+        "--no-undeformed", action="store_true", help="Hide undeformed wireframe"
+    )
+    parser.add_argument(
+        "--step",
+        default=None,
         help="Load case / step name to visualize (default: all steps combined)",
     )
 
@@ -132,14 +143,18 @@ def main():
     # Filter by step/load-case name if requested
     if args.step:
         filtered = [
-            r for r in parsed.get("displacement", [])
+            r
+            for r in parsed.get("displacement", [])
             if r.get_metadata("load_case") == args.step
         ]
         if not filtered:
-            available = sorted(set(
-                r.get_metadata("load_case") for r in parsed.get("displacement", [])
-                if r.get_metadata("load_case")
-            ))
+            available = sorted(
+                set(
+                    r.get_metadata("load_case")
+                    for r in parsed.get("displacement", [])
+                    if r.get_metadata("load_case")
+                )
+            )
             sys.exit(
                 f"No results for step '{args.step}'. "
                 f"Available: {available or ['(no load case tags)']}"
@@ -155,11 +170,12 @@ def main():
     print("Loading mesh and building node mapping...")
     viz = ResultVisualizer(model)
     viz.load_mesh_from_frd(str(frd_file), str(inp_file))
-    mapped = len(getattr(viz, '_inp_node_to_frd_node', {}))
+    mapped = len(getattr(viz, "_inp_node_to_frd_node", {}))
     print(f"  {viz.mesh.n_points} mesh nodes, {mapped} mapped to FRD results")
 
     # Determine scale factor
     from ifc_structural_mechanics.domain.result import DisplacementResult
+
     disp_results = [r for r in model.results if isinstance(r, DisplacementResult)]
     scale = args.scale if args.scale is not None else auto_scale(disp_results)
     print(f"  Scale factor: {scale:.1f}x")
@@ -181,7 +197,9 @@ def main():
     # Output
     if args.html:
         print(f"Exporting to {args.html}...")
-        viz.export_to_html(args.html, scale_factor=scale, field=field_name, cmap=args.cmap)
+        viz.export_to_html(
+            args.html, scale_factor=scale, field=field_name, cmap=args.cmap
+        )
         print(f"Done — open {args.html} in a browser.")
     elif args.screenshot:
         print(f"Saving screenshot to {args.screenshot}...")
