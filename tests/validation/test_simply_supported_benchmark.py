@@ -51,13 +51,12 @@ def _write_ss_beam_inp(inp_path: str) -> None:
     Midspan point load at node 11 (x=1.0).
     """
     from ifc_structural_mechanics.analysis.file_writers import (
-        write_elements,
         write_node_sets,
         write_nodes,
     )
 
     nodes = {i + 1: (round(i * 0.1, 1), 0.0, 0.0) for i in range(21)}
-    elements = {i + 1: {"type": "B31", "nodes": [i + 1, i + 2]} for i in range(20)}
+    {i + 1: {"type": "B31", "nodes": [i + 1, i + 2]} for i in range(20)}
     node_sets = {
         "PINA": [1],
         "ROLLERB": [21],
