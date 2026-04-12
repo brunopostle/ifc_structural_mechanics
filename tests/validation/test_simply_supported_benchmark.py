@@ -66,7 +66,9 @@ def _write_ss_beam_inp(inp_path: str) -> None:
     }
 
     with open(inp_path, "w") as f:
-        f.write("*HEADING\nSimply supported beam benchmark: midspan load, 20 B31 elements\n")
+        f.write(
+            "*HEADING\nSimply supported beam benchmark: midspan load, 20 B31 elements\n"
+        )
         write_nodes(f, nodes)
         # write_elements doesn't support ELSET on the *ELEMENT line, so write directly
         f.write("*ELEMENT, TYPE=B31, ELSET=BEAM\n")
@@ -106,14 +108,11 @@ def _parse_frd_node_coordinates(frd_path):
                 parts = s.split()
                 nid = parts[1]
                 rest = s[s.index(nid) + len(nid) :]
-                pattern = (
-                    r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)"
-                )
+                pattern = r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)"
                 vals = re.findall(pattern, rest)
                 if len(vals) >= 3:
                     coords[nid] = tuple(
-                        float(v.replace("D", "E").replace("d", "e"))
-                        for v in vals[:3]
+                        float(v.replace("D", "E").replace("d", "e")) for v in vals[:3]
                     )
     return coords
 
@@ -169,10 +168,13 @@ class TestDirectCalculixValidation:
         assert len(mid_tys) > 0, f"No displacements for midspan nodes {mid_node_ids}"
 
         computed = abs(sum(mid_tys) / len(mid_tys))
-        assert sum(mid_tys) / len(mid_tys) < 0, "Expected downward (negative y) deflection"
+        assert (
+            sum(mid_tys) / len(mid_tys) < 0
+        ), "Expected downward (negative y) deflection"
 
         rel_error = (
-            abs(computed - ANALYTICAL_MIDSPAN_DEFLECTION) / ANALYTICAL_MIDSPAN_DEFLECTION
+            abs(computed - ANALYTICAL_MIDSPAN_DEFLECTION)
+            / ANALYTICAL_MIDSPAN_DEFLECTION
         )
         assert rel_error < TOLERANCE, (
             f"Midspan deflection {computed:.6e} m deviates from analytical "
