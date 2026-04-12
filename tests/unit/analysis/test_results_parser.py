@@ -171,3 +171,86 @@ total forces (fx,fy,fz) and moments (mx,my,mz)
 
         # Check that results were added to the domain model
         assert len(mock_domain_model.results) > 0
+
+
+class TestParseBeamSectionForces:
+    """Tests for ResultsParser.parse_beam_section_forces()."""
+
+    @pytest.fixture
+    def dat_with_sf(self, tmp_path):
+        """DAT file with a single beam section forces block.
+
+        No blank line between the block banner and the column-header row —
+        that matches the format the parser handles (a blank line would
+        prematurely close the block).
+        """
+        content = """\
+ STEP 1
+
+ beam section forces and moments
+  element no.  integ. pt. no.     N          T         Mf1        Mf2        Vf1        Vf2
+       1           1       1.000E+03  0.000E+00  5.000E+03  2.000E+03  1.500E+03  5.000E+02
+       1           2       1.100E+03  0.000E+00  4.800E+03  1.900E+03  1.400E+03  4.800E+02
+       2           1       2.000E+03  1.000E+02  6.000E+03  3.000E+03  2.000E+03  6.000E+02
+
+"""
+        p = tmp_path / "analysis.dat"
+        p.write_text(content)
+        return str(p)
+
+    @pytest.fixture
+    def dat_multi_step(self, tmp_path):
+        """DAT file with two steps, each with a beam section forces block."""
+        content = """\
+ STEP 1
+
+ beam section forces and moments
+  element no.  integ. pt. no.     N          T         Mf1        Mf2        Vf1        Vf2
+       1           1       1.000E+03  0.000E+00  5.000E+03  0.000E+00  0.000E+00  0.000E+00
+
+ STEP 2
+
+ beam section forces and moments
+  element no.  integ. pt. no.     N          T         Mf1        Mf2        Vf1        Vf2
+       1           1       2.000E+03  0.000E+00  8.000E+03  0.000E+00  0.000E+00  0.000E+00
+
+"""
+        p = tmp_path / "analysis.dat"
+        p.write_text(content)
+        return str(p)
+
+    def test_returns_list_of_dicts(self, dat_with_sf):
+        parser = ResultsParser(domain_model=StructuralModel(id="m"))
+        results = parser.parse_beam_section_forces(dat_with_sf)
+        assert isinstance(results, list)
+        assert len(results) == 3
+
+    def test_element_and_integ_pt_parsed(self, dat_with_sf):
+        parser = ResultsParser(domain_model=StructuralModel(id="m"))
+        results = parser.parse_beam_section_forces(dat_with_sf)
+        assert results[0]["element_id"] == 1
+        assert results[0]["integ_pt"] == 1
+        assert results[1]["element_id"] == 1
+        assert results[1]["integ_pt"] == 2
+        assert results[2]["element_id"] == 2
+
+    def test_force_values_parsed(self, dat_with_sf):
+        parser = ResultsParser(domain_model=StructuralModel(id="m"))
+        results = parser.parse_beam_section_forces(dat_with_sf)
+        r = results[0]
+        assert abs(r["N"] - 1000.0) < 1.0
+        assert abs(r["Mf1"] - 5000.0) < 1.0
+        assert abs(r["Mf2"] - 2000.0) < 1.0
+
+    def test_nonexistent_file_returns_empty(self, tmp_path):
+        parser = ResultsParser(domain_model=StructuralModel(id="m"))
+        results = parser.parse_beam_section_forces(str(tmp_path / "missing.dat"))
+        assert results == []
+
+    def test_multi_step_produces_separate_records(self, dat_multi_step):
+        parser = ResultsParser(domain_model=StructuralModel(id="m"))
+        results = parser.parse_beam_section_forces(dat_multi_step)
+        assert len(results) == 2
+        # Step indices should differ
+        step_indices = {r.get("step_index", r.get("load_case")) for r in results}
+        assert len(step_indices) == 2

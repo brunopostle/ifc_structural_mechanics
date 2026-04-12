@@ -476,6 +476,118 @@ class TestSection:
         assert "shear_area_z" in section_dict
 
 
+class TestSectionExtremeFibreDistances:
+    """Tests for Section.get_extreme_fibre_distances()."""
+
+    def test_rectangular(self):
+        sec = Section.create_rectangular_section("r1", "Rect", width=0.2, height=0.4)
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.2, rel_tol=1e-10)  # height/2
+        assert math.isclose(z, 0.1, rel_tol=1e-10)  # width/2
+
+    def test_circular(self):
+        sec = Section.create_circular_section("c1", "Circ", radius=0.05)
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.05, rel_tol=1e-10)
+        assert math.isclose(z, 0.05, rel_tol=1e-10)
+
+    def test_i_section(self):
+        sec = Section(
+            id="i1",
+            name="I",
+            section_type="i",
+            area=0.01,
+            dimensions={
+                "width": 0.2,
+                "height": 0.4,
+                "web_thickness": 0.01,
+                "flange_thickness": 0.015,
+            },
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.2, rel_tol=1e-10)  # height/2
+        assert math.isclose(z, 0.1, rel_tol=1e-10)  # width/2
+
+    def test_c_section(self):
+        sec = Section(
+            id="c1",
+            name="C",
+            section_type="c",
+            area=0.005,
+            dimensions={
+                "width": 0.1,
+                "height": 0.2,
+                "web_thickness": 0.008,
+                "flange_thickness": 0.012,
+            },
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.1, rel_tol=1e-10)  # height/2
+        assert math.isclose(z, 0.05, rel_tol=1e-10)  # width/2
+
+    def test_l_section(self):
+        sec = Section(
+            id="l1",
+            name="L",
+            section_type="l",
+            area=0.004,
+            dimensions={"width": 0.1, "height": 0.15, "thickness": 0.01},
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.075, rel_tol=1e-10)  # height/2
+        assert math.isclose(z, 0.05, rel_tol=1e-10)  # width/2
+
+    def test_t_section_centroid(self):
+        """T-section centroid is asymmetric; y_max is the larger half."""
+        tf, h, tw, b = 0.02, 0.3, 0.015, 0.2
+        Af = b * tf
+        Aw = tw * (h - tf)
+        y_centroid = (Af * (h - tf / 2) + Aw * (h - tf) / 2) / (Af + Aw)
+        sec = Section(
+            id="t1",
+            name="T",
+            section_type="t",
+            area=Af + Aw,
+            dimensions={
+                "width": b,
+                "height": h,
+                "web_thickness": tw,
+                "flange_thickness": tf,
+            },
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, max(y_centroid, h - y_centroid), rel_tol=1e-6)
+        assert math.isclose(z, b / 2, rel_tol=1e-10)
+
+    def test_hollow_circular_outer_radius(self):
+        sec = Section.create_hollow_circular_section(
+            "hc1", "Pipe", outer_radius=0.05, thickness=0.005
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.05, rel_tol=1e-10)
+        assert math.isclose(z, 0.05, rel_tol=1e-10)
+
+    def test_hollow_rectangular(self):
+        sec = Section.create_hollow_rectangular_section(
+            "hr1", "Box", outer_width=0.2, outer_height=0.3, thickness=0.01
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert math.isclose(y, 0.15, rel_tol=1e-10)  # height/2
+        assert math.isclose(z, 0.1, rel_tol=1e-10)  # width/2
+
+    def test_unknown_section_type_returns_none(self):
+        sec = Section(
+            id="x1",
+            name="X",
+            section_type="custom_unknown",
+            area=0.01,
+            dimensions={"width": 0.1},
+        )
+        y, z = sec.get_extreme_fibre_distances()
+        assert y is None
+        assert z is None
+
+
 class TestThickness:
     """Tests for the Thickness class."""
 

@@ -339,3 +339,37 @@ class TestStructuralModel:
         # Try to get a non-existent result
         result = model.get_result("non_existent")
         assert result is None
+
+
+class TestRegisterNodeMemberships:
+    """Tests for StructuralModel.register_node_memberships()."""
+
+    def test_nodes_mapped_to_member(self):
+        model = StructuralModel(id="m")
+        model.register_node_memberships([1, 2, 3], "beam_1")
+        assert model.node_to_member[1] == "beam_1"
+        assert model.node_to_member[2] == "beam_1"
+        assert model.node_to_member[3] == "beam_1"
+
+    def test_multiple_members(self):
+        model = StructuralModel(id="m")
+        model.register_node_memberships([1, 2], "beam_1")
+        model.register_node_memberships([3, 4], "beam_2")
+        assert model.node_to_member[1] == "beam_1"
+        assert model.node_to_member[3] == "beam_2"
+
+    def test_empty_node_list(self):
+        model = StructuralModel(id="m")
+        model.register_node_memberships([], "beam_1")
+        assert model.node_to_member == {}
+
+    def test_later_registration_overwrites(self):
+        """If the same node is registered twice, the later call wins."""
+        model = StructuralModel(id="m")
+        model.register_node_memberships([5], "beam_1")
+        model.register_node_memberships([5], "beam_2")
+        assert model.node_to_member[5] == "beam_2"
+
+    def test_node_to_member_starts_empty(self):
+        model = StructuralModel(id="m")
+        assert model.node_to_member == {}
