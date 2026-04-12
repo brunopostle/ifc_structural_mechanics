@@ -249,6 +249,9 @@ class UnifiedCalculixWriter:
             # Step 2: Map elements to domain members
             self._map_elements_to_members()
 
+            # Step 2b: Register node→member memberships for result export
+            self._register_node_memberships()
+
             # Step 3: Write complete CalculiX input file
             self._write_calculix_input_file(output_file)
 
@@ -639,6 +642,26 @@ class UnifiedCalculixWriter:
                 f"Assigned {len(member_elements)} {member_type} elements to member {member.id}"
             )
             start_idx = end_idx
+
+    def _register_node_memberships(self) -> None:
+        """Register mesh node IDs to member IDs in the domain model.
+
+        Iterates over all member element sets, collects the node IDs from each
+        element's connectivity, and records them in ``StructuralModel.node_to_member``
+        so that node-based FRD results (displacements, stresses) can be traced back
+        to IFC entities without re-parsing the INP file.
+        """
+        for member in self.domain_model.members:
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+            elem_ids = self.element_sets.get(member_set, [])
+            node_ids = []
+            for elem_id in elem_ids:
+                elem = self.elements.get(elem_id)
+                if elem:
+                    node_ids.extend(elem["nodes"])
+            if node_ids:
+                self.domain_model.register_node_memberships(node_ids, member.id)
 
     def _write_calculix_input_file(self, output_file: str) -> None:
         """

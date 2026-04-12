@@ -17,6 +17,7 @@ from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
 from ..domain.structural_model import StructuralModel
+from ..export.results_exporter import ResultsExporter
 from ..ifc.extractor import Extractor
 from ..meshing.unified_calculix_writer import run_complete_analysis_workflow
 from ..utils.error_handling import (
@@ -203,6 +204,25 @@ def analyze_ifc(
                 parsed_results = results_parser.parse_results(calculix_output_files)
                 result["parsed_results"] = parsed_results
                 logger.info("Successfully parsed analysis results")
+
+                # Export GlobalId-keyed JSON results
+                try:
+                    json_path = os.path.join(output_dir, "results.json")
+                    exporter = ResultsExporter(domain_model, parsed_results)
+                    exporter.export(json_path)
+                    result["output_files"]["results_json"] = json_path
+                    logger.info(f"Wrote results JSON: {json_path}")
+                except Exception as e:
+                    logger.warning(f"Could not write results.json: {e}")
+                    result["warnings"].append(
+                        {
+                            "message": f"Could not write results.json: {str(e)}",
+                            "severity": "warning",
+                            "entity_type": None,
+                            "ccx_id": None,
+                            "domain_id": None,
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"Error parsing detailed results: {e}")
                 result["warnings"].append(

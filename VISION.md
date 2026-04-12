@@ -154,19 +154,40 @@ integration is preferred.
 - **Partial end-releases**: only full pins (all rotational DOFs released) are modelled.
   Per-DOF partial releases are out of scope.
 
-### Phase 2 — JSON results output
+### Phase 2 — JSON results output *(partially done)*
 
-- [ ] Define and document the JSON schema (summary + detail levels, unit declarations,
-  status fields, section force/moment output per member)
-- [ ] Implement `ResultsExporter` that consumes `StructuralModel` post-analysis and
-  writes JSON
-- [ ] Load case axis in results (per-case values, not just global envelope)
-- [ ] Utilisation ratio computation from section forces + section properties
-- [ ] `status` field driven by user-supplied limit parameters (CLI flags or config file)
-- [ ] Integration tests asserting JSON output for all example models
+**Done:**
+
+- [x] JSON schema defined (summary level: per-member envelope + per-load-case breakdown,
+  global displacement stats, total reactions). Schema documented in
+  `export/results_exporter.py` module docstring.
+- [x] `ResultsExporter` implemented — consumes `StructuralModel` + `parsed_results`,
+  writes `results.json` keyed to IFC GlobalIds
+- [x] Load case axis in results (per-case `max_displacement_m`, `max_von_mises_Pa`)
+- [x] `status` field framework in place (`ok` / `fail` driven by optional `limits` dict)
+- [x] Node→member traceability: `StructuralModel.node_to_member` populated by the
+  meshing pipeline so node-based FRD results map back to IFC entities
+
+**Remaining:**
+
+- [ ] **Beam section forces**: For B31 beam elements, CalculiX internally expands to
+  C3D8I bricks whose nodes are not in the original mesh. FRD nodal stress results
+  therefore do not map to beam members via `node_to_member`. The correct source for
+  beam results is the section forces/moments (N, Vy, Vz, My, Mz, T) written to the
+  `.dat` file by `*NODE PRINT`. These must be parsed from `.dat` and added as
+  `section_forces` in the per-member JSON entry. Shell element (S8R) stress results
+  already work correctly via `node_to_member`.
+- [ ] **Utilisation ratio**: once section forces are available, compute
+  σ_max = |N|/A + |M|/I × y_max per member and expose as `max_utilisation_ratio` in
+  the JSON. Requires section properties (A, Iy, Iz, y_max) already extracted from IFC.
+- [ ] **`--limits` CLI flag**: expose the `limits` dict as CLI arguments so users can
+  set pass/fail thresholds without touching Python (e.g. `--limit-stress 250e6`).
+- [ ] **Integration tests**: assert `results.json` content for all example models
+  (displacement, stress, load case labels, member count).
 
 **Done when**: `ifc-analysis analyze model.ifc --output ./results` writes `results.json`
-that a script can consume to find the most-stressed member by GlobalId.
+that a script can consume to find the most-stressed member by GlobalId — including beam
+members.
 
 ### Phase 3 — Bonsai wrapper *(separate repo)*
 

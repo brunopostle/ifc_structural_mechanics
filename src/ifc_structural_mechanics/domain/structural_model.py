@@ -61,6 +61,7 @@ class StructuralModel:
         )  # element_id → connection.id
         self.mesh_entity_to_member: Dict[str, str] = {}  # gmsh_id → member.id
         self.mesh_entity_to_connection: Dict[str, str] = {}  # gmsh_id → connection.id
+        self.node_to_member: Dict[int, str] = {}  # node_id → member.id
 
     def add_member(self, member) -> None:
         """
@@ -375,6 +376,20 @@ class StructuralModel:
             raise ValueError(
                 f"Invalid entity_type: {entity_type}. Must be 'member' or 'connection'"
             )
+
+    def register_node_memberships(self, node_ids: List[int], member_id: str) -> None:
+        """
+        Register the mesh nodes that belong to a structural member.
+
+        Called by the meshing module after element-to-member mapping is complete,
+        so that result exporters can map node-based FRD results to IFC entities.
+
+        Args:
+            node_ids: List of CalculiX node IDs belonging to this member.
+            member_id: ID of the domain member that owns these nodes.
+        """
+        for node_id in node_ids:
+            self.node_to_member[node_id] = member_id
 
     def trace_error_to_ifc(self, analysis_element_id: int) -> Optional[str]:
         """
