@@ -813,6 +813,107 @@ class ResultsParser(BaseParser):
         logger.info(f"Parsed {len(eigenvalues)} buckling eigenvalues from {dat_file}")
         return eigenvalues
 
+    def parse_beam_section_forces(self, dat_file: str) -> List[Dict]:
+        """Parse beam section forces from the CalculiX DAT file.
+
+        CalculiX writes beam section forces when ``*EL PRINT, ELSET=EALL`` / ``SF``
+        appears in the input.  The DAT block looks like::
+
+            beam section forces and moments
+
+             element no.  integ. pt. no.     N          T         Mf1        Mf2        Vf1        Vf2
+                  1           1       1.234E+03  0.000E+00  ...
+
+        Column order is N (axial), T (torsion), Mf1/Mf2 (bending moments),
+        Vf1/Vf2 (shear forces).  The exact column headers vary across CalculiX
+        versions; this parser uses positional extraction after detecting the block.
+
+        Returns:
+            List of dicts with keys: ``element_id`` (int), ``integ_pt`` (int),
+            ``N`` (float), ``T`` (float), ``Mf1`` (float), ``Mf2`` (float),
+            ``Vf1`` (float), ``Vf2`` (float), ``load_case`` (str).
+        """
+        results: List[Dict] = []
+        if not os.path.exists(dat_file):
+            return results
+
+        try:
+            with open(dat_file) as fh:
+                lines = fh.readlines()
+        except (IOError, OSError) as e:
+            logger.warning(f"Could not read DAT file for section forces: {e}")
+            return results
+
+        step_index = 0
+        in_block = False
+        past_header = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect a new step boundary so we can label results by load case
+            if stripped.lower().startswith("step") and stripped.lower() != "step":
+                step_index += 1
+                in_block = False
+                past_header = False
+                continue
+
+            # Detect the section-force block header
+            if "beam section forces" in stripped.lower():
+                in_block = True
+                past_header = False
+                continue
+
+            if not in_block:
+                continue
+
+            # Skip the column-header line (contains letters like N, T, Mf1…)
+            if not past_header:
+                if stripped and not stripped[0].isdigit() and not stripped[0] == "-":
+                    continue  # still a header line
+                past_header = True
+
+            # Empty line signals end of this block
+            if not stripped:
+                if past_header:
+                    in_block = False
+                    past_header = False
+                continue
+
+            # Parse a data line: elem_no  integ_pt  N  T  Mf1  Mf2  Vf1  Vf2
+            parts = stripped.split()
+            if len(parts) < 4:
+                continue
+            try:
+                elem_id = int(parts[0])
+                integ_pt = int(parts[1])
+                floats = [float(p) for p in parts[2:]]
+            except (ValueError, IndexError):
+                continue
+
+            # Map positional floats to named quantities
+            # CalculiX B31 SF output order: N, T, Mf1, Mf2, Vf1, Vf2
+            lc_name = (
+                self.load_case_names[step_index - 1]
+                if self.load_case_names and 0 < step_index <= len(self.load_case_names)
+                else (f"step_{step_index}" if step_index else "_combined")
+            )
+            entry: Dict = {
+                "element_id": elem_id,
+                "integ_pt": integ_pt,
+                "N": floats[0] if len(floats) > 0 else 0.0,
+                "T": floats[1] if len(floats) > 1 else 0.0,
+                "Mf1": floats[2] if len(floats) > 2 else 0.0,
+                "Mf2": floats[3] if len(floats) > 3 else 0.0,
+                "Vf1": floats[4] if len(floats) > 4 else 0.0,
+                "Vf2": floats[5] if len(floats) > 5 else 0.0,
+                "load_case": lc_name,
+            }
+            results.append(entry)
+
+        logger.info(f"Parsed {len(results)} beam section force records from {dat_file}")
+        return results
+
     def parse_results(self, result_files: Dict[str, str]) -> Dict[str, List[Result]]:
         """
         Parse all result files and create domain model result objects.
@@ -832,6 +933,7 @@ class ResultsParser(BaseParser):
             "strain": [],
             "reaction": [],
             "buckling": [],
+            "section_forces": [],
         }
 
         try:
@@ -864,6 +966,10 @@ class ResultsParser(BaseParser):
                 # Parse buckling eigenvalues (non-empty only for buckling analyses)
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)
                 parsed_results["buckling"].extend(eigenvalues)
+
+                # Parse beam section forces (written by *EL PRINT, SF)
+                section_forces = self.parse_beam_section_forces(dat_file)
+                parsed_results["section_forces"].extend(section_forces)
 
             # Map results to domain model entities if a model is provided
             if self.domain_model:

@@ -577,6 +577,45 @@ class Section:
 
         return wy, wz
 
+    def get_extreme_fibre_distances(self) -> Tuple[Optional[float], Optional[float]]:
+        """Return distances from neutral axis to extreme fibres (y_max, z_max) in m.
+
+        Used for utilisation ratio calculation: σ_max = |N|/A + |My|/Iy*y_max + |Mz|/Iz*z_max.
+        Returns (None, None) when the section geometry is unknown.
+        """
+        d = self.dimensions
+        t = self.section_type
+        if t == "rectangular":
+            return d["height"] / 2, d["width"] / 2
+        elif t == "circular":
+            r = d["radius"]
+            return r, r
+        elif t in ("i", "c"):
+            return d["height"] / 2, d["width"] / 2
+        elif t == "t":
+            # Asymmetric — use larger of the two sides from centroid
+            tf, h = d["flange_thickness"], d["height"]
+            tw = d["web_thickness"]
+            b = d["width"]
+            Af = b * tf
+            Aw = tw * (h - tf)
+            y_centroid = (Af * (h - tf / 2) + Aw * (h - tf) / 2) / (Af + Aw)
+            return max(y_centroid, h - y_centroid), b / 2
+        elif t == "l":
+            return d["height"] / 2, d["width"] / 2
+        elif t in ("pipe", "hollow_circular"):
+            r = d.get("outer_radius", d.get("radius", None))
+            if r is None:
+                return None, None
+            return r, r
+        elif t in ("box", "hollow_rectangular"):
+            ho = d.get("height", d.get("outer_height", None))
+            wo = d.get("width", d.get("outer_width", None))
+            if ho is None or wo is None:
+                return None, None
+            return ho / 2, wo / 2
+        return None, None
+
     @classmethod
     def create_rectangular_section(
         cls, id: str, name: str, width: float, height: float

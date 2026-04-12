@@ -948,27 +948,54 @@ class UnifiedCalculixWriter:
             )
 
         else:
-            # Non-standard section (I-beam, etc.): CalculiX B31 only supports
-            # RECT, CIRC, PIPE, BOX — not GENERAL. Use equivalent RECT that
-            # preserves area and strong-axis moment of inertia:
-            #   w*h = A, w*h³/12 = Iy → h = sqrt(12*Iy/A), w = A/h
-            area = getattr(member.section, "area", 0.01)
-            i_yy = getattr(member.section, "moment_of_inertia_y", area * 0.01)
+            # Non-standard section (I, T, L, C, hollow, etc.): use SECTION=GENERAL
+            # so cross-sectional properties are supplied directly rather than
+            # approximated by an equivalent rectangle.
+            #
+            # SECTION=GENERAL line: A, I11, I12, I22, IT
+            #   A   = cross-sectional area
+            #   I11 = moment of inertia about local 2-axis (Iy, strong axis)
+            #   I12 = product of inertia (0 for doubly-symmetric sections)
+            #   I22 = moment of inertia about local 3-axis (Iz, weak axis)
+            #   IT  = St. Venant torsional constant
+            area = getattr(member.section, "area", None)
+            i_yy = getattr(member.section, "moment_of_inertia_y", None)
+            i_zz = getattr(member.section, "moment_of_inertia_z", None)
+            it = getattr(member.section, "torsional_constant", None)
 
-            if area > 0 and i_yy > 0:
-                height = (12.0 * i_yy / area) ** 0.5
-                width = area / height
+            if area and i_yy and i_zz and it:
+                file.write(
+                    f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
+                    f" SECTION=GENERAL\n"
+                )
+                file.write(f"{area:.6e}, {i_yy:.6e}, 0.0, {i_zz:.6e}, {it:.6e}\n")
+                file.write(
+                    f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
+                    f" {beam_normal[2]:.6e}\n\n"
+                )
             else:
-                height = area**0.5 if area > 0 else 0.1
-                width = height
-
-            file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
-            )
-            file.write(f"{width:.6e}, {height:.6e}\n")
-            file.write(
-                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
-            )
+                # Last resort: fall back to equivalent RECT when properties are missing
+                area = area or 0.01
+                i_yy = i_yy or area * 0.01
+                if area > 0 and i_yy > 0:
+                    height = (12.0 * i_yy / area) ** 0.5
+                    width = area / height
+                else:
+                    height = area**0.5 if area > 0 else 0.1
+                    width = height
+                logger.warning(
+                    f"Member {member.id}: missing section properties for SECTION=GENERAL,"
+                    f" falling back to equivalent RECT {width:.4f}×{height:.4f}"
+                )
+                file.write(
+                    f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
+                    f" SECTION=RECT\n"
+                )
+                file.write(f"{width:.6e}, {height:.6e}\n")
+                file.write(
+                    f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
+                    f" {beam_normal[2]:.6e}\n\n"
+                )
 
     def _compute_element_normal(self, element_id: int) -> Tuple[float, float, float]:
         """

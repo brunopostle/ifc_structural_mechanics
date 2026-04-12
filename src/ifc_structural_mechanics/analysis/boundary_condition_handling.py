@@ -489,14 +489,43 @@ def write_area_load(
     return True
 
 
-def _write_step_output_requests(file: TextIO) -> None:
-    """Write standard output requests for a single analysis step."""
+def _find_beam_elset(element_sets: Optional[Dict[str, List[int]]]) -> Optional[str]:
+    """Return the name of the first beam-only element set, or None.
+
+    Beam elements are Gmsh ``line2`` / ``line3`` cells, which the mesh processor
+    stores as ``ELSET_LINE2`` / ``ELSET_LINE3``.  CalculiX ``*EL PRINT, SF``
+    is only valid for beam elements; passing a mixed or shell-only set causes a
+    fatal error.
+    """
+    if not element_sets:
+        return None
+    for key in element_sets:
+        if key.upper().startswith("ELSET_LINE") and element_sets[key]:
+            return key
+    return None
+
+
+def _write_step_output_requests(file: TextIO, beam_elset: Optional[str] = None) -> None:
+    """Write standard output requests for a single analysis step.
+
+    Args:
+        file: Output file handle.
+        beam_elset: Name of an element set containing only B31 beam elements.
+            When provided, ``*EL PRINT, SF`` is written for that set so that
+            beam section forces (N, T, Mf1, Mf2, Vf1, Vf2) appear in the DAT
+            file.  Omitting this skips SF output, which is required when the
+            model contains only shell elements (CalculiX rejects SF on mixed or
+            shell-only sets).
+    """
     file.write("*NODE FILE\n")
     file.write("U\n")
     file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY\n")
     file.write("RF\n")
     file.write("*EL FILE\n")
     file.write("S, E\n")
+    if beam_elset:
+        file.write(f"*EL FILE, ELSET={beam_elset}\n")
+        file.write("SF\n")
     file.write("*END STEP\n\n")
 
 
@@ -608,6 +637,9 @@ def write_analysis_steps(
         file.write("*END STEP\n\n")
         return
 
+    # Determine beam-only element set for SF output (None if no beam elements)
+    beam_elset = _find_beam_elset(element_sets)
+
     # For linear static: use one step per load case if any exist
     load_cases = [g for g in domain_model.load_groups if g.is_load_case and g.loads]
 
@@ -630,7 +662,7 @@ def write_analysis_steps(
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
                 )
-            _write_step_output_requests(file)
+            _write_step_output_requests(file, beam_elset=beam_elset)
 
         # Gravity as a separate step (self-weight applies once, not per load case)
         if gravity:
@@ -643,7 +675,7 @@ def write_analysis_steps(
             file.write(
                 f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
             )
-            _write_step_output_requests(file)
+            _write_step_output_requests(file, beam_elset=beam_elset)
     else:
         # No explicit load cases — single combined step (backward-compatible)
         file.write("*STEP\n")
@@ -664,7 +696,7 @@ def write_analysis_steps(
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")
-        _write_step_output_requests(file)
+        _write_step_output_requests(file, beam_elset=beam_elset)
 
 
 def _write_loads_within_step(file: TextIO, domain_model: StructuralModel) -> None:

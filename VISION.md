@@ -117,11 +117,9 @@ no FEA knowledge — they only consume the JSON schema.
 
 ## Milestones
 
-### Phase 1 — Reliable core analysis *(largely complete)*
+### Phase 1 — Reliable core analysis *(complete)*
 
-The most important remaining item is full section coverage for linear members.
-
-**Section properties via `SECTION=GENERAL`**
+**Section properties via `SECTION=GENERAL`** *(done)*
 
 CalculiX B31 beam elements accept `SECTION=GENERAL`, where cross-sectional properties
 are supplied directly: area A, moments of inertia I11/I22, product of inertia I12, and
@@ -144,7 +142,7 @@ properties already extracted from IFC. This is sufficient for code-checking.
 The existing RECT/CIRC/PIPE/BOX paths are retained where CalculiX's built-in section
 integration is preferred.
 
-**Other known limitations:**
+**Remaining known limitations (acknowledged, lower priority):**
 
 - **Connection topology**: connections are resolved by geometric proximity rather than
   `IfcRelConnectsStructuralMember` relationship data. Closely spaced but unconnected
@@ -170,16 +168,18 @@ integration is preferred.
 
 **Remaining:**
 
-- [ ] **Beam section forces**: For B31 beam elements, CalculiX internally expands to
-  C3D8I bricks whose nodes are not in the original mesh. FRD nodal stress results
-  therefore do not map to beam members via `node_to_member`. The correct source for
-  beam results is the section forces/moments (N, Vy, Vz, My, Mz, T) written to the
-  `.dat` file by `*NODE PRINT`. These must be parsed from `.dat` and added as
-  `section_forces` in the per-member JSON entry. Shell element (S8R) stress results
-  already work correctly via `node_to_member`.
-- [ ] **Utilisation ratio**: once section forces are available, compute
-  σ_max = |N|/A + |M|/I × y_max per member and expose as `max_utilisation_ratio` in
-  the JSON. Requires section properties (A, Iy, Iz, y_max) already extracted from IFC.
+- [ ] **Beam section forces**: For B31 beam elements, CalculiX 2.22 internally expands
+  to C3D8I bricks, and `*EL FILE, SF` (section forces) is silently ignored — the FRD
+  contains no SF dataset. This is a CalculiX 2.22 limitation; the output request and
+  parser infrastructure are already in place. Options to resolve: (a) test with a newer
+  CalculiX version that may fix B31 SF output; (b) post-process section forces from the
+  expanded C3D8I stress results (integration over cross-section); (c) use `*NODE FILE`
+  with custom user output. Shell element (S8R) stress results already work correctly via
+  `node_to_member`.
+- [ ] **Utilisation ratio**: blocked on beam section forces above. The computation
+  (σ_max = |N|/A + |Mf1|/Iy × y_max + |Mf2|/Iz × z_max) and `get_extreme_fibre_distances()`
+  are already implemented in `ResultsExporter` and `Section` respectively; they activate
+  automatically once section force records are non-empty.
 - [ ] **`--limits` CLI flag**: expose the `limits` dict as CLI arguments so users can
   set pass/fail thresholds without touching Python (e.g. `--limit-stress 250e6`).
 - [ ] **Integration tests**: assert `results.json` content for all example models
