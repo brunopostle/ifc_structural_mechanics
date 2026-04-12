@@ -4,6 +4,9 @@ A Python library for structural analysis of IFC (Industry Foundation Classes) bu
 
 > **Development Status**: This is early-stage, experimental software. It has been tested against a small set of example models and produces plausible results, but has known limitations described below. It is not suitable for production use without independent verification of results.
 
+See [VISION.md](VISION.md) for the project roadmap and intended architecture.
+See [docs/validation_report.md](docs/validation_report.md) for numerical accuracy benchmarks.
+
 ## Overview
 
 IFC Structural Mechanics provides a workflow for performing structural analysis on IFC building models. The library extracts structural information from IFC files, generates finite element meshes using Gmsh, performs structural analysis with CalculiX, and provides tools for visualizing results.
