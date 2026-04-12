@@ -14,7 +14,6 @@ from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.export.results_exporter import ResultsExporter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

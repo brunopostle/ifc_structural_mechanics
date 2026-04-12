@@ -20,7 +20,6 @@ from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
