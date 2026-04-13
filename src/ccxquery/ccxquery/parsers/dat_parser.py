@@ -15,6 +15,7 @@ def parse_dat(path: str) -> dict[str, Any]:
     Returns a dict with:
         reactions: list of {node, fx, fy, fz}
         totals: {fx, fy, fz} or None
+        section_forces: list of {element_id, int_pt, N, T, Mf1, Mf2, Vf1, Vf2, step}
         status: "completed" | "no_convergence" | "divergence" | "unknown"
     """
     with open(path, "r") as f:
@@ -23,6 +24,7 @@ def parse_dat(path: str) -> dict[str, Any]:
     return {
         "reactions": _parse_reactions(content),
         "totals": _parse_totals(content),
+        "section_forces": _parse_section_forces(content),
         "status": _parse_status(content),
     }
 
@@ -99,6 +101,85 @@ def _extract_floats(line: str) -> list[float]:
     """Extract all floating point numbers from a line."""
     pattern = re.compile(r"[+-]?\d+\.?\d*(?:[eE][+-]?\d+)?")
     return [float(m) for m in pattern.findall(line)]
+
+
+def _parse_section_forces(content: str) -> list[dict[str, Any]]:
+    """Parse beam section forces from a DAT file.
+
+    CalculiX format::
+
+        beam section forces and moments
+
+         element no.  integ. pt. no.     N          T         Mf1        Mf2        Vf1        Vf2
+              1           1       1.234E+03  0.000E+00  ...
+
+    Returns list of dicts with keys: element_id, int_pt, N, T, Mf1, Mf2, Vf1, Vf2, step.
+    """
+    results: list[dict[str, Any]] = []
+    lines = content.split("\n")
+    step = 0
+    in_block = False
+    past_header = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Track steps
+        if stripped.lower().startswith("s t e p") or stripped.lower().startswith("step"):
+            parts = stripped.split()
+            for p in parts:
+                try:
+                    step = int(p)
+                    break
+                except ValueError:
+                    continue
+
+        # Detect section force block
+        if "beam section forces" in stripped.lower():
+            in_block = True
+            past_header = False
+            continue
+
+        if not in_block:
+            continue
+
+        # Skip the column header line
+        if not past_header:
+            if "element no" in stripped.lower() or "integ" in stripped.lower():
+                past_header = True
+            continue
+
+        # Blank line or new section ends the block
+        if not stripped:
+            in_block = False
+            past_header = False
+            continue
+
+        parts = stripped.split()
+        try:
+            elem_id = int(parts[0])
+            int_pt = int(parts[1])
+            floats = [float(p) for p in parts[2:]]
+        except (ValueError, IndexError):
+            in_block = False
+            past_header = False
+            continue
+
+        results.append(
+            {
+                "element_id": elem_id,
+                "int_pt": int_pt,
+                "N": floats[0] if len(floats) > 0 else 0.0,
+                "T": floats[1] if len(floats) > 1 else 0.0,
+                "Mf1": floats[2] if len(floats) > 2 else 0.0,
+                "Mf2": floats[3] if len(floats) > 3 else 0.0,
+                "Vf1": floats[4] if len(floats) > 4 else 0.0,
+                "Vf2": floats[5] if len(floats) > 5 else 0.0,
+                "step": step,
+            }
+        )
+
+    return results
 
 
 def _parse_status(content: str) -> str:

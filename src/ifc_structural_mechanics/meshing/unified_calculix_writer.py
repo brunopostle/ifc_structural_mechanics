@@ -93,6 +93,16 @@ class UnifiedCalculixWriter:
         self.short_id_map: Dict[str, str] = {}
         self.short_id_counter = 0
 
+        # U1 user-element tracking: members whose elements use TYPE=U1
+        # (non-standard cross-sections: I, T, L, C, arbitrary)
+        self._u1_members: set = set()  # member IDs that need U1 elements
+        # Element set names (MEMBER_*) that contain only U1 elements.
+        # Used by boundary_condition_handling to skip *DLOAD for these sets
+        # (U1 elements don't support *DLOAD; facial-load processing crashes).
+        self._u1_element_sets: set = set()
+        # Pre-computed lumped gravity nodal loads for U1 elements (node_id -> [Fx,Fy,Fz])
+        self._u1_gravity_nodal_loads: Dict[int, List[float]] = {}
+
         # Working directory
         self.work_dir = create_temp_subdir(prefix="unified_calculix_")
 
@@ -249,7 +259,10 @@ class UnifiedCalculixWriter:
             # Step 2: Map elements to domain members
             self._map_elements_to_members()
 
-            # Step 2b: Register node→member memberships for result export
+            # Step 2b: Identify non-standard-section members and retype to U1
+            self._identify_and_retype_u1_members()
+
+            # Step 2c: Register node→member memberships for result export
             self._register_node_memberships()
 
             # Step 3: Write complete CalculiX input file
@@ -643,6 +656,46 @@ class UnifiedCalculixWriter:
             )
             start_idx = end_idx
 
+    @staticmethod
+    def _needs_user_element(member) -> bool:
+        """Return True when a CurveMember has a non-standard cross-section.
+
+        B31 only supports RECT, CIRC, PIPE, BOX.  Everything else must use
+        a U1 user element (built-in Timoshenko beam) with SECTION=GENERAL.
+        """
+        if not isinstance(member, CurveMember):
+            return False
+        section = getattr(member, "section", None)
+        if section is None:
+            return False
+        stype = getattr(section, "section_type", None)
+        return stype not in ("rectangular", "circular", "pipe", "box")
+
+    def _identify_and_retype_u1_members(self) -> None:
+        """Mark non-standard-section beam members and retype their elements to U1.
+
+        Called after element-to-member mapping so element ownership is known.
+        Modifies self.elements in-place and populates self._u1_members and
+        self._u1_element_sets.
+        """
+        for member in self.domain_model.members:
+            if not self._needs_user_element(member):
+                continue
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+            elem_ids = self.element_sets.get(member_set, [])
+            if not elem_ids:
+                continue
+            self._u1_members.add(member.id)
+            self._u1_element_sets.add(member_set)
+            for elem_id in elem_ids:
+                if elem_id in self.elements:
+                    self.elements[elem_id]["type"] = "U1"
+            logger.info(
+                f"Member {member.id}: {len(elem_ids)} elements retyped to U1 "
+                f"(section_type={getattr(member.section, 'section_type', 'unknown')})"
+            )
+
     def _register_node_memberships(self) -> None:
         """Register mesh node IDs to member IDs in the domain model.
 
@@ -682,6 +735,9 @@ class UnifiedCalculixWriter:
             # Mesh data
             self._write_nodes(f)
             self._write_nodal_thickness(f)  # Must come after nodes, before elements
+            # *USER ELEMENT must appear before any *ELEMENT TYPE=U1 cards
+            if self._u1_members:
+                self._write_user_element_definition(f)
             self._write_elements(f)
             self._write_node_sets(f)
             self._write_element_sets(f)
@@ -713,6 +769,8 @@ class UnifiedCalculixWriter:
                 dict(self.nodes),
                 gravity=self.analysis_config.get_gravity(),
                 gravity_direction=self.analysis_config.get_gravity_direction(),
+                u1_gravity_nodal_loads=self._u1_gravity_nodal_loads,
+                u1_element_sets=self._u1_element_sets,
             )
 
     def _write_header(self, file: TextIO) -> None:
@@ -805,6 +863,10 @@ class UnifiedCalculixWriter:
 
         # Write each element type
         for element_type, elements in element_types.items():
+            # U1 elements are written individually (with per-element ELSET + MATRIX)
+            # inside _write_sections() — skip them here to avoid a premature block
+            if element_type == "U1":
+                continue
             set_name = f"ELSET_{element_type}"
             file.write(f"*ELEMENT, TYPE={element_type}, ELSET={set_name}\n")
 
@@ -839,12 +901,26 @@ class UnifiedCalculixWriter:
                 file.write("\n")
                 written_sets.add(set_name)
 
-        # Write EALL set containing all elements (needed for gravity DLOAD)
+        # Write EALL set (all elements) and BEAM_B31 set (B31 only, for SF output)
         all_element_ids = sorted(self.elements.keys())
+        b31_element_ids = sorted(
+            eid for eid, ed in self.elements.items() if ed["type"] == "B31"
+        )
         if all_element_ids:
             file.write("*ELSET, ELSET=EALL\n")
             for i in range(0, len(all_element_ids), 8):
                 line_elements = all_element_ids[i : i + 8]
+                file.write(", ".join(map(str, line_elements)) + "\n")
+            file.write("\n")
+        # Always register BEAM_B31 in element_sets when U1 members exist so that
+        # _find_beam_elset() in boundary_condition_handling knows not to fall back to
+        # ELSET_LINE* (which would include U1 elements that don't support SF output).
+        if self._u1_members:
+            self.element_sets["BEAM_B31"] = b31_element_ids
+        if b31_element_ids:
+            file.write("*ELSET, ELSET=BEAM_B31\n")
+            for i in range(0, len(b31_element_ids), 8):
+                line_elements = b31_element_ids[i : i + 8]
                 file.write(", ".join(map(str, line_elements)) + "\n")
             file.write("\n")
 
@@ -948,54 +1024,33 @@ class UnifiedCalculixWriter:
             )
 
         else:
-            # Non-standard section (I, T, L, C, hollow, etc.): use SECTION=GENERAL
-            # so cross-sectional properties are supplied directly rather than
-            # approximated by an equivalent rectangle.
-            #
-            # SECTION=GENERAL line: A, I11, I12, I22, IT
-            #   A   = cross-sectional area
-            #   I11 = moment of inertia about local 2-axis (Iy, strong axis)
-            #   I12 = product of inertia (0 for doubly-symmetric sections)
-            #   I22 = moment of inertia about local 3-axis (Iz, weak axis)
-            #   IT  = St. Venant torsional constant
+            # Non-standard section (I, T, L, C, hollow, etc.).
+            # B31 elements only support RECT/CIRC/PIPE/BOX — SECTION=GENERAL is
+            # reserved for U1 elements only and will cause a CalculiX error.
+            # Use an equivalent RECT that preserves area and Iy (strong-axis moment).
             area = getattr(member.section, "area", None)
             i_yy = getattr(member.section, "moment_of_inertia_y", None)
-            i_zz = getattr(member.section, "moment_of_inertia_z", None)
-            it = getattr(member.section, "torsional_constant", None)
-
-            if area and i_yy and i_zz and it:
-                file.write(
-                    f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
-                    f" SECTION=GENERAL\n"
-                )
-                file.write(f"{area:.6e}, {i_yy:.6e}, 0.0, {i_zz:.6e}, {it:.6e}\n")
-                file.write(
-                    f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
-                    f" {beam_normal[2]:.6e}\n\n"
-                )
+            area = area or 0.01
+            i_yy = i_yy or area * 0.01
+            if area > 0 and i_yy > 0:
+                height = (12.0 * i_yy / area) ** 0.5
+                width = area / height
             else:
-                # Last resort: fall back to equivalent RECT when properties are missing
-                area = area or 0.01
-                i_yy = i_yy or area * 0.01
-                if area > 0 and i_yy > 0:
-                    height = (12.0 * i_yy / area) ** 0.5
-                    width = area / height
-                else:
-                    height = area**0.5 if area > 0 else 0.1
-                    width = height
-                logger.warning(
-                    f"Member {member.id}: missing section properties for SECTION=GENERAL,"
-                    f" falling back to equivalent RECT {width:.4f}×{height:.4f}"
-                )
-                file.write(
-                    f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
-                    f" SECTION=RECT\n"
-                )
-                file.write(f"{width:.6e}, {height:.6e}\n")
-                file.write(
-                    f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
-                    f" {beam_normal[2]:.6e}\n\n"
-                )
+                height = area**0.5 if area > 0 else 0.1
+                width = height
+            logger.warning(
+                f"Member {member.id}: non-standard section mapped to equivalent RECT"
+                f" {width:.4f}×{height:.4f} (preserves A and Iy)"
+            )
+            file.write(
+                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
+                f" SECTION=RECT\n"
+            )
+            file.write(f"{width:.6e}, {height:.6e}\n")
+            file.write(
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
+                f" {beam_normal[2]:.6e}\n\n"
+            )
 
     def _compute_element_normal(self, element_id: int) -> Tuple[float, float, float]:
         """
@@ -1059,6 +1114,148 @@ class UnifiedCalculixWriter:
 
         return (0.0, 1.0, 0.0)
 
+    def _write_user_element_definition(self, file: TextIO) -> None:
+        """Write the *USER ELEMENT type declaration (written once per model).
+
+        U1 is a built-in 2-node 3D Timoshenko beam element.  The correct
+        keyword parameters are INTEGRATIONPOINTS and MAXDOF (not INTEGRATION
+        or VARIABLES).  No data line follows this keyword.
+
+        INTEGRATIONPOINTS=2: resultsmech_u1.f iterates jj=1..nope (nope=2) and
+        writes to stx/eme/eei arrays indexed by jj.  These arrays have size mi(1)
+        in the second dimension where mi(1) is the max integration points across
+        all elements.  With INTEGRATIONPOINTS=0 → mi(1)=0 → out-of-bounds write
+        → segfault.  Setting INTEGRATIONPOINTS=2 gives mi(1)≥2.
+        """
+        file.write("** User element: 2-node 3D Timoshenko beam (6 DOF/node)\n")
+        file.write("*USER ELEMENT, NODES=2, TYPE=U1, INTEGRATIONPOINTS=2, MAXDOF=6\n\n")
+
+    def _write_beam_section_general(
+        self, file: TextIO, member, elem_ids: List[int]
+    ) -> None:
+        """Write *ELEMENT TYPE=U1 and *BEAM SECTION SECTION=GENERAL for a member.
+
+        U1 is CalculiX's built-in Timoshenko beam element.  All elements for
+        the member share one ELSET so that a single *BEAM SECTION card covers
+        them.  Section properties are taken directly from the domain model.
+
+        Side-effects:
+            Populates ``self._u1_gravity_nodal_loads`` when density and area
+            are available and gravity is enabled.
+        """
+        section = member.section
+        material = member.material
+        if section is None or material is None:
+            logger.warning(
+                f"Member {member.id}: missing section or material, skipping U1"
+            )
+            return
+
+        A = getattr(section, "area", None)
+        xi11 = getattr(section, "moment_of_inertia_y", None)
+        xi22 = getattr(section, "moment_of_inertia_z", None)
+        shear_area = getattr(section, "shear_area_y", None)
+
+        if not all([A, xi11, xi22]):
+            logger.warning(
+                f"Member {member.id}: incomplete section properties "
+                f"(A={A}, Iy={xi11}, Iz={xi22}), skipping U1"
+            )
+            return
+
+        # Shear correction factor k_s (dimensionless)
+        k_s = float(shear_area) / float(A) if shear_area else 0.833
+
+        short_id = self._get_short_id(member.id)
+        elset = f"U1_{short_id}"
+        material_id = material.id
+
+        # Write all elements for this member as a single block
+        file.write(f"*ELEMENT, TYPE=U1, ELSET={elset}\n")
+        for elem_id in elem_ids:
+            elem = self.elements.get(elem_id)
+            if elem is None:
+                continue
+            node1_id, node2_id = elem["nodes"][0], elem["nodes"][1]
+            file.write(f"{elem_id}, {node1_id}, {node2_id}\n")
+        file.write("\n")
+
+        # *BEAM SECTION, SECTION=GENERAL
+        # Data line 1: A, xi11, xi12(=0), xi22, k_s
+        # Data line 2: beam normal direction (e2 — must be perpendicular to beam axis)
+        beam_normal_raw = np.array(self._get_beam_normal(member), dtype=float)
+
+        # Compute beam axis from the first element's nodes so we can check/fix
+        # whether the IFC-provided normal is parallel to the axis (common for
+        # vertical columns whose xAxis == zAxis == (0,0,1)).
+        beam_axis = np.array([0.0, 0.0, 1.0])  # fallback
+        for eid in elem_ids:
+            elem = self.elements.get(eid)
+            if elem is None:
+                continue
+            n1c = np.array(self.nodes[elem["nodes"][0]], dtype=float)
+            n2c = np.array(self.nodes[elem["nodes"][1]], dtype=float)
+            ax = n2c - n1c
+            if np.linalg.norm(ax) > 1e-12:
+                beam_axis = ax / np.linalg.norm(ax)
+                break
+
+        # Orthogonalise: subtract the component parallel to the beam axis
+        n = beam_normal_raw - np.dot(beam_normal_raw, beam_axis) * beam_axis
+        n_len = float(np.linalg.norm(n))
+        if n_len < 1e-10:
+            # Provided normal is (nearly) parallel to axis — choose a perpendicular
+            for cand in (
+                np.array([0.0, 1.0, 0.0]),
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 0.0, 1.0]),
+            ):
+                n = cand - np.dot(cand, beam_axis) * beam_axis
+                n_len = float(np.linalg.norm(n))
+                if n_len > 1e-10:
+                    break
+        beam_normal = n / n_len
+
+        file.write(
+            f"*BEAM SECTION, SECTION=GENERAL, ELSET={elset},"
+            f" MATERIAL=MAT_{material_id}\n"
+        )
+        file.write(
+            f"{float(A):.6e}, {float(xi11):.6e}, 0.0,"
+            f" {float(xi22):.6e}, {k_s:.6e}\n"
+        )
+        file.write(
+            f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
+            f" {beam_normal[2]:.6e}\n\n"
+        )
+
+        # Accumulate lumped gravity nodal loads for U1 self-weight
+        gravity = self.analysis_config.get_gravity()
+        density = getattr(material, "density", None)
+        if gravity and density and A:
+            gdir = self.analysis_config.get_gravity_direction() or [0.0, 0.0, -1.0]
+            g = 9.81
+            mass_per_length = float(density) * float(A)
+            for elem_id in elem_ids:
+                elem = self.elements.get(elem_id)
+                if elem is None:
+                    continue
+                node1_id, node2_id = elem["nodes"][0], elem["nodes"][1]
+                n1 = np.array(self.nodes[node1_id], dtype=float)
+                n2 = np.array(self.nodes[node2_id], dtype=float)
+                L = float(np.linalg.norm(n2 - n1))
+                if L < 1e-12:
+                    continue
+                f_half = mass_per_length * g * L / 2.0
+                for node_id in (node1_id, node2_id):
+                    existing = self._u1_gravity_nodal_loads.get(
+                        node_id, [0.0, 0.0, 0.0]
+                    )
+                    existing[0] += f_half * gdir[0]
+                    existing[1] += f_half * gdir[1]
+                    existing[2] += f_half * gdir[2]
+                    self._u1_gravity_nodal_loads[node_id] = existing
+
     def _write_sections(self, file: TextIO) -> None:
         """Write section definitions for members."""
         file.write("** Section Definitions\n")
@@ -1097,7 +1294,15 @@ class UnifiedCalculixWriter:
                 and hasattr(member, "section")
                 and member.section
             ):
-                # Get orientation groups for this member
+                # Non-standard section → U1 built-in Timoshenko + SECTION=GENERAL
+                if member.id in self._u1_members:
+                    self._write_beam_section_general(
+                        file, member, list(member_elems)
+                    )
+                    sections_written += 1
+                    continue
+
+                # Standard section (RECT/CIRC/PIPE/BOX) → *BEAM SECTION
                 if member_set in beam_orientation_groups:
                     orientation_groups = beam_orientation_groups[member_set]
 

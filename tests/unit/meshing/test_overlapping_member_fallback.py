@@ -138,6 +138,7 @@ class TestSectionDeduplication:
             "MEMBER_mb": [10, 11],  # same elements — overlap
         }
         writer.defined_element_sets = {"MEMBER_ma", "MEMBER_mb"}
+        writer._u1_members = set()  # no U1 elements in this test
         writer._get_short_id = lambda mid: mid
         writer._split_beam_sets_by_orientation = MagicMock(return_value={})
         writer._get_beam_normal = MagicMock(return_value=(0.0, 1.0, 0.0))

@@ -1,9 +1,14 @@
-"""Tests for SECTION=GENERAL writing for non-standard profiles (I, T, L, C).
+"""Tests for non-standard section handling and U1 beam element output.
 
-These tests verify that _write_beam_section_for_set() emits SECTION=GENERAL
-with correct A, I11, I12, I22, IT values instead of the approximate
-equivalent-RECT fallback, and that _find_beam_elset() and the SF output
-request behave correctly.
+Architecture (as of Phase 2):
+- Non-standard sections (I, T, L, C, arbitrary) are handled by U1 elements
+  via _write_beam_section_general() (uses *BEAM SECTION SECTION=GENERAL).
+- _write_beam_section_for_set() is only called for B31 elements with standard
+  sections (RECT/CIRC/PIPE/BOX).  Non-standard profiles that somehow reach
+  this path fall back to an equivalent RECT (preserves A and Iy).
+- When U1 elements are present the writer adds BEAM_B31 to element_sets
+  (possibly empty) as a sentinel so that _find_beam_elset() knows not to
+  fall back to ELSET_LINE* (which would include U1 elements that crash on SF).
 """
 
 import io
@@ -80,41 +85,27 @@ def _i_member():
 # ---------------------------------------------------------------------------
 
 
-class TestGeneralSectionWriting:
-    """_write_beam_section_for_set() emits SECTION=GENERAL for I-sections."""
+class TestNonStandardSectionFallback:
+    """_write_beam_section_for_set() falls back to RECT for non-standard profiles.
 
-    def test_i_section_uses_general(self):
+    Non-standard sections are now handled by U1 elements via
+    _write_beam_section_general().  If an I/T/L/C section somehow reaches
+    _write_beam_section_for_set() (B31 path), it must not silently produce
+    wrong output — it uses an equivalent RECT so the analysis at least runs.
+    """
+
+    def test_i_section_falls_back_to_rect(self):
+        """Non-standard section in B31 path uses SECTION=RECT fallback."""
         member = _i_member()
         writer = _make_writer(member)
         buf = io.StringIO()
         writer._write_beam_section_for_set(
             buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
         )
-        assert "SECTION=GENERAL" in buf.getvalue()
+        assert "SECTION=RECT" in buf.getvalue()
 
-    def test_i_section_not_rect(self):
-        member = _i_member()
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        assert "SECTION=RECT" not in buf.getvalue()
-
-    def test_general_data_line_has_five_values(self):
-        """SECTION=GENERAL data line: A, I11, I12, I22, IT."""
-        member = _i_member()
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
-        idx = next(i for i, ln in enumerate(lines) if "SECTION=GENERAL" in ln)
-        data_parts = [p.strip() for p in lines[idx + 1].split(",")]
-        assert len(data_parts) == 5
-
-    def test_general_area_matches_section(self):
+    def test_i_section_fallback_rect_preserves_area(self):
+        """Equivalent RECT area ≈ original section area."""
         sec = _i_section(b=0.2, h=0.4, tw=0.01, tf=0.015)
         member = CurveMember(
             id="m1",
@@ -127,67 +118,12 @@ class TestGeneralSectionWriting:
         writer._write_beam_section_for_set(
             buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
         )
+        # Data line after *BEAM SECTION … SECTION=RECT is "width, height"
         lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
-        idx = next(i for i, ln in enumerate(lines) if "SECTION=GENERAL" in ln)
-        a_written = float(lines[idx + 1].split(",")[0])
-        assert abs(a_written - sec.area) / sec.area < 1e-4
-
-    def test_general_iy_matches_section(self):
-        sec = _i_section()
-        member = CurveMember(
-            id="m1",
-            geometry=[[0, 0, 0], [5, 0, 0]],
-            material=_make_mat(),
-            section=sec,
-        )
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
-        idx = next(i for i, ln in enumerate(lines) if "SECTION=GENERAL" in ln)
-        vals = [float(p) for p in lines[idx + 1].split(",")]
-        assert abs(vals[1] - sec.moment_of_inertia_y) / sec.moment_of_inertia_y < 1e-4
-
-    def test_general_product_of_inertia_is_zero_for_symmetric(self):
-        """I12 = 0 for a doubly-symmetric I-section."""
-        member = _i_member()
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
-        idx = next(i for i, ln in enumerate(lines) if "SECTION=GENERAL" in ln)
-        vals = [float(p) for p in lines[idx + 1].split(",")]
-        assert vals[2] == 0.0  # I12 = 0
-
-    def test_c_section_uses_general(self):
-        sec = Section(
-            id="c_sec",
-            name="C-Section",
-            section_type="c",
-            area=0.005,
-            dimensions={
-                "width": 0.1,
-                "height": 0.2,
-                "web_thickness": 0.008,
-                "flange_thickness": 0.012,
-            },
-        )
-        member = CurveMember(
-            id="m2",
-            geometry=[[0, 0, 0], [3, 0, 0]],
-            material=_make_mat(),
-            section=sec,
-        )
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m2", "mat1", BEAM_NORMAL
-        )
-        assert "SECTION=GENERAL" in buf.getvalue()
+        idx = next(i for i, ln in enumerate(lines) if "SECTION=RECT" in ln)
+        w, h = (float(v) for v in lines[idx + 1].split(","))
+        rect_area = w * h
+        assert abs(rect_area - sec.area) / sec.area < 1e-4
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +153,33 @@ class TestFindBeamElset:
     def test_skips_empty_beam_set(self):
         """An ELSET_LINE with no elements should not be returned."""
         element_sets = {"ELSET_LINE": [], "ELSET_TRIANGLE6": [1]}
+        assert _find_beam_elset(element_sets) is None
+
+    # ---- BEAM_B31 sentinel tests (U1 element support) ----
+
+    def test_beam_b31_non_empty_returned(self):
+        """Mixed B31+U1 model: BEAM_B31 is non-empty → return it for SF output."""
+        element_sets = {
+            "BEAM_B31": [1, 2],
+            "ELSET_LINE": [1, 2, 3, 4],  # U1 + B31 mixed
+        }
+        assert _find_beam_elset(element_sets) == "BEAM_B31"
+
+    def test_beam_b31_empty_returns_none(self):
+        """All-U1 model: BEAM_B31 present but empty → None (skip SF output)."""
+        element_sets = {
+            "BEAM_B31": [],  # sentinel: U1 elements exist, no B31
+            "ELSET_LINE": [1, 2, 3],  # all U1 elements
+        }
+        assert _find_beam_elset(element_sets) is None
+
+    def test_beam_b31_empty_does_not_fall_through_to_line(self):
+        """BEAM_B31=[] must suppress the ELSET_LINE fallback (prevents SF crash)."""
+        element_sets = {
+            "BEAM_B31": [],
+            "ELSET_LINE2": [10, 11, 12],  # would be returned without sentinel
+        }
+        # Must be None, not "ELSET_LINE2"
         assert _find_beam_elset(element_sets) is None
 
 
@@ -250,3 +213,16 @@ class TestStepOutputRequests:
         buf = io.StringIO()
         _write_step_output_requests(buf, beam_elset=None)
         assert "*END STEP" in buf.getvalue()
+
+    def test_s_e_suppressed_for_u1_elements(self):
+        """has_u1_elements=True → no *EL FILE S, E (U1 segfaults on stress output)."""
+        buf = io.StringIO()
+        _write_step_output_requests(buf, beam_elset=None, has_u1_elements=True)
+        text = buf.getvalue()
+        assert "S, E" not in text
+
+    def test_s_e_written_without_u1(self):
+        """Default (no U1) → *EL FILE S, E is written."""
+        buf = io.StringIO()
+        _write_step_output_requests(buf, beam_elset=None, has_u1_elements=False)
+        assert "S, E" in buf.getvalue()

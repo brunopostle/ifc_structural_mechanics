@@ -175,6 +175,20 @@ def main() -> None:
     # reactions
     subparsers.add_parser("reactions", help="Reaction forces from .dat", parents=[fmt])
 
+    # section-forces
+    sf_parser = subparsers.add_parser(
+        "section-forces", help="Beam section forces (N, T, Mf1, Mf2, Vf1, Vf2) from .dat",
+        parents=[fmt]
+    )
+    sf_parser.add_argument(
+        "--element", type=int, default=None, dest="element_id",
+        help="Filter to a specific element ID"
+    )
+    sf_parser.add_argument(
+        "--max", action="store_true", dest="show_max",
+        help="Show worst-case (max abs) per component"
+    )
+
     # status
     subparsers.add_parser(
         "status", help="Analysis completion status from .dat", parents=[fmt]
@@ -343,7 +357,7 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
             )
 
     # Commands that need .dat data
-    elif cmd in ("reactions", "status"):
+    elif cmd in ("reactions", "section-forces", "status"):
         if file_type == "dat":
             dat_path = args.file
         else:
@@ -359,6 +373,14 @@ def _dispatch(args: argparse.Namespace, file_type: str) -> Any:
             from . import reactions as react_mod
 
             return react_mod.reactions(dat_data)
+        elif cmd == "section-forces":
+            from . import section_forces as sf_mod
+
+            return sf_mod.section_forces(
+                dat_data,
+                element_id=getattr(args, "element_id", None),
+                show_max=getattr(args, "show_max", False),
+            )
         elif cmd == "status":
             from . import status as status_mod
 
