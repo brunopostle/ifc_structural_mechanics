@@ -838,7 +838,7 @@ class MembersExtractor:
                 dimensions={"width": w, "height": h, "wall_thickness": t},
             )
 
-        # Handle I-shape profile
+        # Handle I-shape profile (symmetric)
         elif profile.is_a("IfcIShapeProfileDef"):
             # Extract mechanical properties
             psets = []
@@ -949,13 +949,137 @@ class MembersExtractor:
                 },
             )
 
-        # Default rectangular section (SI units)
-        default_width = 0.1  # m
-        default_height = 0.2  # m
+        # Handle asymmetric I-shape (averaged flanges → stored as "i")
+        elif profile.is_a("IfcAsymmetricIShapeProfileDef"):
+            b_bot = convert_length(
+                getattr(profile, "BottomFlangeWidth", 0.1), self.length_scale
+            )
+            b_top = convert_length(
+                getattr(profile, "TopFlangeWidth", b_bot), self.length_scale
+            )
+            h = convert_length(
+                getattr(profile, "OverallDepth", 0.2), self.length_scale
+            )
+            tw = convert_length(
+                getattr(profile, "WebThickness", 0.01), self.length_scale
+            )
+            tf_bot = convert_length(
+                getattr(profile, "BottomFlangeThickness", 0.01), self.length_scale
+            )
+            tf_top = convert_length(
+                getattr(profile, "TopFlangeThickness", tf_bot), self.length_scale
+            )
+            bf = (b_bot + b_top) / 2.0
+            tf = (tf_bot + tf_top) / 2.0
+            h_web = max(h - tf_bot - tf_top, 0.0)
+            area = b_bot * tf_bot + b_top * tf_top + tw * h_web
+            return Section(
+                id=str(uuid.uuid4()),
+                name=getattr(profile, "ProfileName", "Asymmetric-I"),
+                section_type="i",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": bf,
+                    "height": h,
+                    "web_thickness": tw,
+                    "flange_thickness": tf,
+                    "fillet_radius": 0.0,
+                },
+            )
 
+        # Handle L-shape (angle) profile
+        elif profile.is_a("IfcLShapeProfileDef"):
+            depth = convert_length(
+                getattr(profile, "Depth", 0.1), self.length_scale
+            )
+            width = convert_length(
+                getattr(profile, "Width", depth), self.length_scale
+            )
+            thickness = convert_length(
+                getattr(profile, "Thickness", 0.01), self.length_scale
+            )
+            area = (depth + width - thickness) * thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=getattr(profile, "ProfileName", "L-Section"),
+                section_type="l",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": width,
+                    "height": depth,
+                    "thickness": thickness,
+                },
+            )
+
+        # Handle T-shape profile
+        elif profile.is_a("IfcTShapeProfileDef"):
+            depth = convert_length(
+                getattr(profile, "Depth", 0.2), self.length_scale
+            )
+            flange_width = convert_length(
+                getattr(profile, "FlangeWidth", 0.1), self.length_scale
+            )
+            web_thickness = convert_length(
+                getattr(profile, "WebThickness", 0.01), self.length_scale
+            )
+            flange_thickness = convert_length(
+                getattr(profile, "FlangeThickness", 0.01), self.length_scale
+            )
+            web_height = max(depth - flange_thickness, 0.0)
+            area = flange_width * flange_thickness + web_height * web_thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=getattr(profile, "ProfileName", "T-Section"),
+                section_type="t",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": flange_width,
+                    "height": depth,
+                    "web_thickness": web_thickness,
+                    "flange_thickness": flange_thickness,
+                },
+            )
+
+        # Handle C-shape / channel profile
+        elif profile.is_a("IfcChannelProfileDef"):
+            depth = convert_length(
+                getattr(profile, "Depth", 0.2), self.length_scale
+            )
+            flange_width = convert_length(
+                getattr(profile, "FlangeWidth", 0.1), self.length_scale
+            )
+            web_thickness = convert_length(
+                getattr(profile, "WebThickness", 0.01), self.length_scale
+            )
+            flange_thickness = convert_length(
+                getattr(profile, "FlangeThickness", 0.01), self.length_scale
+            )
+            web_height = max(depth - 2 * flange_thickness, 0.0)
+            area = web_thickness * web_height + 2 * flange_width * flange_thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=getattr(profile, "ProfileName", "C-Section"),
+                section_type="c",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": flange_width,
+                    "height": depth,
+                    "web_thickness": web_thickness,
+                    "flange_thickness": flange_thickness,
+                },
+            )
+
+        else:
+            logger.warning(
+                f"Unsupported profile type: {profile.is_a()} — "
+                f"member will use the default section. "
+                f"Consider adding an extractor for this profile type."
+            )
+
+        # Default rectangular section (SI units)
         return Section.create_rectangular_section(
             id=str(uuid.uuid4()),
             name="Default Section",
-            width=default_width,
-            height=default_height,
+            width=0.1,
+            height=0.2,
         )

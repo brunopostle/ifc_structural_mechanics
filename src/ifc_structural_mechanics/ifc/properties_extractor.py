@@ -462,12 +462,32 @@ class PropertiesExtractor:
                     dimensions={"width": w, "height": h, "wall_thickness": t},
                 )
 
-            # Handle I-shape profile
+            # Handle I-shape profile (symmetric)
             elif profile.is_a("IfcIShapeProfileDef"):
                 return self._create_i_section(profile)
 
+            # Handle asymmetric I-shape (treated as I with averaged flanges)
+            elif profile.is_a("IfcAsymmetricIShapeProfileDef"):
+                return self._create_asymmetric_i_section(profile)
+
+            # Handle L-shape (angle) profile
+            elif profile.is_a("IfcLShapeProfileDef"):
+                return self._create_l_section(profile)
+
+            # Handle T-shape profile
+            elif profile.is_a("IfcTShapeProfileDef"):
+                return self._create_t_section(profile)
+
+            # Handle C-shape / channel profile
+            elif profile.is_a("IfcChannelProfileDef"):
+                return self._create_c_section(profile)
+
             else:
-                self.logger.debug(f"Unsupported profile type: {profile.is_a()}")
+                self.logger.warning(
+                    f"Unsupported profile type: {profile.is_a()} — "
+                    f"member will use the default section. "
+                    f"Consider adding an extractor for this profile type."
+                )
                 return self._create_default_section()
 
         except Exception as e:
@@ -560,6 +580,161 @@ class PropertiesExtractor:
 
         except Exception as e:
             self.logger.warning(f"Error creating I-section: {e}")
+            return self._create_default_section()
+
+    def _create_asymmetric_i_section(self, profile) -> Section:
+        """Extract IfcAsymmetricIShapeProfileDef — treated as I with averaged flanges."""
+        try:
+            b_bot = convert_length(
+                self._safe_get_attribute(profile, "BottomFlangeWidth", 0.1),
+                self.length_scale,
+            )
+            b_top = convert_length(
+                self._safe_get_attribute(profile, "TopFlangeWidth", 0.1),
+                self.length_scale,
+            )
+            h = convert_length(
+                self._safe_get_attribute(profile, "OverallDepth", 0.2),
+                self.length_scale,
+            )
+            tw = convert_length(
+                self._safe_get_attribute(profile, "WebThickness", 0.01),
+                self.length_scale,
+            )
+            tf_bot = convert_length(
+                self._safe_get_attribute(profile, "BottomFlangeThickness", 0.01),
+                self.length_scale,
+            )
+            tf_top = convert_length(
+                self._safe_get_attribute(profile, "TopFlangeThickness", 0.01),
+                self.length_scale,
+            )
+            bf = (b_bot + b_top) / 2.0
+            tf = (tf_bot + tf_top) / 2.0
+            h_web = max(h - tf_bot - tf_top, 0.0)
+            area = b_bot * tf_bot + b_top * tf_top + tw * h_web
+            Iy = (
+                (b_bot * h**3) / 12
+                - (b_bot - tw) * h_web**3 / 12
+            )
+            Iz = (
+                tf_bot * b_bot**3 / 12
+                + tf_top * b_top**3 / 12
+                + h_web * tw**3 / 12
+            )
+            # Store as symmetric "i" with averaged flanges; domain computes Iy/Iz
+            return Section(
+                id=str(uuid.uuid4()),
+                name=self._safe_get_attribute(profile, "ProfileName", "Asymmetric-I"),
+                section_type="i",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": bf,
+                    "height": h,
+                    "web_thickness": tw,
+                    "flange_thickness": tf,
+                    "fillet_radius": 0.0,
+                },
+            )
+        except Exception as e:
+            self.logger.warning(f"Error creating asymmetric I-section: {e}")
+            return self._create_default_section()
+
+    def _create_l_section(self, profile) -> Section:
+        """Extract IfcLShapeProfileDef."""
+        try:
+            depth = convert_length(
+                self._safe_get_attribute(profile, "Depth", 0.1), self.length_scale
+            )
+            # Width defaults to Depth for equal-leg angles
+            width = convert_length(
+                self._safe_get_attribute(profile, "Width", depth), self.length_scale
+            )
+            thickness = convert_length(
+                self._safe_get_attribute(profile, "Thickness", 0.01), self.length_scale
+            )
+            area = (depth + width - thickness) * thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=self._safe_get_attribute(profile, "ProfileName", "L-Section"),
+                section_type="l",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": width,
+                    "height": depth,
+                    "thickness": thickness,
+                },
+            )
+        except Exception as e:
+            self.logger.warning(f"Error creating L-section: {e}")
+            return self._create_default_section()
+
+    def _create_t_section(self, profile) -> Section:
+        """Extract IfcTShapeProfileDef."""
+        try:
+            depth = convert_length(
+                self._safe_get_attribute(profile, "Depth", 0.2), self.length_scale
+            )
+            flange_width = convert_length(
+                self._safe_get_attribute(profile, "FlangeWidth", 0.1), self.length_scale
+            )
+            web_thickness = convert_length(
+                self._safe_get_attribute(profile, "WebThickness", 0.01), self.length_scale
+            )
+            flange_thickness = convert_length(
+                self._safe_get_attribute(profile, "FlangeThickness", 0.01),
+                self.length_scale,
+            )
+            web_height = max(depth - flange_thickness, 0.0)
+            area = flange_width * flange_thickness + web_height * web_thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=self._safe_get_attribute(profile, "ProfileName", "T-Section"),
+                section_type="t",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": flange_width,
+                    "height": depth,
+                    "web_thickness": web_thickness,
+                    "flange_thickness": flange_thickness,
+                },
+            )
+        except Exception as e:
+            self.logger.warning(f"Error creating T-section: {e}")
+            return self._create_default_section()
+
+    def _create_c_section(self, profile) -> Section:
+        """Extract IfcChannelProfileDef (C/U-section)."""
+        try:
+            depth = convert_length(
+                self._safe_get_attribute(profile, "Depth", 0.2), self.length_scale
+            )
+            flange_width = convert_length(
+                self._safe_get_attribute(profile, "FlangeWidth", 0.1), self.length_scale
+            )
+            web_thickness = convert_length(
+                self._safe_get_attribute(profile, "WebThickness", 0.01), self.length_scale
+            )
+            flange_thickness = convert_length(
+                self._safe_get_attribute(profile, "FlangeThickness", 0.01),
+                self.length_scale,
+            )
+            web_height = max(depth - 2 * flange_thickness, 0.0)
+            area = web_thickness * web_height + 2 * flange_width * flange_thickness
+            return Section(
+                id=str(uuid.uuid4()),
+                name=self._safe_get_attribute(profile, "ProfileName", "C-Section"),
+                section_type="c",
+                area=max(1e-6, area),
+                dimensions={
+                    "width": flange_width,
+                    "height": depth,
+                    "web_thickness": web_thickness,
+                    "flange_thickness": flange_thickness,
+                },
+            )
+        except Exception as e:
+            self.logger.warning(f"Error creating C-section: {e}")
             return self._create_default_section()
 
     def _create_default_section(self) -> Section:

@@ -24,6 +24,7 @@ from ..analysis.boundary_condition_handling import (
     write_boundary_conditions,
 )
 from ..config.analysis_config import AnalysisConfig
+from ..converters.section_profiles import get_native_section, uses_user_element
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError, MeshingError
@@ -658,10 +659,11 @@ class UnifiedCalculixWriter:
 
     @staticmethod
     def _needs_user_element(member) -> bool:
-        """Return True when a CurveMember has a non-standard cross-section.
+        """Return True when a CurveMember's section requires a U1 element.
 
-        B31 only supports RECT, CIRC, PIPE, BOX.  Everything else must use
-        a U1 user element (built-in Timoshenko beam) with SECTION=GENERAL.
+        Queries the section_profiles registry — B31 native types (RECT, CIRC,
+        PIPE, BOX) use standard B31 elements; all others (I, L, T, C, …) use
+        U1 with SECTION=GENERAL.  Unknown types default to U1 (safe fallback).
         """
         if not isinstance(member, CurveMember):
             return False
@@ -669,7 +671,7 @@ class UnifiedCalculixWriter:
         if section is None:
             return False
         stype = getattr(section, "section_type", None)
-        return stype not in ("rectangular", "circular", "pipe", "box")
+        return uses_user_element(stype)
 
     def _identify_and_retype_u1_members(self) -> None:
         """Mark non-standard-section beam members and retype their elements to U1.
@@ -965,73 +967,34 @@ class UnifiedCalculixWriter:
         material_id: str,
         beam_normal: tuple,
     ) -> None:
-        """Write a beam section definition for a given element set."""
-        if (
-            hasattr(member.section, "section_type")
-            and member.section.section_type == "rectangular"
-        ):
-            file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=RECT\n"
-            )
-            width = member.section.dimensions.get("width", 0.1)
-            height = member.section.dimensions.get("height", 0.2)
-            file.write(f"{width:.6e}, {height:.6e}\n")
-            file.write(
-                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
-            )
+        """Write a *BEAM SECTION definition for a B31 element set.
 
-        elif (
-            hasattr(member.section, "section_type")
-            and member.section.section_type == "circular"
-        ):
-            file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=CIRC\n"
-            )
-            radius = member.section.dimensions.get("radius", 0.1)
-            file.write(f"{radius:.6e}\n")
-            file.write(
-                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
-            )
+        Looks up the section type in the section_profiles registry.  Native
+        B31 types (RECT, CIRC, PIPE, BOX) are written with their exact CCX
+        keyword and dimension data line.  Any other type that somehow reaches
+        this path (which should not happen — they are retyped to U1 earlier)
+        falls back to an equivalent RECT so CalculiX doesn't error out.
+        """
+        stype = getattr(getattr(member, "section", None), "section_type", None)
+        native = get_native_section(stype)
 
-        elif (
-            hasattr(member.section, "section_type")
-            and member.section.section_type == "pipe"
-        ):
-            outer_r = member.section.dimensions.get("outer_radius", 0.05)
-            inner_r = member.section.dimensions.get("inner_radius", 0.04)
+        if native is not None:
+            dims = getattr(member.section, "dimensions", {})
+            data_line = native.format_data_line(dims)
             file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=PIPE\n"
+                f"*BEAM SECTION, ELSET={elset_name},"
+                f" MATERIAL=MAT_{material_id}, SECTION={native.ccx_keyword}\n"
             )
-            file.write(f"{outer_r:.6e}, {inner_r:.6e}\n")
+            file.write(f"{data_line}\n")
             file.write(
-                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
+                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
+                f" {beam_normal[2]:.6e}\n\n"
             )
-
-        elif (
-            hasattr(member.section, "section_type")
-            and member.section.section_type == "box"
-        ):
-            h = member.section.dimensions.get("height", 0.2)
-            w = member.section.dimensions.get("width", 0.1)
-            t = member.section.dimensions.get("wall_thickness", 0.005)
-            # CalculiX BOX: a (height, local-1), b (width, local-2), t1 t2 t3 t4
-            file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id}, SECTION=BOX\n"
-            )
-            file.write(f"{h:.6e}, {w:.6e}, {t:.6e}, {t:.6e}, {t:.6e}, {t:.6e}\n")
-            file.write(
-                f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}, {beam_normal[2]:.6e}\n\n"
-            )
-
         else:
-            # Non-standard section (I, T, L, C, hollow, etc.).
-            # B31 elements only support RECT/CIRC/PIPE/BOX — SECTION=GENERAL is
-            # reserved for U1 elements only and will cause a CalculiX error.
-            # Use an equivalent RECT that preserves area and Iy (strong-axis moment).
-            area = getattr(member.section, "area", None)
-            i_yy = getattr(member.section, "moment_of_inertia_y", None)
-            area = area or 0.01
-            i_yy = i_yy or area * 0.01
+            # Should not be reached: non-native sections are retyped to U1 before
+            # this method is called.  Fall back to equivalent RECT as a safety net.
+            area = getattr(member.section, "area", None) or 0.01
+            i_yy = getattr(member.section, "moment_of_inertia_y", None) or area * 0.01
             if area > 0 and i_yy > 0:
                 height = (12.0 * i_yy / area) ** 0.5
                 width = area / height
@@ -1039,8 +1002,8 @@ class UnifiedCalculixWriter:
                 height = area**0.5 if area > 0 else 0.1
                 width = height
             logger.warning(
-                f"Member {member.id}: non-standard section mapped to equivalent RECT"
-                f" {width:.4f}×{height:.4f} (preserves A and Iy)"
+                f"Member {member.id}: section_type={stype!r} reached B31 writer "
+                f"unexpectedly — using equivalent RECT {width:.4f}×{height:.4f}"
             )
             file.write(
                 f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
