@@ -374,3 +374,122 @@ class TestLoadsExtractor:
 
         # Verify no groups are created
         assert len(groups) == 0
+
+
+# ---------------------------------------------------------------------------
+# GRAVITY / VARIABLE_Q group inclusion fix
+# ---------------------------------------------------------------------------
+
+
+class TestGravityLoadGroupInclusion:
+    """Groups with PredefinedType=GRAVITY (or VARIABLE_Q) must be included."""
+
+    def _make_group_entity(self, gid, predefined_type):
+        g = MagicMock()
+        g.GlobalId = gid
+        g.Name = f"Group-{gid}"
+        g.Description = None
+        g.PredefinedType = predefined_type
+        # is_a: only matches IfcStructuralLoadGroup, NOT Combination/Case
+        g.is_a = lambda x: x == "IfcStructuralLoadGroup"
+        return g
+
+    def _make_extractor(self, group_entities):
+        mock_ifc = MagicMock()
+
+        def by_type(entity_type):
+            if entity_type == "IfcStructuralLoadGroup":
+                return group_entities
+            if entity_type == "IfcStructuralLoadCase":
+                return []
+            if entity_type == "IfcRelAssignsToGroup":
+                return []
+            return []
+
+        mock_ifc.by_type.side_effect = by_type
+        return LoadsExtractor(mock_ifc)
+
+    def test_gravity_group_is_included(self):
+        g = self._make_group_entity("grav1", "GRAVITY")
+        ext = self._make_extractor([g])
+        groups = ext.extract_load_groups()
+        assert any(grp.id == "grav1" for grp in groups)
+
+    def test_variable_q_group_is_included(self):
+        g = self._make_group_entity("vq1", "VARIABLE_Q")
+        ext = self._make_extractor([g])
+        groups = ext.extract_load_groups()
+        assert any(grp.id == "vq1" for grp in groups)
+
+    def test_prestress_group_is_included(self):
+        g = self._make_group_entity("ps1", "PRESTRESS_LOAD")
+        ext = self._make_extractor([g])
+        groups = ext.extract_load_groups()
+        assert any(grp.id == "ps1" for grp in groups)
+
+    def test_load_group_predefined_type_still_included(self):
+        g = self._make_group_entity("lg1", "LOAD_GROUP")
+        ext = self._make_extractor([g])
+        groups = ext.extract_load_groups()
+        assert any(grp.id == "lg1" for grp in groups)
+
+
+# ---------------------------------------------------------------------------
+# IfcStructuralLoadConfiguration averaging
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfigurationAveraging:
+    """_extract_line_force_vector must average all Values in a Configuration."""
+
+    def _make_extractor(self):
+        mock_ifc = MagicMock()
+        mock_ifc.by_type.return_value = []
+        return LoadsExtractor(mock_ifc)
+
+    def _make_linear_force(self, fx=0.0, fy=0.0, fz=0.0):
+        v = MagicMock()
+        v.is_a = lambda x: x == "IfcStructuralLoadLinearForce"
+        v.LinearForceX = fx
+        v.LinearForceY = fy
+        v.LinearForceZ = fz
+        # must NOT have ForceX so _extract_line_force_vector takes the Linear branch
+        del v.ForceX
+        return v
+
+    def _make_config(self, values):
+        cfg = MagicMock()
+        cfg.is_a = lambda x: x == "IfcStructuralLoadConfiguration"
+        cfg.Values = values
+        return cfg
+
+    def test_uniform_load_unchanged(self):
+        ext = self._make_extractor()
+        v = self._make_linear_force(fz=-1000.0)
+        cfg = self._make_config([v])
+        result, is_per_length = ext._extract_line_force_vector(cfg)
+        assert is_per_length is True
+        assert abs(result[2] - (-1000.0)) < 1e-9
+
+    def test_trapezoidal_averages_two_ends(self):
+        ext = self._make_extractor()
+        v1 = self._make_linear_force(fz=-1000.0)
+        v2 = self._make_linear_force(fz=-2000.0)
+        cfg = self._make_config([v1, v2])
+        result, is_per_length = ext._extract_line_force_vector(cfg)
+        assert is_per_length is True
+        assert abs(result[2] - (-1500.0)) < 1e-9
+
+    def test_empty_config_returns_zero(self):
+        ext = self._make_extractor()
+        cfg = self._make_config([])
+        result, is_per_length = ext._extract_line_force_vector(cfg)
+        assert result == [0.0, 0.0, 0.0]
+        assert is_per_length is False
+
+    def test_three_point_load_averages_correctly(self):
+        ext = self._make_extractor()
+        vals = [self._make_linear_force(fz=fz) for fz in [-0.0, -300.0, -600.0]]
+        cfg = self._make_config(vals)
+        result, _ = ext._extract_line_force_vector(cfg)
+        assert abs(result[2] - (-300.0)) < 1e-9

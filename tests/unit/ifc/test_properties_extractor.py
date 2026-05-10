@@ -6,6 +6,7 @@ from IFC4 files, ensuring they're correctly mapped to domain objects.
 """
 
 import os
+from unittest.mock import MagicMock
 
 import ifcopenshell
 import pytest
@@ -284,3 +285,187 @@ class TestPropertyExtraction:
         print(
             f"\nExtracted {total_property_sets} property sets with {total_properties} total properties"
         )
+
+
+# ---------------------------------------------------------------------------
+# Section shape extraction — pure unit tests using mock IFC profiles
+# ---------------------------------------------------------------------------
+
+
+def _make_extractor():
+    """Return a PropertiesExtractor backed by a minimal mock IFC object."""
+    mock_ifc = MagicMock()
+    mock_ifc.by_type.return_value = []
+    return PropertiesExtractor(mock_ifc)
+
+
+def _profile(attrs: dict):
+    """Build a mock IFC profile with the given attribute dict."""
+    p = MagicMock()
+    for k, v in attrs.items():
+        setattr(p, k, v)
+    p.ProfileName = attrs.get("ProfileName", None)
+    return p
+
+
+class TestLSectionExtraction:
+    def test_basic_l_section(self):
+        ext = _make_extractor()
+        profile = _profile({"Depth": 0.1, "Width": 0.08, "Thickness": 0.008})
+        sec = ext._create_l_section(profile)
+        assert sec.section_type == "l"
+        assert abs(sec.dimensions["height"] - 0.1) < 1e-9
+        assert abs(sec.dimensions["width"] - 0.08) < 1e-9
+        assert abs(sec.dimensions["thickness"] - 0.008) < 1e-9
+
+    def test_area_calculation(self):
+        ext = _make_extractor()
+        depth, width, t = 0.1, 0.1, 0.01
+        profile = _profile({"Depth": depth, "Width": width, "Thickness": t})
+        sec = ext._create_l_section(profile)
+        expected_area = (depth + width - t) * t
+        assert abs(sec.area - expected_area) < 1e-9
+
+    def test_equal_leg_angle_defaults_width_to_depth(self):
+        """Width should default to Depth when not provided."""
+        ext = _make_extractor()
+        # MagicMock will return a MagicMock for missing attrs, but _safe_get_attribute
+        # uses getattr with default, so we mock missing Width by not setting it.
+        profile = MagicMock(spec=[])  # empty spec → getattr returns AttributeError
+        profile.Depth = 0.1
+        profile.Thickness = 0.01
+        profile.ProfileName = None
+        sec = ext._create_l_section(profile)
+        assert sec.section_type == "l"
+        assert sec.area > 0
+
+    def test_area_is_positive(self):
+        ext = _make_extractor()
+        profile = _profile({"Depth": 0.05, "Width": 0.05, "Thickness": 0.005})
+        sec = ext._create_l_section(profile)
+        assert sec.area > 0
+
+
+class TestTSectionExtraction:
+    def test_basic_t_section(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "Depth": 0.2, "FlangeWidth": 0.1,
+            "WebThickness": 0.01, "FlangeThickness": 0.015,
+        })
+        sec = ext._create_t_section(profile)
+        assert sec.section_type == "t"
+        assert abs(sec.dimensions["height"] - 0.2) < 1e-9
+        assert abs(sec.dimensions["width"] - 0.1) < 1e-9
+        assert abs(sec.dimensions["web_thickness"] - 0.01) < 1e-9
+        assert abs(sec.dimensions["flange_thickness"] - 0.015) < 1e-9
+
+    def test_area_calculation(self):
+        ext = _make_extractor()
+        depth, fw, tw, tf = 0.2, 0.1, 0.01, 0.015
+        profile = _profile({
+            "Depth": depth, "FlangeWidth": fw,
+            "WebThickness": tw, "FlangeThickness": tf,
+        })
+        sec = ext._create_t_section(profile)
+        web_height = max(depth - tf, 0.0)
+        expected_area = fw * tf + web_height * tw
+        assert abs(sec.area - expected_area) < 1e-9
+
+    def test_area_is_positive(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "Depth": 0.1, "FlangeWidth": 0.06,
+            "WebThickness": 0.005, "FlangeThickness": 0.008,
+        })
+        sec = ext._create_t_section(profile)
+        assert sec.area > 0
+
+
+class TestCSectionExtraction:
+    def test_basic_c_section(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "Depth": 0.2, "FlangeWidth": 0.08,
+            "WebThickness": 0.008, "FlangeThickness": 0.012,
+        })
+        sec = ext._create_c_section(profile)
+        assert sec.section_type == "c"
+        assert abs(sec.dimensions["height"] - 0.2) < 1e-9
+        assert abs(sec.dimensions["width"] - 0.08) < 1e-9
+        assert abs(sec.dimensions["web_thickness"] - 0.008) < 1e-9
+        assert abs(sec.dimensions["flange_thickness"] - 0.012) < 1e-9
+
+    def test_area_calculation(self):
+        ext = _make_extractor()
+        depth, fw, tw, tf = 0.2, 0.08, 0.008, 0.012
+        profile = _profile({
+            "Depth": depth, "FlangeWidth": fw,
+            "WebThickness": tw, "FlangeThickness": tf,
+        })
+        sec = ext._create_c_section(profile)
+        web_height = max(depth - 2 * tf, 0.0)
+        expected_area = tw * web_height + 2 * fw * tf
+        assert abs(sec.area - expected_area) < 1e-9
+
+    def test_area_is_positive(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "Depth": 0.15, "FlangeWidth": 0.06,
+            "WebThickness": 0.006, "FlangeThickness": 0.01,
+        })
+        sec = ext._create_c_section(profile)
+        assert sec.area > 0
+
+
+class TestAsymmetricISectionExtraction:
+    def test_basic_asymmetric_i_section(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "BottomFlangeWidth": 0.2,
+            "TopFlangeWidth": 0.1,
+            "OverallDepth": 0.3,
+            "WebThickness": 0.01,
+            "BottomFlangeThickness": 0.015,
+            "TopFlangeThickness": 0.01,
+        })
+        sec = ext._create_asymmetric_i_section(profile)
+        assert sec.section_type == "i"
+        # averaged flange width
+        assert abs(sec.dimensions["width"] - 0.15) < 1e-9
+        assert abs(sec.dimensions["height"] - 0.3) < 1e-9
+
+    def test_area_calculation(self):
+        ext = _make_extractor()
+        b_bot, b_top = 0.2, 0.1
+        h, tw = 0.3, 0.01
+        tf_bot, tf_top = 0.015, 0.01
+        profile = _profile({
+            "BottomFlangeWidth": b_bot, "TopFlangeWidth": b_top,
+            "OverallDepth": h, "WebThickness": tw,
+            "BottomFlangeThickness": tf_bot, "TopFlangeThickness": tf_top,
+        })
+        sec = ext._create_asymmetric_i_section(profile)
+        h_web = max(h - tf_bot - tf_top, 0.0)
+        expected_area = b_bot * tf_bot + b_top * tf_top + tw * h_web
+        assert abs(sec.area - expected_area) < 1e-9
+
+    def test_symmetric_i_as_asymmetric_gives_correct_width(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "BottomFlangeWidth": 0.15, "TopFlangeWidth": 0.15,
+            "OverallDepth": 0.25, "WebThickness": 0.009,
+            "BottomFlangeThickness": 0.012, "TopFlangeThickness": 0.012,
+        })
+        sec = ext._create_asymmetric_i_section(profile)
+        assert abs(sec.dimensions["width"] - 0.15) < 1e-9
+
+    def test_area_is_positive(self):
+        ext = _make_extractor()
+        profile = _profile({
+            "BottomFlangeWidth": 0.1, "TopFlangeWidth": 0.08,
+            "OverallDepth": 0.2, "WebThickness": 0.008,
+            "BottomFlangeThickness": 0.01, "TopFlangeThickness": 0.01,
+        })
+        sec = ext._create_asymmetric_i_section(profile)
+        assert sec.area > 0
