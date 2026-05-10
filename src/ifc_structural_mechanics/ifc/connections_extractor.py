@@ -312,11 +312,12 @@ class ConnectionsExtractor:
                 f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
             )
 
-            # Check for end-releases from IfcRelConnectsStructuralMember.AppliedCondition
-            if self._has_rotational_releases(ifc_connection):
-                connection.has_end_releases = True
+            # Extract per-member rotational end-releases from AppliedCondition
+            end_releases = self._extract_end_releases(ifc_connection)
+            if end_releases:
+                connection.released_dofs_by_member = end_releases
                 self.logger.debug(
-                    f"Connection {connection_id} has rotational end-releases"
+                    f"Connection {connection_id} has end-releases: {end_releases}"
                 )
 
             # NOW VALIDATION SHOULD ALWAYS SUCCEED (connection has >= 2 members)
@@ -346,33 +347,46 @@ class ConnectionsExtractor:
             )
             return None
 
-    def _has_rotational_releases(self, ifc_connection) -> bool:
-        """Return True if any connected member has any rotational DOF free or zero.
+    def _extract_end_releases(self, ifc_connection) -> dict:
+        """Return per-member released rotation DOFs from AppliedCondition.
 
         Reads ``IfcRelConnectsStructuralMember.AppliedCondition`` for each
-        relationship attached to this connection.  A DOF is considered released
-        when its stiffness value is ``False`` (explicitly free) or ``0.0`` (zero
-        spring, transmits no force/moment).
+        relationship. A rotational DOF is released when its stiffness value is
+        ``False`` (explicitly free) or ``0.0`` (zero-stiffness spring).
+
+        Returns:
+            Dict mapping member IFC GlobalId → list of released CalculiX DOF
+            numbers (4 = Rx, 5 = Ry, 6 = Rz). Empty dict when no releases.
         """
+        result: dict = {}
         if not hasattr(ifc_connection, "ConnectsStructuralMembers"):
-            return False
+            return result
         for rel in ifc_connection.ConnectsStructuralMembers:
             condition = getattr(rel, "AppliedCondition", None)
             if condition is None:
                 continue
-            for attr_name in (
-                "RotationalStiffnessX",
-                "RotationalStiffnessY",
-                "RotationalStiffnessZ",
+            # Get the member GlobalId from the relationship
+            member = getattr(rel, "RelatingStructuralMember", None)
+            if member is None:
+                continue
+            member_id = getattr(member, "GlobalId", None)
+            if member_id is None:
+                continue
+            released = []
+            for attr_name, dof in (
+                ("RotationalStiffnessX", 4),
+                ("RotationalStiffnessY", 5),
+                ("RotationalStiffnessZ", 6),
             ):
                 attr = getattr(condition, attr_name, None)
                 if attr is None:
                     continue
                 wrapped = getattr(attr, "wrappedValue", attr)
-                # False = explicitly free; 0.0 = zero-stiffness spring (also released)
                 if wrapped is False or wrapped == 0.0:
-                    return True
-        return False
+                    released.append(dof)
+            if released:
+                result[member_id] = released
+        return result
 
     def _determine_geometry_type(self, ifc_connection) -> str:
         """

@@ -1405,30 +1405,21 @@ class UnifiedCalculixWriter:
                 continue
 
             # Get connection type
-            if conn.entity_type == "point":
-                # Use is_hinge if either the connection type says so OR the IFC
-                # AppliedCondition indicates rotational end-releases
-                is_hinge = getattr(conn, "has_end_releases", False)
+            if conn.entity_type in ("point", "rigid"):
+                released = getattr(conn, "released_dofs_by_member", {})
                 self._write_point_connection(
-                    file, conn, real_members, constrained_node_dofs, is_hinge=is_hinge
-                )
-                connections_written += 1
-            elif conn.entity_type == "rigid":
-                self._write_rigid_connection(
-                    file, conn, real_members, constrained_node_dofs
+                    file, conn, real_members, constrained_node_dofs,
+                    released_dofs_by_member=released,
                 )
                 connections_written += 1
             elif conn.entity_type == "hinge":
-                # Hinges with multiple members could be modeled differently
-                # For now, treat as point connection with note
-                if len(real_members) >= 2:
-                    logger.debug(
-                        f"Hinge connection {conn.id} with {len(real_members)} members - treating as pinned joint"
-                    )
-                    self._write_point_connection(
-                        file, conn, real_members, constrained_node_dofs, is_hinge=True
-                    )
-                    connections_written += 1
+                # Legacy hinge: release all rotation DOFs for all real members.
+                released = {mid: [4, 5, 6] for mid in real_members}
+                self._write_point_connection(
+                    file, conn, real_members, constrained_node_dofs,
+                    released_dofs_by_member=released,
+                )
+                connections_written += 1
             elif conn.entity_type == "spring":
                 logger.warning(f"Spring connections not yet implemented: {conn.id}")
             else:
@@ -1444,72 +1435,82 @@ class UnifiedCalculixWriter:
         conn,
         member_ids: List[str],
         constrained_node_dofs: set,
-        is_hinge: bool = False,
+        released_dofs_by_member: Optional[dict] = None,
     ) -> None:
         """
         Write a point connection using CalculiX *EQUATION constraints.
 
-        A point connection ties all member nodes at the connection point together.
+        Translations (DOF 1-3) are always coupled.  Rotations (DOF 4-6) are
+        coupled for members that do NOT have that DOF released.  When all
+        members have a given rotation DOF released, that DOF is left free for
+        everyone (full pin about that axis).
 
         Args:
             file: Output file handle
             conn: Connection object
             member_ids: List of member IDs
             constrained_node_dofs: Set of (node_id, dof) tuples already constrained
-            is_hinge: If True, only constrain translations, not rotations
+            released_dofs_by_member: Dict mapping member IFC GlobalId → list of
+                released CalculiX DOF numbers (4, 5, 6).  None or {} = rigid.
         """
-        # Find nodes at this connection point for each member
-        connection_nodes = self._find_connection_nodes_at_location(conn, member_ids)
+        # Find (member_id, node_id) pairs at the connection point
+        connection_pairs = self._find_connection_nodes_at_location(conn, member_ids)
 
-        if len(connection_nodes) < 2:
-            if len(connection_nodes) == 1:
-                # Conforming mesh: single shared node means members already share
-                # this node -- no equations needed.
+        if len(connection_pairs) < 2:
+            if len(connection_pairs) == 1:
+                _, sole_node = connection_pairs[0]
                 logger.debug(
-                    f"Connection {conn.id}: single shared node {connection_nodes[0]}, no equations needed"
+                    f"Connection {conn.id}: single shared node {sole_node}, no equations needed"
                 )
             else:
                 logger.warning(f"Connection {conn.id}: Found no connection nodes")
             return
 
-        conn_type = "HINGE" if is_hinge else "POINT"
+        released = released_dofs_by_member or {}
+        any_released = any(released.values())
+        conn_type = "PARTIAL_HINGE" if any_released else "RIGID"
         file.write(f"** {conn_type} Connection: {conn.id}\n")
         file.write(
-            f"** Connects {len(member_ids)} members at {len(connection_nodes)} nodes\n"
+            f"** Connects {len(member_ids)} members at {len(connection_pairs)} nodes\n"
         )
 
-        # Use first node as reference, constrain all others to it
-        ref_node = connection_nodes[0]
-
-        # Translations are always coupled for rigid/hinge connections.
-        # Rotations are also coupled for rigid connections — writing DOF 4-6 EQUATION
-        # constraints between separate nodes does NOT trigger CalculiX KNOT generation
-        # (KNOT only occurs when beam and shell elements share a node).
-        dofs = [1, 2, 3]  # X, Y, Z translations (always constrained)
-        if not is_hinge:
-            dofs.extend([4, 5, 6])  # Rotations for rigid connection
+        _, ref_node = connection_pairs[0]
 
         equations_written = 0
         equations_skipped = 0
 
-        for dof in dofs:
-            for node in connection_nodes[1:]:
-                # Check if this (node, DOF) is already constrained
-                if (node, dof) in constrained_node_dofs:
-                    logger.debug(
-                        f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)"
-                    )
-                    equations_skipped += 1
-                    continue
+        def _write_eq(node, dof, ref):
+            nonlocal equations_written, equations_skipped
+            if (node, dof) in constrained_node_dofs:
+                logger.debug(
+                    f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)"
+                )
+                equations_skipped += 1
+                return
+            file.write("*EQUATION\n2\n")
+            file.write(f"{node},{dof},1.0,{ref},{dof},-1.0\n")
+            constrained_node_dofs.add((node, dof))
+            equations_written += 1
 
-                # Write the equation
-                file.write("*EQUATION\n")
-                file.write("2\n")
-                file.write(f"{node},{dof},1.0,{ref_node},{dof},-1.0\n")
+        # Translations (DOF 1-3): always couple all nodes to ref_node
+        for dof in [1, 2, 3]:
+            for _, node in connection_pairs[1:]:
+                _write_eq(node, dof, ref_node)
 
-                # Mark this (node, DOF) as constrained
-                constrained_node_dofs.add((node, dof))
-                equations_written += 1
+        # Rotations (DOF 4-6): couple only nodes whose members don't have this DOF released.
+        # Writing DOF 4-6 EQUATION constraints between separate nodes does NOT trigger
+        # CalculiX KNOT generation (KNOT only occurs when beam and shell share a node).
+        for dof in [4, 5, 6]:
+            coupled = [
+                (mid, nid)
+                for mid, nid in connection_pairs
+                if dof not in released.get(mid or "", [])
+            ]
+            if len(coupled) < 2:
+                continue  # All (or all but one) members released this DOF — leave free
+            dof_ref = coupled[0][1]
+            for _, node in coupled[1:]:
+                _write_eq(node, dof, dof_ref)
 
         if equations_skipped > 0:
             logger.info(
@@ -1523,7 +1524,7 @@ class UnifiedCalculixWriter:
     ) -> None:
         """Write a rigid connection (same as point connection for now)."""
         self._write_point_connection(
-            file, conn, member_ids, constrained_node_dofs, is_hinge=False
+            file, conn, member_ids, constrained_node_dofs
         )
 
     def _find_connection_nodes_at_location(
@@ -1542,7 +1543,9 @@ class UnifiedCalculixWriter:
             member_ids: List of member IDs to search
 
         Returns:
-            List of node IDs (one per member that has an element set)
+            List of (member_id, node_id) pairs — one per member that has an
+            element set.  The member_id is the domain member identifier and is
+            used to look up per-member end-release DOFs.
         """
         conn_pos = None
         if hasattr(conn, "position") and conn.position:
@@ -1561,7 +1564,8 @@ class UnifiedCalculixWriter:
         # column faces (150-300mm from centerline). 0.5m covers typical cases.
         tolerance = 0.5
 
-        connection_node_ids = []
+        seen_nodes: set = set()
+        connection_pairs: list = []  # List[Tuple[str, int]]
         for member_id in member_ids:
             short_id = self._get_short_id(member_id)
             member_set = f"MEMBER_{short_id}"
@@ -1592,15 +1596,16 @@ class UnifiedCalculixWriter:
                         best_dist = dist
                         best_node = node_id
 
-            if best_node is not None and best_node not in connection_node_ids:
-                connection_node_ids.append(best_node)
+            if best_node is not None and best_node not in seen_nodes:
+                seen_nodes.add(best_node)
+                connection_pairs.append((member_id, best_node))
 
-        if connection_node_ids:
+        if connection_pairs:
             logger.debug(
-                f"Connection {conn.id}: Found {len(connection_node_ids)} nodes at location"
+                f"Connection {conn.id}: Found {len(connection_pairs)} nodes at location"
             )
 
-        return connection_node_ids
+        return connection_pairs
 
     def _find_connection_nodes(self, conn, member_ids: List[str]) -> List[int]:
         """
@@ -1687,7 +1692,8 @@ class UnifiedCalculixWriter:
         else:
             logger.warning(f"Connection {conn.id}: No coincident nodes found")
 
-        return connection_node_ids
+        # Wrap with None member IDs: this fallback cannot attribute nodes to members
+        return [(None, nid) for nid in connection_node_ids]
 
     def _node_connects_multiple_members(
         self, node_id: int, member_nodes: Dict[str, set]

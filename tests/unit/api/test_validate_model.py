@@ -14,25 +14,32 @@ from unittest.mock import MagicMock
 # a full Gmsh installation (libGLU.so.1 is not available in the test env).
 # ---------------------------------------------------------------------------
 
-def _make_stub(name):
+def _stub(name, **attrs):
     mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
     sys.modules[name] = mod
     return mod
 
 
-for _mod in [
-    "gmsh",
-    "ifc_structural_mechanics.meshing",
-    "ifc_structural_mechanics.meshing.gmsh_geometry",
-    "ifc_structural_mechanics.meshing.gmsh_runner",
-    "ifc_structural_mechanics.meshing.gmsh_utils",
-    "ifc_structural_mechanics.meshing.unified_calculix_writer",
-]:
-    if _mod not in sys.modules:
-        _make_stub(_mod)
+# Stub gmsh (needs libGLU.so.1 which is absent) and the sub-modules that
+# import it.  Do NOT stub the meshing package or unified_calculix_writer
+# because those load fine without a live gmsh binary.
+if "gmsh" not in sys.modules:
+    _stub("gmsh")
 
-# Provide the symbol that structural_analysis.py imports from the meshing package
-sys.modules["ifc_structural_mechanics.meshing.unified_calculix_writer"].run_complete_analysis_workflow = MagicMock()
+if "ifc_structural_mechanics.meshing.gmsh_geometry" not in sys.modules:
+    _stub(
+        "ifc_structural_mechanics.meshing.gmsh_geometry",
+        GmshGeometryConverter=MagicMock(),
+        convert_model=MagicMock(),
+    )
+
+if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
+    _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
+
+if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
+    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
 
 # ---------------------------------------------------------------------------
 # Now it is safe to import the real module under test
