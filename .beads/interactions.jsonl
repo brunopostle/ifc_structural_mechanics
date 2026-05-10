@@ -1,3 +1,6 @@
 {"id":"int-23558781","kind":"field_change","created_at":"2026-05-10T17:22:40.174082016Z","actor":"Claude","issue_id":"ifc_structural_mechanics-8go","extra":{"field":"priority","new_value":"1","old_value":"2"}}
 {"id":"int-8f55b6cd","kind":"field_change","created_at":"2026-05-10T17:22:40.554939741Z","actor":"Claude","issue_id":"ifc_structural_mechanics-81l","extra":{"field":"priority","new_value":"1","old_value":"2"}}
 {"id":"int-7e802783","kind":"field_change","created_at":"2026-05-10T17:22:40.860378845Z","actor":"Claude","issue_id":"ifc_structural_mechanics-sjk","extra":{"field":"priority","new_value":"3","old_value":"2"}}
+{"id":"int-fabbdf5a","kind":"field_change","created_at":"2026-05-10T18:01:55.755007385Z","actor":"Claude","issue_id":"ifc_structural_mechanics-aps","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-ec9e3c11","kind":"field_change","created_at":"2026-05-10T18:01:55.879343218Z","actor":"Claude","issue_id":"ifc_structural_mechanics-afc","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
+{"id":"int-e9be05be","kind":"field_change","created_at":"2026-05-10T18:01:55.990961214Z","actor":"Claude","issue_id":"ifc_structural_mechanics-ode","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
