@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ifc_structural_mechanics",
+  "project_id": "4358d4c1-6e35-4958-9664-363384166006"
+}
