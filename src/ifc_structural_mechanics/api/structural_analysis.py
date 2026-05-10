@@ -39,6 +39,7 @@ def analyze_ifc(
     mesh_size: float = 1.0,
     verbose: bool = False,
     gravity: bool = False,
+    calculix_timeout: Optional[int] = 600,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -150,7 +151,7 @@ def analyze_ifc(
             working_dir=output_dir,
         )
 
-        calculix_output_files = calculix_runner.run_analysis()
+        calculix_output_files = calculix_runner.run_analysis(timeout=calculix_timeout)
         logger.info(f"CalculiX analysis completed: {calculix_output_files}")
 
         # Step 6: Parse results and check for errors/warnings
@@ -465,6 +466,7 @@ def run_enhanced_analysis(
     mesh_size: float = 1.0,
     verbose: bool = False,
     gravity: bool = False,
+    calculix_timeout: Optional[int] = 600,
 ) -> Dict[str, Any]:
     """
     Enhanced analysis function - now just calls the unified analyze_ifc.
@@ -492,4 +494,5 @@ def run_enhanced_analysis(
         mesh_size=mesh_size,
         verbose=verbose,
         gravity=gravity,
+        calculix_timeout=calculix_timeout,
     )

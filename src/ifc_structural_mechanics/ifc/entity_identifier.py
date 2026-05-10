@@ -619,20 +619,17 @@ def find_member_endpoints(
                     if start and end:
                         return [start, end]
 
-        # Default fallback if we couldn't extract reasonable endpoints
-        # Convert to SI units
-        return [
-            convert_coordinates([0.0, 0.0, 0.0], unit_scale),
-            convert_coordinates([1.0, 0.0, 0.0], unit_scale),
-        ]
+        # Geometry could not be extracted
+        guid = getattr(member, "GlobalId", None) or member.id()
+        logger.warning(
+            f"Could not extract geometry for curve member {guid} — member will be skipped"
+        )
+        return []
 
     except Exception as e:
-        logger.warning(f"Error finding member endpoints: {e}")
-        # Convert to SI units
-        return [
-            convert_coordinates([0.0, 0.0, 0.0], unit_scale),
-            convert_coordinates([1.0, 0.0, 0.0], unit_scale),
-        ]
+        guid = getattr(member, "GlobalId", None) or member.id()
+        logger.warning(f"Error finding member endpoints for {guid}: {e}")
+        return []
 
 
 def find_surface_boundaries(
@@ -670,26 +667,17 @@ def find_surface_boundaries(
                         )
                     return [coords]
 
-        # Default fallback if we couldn't extract reasonable boundaries
-        # Convert to SI units
-        default_boundary = [
-            [0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0],
-            [10.0, 10.0, 0.0],
-            [0.0, 10.0, 0.0],
-        ]
-        return [convert_point_list(default_boundary, unit_scale)]
+        # Geometry could not be extracted
+        guid = getattr(surface_member, "GlobalId", None) or surface_member.id()
+        logger.warning(
+            f"Could not extract geometry for surface member {guid} — member will be skipped"
+        )
+        return []
 
     except Exception as e:
-        logger.warning(f"Error finding surface boundaries: {e}")
-        # Convert to SI units
-        default_boundary = [
-            [0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0],
-            [10.0, 10.0, 0.0],
-            [0.0, 10.0, 0.0],
-        ]
-        return [convert_point_list(default_boundary, unit_scale)]
+        guid = getattr(surface_member, "GlobalId", None) or surface_member.id()
+        logger.warning(f"Error finding surface boundaries for {guid}: {e}")
+        return []
 
 
 def get_transformation(placement):

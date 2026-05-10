@@ -202,8 +202,11 @@ class PropertiesExtractor:
             # Find related material
             material_entity = self._find_related_material(entity)
             if not material_entity:
-                self.logger.debug(f"No material found for entity {entity.id()}")
-                return self._create_default_material()
+                guid = getattr(entity, "GlobalId", None) or entity.id()
+                self.logger.warning(
+                    f"No material assigned to entity {guid} — member will have no material"
+                )
+                return None
 
             # Extract material properties with safe handling
             psets = []
@@ -344,17 +347,7 @@ class PropertiesExtractor:
             self.logger.error(
                 f"Error extracting material for entity {entity.id()}: {e}"
             )
-            return self._create_default_material()
-
-    def _create_default_material(self) -> Material:
-        """Create a default material with SI units (no conversion needed)."""
-        return Material(
-            id="default_material",
-            name="Default Steel",
-            density=7850.0,  # kg/m³
-            elastic_modulus=210e9,  # Pa
-            poisson_ratio=0.3,
-        )
+            return None
 
     def extract_section(
         self, entity: ifcopenshell.entity_instance
