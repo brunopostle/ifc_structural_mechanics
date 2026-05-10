@@ -254,14 +254,16 @@ class LoadsExtractor:
         load_group_entities = []
         load_case_entities = []
 
-        # Find all load groups (excluding combinations)
+        # Find all load groups (excluding combinations and load cases)
         try:
             for group_entity in self.ifc.by_type(self.LOAD_GROUP_TYPE):
-                # Check if the entity is a load group (not a combination)
-                if hasattr(group_entity, "PredefinedType"):
-                    if group_entity.PredefinedType == "LOAD_GROUP":
-                        load_group_entities.append(group_entity)
-                    # Don't include combinations here, they'll be handled separately
+                # Include all groups that are not combinations or load cases.
+                # PredefinedType can be LOAD_GROUP, GRAVITY, VARIABLE_Q,
+                # PRESTRESS_LOAD, etc. — all are valid load-bearing groups.
+                if not group_entity.is_a(
+                    "IfcStructuralLoadCombination"
+                ) and not group_entity.is_a("IfcStructuralLoadCase"):
+                    load_group_entities.append(group_entity)
 
             self.logger.info(f"Found {len(load_group_entities)} load groups")
         except Exception as e:
@@ -361,13 +363,12 @@ class LoadsExtractor:
                                 if load:
                                     load_case.add_load(load)
 
-                            # Check for referenced load groups (must be of type LOAD_GROUP)
+                            # Check for referenced load groups (any PredefinedType)
                             elif (
                                 hasattr(obj, "is_a")
                                 and callable(obj.is_a)
                                 and obj.is_a("IfcStructuralLoadGroup")
-                                and hasattr(obj, "PredefinedType")
-                                and obj.PredefinedType == "LOAD_GROUP"
+                                and not obj.is_a("IfcStructuralLoadCombination")
                                 and obj.GlobalId in all_groups
                             ):
                                 # Get all loads from the referenced group

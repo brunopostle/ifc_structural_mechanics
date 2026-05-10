@@ -119,6 +119,10 @@ def analyze_ifc(
             f"Extracted structural model with {len(domain_model.members)} members"
         )
 
+        # Step 1b: Pre-analysis model validation
+        validation_warnings = _validate_model(domain_model, gravity)
+        result["warnings"].extend(validation_warnings)
+
         # Step 2: Create configurations
         analysis_config = create_analysis_config(analysis_type, gravity=gravity)
         meshing_config = create_meshing_config(mesh_size)
@@ -413,6 +417,88 @@ def create_meshing_config(mesh_size: float) -> MeshingConfig:
     config.validate()
 
     return config
+
+
+def _validate_model(domain_model, gravity: bool) -> list:
+    """
+    Validate the extracted structural model and return a list of warnings.
+
+    Checks that members have materials/sections, that boundary conditions exist,
+    and that loads are present (warning when gravity is the only likely source
+    but --gravity was not passed).
+
+    Args:
+        domain_model: The extracted StructuralModel.
+        gravity: Whether gravity self-weight was requested.
+
+    Returns:
+        List of warning dicts (same format as result["warnings"]).
+    """
+    warnings = []
+
+    def _warn(msg):
+        warnings.append(
+            {
+                "message": msg,
+                "severity": "warning",
+                "entity_type": None,
+                "ccx_id": None,
+                "domain_id": None,
+            }
+        )
+
+    # Check every member has a material
+    members_missing_material = [
+        m for m in domain_model.members if not getattr(m, "material", None)
+    ]
+    if members_missing_material:
+        ids = ", ".join(str(m.id) for m in members_missing_material[:5])
+        suffix = (
+            f" (and {len(members_missing_material) - 5} more)"
+            if len(members_missing_material) > 5
+            else ""
+        )
+        _warn(
+            f"{len(members_missing_material)} member(s) have no material assigned "
+            f"— CalculiX will reject them: {ids}{suffix}"
+        )
+
+    # Check every member has a section
+    members_missing_section = [
+        m for m in domain_model.members if not getattr(m, "section", None)
+    ]
+    if members_missing_section:
+        ids = ", ".join(str(m.id) for m in members_missing_section[:5])
+        suffix = (
+            f" (and {len(members_missing_section) - 5} more)"
+            if len(members_missing_section) > 5
+            else ""
+        )
+        _warn(
+            f"{len(members_missing_section)} member(s) have no section assigned "
+            f"— CalculiX will reject them: {ids}{suffix}"
+        )
+
+    # Check that at least one boundary condition (support) exists
+    if not domain_model.connections:
+        _warn(
+            "No structural connections found — the model has no supports and CalculiX "
+            "will produce a singular stiffness matrix."
+        )
+
+    # Check that loads exist; warn when gravity is the likely missing ingredient
+    load_groups = getattr(domain_model, "load_groups", [])
+    has_explicit_loads = any(
+        getattr(g, "loads", []) for g in load_groups
+    )
+    if not has_explicit_loads and not gravity:
+        _warn(
+            "No explicit loads found in the model and --gravity was not requested. "
+            "The analysis will run with zero applied loads. "
+            "If self-weight is the intended load, rerun with --gravity."
+        )
+
+    return warnings
 
 
 def _get_file_size(file_path: Optional[str]) -> Optional[int]:
