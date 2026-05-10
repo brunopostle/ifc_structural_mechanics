@@ -36,7 +36,7 @@ def analyze_ifc(
     ifc_path: str,
     output_dir: str,
     analysis_type: str = "linear_static",
-    mesh_size: float = 0.1,
+    mesh_size: float = 1.0,
     verbose: bool = False,
     gravity: bool = False,
 ) -> Dict[str, Any]:
@@ -462,7 +462,7 @@ def run_enhanced_analysis(
     ifc_path: str,
     output_dir: str,
     analysis_type: str = "linear_static",
-    mesh_size: float = 0.1,
+    mesh_size: float = 1.0,
     verbose: bool = False,
     gravity: bool = False,
 ) -> Dict[str, Any]:

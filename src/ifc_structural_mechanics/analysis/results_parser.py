@@ -216,21 +216,15 @@ class ResultsParser(BaseParser):
                     logger.debug(f"Trying alternative DAT file: {dat_file}")
                     displacements = self._parse_displacements_from_dat(dat_file)
 
-            # Last resort: create dummy results for the test
-            if not displacements and "test_model" in frd_file:
-                logger.warning(
-                    "No displacement results found, creating minimal test results"
-                )
-                displacements = self._create_test_displacement_results()
-
             logger.info(f"Parsed {len(displacements)} displacement results")
             return displacements
 
         except Exception as e:
             logger.error(f"Error parsing displacement results: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            # Don't raise an exception, just return empty list
-            return []
+            raise ResultProcessingError(
+                f"Failed to parse displacement results: {str(e)}"
+            ) from e
 
     def _parse_displacements_from_dat(self, dat_file: str) -> List[DisplacementResult]:
         """
@@ -300,29 +294,6 @@ class ResultsParser(BaseParser):
                             )
         except Exception as e:
             logger.warning(f"Error parsing DAT file {dat_file}: {str(e)}")
-
-        return displacements
-
-    def _create_test_displacement_results(self) -> List[DisplacementResult]:
-        """
-        Create test displacement results for testing purposes.
-
-        Returns:
-            List[DisplacementResult]: List of test displacement result objects.
-        """
-        displacements = []
-
-        # Node 1 (fixed, no displacement)
-        result1 = DisplacementResult(reference_element="1")
-        result1.set_translations([0.0, 0.0, 0.0])
-        result1.set_rotations([0.0, 0.0, 0.0])
-        displacements.append(result1)
-
-        # Node 2 (end node, should have displacement)
-        result2 = DisplacementResult(reference_element="2")
-        result2.set_translations([0.0, -0.0012345, 0.0])
-        result2.set_rotations([0.0, 0.0, 0.0])
-        displacements.append(result2)
 
         return displacements
 
@@ -616,20 +587,14 @@ class ResultsParser(BaseParser):
                 logger.debug("No reaction forces found, trying alternative formats")
                 reactions = self._parse_reactions_alternative_format(lines)
 
-            # Last resort: create dummy reactions for the test
-            if not reactions and "test_model" in dat_file:
-                logger.warning(
-                    "No reaction results found, creating minimal test results"
-                )
-                reactions = self._create_test_reaction_results()
-
             logger.info(f"Parsed {len(reactions)} reaction force results")
             return reactions
 
         except Exception as e:
             logger.error(f"Error parsing reaction forces: {str(e)}")
-            # Return empty list instead of raising exception
-            return []
+            raise ResultProcessingError(
+                f"Failed to parse reaction forces: {str(e)}"
+            ) from e
 
     def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
         """
@@ -752,23 +717,6 @@ class ResultsParser(BaseParser):
                         logger.warning(
                             f"Error parsing alternative reaction line: {data_line}, error: {e}"
                         )
-
-        return reactions
-
-    def _create_test_reaction_results(self) -> List[ReactionForceResult]:
-        """
-        Create test reaction force results for testing purposes.
-
-        Returns:
-            List[ReactionForceResult]: List of test reaction force result objects.
-        """
-        reactions = []
-
-        # Add a reaction at node 1 (fixed support)
-        result = ReactionForceResult(reference_element="1")
-        result.set_forces([0.0, 1000.0, 0.0])  # Vertical reaction of 1000N
-        result.set_moments([0.0, 0.0, 0.0])
-        reactions.append(result)
 
         return reactions
 

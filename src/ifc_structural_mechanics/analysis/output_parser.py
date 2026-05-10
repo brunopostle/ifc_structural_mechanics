@@ -123,20 +123,32 @@ class OutputParser(BaseParser):
         )
 
         # Add analysis completion status error if necessary
-        if (
-            not completed
-            and "ANALYSIS INTERRUPTED" in output_text
-            or "ANALYSIS ABORTED" in output_text
-        ):
-            errors.append(
-                {
-                    "message": "Analysis was interrupted or aborted before completion",
-                    "severity": "critical",
-                    "entity_type": None,
-                    "ccx_id": None,
-                    "domain_id": None,
-                }
-            )
+        if not completed:
+            if (
+                "ANALYSIS INTERRUPTED" in output_text
+                or "ANALYSIS ABORTED" in output_text
+            ):
+                errors.append(
+                    {
+                        "message": "Analysis was interrupted or aborted before completion",
+                        "severity": "critical",
+                        "entity_type": None,
+                        "ccx_id": None,
+                        "domain_id": None,
+                    }
+                )
+            elif not errors:
+                # No error patterns matched and no success marker — entirely inconclusive
+                errors.append(
+                    {
+                        "message": reason
+                        or "Analysis did not complete (no completion marker in output)",
+                        "severity": "critical",
+                        "entity_type": None,
+                        "ccx_id": None,
+                        "domain_id": None,
+                    }
+                )
 
         # Log summary of findings
         if errors:
