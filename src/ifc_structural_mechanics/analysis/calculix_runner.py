@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from ..config.analysis_config import AnalysisConfig
 from ..config.system_config import SystemConfig
 from ..utils.error_handling import AnalysisError
+from .output_parser import OutputParser
 from ..utils.subprocess_utils import run_subprocess
 from ..utils.temp_dir import create_temp_subdir
 
@@ -230,9 +231,14 @@ class CalculixRunner:
                         error_details=errors,
                     )
 
-            # Check for convergence issues
-            if not self._check_convergence(self._process_result.stdout):
-                raise AnalysisError("CalculiX analysis did not converge")
+            # Check for convergence issues using the shared OutputParser logic
+            converged, reason = OutputParser().check_convergence(
+                self._process_result.stdout
+            )
+            if not converged:
+                raise AnalysisError(
+                    f"CalculiX analysis did not converge: {reason}"
+                )
 
             # Collect result files
             self.result_files = self._collect_result_files()
@@ -495,57 +501,6 @@ class CalculixRunner:
             error_details.append({"message": stderr})
 
         return error_details
-
-    def _check_convergence(self, output: str) -> bool:
-        """
-        Check if the analysis converged.
-
-        Args:
-            output (str): Output from CalculiX.
-
-        Returns:
-            bool: True if converged, False otherwise.
-        """
-        # Check for common convergence indicators in CalculiX output
-        convergence_patterns = [
-            r"(?i)analysis terminated successfully",
-            r"(?i)solution converged",
-            r"(?i)analysis completed",
-        ]
-
-        # Check for convergence issues
-        nonconvergence_patterns = [
-            r"(?i)failed to converge",
-            r"(?i)no convergence",
-            r"(?i)divergence",
-            r"(?i)zero pivot",
-        ]
-
-        # Check for convergence success first
-        for pattern in convergence_patterns:
-            if re.search(pattern, output):
-                return True
-
-        # Then check for explicit convergence failures
-        for pattern in nonconvergence_patterns:
-            if re.search(pattern, output):
-                logger.warning(f"Convergence issue detected: {pattern}")
-                return False
-
-        # If neither explicitly converged nor explicitly failed, need to examine
-        # the output more carefully or check result files
-
-        # For static analysis, check if the final time increment completed
-        if "STEP TIME COMPLETED" in output or "STEP COMPLETED" in output:
-            return True
-
-        # Default to assuming it converged if no explicit failure is detected
-        # but log a warning
-        logger.warning(
-            "Could not definitively determine if analysis converged. "
-            "Assuming success but results should be verified."
-        )
-        return True
 
     def _collect_result_files(self) -> Dict[str, str]:
         """

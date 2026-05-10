@@ -672,13 +672,22 @@ class LoadsExtractor:
         Returns:
             Tuple of ([fx, fy, fz] in project units, is_per_length flag)
         """
-        # Handle IfcStructuralLoadConfiguration (wraps multiple load values)
+        # Handle IfcStructuralLoadConfiguration (wraps multiple load values).
+        # Average all values so that linearly-varying (trapezoidal) loads get
+        # the correct resultant rather than just using the value at one end.
         if applied_load.is_a("IfcStructuralLoadConfiguration"):
-            values = getattr(applied_load, "Values", [])
-            if values and len(values) > 0:
-                # Use the first load value (for uniform loads, all are equal)
-                return self._extract_line_force_vector(values[0])
-            return [0.0, 0.0, 0.0], False
+            values = list(getattr(applied_load, "Values", None) or [])
+            if not values:
+                return [0.0, 0.0, 0.0], False
+            vectors = []
+            last_is_per_length = False
+            for v in values:
+                vec, ipl = self._extract_line_force_vector(v)
+                vectors.append(vec)
+                last_is_per_length = ipl
+            n = len(vectors)
+            avg = [sum(v[i] for v in vectors) / n for i in range(3)]
+            return avg, last_is_per_length
 
         # Handle IfcStructuralLoadLinearForce (force per unit length)
         if hasattr(applied_load, "LinearForceX"):

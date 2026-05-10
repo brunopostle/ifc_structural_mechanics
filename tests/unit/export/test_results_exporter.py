@@ -254,3 +254,69 @@ class TestExportWritesJson:
         data = exporter.export(str(tmp_path / "r.json"))
         assert len(data["members"]) == 1
         assert data["members"][0]["id"] == "m1"
+
+
+# ---------------------------------------------------------------------------
+# Schema structure validation (g6y: stabilise JSON schema)
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaStructure:
+    """Validate that the exported JSON conforms to the documented schema.
+
+    These tests act as a contract — if the schema changes, bump
+    ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
+    """
+
+    CURRENT_SCHEMA_VERSION = "1.0"
+
+    _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
+    _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}
+    _VALID_STATUSES = {"ok", "warning", "fail"}
+
+    @pytest.fixture()
+    def data(self, tmp_path):
+        member = _curve_member(_rect_section())
+        exporter = _make_exporter(member)
+        return exporter.export(str(tmp_path / "schema_check.json"))
+
+    def test_schema_version_present_and_current(self, data):
+        assert data["schema_version"] == self.CURRENT_SCHEMA_VERSION
+
+    def test_units_block_has_all_keys(self, data):
+        assert self._REQUIRED_UNIT_KEYS <= set(data["units"])
+
+    def test_units_values_are_strings(self, data):
+        for key, val in data["units"].items():
+            assert isinstance(val, str), f"units[{key!r}] should be a string"
+
+    def test_model_block_has_id_and_name(self, data):
+        assert "id" in data["model"]
+        assert "name" in data["model"]
+
+    def test_load_cases_is_list(self, data):
+        assert isinstance(data["load_cases"], list)
+
+    def test_members_is_list(self, data):
+        assert isinstance(data["members"], list)
+
+    def test_each_member_has_required_keys(self, data):
+        for m in data["members"]:
+            missing = self._REQUIRED_MEMBER_KEYS - set(m)
+            assert not missing, f"Member {m.get('id')} missing keys: {missing}"
+
+    def test_member_status_is_valid(self, data):
+        for m in data["members"]:
+            assert m["status"] in self._VALID_STATUSES
+
+    def test_top_level_keys_present(self, data):
+        required = {
+            "schema_version",
+            "units",
+            "model",
+            "load_cases",
+            "members",
+            "global_displacements",
+            "global_reactions",
+        }
+        assert required <= set(data)

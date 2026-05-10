@@ -160,6 +160,26 @@ class Extractor:
                 "TIMEUNIT": 1.0,
             }
 
+        # Warn when the model is not in SI base units so engineers know
+        # their values will be scaled. Most structural tools use metres, but
+        # some Bonsai/Revit workflows default to millimetres.
+        _si_labels = {
+            "LENGTHUNIT": "m",
+            "FORCEUNIT": "N",
+            "PRESSUREUNIT": "Pa",
+            "MOMENTUNIT": "N·m",
+            "MASSUNIT": "kg",
+        }
+        for unit_type, si_label in _si_labels.items():
+            scale = unit_scales.get(unit_type, 1.0)
+            if abs(scale - 1.0) > 1e-9:
+                self.logger.warning(
+                    f"Non-SI {unit_type} detected (scale = {scale}). "
+                    f"Values from IFC are multiplied by {scale} to convert to {si_label}. "
+                    f"If your model was created in mm, ensure all geometry and property "
+                    f"values are consistent."
+                )
+
         return unit_scales
 
     def extract_model(
