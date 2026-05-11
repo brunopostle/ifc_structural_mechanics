@@ -44,6 +44,7 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
 from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
+from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
@@ -63,37 +64,43 @@ def _member(member_id, start=(0, 0, 0), end=(1, 0, 0)):
     )
 
 
-def _make_writer(members):
+_NODES = {
+    1: np.array([0.0, 0.0, 0.0]),
+    2: np.array([0.5, 0.0, 0.0]),
+    3: np.array([1.0, 0.0, 0.0]),
+}
+_ELEMENTS = {
+    10: {"type": "B31", "nodes": [1, 2]},
+    11: {"type": "B31", "nodes": [2, 3]},
+}
+
+
+def _make_mapper(members, element_physical_group=None, physical_group_names=None,
+                 nodes=None, elements=None):
+    """Build a MeshMapper with the given members and optional mesh state."""
     model = StructuralModel(id="t")
     for m in members:
         model.add_member(m)
+    model.register_analysis_elements = MagicMock()
 
-    writer = MagicMock(spec=UnifiedCalculixWriter)
-    writer.domain_model = model
-    writer.element_sets = {}
-    writer.defined_element_sets = set()
-    writer.nodes = {
-        1: np.array([0.0, 0.0, 0.0]),
-        2: np.array([0.5, 0.0, 0.0]),
-        3: np.array([1.0, 0.0, 0.0]),
-    }
-    writer.elements = {
-        10: {"type": "B31", "nodes": [1, 2]},
-        11: {"type": "B31", "nodes": [2, 3]},
-    }
-    writer._element_physical_group = {}
-    writer._physical_group_names = {}
-    writer.short_id_map = {}
-    writer.short_id_counter = 0
-    writer._get_short_id = UnifiedCalculixWriter._get_short_id.__get__(writer)
-    writer._assign_elements_spatially = (
-        UnifiedCalculixWriter._assign_elements_spatially.__get__(writer)
+    # Short-id helper reused from UnifiedCalculixWriter for consistent MEMBER_Mx names
+    short_id_map = {}
+    counter = [0]
+
+    def get_short_id(member_id):
+        if member_id not in short_id_map:
+            counter[0] += 1
+            short_id_map[member_id] = f"M{counter[0]}"
+        return short_id_map[member_id]
+
+    return MeshMapper(
+        elements=elements if elements is not None else dict(_ELEMENTS),
+        nodes=nodes if nodes is not None else dict(_NODES),
+        domain_model=model,
+        element_physical_group=element_physical_group or {},
+        physical_group_names=physical_group_names or {},
+        get_short_id=get_short_id,
     )
-    writer._map_elements_via_physical_groups = (
-        UnifiedCalculixWriter._map_elements_via_physical_groups.__get__(writer)
-    )
-    writer.domain_model.register_analysis_elements = MagicMock()
-    return writer
 
 
 # ---------------------------------------------------------------------------
@@ -107,17 +114,15 @@ class TestPipeSeparatedPhysicalGroups:
     def test_both_members_get_elements_from_combined_group(self):
         ma = _member("ma")
         mb = _member("mb")
-        writer = _make_writer([ma, mb])
+        mapper = _make_mapper(
+            [ma, mb],
+            element_physical_group={10: 1, 11: 1},
+            physical_group_names={1: "ma||mb"},
+        )
+        mapper._map_via_physical_groups()
 
-        # Simulate: elements 10 and 11 both belong to physical group 1,
-        # whose name is "ma||mb" (exact overlap).
-        writer._element_physical_group = {10: 1, 11: 1}
-        writer._physical_group_names = {1: "ma||mb"}
-
-        writer._map_elements_via_physical_groups()
-
-        ma_set = writer.element_sets.get("MEMBER_M1", [])
-        mb_set = writer.element_sets.get("MEMBER_M2", [])
+        ma_set = mapper.element_sets.get("MEMBER_M1", [])
+        mb_set = mapper.element_sets.get("MEMBER_M2", [])
         assert sorted(ma_set) == [10, 11], f"Expected [10,11] for ma, got {ma_set}"
         assert sorted(mb_set) == [10, 11], f"Expected [10,11] for mb, got {mb_set}"
 
@@ -125,51 +130,45 @@ class TestPipeSeparatedPhysicalGroups:
         """Normal (non-overlapping) group name still works."""
         ma = _member("ma")
         mb = _member("mb")
-        writer = _make_writer([ma, mb])
+        mapper = _make_mapper(
+            [ma, mb],
+            element_physical_group={10: 1, 11: 2},
+            physical_group_names={1: "ma", 2: "mb"},
+        )
+        mapper._map_via_physical_groups()
 
-        # ma → group 1, mb → group 2 (separate, no overlap)
-        writer._element_physical_group = {10: 1, 11: 2}
-        writer._physical_group_names = {1: "ma", 2: "mb"}
-
-        writer._map_elements_via_physical_groups()
-
-        assert writer.element_sets.get("MEMBER_M1") == [10]
-        assert writer.element_sets.get("MEMBER_M2") == [11]
+        assert mapper.element_sets.get("MEMBER_M1") == [10]
+        assert mapper.element_sets.get("MEMBER_M2") == [11]
 
     def test_three_way_overlap(self):
         """Three members with identical geometry share all elements."""
         ma = _member("ma")
         mb = _member("mb")
         mc = _member("mc", end=(2, 0, 0))
-        writer = _make_writer([ma, mb, mc])
-        # mc has different geometry — give it its own group
-        writer.nodes[4] = np.array([2.0, 0.0, 0.0])
-        writer.elements[12] = {"type": "B31", "nodes": [3, 4]}
-
-        writer._element_physical_group = {10: 1, 11: 1, 12: 2}
-        writer._physical_group_names = {1: "ma||mb", 2: "mc"}
-
-        writer._map_elements_via_physical_groups()
+        extra_nodes = {**_NODES, 4: np.array([2.0, 0.0, 0.0])}
+        extra_elems = {**_ELEMENTS, 12: {"type": "B31", "nodes": [3, 4]}}
+        mapper = _make_mapper(
+            [ma, mb, mc],
+            element_physical_group={10: 1, 11: 1, 12: 2},
+            physical_group_names={1: "ma||mb", 2: "mc"},
+            nodes=extra_nodes,
+            elements=extra_elems,
+        )
+        mapper._map_via_physical_groups()
 
         for mid in ("MEMBER_M1", "MEMBER_M2"):
-            elems = writer.element_sets.get(mid, [])
+            elems = mapper.element_sets.get(mid, [])
             assert sorted(elems) == [10, 11], f"{mid}: {elems}"
-        assert writer.element_sets.get("MEMBER_M3") == [12]
+        assert mapper.element_sets.get("MEMBER_M3") == [12]
 
     def test_unmapped_elements_fall_through_to_spatial(self):
         """Elements with no physical group still hit spatial fallback."""
         ma = _member("ma")
-        writer = _make_writer([ma])
-
-        # No physical group data at all
-        writer._element_physical_group = {}
-        writer._physical_group_names = {}
-
-        # Spatial fallback should assign elements
-        writer._map_elements_via_physical_groups()
+        mapper = _make_mapper([ma])  # no physical group data
+        mapper._map_via_physical_groups()
 
         # ma should get elements via spatial fallback (geometry centroid (0.5,0,0))
-        ma_set = writer.element_sets.get("MEMBER_M1", [])
+        ma_set = mapper.element_sets.get("MEMBER_M1", [])
         assert len(ma_set) > 0, "Expected spatial fallback to assign elements"
 
 

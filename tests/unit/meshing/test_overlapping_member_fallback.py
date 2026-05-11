@@ -2,16 +2,54 @@
 
 import io
 import logging
+import sys
+import types
 from unittest.mock import MagicMock
 
 import numpy as np
 
+
+def _stub(name, **attrs):
+    mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    sys.modules[name] = mod
+    return mod
+
+
+if "gmsh" not in sys.modules:
+    _stub("gmsh")
+
+if "ifc_structural_mechanics.meshing.gmsh_geometry" not in sys.modules:
+    _stub(
+        "ifc_structural_mechanics.meshing.gmsh_geometry",
+        GmshGeometryConverter=MagicMock(),
+        convert_model=MagicMock(),
+    )
+
+if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
+    _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
+
+if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
+    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
+
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
 )
+
+_NODES = {
+    1: np.array([0.0, 0.0, 0.0]),
+    2: np.array([1.0, 0.0, 0.0]),
+    3: np.array([0.5, 0.0, 0.0]),
+}
+_ELEMENTS = {
+    10: {"type": "B31", "nodes": [1, 2]},
+    11: {"type": "B31", "nodes": [2, 3]},
+}
 
 
 def _make_curve_member(id_, start, end, mat=None, sec=None):
@@ -30,34 +68,28 @@ def _make_curve_member(id_, start, end, mat=None, sec=None):
     return CurveMember(id=id_, geometry=[start, end], material=mat, section=sec)
 
 
-def _make_writer_with_two_members(member_a, member_b):
-    """Build a writer stub with two members and no actual mesh."""
+def _make_mapper_with_two_members(member_a, member_b):
+    """Build a MeshMapper with two members and a minimal mesh."""
     model = StructuralModel(id="test")
     model.add_member(member_a)
     model.add_member(member_b)
+    model.register_analysis_elements = MagicMock()
 
-    writer = MagicMock(spec=UnifiedCalculixWriter)
-    writer.domain_model = model
-    writer.element_sets = {}
-    writer.defined_element_sets = set()
-    writer.nodes = {
-        1: np.array([0.0, 0.0, 0.0]),
-        2: np.array([1.0, 0.0, 0.0]),
-        3: np.array([0.5, 0.0, 0.0]),
-    }
-    writer.elements = {
-        10: {"type": "B31", "nodes": [1, 2]},
-        11: {"type": "B31", "nodes": [2, 3]},
-    }
-    writer._get_short_id = lambda mid: mid[:8].replace("-", "")
-    writer._assign_elements_spatially = (
-        UnifiedCalculixWriter._assign_elements_spatially.__get__(writer)
+    def get_short_id(mid):
+        return mid[:8].replace("-", "")
+
+    return MeshMapper(
+        elements=dict(_ELEMENTS),
+        nodes=dict(_NODES),
+        domain_model=model,
+        element_physical_group={},
+        physical_group_names={},
+        get_short_id=get_short_id,
     )
-    return writer
 
 
 class TestSpatialFallback:
-    """_assign_elements_spatially() with allow_sharing flag."""
+    """MeshMapper._assign_spatially() with allow_sharing flag."""
 
     def test_no_sharing_leaves_empty_member(self):
         """Without sharing, a member whose elements are all assigned stays empty."""
@@ -65,47 +97,44 @@ class TestSpatialFallback:
         mb = _make_curve_member(
             "member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]
         )  # overlapping
-        writer = _make_writer_with_two_members(ma, mb)
+        mapper = _make_mapper_with_two_members(ma, mb)
 
         # Assign all elements to member_a first
         assigned = {10, 11}
-        writer.element_sets["MEMBER_member_a"] = [10, 11]
-        writer.defined_element_sets.add("MEMBER_member_a")
-        writer.domain_model.register_analysis_elements = MagicMock()
+        mapper.element_sets["MEMBER_member_a"] = [10, 11]
+        mapper.defined_element_sets.add("MEMBER_member_a")
 
-        writer._assign_elements_spatially([mb], assigned, allow_sharing=False)
+        mapper._assign_spatially([mb], assigned, allow_sharing=False)
 
-        assert "MEMBER_member_b" not in writer.element_sets
+        assert "MEMBER_member_b" not in mapper.element_sets
 
     def test_sharing_gives_overlapping_member_elements(self):
         """With sharing, an overlapping member gets the same elements."""
         ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
         mb = _make_curve_member("member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        writer = _make_writer_with_two_members(ma, mb)
+        mapper = _make_mapper_with_two_members(ma, mb)
 
         assigned = {10, 11}
-        writer.element_sets["MEMBER_member_a"] = [10, 11]
-        writer.defined_element_sets.add("MEMBER_member_a")
-        writer.domain_model.register_analysis_elements = MagicMock()
+        mapper.element_sets["MEMBER_member_a"] = [10, 11]
+        mapper.defined_element_sets.add("MEMBER_member_a")
 
-        writer._assign_elements_spatially([mb], assigned, allow_sharing=True)
+        mapper._assign_spatially([mb], assigned, allow_sharing=True)
 
-        assert "MEMBER_member_b" in writer.element_sets
-        assert len(writer.element_sets["MEMBER_member_b"]) > 0
+        assert "MEMBER_member_b" in mapper.element_sets
+        assert len(mapper.element_sets["MEMBER_member_b"]) > 0
 
     def test_sharing_logs_warning(self, caplog):
         """allow_sharing=True logs a warning about shared elements."""
         ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
         mb = _make_curve_member("member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        writer = _make_writer_with_two_members(ma, mb)
+        mapper = _make_mapper_with_two_members(ma, mb)
 
         assigned = {10, 11}
-        writer.element_sets["MEMBER_member_a"] = [10, 11]
-        writer.defined_element_sets.add("MEMBER_member_a")
-        writer.domain_model.register_analysis_elements = MagicMock()
+        mapper.element_sets["MEMBER_member_a"] = [10, 11]
+        mapper.defined_element_sets.add("MEMBER_member_a")
 
         with caplog.at_level(logging.WARNING):
-            writer._assign_elements_spatially([mb], assigned, allow_sharing=True)
+            mapper._assign_spatially([mb], assigned, allow_sharing=True)
 
         assert any("sharing" in r.message.lower() for r in caplog.records)
 
