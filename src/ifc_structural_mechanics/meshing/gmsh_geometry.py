@@ -89,7 +89,7 @@ class GmshGeometryConverter:
         # Fragment results
         self._fragment_map: Optional[List] = None
 
-    def _ensure_gmsh_initialized(self):
+    def _ensure_gmsh_initialized(self) -> None:
         """
         Ensure Gmsh is initialized before performing operations.
 

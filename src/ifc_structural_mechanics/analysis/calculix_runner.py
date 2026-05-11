@@ -538,29 +538,3 @@ class CalculixRunner:
 
         return result_files
 
-    def get_result_files(self) -> Dict[str, str]:
-        """
-        Get the paths to the result files.
-
-        Returns:
-            Dict[str, str]: Dictionary of result file paths by type.
-        """
-        return self.result_files
-
-    def set_mapper(self, mapper) -> None:
-        """
-        Set the domain to CalculiX mapper.
-
-        Args:
-            mapper: The mapper to use for error handling (deprecated, kept for compatibility).
-        """
-        self.mapper = mapper
-
-    def get_mapper(self):
-        """
-        Get the domain to CalculiX mapper.
-
-        Returns:
-            The mapper used for error handling, or None if not set (deprecated).
-        """
-        return self.mapper

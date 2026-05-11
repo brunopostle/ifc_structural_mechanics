@@ -1008,34 +1008,6 @@ class PropertiesExtractor:
 
         return psets
 
-    def get_pset_property(self, psets, pset_name, prop_name):
-        """
-        Get a specific property from property sets.
-
-        Args:
-            psets: List of property sets
-            pset_name: Name of the property set to look in
-            prop_name: Name of the property to find
-
-        Returns:
-            Property value or None
-        """
-        try:
-            for pset in psets:
-                pset_name_actual = self._safe_get_attribute(pset, "Name", "")
-                if pset_name_actual == pset_name or pset_name is None:
-                    properties = self._safe_get_attribute(pset, "Properties", [])
-                    for prop in properties:
-                        prop_name_actual = self._safe_get_attribute(prop, "Name", "")
-                        if prop_name_actual == prop_name:
-                            return self._safe_get_property_value(prop)
-        except Exception as e:
-            self.logger.warning(
-                f"Error getting property {prop_name} from {pset_name}: {e}"
-            )
-
-        return None
-
     def get_pset_properties(self, psets, pset_name):
         """
         Get all properties from a property set.

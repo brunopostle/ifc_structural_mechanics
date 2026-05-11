@@ -386,7 +386,7 @@ class UnifiedCalculixWriter:
                 f"  {len(self._element_physical_group)} elements have physical group tags"
             )
 
-    def _extract_cell_blocks(self, mesh):
+    def _extract_cell_blocks(self, mesh: "meshio.Mesh") -> List:
         """Extract cell blocks from mesh in version-agnostic way."""
         try:
             if hasattr(mesh.cells, "items"):
@@ -632,7 +632,7 @@ class UnifiedCalculixWriter:
 
     def _distribute_elements_to_members(
         self, elements: List[int], members: List, member_type: str
-    ):
+    ) -> None:
         """Distribute elements among members of the same type (naive fallback)."""
         if not elements or not members:
             logger.warning(f"No {member_type} elements or members to distribute")
@@ -1105,7 +1105,7 @@ class UnifiedCalculixWriter:
         file.write("*USER ELEMENT, NODES=2, TYPE=U1, INTEGRATIONPOINTS=2, MAXDOF=6\n\n")
 
     def _write_beam_section_general(
-        self, file: TextIO, member, elem_ids: List[int]
+        self, file: TextIO, member: "CurveMember", elem_ids: List[int]
     ) -> None:
         """Write *ELEMENT TYPE=U1 and *BEAM SECTION SECTION=GENERAL for a member.
 
@@ -1567,7 +1567,7 @@ class UnifiedCalculixWriter:
 
     def _find_connection_nodes_at_location(
         self, conn, member_ids: List[str]
-    ) -> List[int]:
+    ) -> List[Tuple[str, int]]:
         """
         Find the nearest mesh node to the connection position for each member.
 

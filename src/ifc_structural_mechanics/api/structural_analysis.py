@@ -373,19 +373,10 @@ def create_analysis_config(analysis_type: str, gravity: bool = False) -> Analysi
             f"Supported types: {list(AnalysisConfig.ANALYSIS_TYPES.keys())}"
         )
 
-    # Create a default analysis configuration
     config = AnalysisConfig()
-
-    # Update config with the specified analysis type
-    config._config["analysis_type"] = analysis_type
-    config._config["solver_params"] = AnalysisConfig.ANALYSIS_TYPES[analysis_type][
-        "default_solver_params"
-    ]
-    config._config["gravity"] = gravity
-
-    # Validate the configuration
+    config.set_analysis_type(analysis_type)
+    config.set_gravity(gravity)
     config.validate()
-
     return config
 
 
@@ -399,23 +390,9 @@ def create_meshing_config(mesh_size: float) -> MeshingConfig:
     Returns:
         MeshingConfig: The meshing configuration.
     """
-    # Create a default meshing configuration
     config = MeshingConfig()
-
-    # Update the default mesh size
-    config._config["global_settings"]["default_element_size"] = mesh_size
-
-    # Ensure max_element_size is at least as large as mesh_size
-    if mesh_size > config._config["global_settings"]["max_element_size"]:
-        config._config["global_settings"]["max_element_size"] = mesh_size
-
-    # Update member-specific mesh sizes
-    for member_type in config._config["member_types"]:
-        config._config["member_types"][member_type]["element_size"] = mesh_size
-
-    # Validate the configuration
+    config.set_default_mesh_size(mesh_size)
     config.validate()
-
     return config
 
 

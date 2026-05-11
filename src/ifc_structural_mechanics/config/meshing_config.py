@@ -452,3 +452,25 @@ class MeshingConfig(BaseConfig):
         # Quality threshold is the inverse of skewness - high quality means low skewness
         skewness = self._config["mesh_quality"]["skewness_threshold"]
         return 1.0 - skewness
+
+    def set_default_mesh_size(self, mesh_size: float) -> None:
+        """Set the default element size for all member types.
+
+        Updates global_settings.default_element_size, max_element_size (if the
+        new size exceeds the current maximum), and element_size for every
+        member type.
+
+        Args:
+            mesh_size: Target element size in metres.  Must be positive.
+
+        Raises:
+            ValueError: If mesh_size is not positive.
+        """
+        if mesh_size <= 0:
+            raise ValueError(f"mesh_size must be positive, got {mesh_size}")
+        gs = self._config["global_settings"]
+        gs["default_element_size"] = mesh_size
+        if mesh_size > gs["max_element_size"]:
+            gs["max_element_size"] = mesh_size
+        for member_type in self._config["member_types"]:
+            self._config["member_types"][member_type]["element_size"] = mesh_size

@@ -564,11 +564,3 @@ class Extractor:
             self.logger.warning(f"Failed to extract model name: {e}")
             return None
 
-    def get_warnings(self) -> List[str]:
-        """
-        Get a list of warnings encountered during extraction.
-
-        Returns:
-            List of warning messages
-        """
-        return self.warnings

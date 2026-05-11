@@ -177,3 +177,26 @@ class AnalysisConfig(BaseConfig):
     def get_gravity_direction(self) -> List[float]:
         """Get the gravity direction vector."""
         return self._config.get("gravity_direction", [0.0, 0.0, -1.0])
+
+    def set_analysis_type(self, analysis_type: str) -> None:
+        """Set the analysis type and update solver parameters to match.
+
+        Args:
+            analysis_type: Must be a key in ANALYSIS_TYPES.
+
+        Raises:
+            ValueError: If analysis_type is not supported.
+        """
+        if analysis_type not in self.ANALYSIS_TYPES:
+            raise ValueError(
+                f"Unsupported analysis type: {analysis_type}. "
+                f"Supported types: {list(self.ANALYSIS_TYPES.keys())}"
+            )
+        self._config["analysis_type"] = analysis_type
+        self._config["solver_params"] = self.ANALYSIS_TYPES[analysis_type][
+            "default_solver_params"
+        ]
+
+    def set_gravity(self, gravity: bool) -> None:
+        """Enable or disable gravity loading."""
+        self._config["gravity"] = bool(gravity)
