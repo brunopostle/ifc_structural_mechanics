@@ -297,7 +297,9 @@ class GmshGeometryConverter:
     # Fragment and remap
     # ------------------------------------------------------------------
 
-    def _fragment_all_entities(self) -> None:
+    def _fragment_all_entities(
+        self, support_point_tags: Optional[List[int]] = None
+    ) -> None:
         """
         Fragment geometry entities to create shared topology.
 
@@ -308,18 +310,37 @@ class GmshGeometryConverter:
         This avoids CalculiX KNOT generation at beam-shell shared nodes,
         which causes ``gen3dnor`` memory overflow on large models.
         Beam-to-shell coupling is handled by ``*EQUATION`` constraints instead.
+
+        Args:
+            support_point_tags: Gmsh point tags seeded at intermediate support
+                positions.  These are passed as *tools* to fragment() so that
+                curves are split exactly at those positions, guaranteeing a mesh
+                node for each intermediate support.
         """
         self._fragment_map = None
         curve_map = None
         surface_map = None
 
-        # Fragment curves against curves
-        if len(self._all_curve_dim_tags) >= 2:
+        support_dim_tags = [(0, pt) for pt in (support_point_tags or [])]
+
+        # Fragment curves against curves (and against support points as tools)
+        if len(self._all_curve_dim_tags) >= 2 or (
+            self._all_curve_dim_tags and support_dim_tags
+        ):
             try:
-                out_c, map_c = gmsh.model.occ.fragment(self._all_curve_dim_tags, [])
+                out_c, map_c = gmsh.model.occ.fragment(
+                    self._all_curve_dim_tags, support_dim_tags
+                )
+                # map_c has len(curves) + len(support_points) entries;
+                # we only use the first len(curves) entries in _remap_tags_after_fragment.
                 curve_map = map_c
                 logger.info(
                     f"Fragment curves: {len(self._all_curve_dim_tags)} -> {len(out_c)}"
+                    + (
+                        f" (split at {len(support_dim_tags)} support point(s))"
+                        if support_dim_tags
+                        else ""
+                    )
                 )
             except Exception as e:
                 logger.warning(f"Curve fragment failed: {e}")
@@ -422,8 +443,115 @@ class GmshGeometryConverter:
             dm.register_mesh_entities(member_id, mesh_ids, entity_type="member")
 
     # ------------------------------------------------------------------
-    # Physical groups for element-to-member mapping
+    # Support point seeding
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _point_on_segment(
+        p: np.ndarray, a: np.ndarray, b: np.ndarray, tol: float = 1e-4
+    ) -> bool:
+        """Return True if point *p* lies strictly inside segment [a, b].
+
+        "Strictly inside" means not at an endpoint, so supports that coincide
+        with member endpoints (already in the shared point registry) are not
+        re-seeded.
+
+        Args:
+            p: Point to test.
+            a: Segment start.
+            b: Segment end.
+            tol: Perpendicular distance tolerance in the same units as the
+                 coordinates (default 0.1 mm for metre-scale models).
+        """
+        ab = b - a
+        ab_len = float(np.linalg.norm(ab))
+        if ab_len < tol:
+            return False
+
+        ap = p - a
+        # Perpendicular distance from p to line ab
+        perp = np.linalg.norm(np.cross(ab / ab_len, ap))
+        if perp > tol:
+            return False
+
+        # Parametric position along segment
+        t = float(np.dot(ap, ab) / (ab_len * ab_len))
+        return tol / ab_len < t < 1.0 - tol / ab_len
+
+    def _seed_support_points(self, domain_model: StructuralModel) -> List[int]:
+        """
+        Add Gmsh points at support positions that lie strictly inside member curves.
+
+        When a support connection is at an intermediate position on a beam (not
+        at an endpoint), Gmsh normally places no mesh node there.  By seeding a
+        point and including it as a *tool* in the subsequent fragment() call, the
+        curve is split at that position and the mesher places a node exactly there.
+
+        Returns:
+            List of Gmsh point tags to pass as tools to fragment().
+        """
+        from ..analysis.boundary_condition_handling import get_constrained_dofs
+
+        seeded: List[int] = []
+        already_registered = set(self._curve_point_registry.values())
+
+        for conn in domain_model.connections:
+            if not get_constrained_dofs(conn):
+                continue
+            if not (hasattr(conn, "position") and conn.position):
+                continue
+
+            try:
+                pos = np.array([float(v) for v in conn.position], dtype=float)
+            except (TypeError, ValueError):
+                continue
+
+            # Skip if a curve point already exists here (endpoint of some member).
+            key = self._coord_key(pos[0], pos[1], pos[2])
+            if key in self._curve_point_registry:
+                continue
+
+            # Check whether pos lies strictly inside any member curve segment.
+            found = False
+            for member in domain_model.members:
+                if not isinstance(member, CurveMember):
+                    continue
+                geom = member.geometry
+                if not geom or len(geom) < 2:
+                    continue
+
+                for i in range(len(geom) - 1):
+                    try:
+                        a = np.array([float(v) for v in geom[i]], dtype=float)
+                        b = np.array([float(v) for v in geom[i + 1]], dtype=float)
+                    except (TypeError, ValueError):
+                        continue
+
+                    if self._point_on_segment(pos, a, b):
+                        pt_tag = self._get_or_create_point(
+                            pos[0], pos[1], pos[2], dim=1
+                        )
+                        seeded.append(pt_tag)
+                        logger.info(
+                            f"Seeded support point at {pos.tolist()} on "
+                            f"member {member.id} segment {i}–{i+1}"
+                        )
+                        found = True
+                        break
+
+                if found:
+                    break
+
+            if not found and not any(
+                m.startswith("dummy_member_") for m in conn.connected_members
+            ):
+                # Real connection not at any member endpoint or segment — warn.
+                logger.debug(
+                    f"Support {conn.id} at {pos.tolist()} does not lie on "
+                    f"any member curve; no point seeded"
+                )
+
+        return seeded
 
     def _create_physical_groups(self, domain_model: StructuralModel) -> None:
         """
@@ -580,8 +708,13 @@ class GmshGeometryConverter:
             elif isinstance(member, SurfaceMember):
                 self._create_surface_geometry(member)
 
+        # Phase 1.5: Seed Gmsh points at support positions that lie on beam
+        # interiors so that fragment() splits the curve there and the mesher
+        # places a node at the exact support location.
+        support_point_tags = self._seed_support_points(domain_model)
+
         # Phase 2: Fragment for shared topology
-        self._fragment_all_entities()
+        self._fragment_all_entities(support_point_tags)
 
         # Phase 3: Single synchronize
         try:
