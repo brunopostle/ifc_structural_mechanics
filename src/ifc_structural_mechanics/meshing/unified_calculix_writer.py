@@ -739,6 +739,12 @@ class UnifiedCalculixWriter:
             # Header
             self._write_header(f)
 
+            # Pre-analysis stability check
+            for warning in self._detect_mechanism_risk():
+                logger.warning(warning)
+                f.write(f"** *** STABILITY WARNING: {warning}\n")
+                f.write("**\n")
+
             # Mesh data
             self._write_nodes(f)
             self._write_nodal_thickness(f)  # Must come after nodes, before elements
@@ -1775,6 +1781,66 @@ class UnifiedCalculixWriter:
                         return False
 
         return True
+
+    def _detect_mechanism_risk(self) -> List[str]:
+        """Return warning strings when the model may be a kinematic mechanism under lateral loads.
+
+        The heuristic flags models where:
+        (1) every support fixes only translational DOFs (1-3, no rotational restraint), AND
+        (2) no moment-resisting member connection exists (all connections are hinges), AND
+        (3) at least one lateral (non-gravity) load is present.
+
+        Under these conditions CalculiX will often report a zero-pivot singularity or
+        converge to unrealistically large displacements.
+        """
+        from ifc_structural_mechanics.analysis.boundary_condition_handling import (
+            get_constrained_dofs,
+        )
+
+        model = self.domain_model
+
+        # --- 1. Any support with rotational fixity (DOF 4-6)? ---
+        for conn in model.connections:
+            real = [m for m in conn.connected_members if not m.startswith("dummy_member_")]
+            if len(real) >= 2:
+                continue  # member-to-member connection
+            if any(d in {4, 5, 6} for d in get_constrained_dofs(conn)):
+                return []  # rotationally restrained support found → not a pure mechanism
+
+        # --- 2. Any moment-resisting connection between members? ---
+        for conn in model.connections:
+            real = [m for m in conn.connected_members if not m.startswith("dummy_member_")]
+            if len(real) < 2:
+                continue  # support
+            if conn.entity_type == "hinge":
+                continue  # explicit hinge releases all rotations
+            if conn.entity_type in ("point", "rigid"):
+                released = getattr(conn, "released_dofs_by_member", {}) or {}
+                for mid in real:
+                    if not {4, 5, 6}.issubset(set(released.get(mid, []))):
+                        return []  # this member retains at least one rotation DOF
+
+        # --- 3. Any lateral (non-gravity) load? ---
+        for load_group in model.load_groups:
+            for load in load_group.loads:
+                try:
+                    vec = load.get_force_vector()
+                    if len(vec) >= 2 and (
+                        abs(float(vec[0])) > 1e-3 or abs(float(vec[1])) > 1e-3
+                    ):
+                        return [
+                            "Possible kinematic mechanism: all supports provide translational "
+                            "fixity only (DOF 1-3) with no rotational restraint (DOF 4-6), "
+                            "and no moment-resisting connections between members were detected. "
+                            "Under lateral loads the structure may be kinematically unstable "
+                            "and CalculiX may report a zero pivot or very large displacements. "
+                            "Check IfcBoundaryNodeCondition drx/dry/drz entries and connection "
+                            "types."
+                        ]
+                except Exception:
+                    continue
+
+        return []
 
     def _split_beam_sets_by_orientation(self) -> Dict[str, Dict[tuple, List[int]]]:
         """

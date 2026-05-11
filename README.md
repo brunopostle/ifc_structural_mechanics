@@ -29,7 +29,7 @@ This software is under active development. The following limitations are known:
 - **Linear buckling**: The `linear_buckling` analysis type produces two CalculiX steps (static pre-stress + perturbation buckle) and parses eigenvalue multipliers from the `.dat` file, but results have not been validated against published benchmarks.
 - **Section types**: Only rectangular, circular, pipe (hollow circle), and box (hollow rectangle) cross-sections are supported for CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
 - **Self-weight loads**: Models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) rely entirely on self-weight. Pass `--gravity` to include it; without that flag, no loads are applied and displacements will be zero.
-- **Intermediate support positions**: If a support connection is at an intermediate point on a beam (not at a beam endpoint), Gmsh may not place a mesh node at that exact location, causing the support to be silently omitted.
+- **Mixed beam+shell instability**: When all column-base supports fix only translational DOFs (no rotational restraint) and no moment-resisting connections exist, the structure is a near-mechanism under lateral loads. The library now detects this condition and emits a `STABILITY WARNING` in both the log and the generated `.inp` file, but does not automatically alter the model.
 
 ## Installation
 
