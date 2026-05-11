@@ -1527,16 +1527,44 @@ class UnifiedCalculixWriter:
             file, conn, member_ids, constrained_node_dofs
         )
 
+    def _get_member_endpoints(self, member_id: str):
+        """
+        Return (start, end) numpy arrays for a curve member's geometry endpoints.
+
+        Returns None if the member has no usable geometry (surface members,
+        missing geometry, etc.).  Results are cached per member_id.
+        """
+        if not hasattr(self, "_member_endpoint_cache"):
+            self._member_endpoint_cache = {}
+
+        if member_id not in self._member_endpoint_cache:
+            member = self.domain_model.get_member(member_id)
+            endpoints = None
+            if member is not None and hasattr(member, "geometry") and member.geometry:
+                geom = member.geometry
+                if isinstance(geom, (list, tuple)) and len(geom) >= 2:
+                    try:
+                        start = np.array([float(v) for v in geom[0]])
+                        end = np.array([float(v) for v in geom[-1]])
+                        if start.shape == (3,) and end.shape == (3,):
+                            endpoints = (start, end)
+                    except (TypeError, ValueError):
+                        pass
+            self._member_endpoint_cache[member_id] = endpoints
+
+        return self._member_endpoint_cache[member_id]
+
     def _find_connection_nodes_at_location(
         self, conn, member_ids: List[str]
     ) -> List[int]:
         """
         Find the nearest mesh node to the connection position for each member.
 
-        In building models, beams often terminate at column faces rather than
-        centerlines, so beam endpoints can be 150-400mm from the connection
-        position. We find the nearest node per member unconditionally (the IFC
-        model says these members are connected, so we trust it).
+        Uses member geometry endpoints (from the domain model) to pinpoint the
+        exact end of each member closest to the connection.  Mesh nodes are
+        expected to sit at member endpoints, so a tight 10 mm tolerance is used
+        when endpoint geometry is available.  Falls back to a loose 0.5 m
+        proximity search when geometry is unavailable (e.g. surface members).
 
         Args:
             conn: Connection with .position attribute [x,y,z]
@@ -1560,9 +1588,11 @@ class UnifiedCalculixWriter:
         if not hasattr(self, "_member_node_cache"):
             self._member_node_cache = {}
 
-        # Tolerance for beam-to-connection offset: beams often terminate at
-        # column faces (150-300mm from centerline). 0.5m covers typical cases.
-        tolerance = 0.5
+        # Tight tolerance for matching a mesh node at a known geometry endpoint.
+        # Gmsh places nodes exactly at geometry points, so 10 mm is very generous.
+        _TIGHT_TOL = 1e-2
+        # Fallback when no geometry is available.
+        _LOOSE_TOL = 0.5
 
         seen_nodes: set = set()
         connection_pairs: list = []  # List[Tuple[str, int]]
@@ -1581,16 +1611,31 @@ class UnifiedCalculixWriter:
                 self._member_node_cache[member_set] = node_set
             node_set = self._member_node_cache[member_set]
 
-            # Find nearest node within tolerance
+            # Choose search target and tolerance.
+            # When we know the member endpoints (curve members), target the
+            # endpoint nearest to the connection position with a tight tolerance.
+            # This avoids false matches for closely-spaced but unconnected members.
+            endpoints = self._get_member_endpoints(member_id)
+            if endpoints is not None:
+                dists = [float(np.linalg.norm(ep - conn_pos)) for ep in endpoints]
+                target_pos = endpoints[int(np.argmin(dists))]
+                tolerance = _TIGHT_TOL
+            else:
+                target_pos = conn_pos
+                tolerance = _LOOSE_TOL
+
+            # Find nearest node to target_pos within tolerance
             best_node = None
             best_dist = tolerance
             for node_id in node_set:
                 if node_id in self.nodes:
                     npos = self.nodes[node_id]
-                    dist = np.sqrt(
-                        (npos[0] - conn_pos[0]) ** 2
-                        + (npos[1] - conn_pos[1]) ** 2
-                        + (npos[2] - conn_pos[2]) ** 2
+                    dist = float(
+                        np.sqrt(
+                            (npos[0] - target_pos[0]) ** 2
+                            + (npos[1] - target_pos[1]) ** 2
+                            + (npos[2] - target_pos[2]) ** 2
+                        )
                     )
                     if dist < best_dist:
                         best_dist = dist
