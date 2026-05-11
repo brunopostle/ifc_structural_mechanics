@@ -434,10 +434,22 @@ class GmshGeometryConverter:
         group, which meshio reads as cell_data['gmsh:physical']. The writer
         uses this to map elements to domain members.
 
+        When two members have *identical* post-fragment geometry tag sets (exact
+        overlap after fragment()), a single physical group is created for them
+        with a pipe-separated name ("MemberA||MemberB").  The writer parses this
+        combined name and assigns elements to all listed members, avoiding the
+        situation where only one group "wins" in the .msh file.
+
         Stores mapping in self.physical_group_map: {phys_tag: member_id}
+        (last member in an overlapping group; use physical group name to get all).
         """
         self.physical_group_map: Dict[int, str] = {}
-        phys_tag = 1
+
+        # Group members by their exact post-fragment tag frozenset.
+        # Members with identical tag sets share the same physical group.
+        tag_key_to_entries: Dict[
+            frozenset, List[Tuple[str, List[int], int]]
+        ] = {}  # frozenset((dim, tag)) -> [(member_id, tags, dim), ...]
 
         for member in domain_model.members:
             mid = member.id
@@ -453,15 +465,38 @@ class GmshGeometryConverter:
             if not tags:
                 continue
 
+            key = frozenset((dim, t) for t in tags)
+            if key not in tag_key_to_entries:
+                tag_key_to_entries[key] = []
+            tag_key_to_entries[key].append((mid, tags, dim))
+
+        phys_tag = 1
+        for key, entries in tag_key_to_entries.items():
+            member_ids = [e[0] for e in entries]
+            tags = entries[0][1]
+            dim = entries[0][2]
+
+            # Combine names for overlapping members so the writer can assign
+            # elements to all of them from a single physical group.
+            group_name = "||".join(member_ids)
+            if len(member_ids) > 1:
+                logger.info(
+                    f"Exact geometry overlap detected: {member_ids} share "
+                    f"{len(tags)} entity tag(s) — combined into one physical group"
+                )
+
             try:
                 gmsh.model.addPhysicalGroup(dim, tags, phys_tag)
-                gmsh.model.setPhysicalName(dim, phys_tag, mid)
-                self.physical_group_map[phys_tag] = mid
+                gmsh.model.setPhysicalName(dim, phys_tag, group_name)
+                for mid in member_ids:
+                    self.physical_group_map[phys_tag] = mid
                 phys_tag += 1
             except Exception as e:
-                logger.debug(f"Could not create physical group for {mid}: {e}")
+                logger.debug(
+                    f"Could not create physical group for {member_ids}: {e}"
+                )
 
-        logger.info(f"Created {len(self.physical_group_map)} physical groups")
+        logger.info(f"Created {phys_tag - 1} physical groups")
 
     # ------------------------------------------------------------------
     # Mesh size application

@@ -25,11 +25,9 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 
 This software is under active development. The following limitations are known:
 
-- **Connection geometry**: Structural connections between members are resolved by geometric proximity (0.5 m tolerance) rather than using the `IfcRelConnectsStructuralMember` relationship topology defined in the IFC file. This can cause incorrect connectivity for closely spaced but unconnected members.
-- **Overlapping members**: Members with identical or overlapping geometry may lose their physical group assignment during mesh fragmentation. Their sections will be skipped with a warning; a fallback assigns the nearest elements by spatial proximity (shared ownership).
+- **Overlapping members (partial)**: Members with *partially* overlapping geometry (e.g. a short stub beam embedded in a longer beam) may still lose element assignments after mesh fragmentation. A spatial-proximity fallback handles these rare cases. Members with *identical* geometry (exact overlap) are now correctly handled: they share a single physical group and receive the same finite elements.
 - **Linear buckling**: The `linear_buckling` analysis type produces two CalculiX steps (static pre-stress + perturbation buckle) and parses eigenvalue multipliers from the `.dat` file, but results have not been validated against published benchmarks.
 - **Section types**: Only rectangular, circular, pipe (hollow circle), and box (hollow rectangle) cross-sections are supported for CalculiX B31 beam elements. I-sections are approximated as equivalent rectangles preserving area and second moment of area.
-- **Partial end-releases**: Connection end-releases read from `IfcRelConnectsStructuralMember.AppliedCondition` are modelled as full pins (all three rotational DOFs released). Partial releases — where only one member or one rotation axis is released — are not yet supported.
 - **Self-weight loads**: Models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) rely entirely on self-weight. Pass `--gravity` to include it; without that flag, no loads are applied and displacements will be zero.
 - **Intermediate support positions**: If a support connection is at an intermediate point on a beam (not at a beam endpoint), Gmsh may not place a mesh node at that exact location, causing the support to be silently omitted.
 

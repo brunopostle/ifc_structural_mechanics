@@ -300,9 +300,10 @@ class UnifiedCalculixWriter:
             node_id = i + 1  # CalculiX uses 1-based indexing
             self.nodes[node_id] = (float(x), float(y), float(z))
 
-        # Extract physical group name mapping: name -> (tag, dim)
+        # Extract physical group name mapping: tag -> name (member_id or
+        # "MemberA||MemberB" for exact-overlap groups).
         # meshio field_data format: {name: [tag, dim]}
-        self._physical_group_names = {}  # tag -> name (member_id)
+        self._physical_group_names = {}  # tag -> name
         if hasattr(mesh, "field_data") and mesh.field_data:
             for name, (tag, dim) in mesh.field_data.items():
                 self._physical_group_names[int(tag)] = name
@@ -435,11 +436,15 @@ class UnifiedCalculixWriter:
         for elem_id in self.elements:
             ptag = self._element_physical_group.get(elem_id)
             if ptag is not None:
-                member_id = self._physical_group_names.get(ptag)
-                if member_id:
-                    if member_id not in member_elements:
-                        member_elements[member_id] = []
-                    member_elements[member_id].append(elem_id)
+                group_name = self._physical_group_names.get(ptag)
+                if group_name:
+                    # Physical group name may be "A||B||C" for exact-overlap
+                    # groups created by GmshGeometryConverter when multiple
+                    # members share the same post-fragment entity tags.
+                    for member_id in group_name.split("||"):
+                        if member_id not in member_elements:
+                            member_elements[member_id] = []
+                        member_elements[member_id].append(elem_id)
                     assigned_elements.add(elem_id)
                     mapped += 1
                     continue
