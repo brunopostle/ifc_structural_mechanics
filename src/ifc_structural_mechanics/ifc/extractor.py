@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Union
 import ifcopenshell
 import ifcopenshell.util.unit
 
+from ..utils.error_handling import ModelExtractionError
+
 from ..domain.structural_model import StructuralModel
 from .connections_extractor import ConnectionsExtractor
 from .entity_identifier import (
@@ -64,7 +66,7 @@ class Extractor:
             self.logger.info("Using provided ifcopenshell.file object")
         else:
             self.logger.error("Invalid IFC file parameter provided")
-            raise ValueError(
+            raise ModelExtractionError(
                 "ifc_file must be a file path or an ifcopenshell.file object"
             )
 

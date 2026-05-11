@@ -17,6 +17,7 @@ from typing import Dict, Optional, Union
 import ifcopenshell
 
 from ..domain.property import Material, Section, Thickness
+from ..utils.error_handling import ModelExtractionError
 from ..utils.units import (
     convert_density,
     convert_length,
@@ -66,7 +67,7 @@ class PropertiesExtractor:
             self.ifc = ifc_file
             self.logger.info("Using provided ifcopenshell.file object")
         else:
-            raise ValueError(
+            raise ModelExtractionError(
                 "ifc_file must be a file path or an ifcopenshell.file object"
             )
 

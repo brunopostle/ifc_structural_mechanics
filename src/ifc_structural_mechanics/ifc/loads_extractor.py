@@ -13,6 +13,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import ifcopenshell
 import numpy as np
 
+from ..utils.error_handling import ModelExtractionError
+
 from ..domain.load import (
     AreaLoad,
     LineLoad,
@@ -72,7 +74,7 @@ class LoadsExtractor:
             self.logger.info("Using provided ifcopenshell.file object")
         else:
             self.logger.error("Invalid IFC file parameter provided")
-            raise ValueError(
+            raise ModelExtractionError(
                 "ifc_file must be a file path or an ifcopenshell.file object"
             )
 

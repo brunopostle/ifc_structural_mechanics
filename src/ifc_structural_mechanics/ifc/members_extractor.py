@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Union
 import ifcopenshell
 
 from ..domain.property import Material, Section, Thickness
+from ..utils.error_handling import ModelExtractionError
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
     get_1D_orientation,
@@ -72,7 +73,7 @@ class MembersExtractor:
             self.logger.info("Using provided ifcopenshell.file object")
         else:
             self.logger.error("Invalid IFC file parameter provided")
-            raise ValueError(
+            raise ModelExtractionError(
                 "ifc_file must be a file path or an ifcopenshell.file object"
             )
 
