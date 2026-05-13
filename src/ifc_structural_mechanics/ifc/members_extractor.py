@@ -13,7 +13,6 @@ from typing import Dict, List, Optional, Union
 import ifcopenshell
 
 from ..domain.property import Material, Section, Thickness
-from ..utils.error_handling import ModelExtractionError
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
     get_1D_orientation,
@@ -23,6 +22,7 @@ from ..ifc.entity_identifier import (
     get_transformation,
     transform_vectors,
 )
+from ..utils.error_handling import ModelExtractionError
 from ..utils.units import (
     convert_area,
     convert_density,
@@ -958,9 +958,7 @@ class MembersExtractor:
             b_top = convert_length(
                 getattr(profile, "TopFlangeWidth", b_bot), self.length_scale
             )
-            h = convert_length(
-                getattr(profile, "OverallDepth", 0.2), self.length_scale
-            )
+            h = convert_length(getattr(profile, "OverallDepth", 0.2), self.length_scale)
             tw = convert_length(
                 getattr(profile, "WebThickness", 0.01), self.length_scale
             )
@@ -990,12 +988,8 @@ class MembersExtractor:
 
         # Handle L-shape (angle) profile
         elif profile.is_a("IfcLShapeProfileDef"):
-            depth = convert_length(
-                getattr(profile, "Depth", 0.1), self.length_scale
-            )
-            width = convert_length(
-                getattr(profile, "Width", depth), self.length_scale
-            )
+            depth = convert_length(getattr(profile, "Depth", 0.1), self.length_scale)
+            width = convert_length(getattr(profile, "Width", depth), self.length_scale)
             thickness = convert_length(
                 getattr(profile, "Thickness", 0.01), self.length_scale
             )
@@ -1014,9 +1008,7 @@ class MembersExtractor:
 
         # Handle T-shape profile
         elif profile.is_a("IfcTShapeProfileDef"):
-            depth = convert_length(
-                getattr(profile, "Depth", 0.2), self.length_scale
-            )
+            depth = convert_length(getattr(profile, "Depth", 0.2), self.length_scale)
             flange_width = convert_length(
                 getattr(profile, "FlangeWidth", 0.1), self.length_scale
             )
@@ -1043,9 +1035,7 @@ class MembersExtractor:
 
         # Handle C-shape / channel profile
         elif profile.is_a("IfcChannelProfileDef"):
-            depth = convert_length(
-                getattr(profile, "Depth", 0.2), self.length_scale
-            )
+            depth = convert_length(getattr(profile, "Depth", 0.2), self.length_scale)
             flange_width = convert_length(
                 getattr(profile, "FlangeWidth", 0.1), self.length_scale
             )

@@ -10,7 +10,6 @@ import sys
 import types
 from unittest.mock import MagicMock
 
-import numpy as np
 
 # ---------------------------------------------------------------------------
 # Stubs so unified_calculix_writer can be imported without Gmsh / libGLU
@@ -41,23 +40,33 @@ if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
 if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_utils")
 
-from ifc_structural_mechanics.domain.load import PointLoad, LoadGroup  # noqa: E402
+from ifc_structural_mechanics.domain.load import LoadGroup, PointLoad  # noqa: E402
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
-from ifc_structural_mechanics.domain.structural_connection import PointConnection  # noqa: E402
+from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E402
+    PointConnection,
+)
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
-from ifc_structural_mechanics.meshing.unified_calculix_writer import UnifiedCalculixWriter  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
+    UnifiedCalculixWriter,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MAT = Material(id="m", name="S", elastic_modulus=210e9, poisson_ratio=0.3, density=7850)
+_MAT = Material(
+    id="m", name="S", elastic_modulus=210e9, poisson_ratio=0.3, density=7850
+)
 _SEC = Section.create_rectangular_section(id="s", name="R", width=0.1, height=0.1)
 
 
 def _member(mid, start=(0, 0, 0), end=(0, 0, 3)):
-    return CurveMember(id=mid, geometry=[list(start), list(end)], material=_MAT, section=_SEC)
+    return CurveMember(
+        id=mid, geometry=[list(start), list(end)], material=_MAT, section=_SEC
+    )
 
 
 def _pinned_support(conn_id, position, member_id="col"):
@@ -90,14 +99,19 @@ def _lateral_load(load_id, position, fx=1000.0):
 def _gravity_load(load_id, position, fz=-1000.0):
     """Vertical (gravity) point load in -Z direction."""
     return PointLoad(
-        id=load_id, position=list(position), magnitude=abs(fz), direction=[0.0, 0.0, -1.0]
+        id=load_id,
+        position=list(position),
+        magnitude=abs(fz),
+        direction=[0.0, 0.0, -1.0],
     )
 
 
 def _make_writer(model):
     writer = MagicMock(spec=UnifiedCalculixWriter)
     writer.domain_model = model
-    writer._detect_mechanism_risk = UnifiedCalculixWriter._detect_mechanism_risk.__get__(writer)
+    writer._detect_mechanism_risk = (
+        UnifiedCalculixWriter._detect_mechanism_risk.__get__(writer)
+    )
     return writer
 
 

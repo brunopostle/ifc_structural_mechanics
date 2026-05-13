@@ -465,9 +465,7 @@ def _validate_model(domain_model, gravity: bool) -> list:
 
     # Check that loads exist; warn when gravity is the likely missing ingredient
     load_groups = getattr(domain_model, "load_groups", [])
-    has_explicit_loads = any(
-        getattr(g, "loads", []) for g in load_groups
-    )
+    has_explicit_loads = any(getattr(g, "loads", []) for g in load_groups)
     if not has_explicit_loads and not gravity:
         _warn(
             "No explicit loads found in the model and --gravity was not requested. "

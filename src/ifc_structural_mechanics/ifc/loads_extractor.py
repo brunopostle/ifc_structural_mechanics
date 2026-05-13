@@ -13,8 +13,6 @@ from typing import Dict, List, Optional, Tuple, Union
 import ifcopenshell
 import numpy as np
 
-from ..utils.error_handling import ModelExtractionError
-
 from ..domain.load import (
     AreaLoad,
     LineLoad,
@@ -23,6 +21,7 @@ from ..domain.load import (
     LoadGroup,
     PointLoad,
 )
+from ..utils.error_handling import ModelExtractionError
 from .entity_identifier import find_member_endpoints
 
 

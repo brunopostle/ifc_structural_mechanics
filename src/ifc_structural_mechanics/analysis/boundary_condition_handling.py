@@ -662,7 +662,11 @@ def write_analysis_steps(
         file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
         file.write("** Loads within step\n")
         loads_written = _write_validated_loads_within_step(
-            file, domain_model, short_id_map, element_sets, node_coords,
+            file,
+            domain_model,
+            short_id_map,
+            element_sets,
+            node_coords,
             u1_element_sets=u1_element_sets,
         )
         if gravity:
@@ -747,7 +751,11 @@ def write_analysis_steps(
         file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
         file.write("** Loads within step\n")
         loads_written = _write_validated_loads_within_step(
-            file, domain_model, short_id_map, element_sets, node_coords,
+            file,
+            domain_model,
+            short_id_map,
+            element_sets,
+            node_coords,
             u1_element_sets=u1_element_sets,
         )
         if gravity:

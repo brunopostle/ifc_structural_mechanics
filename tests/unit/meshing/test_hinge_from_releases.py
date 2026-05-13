@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
+
 # Stub gmsh and the sub-modules that import it before importing the real
 # meshing package.  We do NOT stub the meshing package itself so that the
 # real UnifiedCalculixWriter class can be loaded.
@@ -42,7 +43,9 @@ from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E40
     PointConnection,
     StructuralConnection,
 )
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
@@ -113,7 +116,9 @@ class TestRigidConnection:
         writer = _make_writer_stub()
         conn = _conn()
         buf = io.StringIO()
-        writer._write_point_connection(buf, conn, _MEMBER_IDS, set(), released_dofs_by_member={})
+        writer._write_point_connection(
+            buf, conn, _MEMBER_IDS, set(), released_dofs_by_member={}
+        )
         return buf.getvalue()
 
     def test_all_six_dofs_coupled(self):
@@ -137,7 +142,9 @@ class TestFullPinReleases:
         conn = _conn(released_dofs_by_member={"m1": [4, 5, 6], "m2": [4, 5, 6]})
         released = conn.released_dofs_by_member
         buf = io.StringIO()
-        writer._write_point_connection(buf, conn, _MEMBER_IDS, set(), released_dofs_by_member=released)
+        writer._write_point_connection(
+            buf, conn, _MEMBER_IDS, set(), released_dofs_by_member=released
+        )
         return buf.getvalue()
 
     def test_no_rotational_equations(self):
@@ -166,7 +173,9 @@ class TestPartialPin:
         writer = _make_writer_stub()
         conn = _conn(released_dofs_by_member=released)
         buf = io.StringIO()
-        writer._write_point_connection(buf, conn, _MEMBER_IDS, set(), released_dofs_by_member=released)
+        writer._write_point_connection(
+            buf, conn, _MEMBER_IDS, set(), released_dofs_by_member=released
+        )
         return buf.getvalue()
 
     def test_only_released_dof_is_absent(self):
@@ -196,9 +205,9 @@ class TestPartialPin:
         # coupled set for DOF 4, so no equation should appear.
         text = self._write({"m1": [4]})
         dofs = _extract_equation_dofs(text)
-        assert 4 not in dofs, (
-            "DOF 4 equation should not appear when only one of two nodes is coupled"
-        )
+        assert (
+            4 not in dofs
+        ), "DOF 4 equation should not appear when only one of two nodes is coupled"
 
 
 # ---------------------------------------------------------------------------

@@ -143,7 +143,9 @@ class ResultsExporter:
     def _member_entry(self, member) -> Dict[str, Any]:
         member_id = member.id
         node_ids: set = {
-            int(nid) for nid, mid in self.model.node_to_member.items() if mid == member_id
+            int(nid)
+            for nid, mid in self.model.node_to_member.items()
+            if mid == member_id
         }
         elem_ids: set = set(getattr(member, "analysis_element_ids", []))
 

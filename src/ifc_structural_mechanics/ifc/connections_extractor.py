@@ -13,14 +13,13 @@ import ifcopenshell
 import ifcopenshell.util.placement
 import numpy as np
 
-from ..utils.error_handling import ModelExtractionError
-
 # Updated imports to use existing domain model
 from ..domain.structural_connection import (
     PointConnection,
     StructuralConnection,
     create_connection_from_stiffness,
 )
+from ..utils.error_handling import ModelExtractionError
 from .entity_identifier import (
     get_connection_input,  # Integration with get_connection_input function
 )

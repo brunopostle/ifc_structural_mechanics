@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 # a full Gmsh installation (libGLU.so.1 is not available in the test env).
 # ---------------------------------------------------------------------------
 
+
 def _stub(name, **attrs):
     mod = types.ModuleType(name)
     for k, v in attrs.items():
@@ -45,10 +46,13 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
 # Now it is safe to import the real module under test
 # ---------------------------------------------------------------------------
 
-from ifc_structural_mechanics.api.structural_analysis import _validate_model  # noqa: E402
+from ifc_structural_mechanics.api.structural_analysis import (  # noqa: E402
+    _validate_model,
+)
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
-
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,9 +80,7 @@ def _empty_model():
 _MATERIAL = Material(
     id="m1", name="Steel", elastic_modulus=210e9, poisson_ratio=0.3, density=7850
 )
-_SECTION = Section.create_rectangular_section(
-    id="s1", name="R", width=0.1, height=0.1
-)
+_SECTION = Section.create_rectangular_section(id="s1", name="R", width=0.1, height=0.1)
 
 
 # ---------------------------------------------------------------------------

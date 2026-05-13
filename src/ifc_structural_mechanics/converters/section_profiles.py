@@ -62,6 +62,7 @@ class SectionProfile(NamedTuple):
 # B31 native formatters
 # ---------------------------------------------------------------------------
 
+
 def _fmt_rect(d: dict) -> str:
     return f"{d['width']:.6e}, {d['height']:.6e}"
 
@@ -84,8 +85,7 @@ def _fmt_box(d: dict) -> str:
     t = d["wall_thickness"]
     # CalculiX BOX: a (local-1, height), b (local-2, width), t1 t2 t3 t4
     return (
-        f"{d['height']:.6e}, {d['width']:.6e},"
-        f" {t:.6e}, {t:.6e}, {t:.6e}, {t:.6e}"
+        f"{d['height']:.6e}, {d['width']:.6e}," f" {t:.6e}, {t:.6e}, {t:.6e}, {t:.6e}"
     )
 
 
@@ -116,19 +116,20 @@ SECTION_REGISTRY: Dict[str, SectionProfile] = {
     # Each of these is handled by _write_beam_section_general() in the writer.
     # Add IFC extraction handlers in properties_extractor / members_extractor
     # when a new type is needed — no other code changes required.
-    "i": SectionProfile(True, None, None),          # IfcIShapeProfileDef
+    "i": SectionProfile(True, None, None),  # IfcIShapeProfileDef
     "i_asymmetric": SectionProfile(True, None, None),  # IfcAsymmetricIShapeProfileDef
-    "l": SectionProfile(True, None, None),          # IfcLShapeProfileDef
-    "t": SectionProfile(True, None, None),          # IfcTShapeProfileDef
-    "c": SectionProfile(True, None, None),          # IfcChannelProfileDef
-    "u": SectionProfile(True, None, None),          # IfcUShapeProfileDef
-    "z": SectionProfile(True, None, None),          # IfcZShapeProfileDef
+    "l": SectionProfile(True, None, None),  # IfcLShapeProfileDef
+    "t": SectionProfile(True, None, None),  # IfcTShapeProfileDef
+    "c": SectionProfile(True, None, None),  # IfcChannelProfileDef
+    "u": SectionProfile(True, None, None),  # IfcUShapeProfileDef
+    "z": SectionProfile(True, None, None),  # IfcZShapeProfileDef
 }
 
 
 # ---------------------------------------------------------------------------
 # Query helpers
 # ---------------------------------------------------------------------------
+
 
 def uses_user_element(section_type: Optional[str]) -> bool:
     """Return True if this section type requires a U1 user element (GENERAL).

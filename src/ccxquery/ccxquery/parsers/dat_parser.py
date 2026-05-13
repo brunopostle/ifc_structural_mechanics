@@ -125,7 +125,9 @@ def _parse_section_forces(content: str) -> list[dict[str, Any]]:
         stripped = line.strip()
 
         # Track steps
-        if stripped.lower().startswith("s t e p") or stripped.lower().startswith("step"):
+        if stripped.lower().startswith("s t e p") or stripped.lower().startswith(
+            "step"
+        ):
             parts = stripped.split()
             for p in parts:
                 try:

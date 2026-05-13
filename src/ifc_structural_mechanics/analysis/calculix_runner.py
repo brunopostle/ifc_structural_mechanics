@@ -15,9 +15,9 @@ from typing import Any, Dict, List, Optional
 from ..config.analysis_config import AnalysisConfig
 from ..config.system_config import SystemConfig
 from ..utils.error_handling import AnalysisError
-from .output_parser import OutputParser
 from ..utils.subprocess_utils import run_subprocess
 from ..utils.temp_dir import create_temp_subdir
+from .output_parser import OutputParser
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -236,9 +236,7 @@ class CalculixRunner:
                 self._process_result.stdout
             )
             if not converged:
-                raise AnalysisError(
-                    f"CalculiX analysis did not converge: {reason}"
-                )
+                raise AnalysisError(f"CalculiX analysis did not converge: {reason}")
 
             # Collect result files
             self.result_files = self._collect_result_files()
@@ -537,4 +535,3 @@ class CalculixRunner:
         logger.info(f"Collected CalculiX result files: {list(result_files.keys())}")
 
         return result_files
-

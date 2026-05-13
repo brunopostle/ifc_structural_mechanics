@@ -94,10 +94,14 @@ class TestBeam01ResultsJson:
         global_disp = data.get("global_displacements", {})
         envelope = global_disp.get("envelope", {})
         max_disp = envelope.get("max_displacement_m", None)
-        assert max_disp is not None, "global_displacements.envelope.max_displacement_m missing"
+        assert (
+            max_disp is not None
+        ), "global_displacements.envelope.max_displacement_m missing"
         logger.info(f"beam_01 max displacement: {max_disp * 1000:.3f} mm")
         assert max_disp > 0, "Zero displacement — analysis may not have run"
-        assert max_disp < 0.01, f"Displacement {max_disp * 1000:.2f} mm unexpectedly large"
+        assert (
+            max_disp < 0.01
+        ), f"Displacement {max_disp * 1000:.2f} mm unexpectedly large"
 
     def test_global_reactions_present(self, tmp_path):
         output_dir = str(tmp_path / "beam_01")
@@ -122,23 +126,29 @@ class TestPortal01ResultsJson:
 
     def test_schema_valid(self, tmp_path):
         output_dir = str(tmp_path / "portal_01")
-        analyze_ifc(ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5)
+        analyze_ifc(
+            ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5
+        )
         data = _load_results_json(output_dir)
         _assert_schema(data)
 
     def test_multiple_members(self, tmp_path):
         """portal_01 has at least 3 members (2 columns + 1 beam)."""
         output_dir = str(tmp_path / "portal_01")
-        analyze_ifc(ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5)
-        data = _load_results_json(output_dir)
-        assert len(data["members"]) >= 3, (
-            f"Expected >= 3 members, got {len(data['members'])}"
+        analyze_ifc(
+            ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5
         )
+        data = _load_results_json(output_dir)
+        assert (
+            len(data["members"]) >= 3
+        ), f"Expected >= 3 members, got {len(data['members'])}"
 
     def test_displacement_plausible(self, tmp_path):
         """portal_01 max displacement should be in (0, 0.1] m (analytical: ~0.55 mm)."""
         output_dir = str(tmp_path / "portal_01")
-        analyze_ifc(ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5)
+        analyze_ifc(
+            ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5
+        )
         data = _load_results_json(output_dir)
         max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
         logger.info(f"portal_01 max displacement: {max_disp * 1000:.3f} mm")
@@ -147,7 +157,9 @@ class TestPortal01ResultsJson:
     def test_member_types_curve(self, tmp_path):
         """portal_01 members should all be curve type."""
         output_dir = str(tmp_path / "portal_01")
-        analyze_ifc(ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5)
+        analyze_ifc(
+            ifc_path=_ifc("portal_01.ifc"), output_dir=output_dir, mesh_size=0.5
+        )
         data = _load_results_json(output_dir)
         types = {m["type"] for m in data["members"]}
         assert "curve" in types, f"No curve members found; types: {types}"
@@ -165,7 +177,10 @@ class TestSlab01ResultsJson:
     def test_schema_valid(self, tmp_path):
         output_dir = str(tmp_path / "slab_01")
         analyze_ifc(
-            ifc_path=_ifc("slab_01.ifc"), output_dir=output_dir, mesh_size=0.5, gravity=True
+            ifc_path=_ifc("slab_01.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
         )
         data = _load_results_json(output_dir)
         _assert_schema(data)
@@ -174,7 +189,10 @@ class TestSlab01ResultsJson:
         """slab_01 members should include surface type."""
         output_dir = str(tmp_path / "slab_01")
         analyze_ifc(
-            ifc_path=_ifc("slab_01.ifc"), output_dir=output_dir, mesh_size=0.5, gravity=True
+            ifc_path=_ifc("slab_01.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
         )
         data = _load_results_json(output_dir)
         types = {m["type"] for m in data["members"]}
@@ -184,7 +202,10 @@ class TestSlab01ResultsJson:
         """slab_01 max displacement should be in (0, 0.01] m (analytical: ~0.39 mm)."""
         output_dir = str(tmp_path / "slab_01")
         analyze_ifc(
-            ifc_path=_ifc("slab_01.ifc"), output_dir=output_dir, mesh_size=0.5, gravity=True
+            ifc_path=_ifc("slab_01.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
         )
         data = _load_results_json(output_dir)
         max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
@@ -195,11 +216,16 @@ class TestSlab01ResultsJson:
         """Each slab_01 member should have an envelope with displacement data."""
         output_dir = str(tmp_path / "slab_01")
         analyze_ifc(
-            ifc_path=_ifc("slab_01.ifc"), output_dir=output_dir, mesh_size=0.5, gravity=True
+            ifc_path=_ifc("slab_01.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
         )
         data = _load_results_json(output_dir)
         members_with_envelope = [m for m in data["members"] if m.get("envelope")]
-        assert len(members_with_envelope) > 0, "No members have displacement envelope data"
+        assert (
+            len(members_with_envelope) > 0
+        ), "No members have displacement envelope data"
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +274,9 @@ class TestBuilding01aResultsJson:
         data = _load_results_json(output_dir)
         max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
         logger.info(f"building_01a max displacement: {max_disp * 1000:.1f} mm")
-        assert 0 < max_disp < 1.0, (
-            f"Displacement {max_disp:.3f} m — possible mesh disconnectivity regression"
-        )
+        assert (
+            0 < max_disp < 1.0
+        ), f"Displacement {max_disp:.3f} m — possible mesh disconnectivity regression"
 
     def test_all_members_have_guid(self, tmp_path):
         """Every member in building_01a should trace back to an IFC GlobalId."""

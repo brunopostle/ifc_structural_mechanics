@@ -13,7 +13,6 @@ import numpy as np
 
 from ..utils.units import (
     convert_coordinates,
-    convert_point_list,
 )
 
 logger = logging.getLogger(__name__)

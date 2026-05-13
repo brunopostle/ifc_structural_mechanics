@@ -1,6 +1,5 @@
 """Unit tests for the section_profiles registry."""
 
-import pytest
 
 from ifc_structural_mechanics.converters.section_profiles import (
     SECTION_REGISTRY,

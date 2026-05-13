@@ -14,7 +14,7 @@ defined_element_sets.
 """
 
 import logging
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Set
 
 import numpy as np
 
@@ -235,9 +235,7 @@ class MeshMapper:
             if ed["type"] in {"S3", "S4", "S6", "S8", "S9"}
         ]
         curve_elements = [
-            eid
-            for eid, ed in self._elements.items()
-            if ed["type"] in {"B31", "B32"}
+            eid for eid, ed in self._elements.items() if ed["type"] in {"B31", "B32"}
         ]
         surface_members = [
             m for m in self._domain_model.members if m.entity_type == "surface"

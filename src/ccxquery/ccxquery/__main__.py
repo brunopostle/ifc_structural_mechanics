@@ -177,16 +177,22 @@ def main() -> None:
 
     # section-forces
     sf_parser = subparsers.add_parser(
-        "section-forces", help="Beam section forces (N, T, Mf1, Mf2, Vf1, Vf2) from .dat",
-        parents=[fmt]
+        "section-forces",
+        help="Beam section forces (N, T, Mf1, Mf2, Vf1, Vf2) from .dat",
+        parents=[fmt],
     )
     sf_parser.add_argument(
-        "--element", type=int, default=None, dest="element_id",
-        help="Filter to a specific element ID"
+        "--element",
+        type=int,
+        default=None,
+        dest="element_id",
+        help="Filter to a specific element ID",
     )
     sf_parser.add_argument(
-        "--max", action="store_true", dest="show_max",
-        help="Show worst-case (max abs) per component"
+        "--max",
+        action="store_true",
+        dest="show_max",
+        help="Show worst-case (max abs) per component",
     )
 
     # status

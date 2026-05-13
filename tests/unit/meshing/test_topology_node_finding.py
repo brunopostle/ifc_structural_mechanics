@@ -42,7 +42,9 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_utils")
 
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
@@ -207,9 +209,9 @@ class TestTightTolerancePreventsWrongNode:
         writer = _make_writer(
             members=[m],
             nodes={
-                1: np.array([0.0, 0.0, 0.0]),   # exact endpoint node
+                1: np.array([0.0, 0.0, 0.0]),  # exact endpoint node
                 2: np.array([10.0, 0.0, 0.0]),
-                3: np.array([0.3, 0.0, 0.0]),   # interior node, closer to conn pos
+                3: np.array([0.3, 0.0, 0.0]),  # interior node, closer to conn pos
             },
             elements={10: {"type": "B31", "nodes": [1, 3, 2]}},
             element_sets={"MEMBER_M1": [10]},

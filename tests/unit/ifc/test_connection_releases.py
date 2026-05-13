@@ -6,7 +6,6 @@ _extract_end_releases() API which returns per-member released DOF lists.
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from ifc_structural_mechanics.domain.structural_connection import StructuralConnection
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
@@ -132,8 +131,8 @@ class TestExtractEndReleases:
     def test_two_members_different_releases(self):
         """Each member has a different axis released."""
         ext = _extractor()
-        rel_a = _make_rel("m_a", rot_x=False)    # releases DOF 4
-        rel_b = _make_rel("m_b", rot_z=0.0)      # releases DOF 6
+        rel_a = _make_rel("m_a", rot_x=False)  # releases DOF 4
+        rel_b = _make_rel("m_b", rot_z=0.0)  # releases DOF 6
         conn = _make_connection(rel_a, rel_b)
         result = ext._extract_end_releases(conn)
         assert result["m_a"] == [4]

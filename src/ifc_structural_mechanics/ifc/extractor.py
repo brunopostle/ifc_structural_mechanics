@@ -9,14 +9,13 @@ different parts of the model.
 import logging
 import os
 import uuid
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.unit
 
-from ..utils.error_handling import ModelExtractionError
-
 from ..domain.structural_model import StructuralModel
+from ..utils.error_handling import ModelExtractionError
 from .connections_extractor import ConnectionsExtractor
 from .entity_identifier import (
     is_structural_connection,
@@ -565,4 +564,3 @@ class Extractor:
         except Exception as e:
             self.logger.warning(f"Failed to extract model name: {e}")
             return None
-

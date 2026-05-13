@@ -73,7 +73,7 @@ def euler_bernoulli_stiffness_local(
     d4 = 2.0 * EIy / L
     K[2, 2] = K[8, 8] = d1
     K[2, 8] = K[8, 2] = -d1
-    K[2, 4] = K[4, 2] = -d2   # negative: θy = -dw/dx
+    K[2, 4] = K[4, 2] = -d2  # negative: θy = -dw/dx
     K[2, 10] = K[10, 2] = -d2
     K[4, 8] = K[8, 4] = d2
     K[10, 8] = K[8, 10] = d2
@@ -194,20 +194,22 @@ def work_equivalent_loads_global(
     # Work-equivalent nodal loads in local coords (Euler-Bernoulli shape functions)
     # Node 1: indices [u1, v1, w1, θx1, θy1, θz1]
     # Node 2: indices [u2, v2, w2, θx2, θy2, θz2]
-    f_local = np.array([
-        qx * L / 2,          # u1
-        qy * L / 2,          # v1
-        qz * L / 2,          # w1
-        0.0,                 # θx1  (no torsion from uniform transverse load)
-        -qz * L**2 / 12,    # θy1  (θy = -dw/dx sign convention)
-        qy * L**2 / 12,     # θz1
-        qx * L / 2,          # u2
-        qy * L / 2,          # v2
-        qz * L / 2,          # w2
-        0.0,                 # θx2
-        qz * L**2 / 12,     # θy2
-        -qy * L**2 / 12,    # θz2
-    ])
+    f_local = np.array(
+        [
+            qx * L / 2,  # u1
+            qy * L / 2,  # v1
+            qz * L / 2,  # w1
+            0.0,  # θx1  (no torsion from uniform transverse load)
+            -qz * L**2 / 12,  # θy1  (θy = -dw/dx sign convention)
+            qy * L**2 / 12,  # θz1
+            qx * L / 2,  # u2
+            qy * L / 2,  # v2
+            qz * L / 2,  # w2
+            0.0,  # θx2
+            qz * L**2 / 12,  # θy2
+            -qy * L**2 / 12,  # θz2
+        ]
+    )
 
     return T.T @ f_local
 
