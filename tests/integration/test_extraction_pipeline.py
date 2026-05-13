@@ -14,6 +14,7 @@ import pytest
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.ifc.extractor import Extractor
+from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
 
 # Define paths to test data
 TEST_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test_data")
@@ -349,7 +350,7 @@ class TestExtractionPipeline:
             Extractor("non_existent_file.ifc")
 
         # Test with invalid file object
-        with pytest.raises(ValueError):
+        with pytest.raises(ModelExtractionError):
             Extractor(123)  # Not a string or ifcopenshell.file
 
     @pytest.mark.skipif(

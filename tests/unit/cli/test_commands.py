@@ -106,6 +106,7 @@ class TestEnhancedCLICommands:
                 mesh_size=0.1,
                 verbose=False,
                 gravity=False,
+                calculix_timeout=600,
             )
 
     def test_analyze_custom_params(
@@ -137,6 +138,7 @@ class TestEnhancedCLICommands:
                 mesh_size=0.2,
                 verbose=True,
                 gravity=False,
+                calculix_timeout=600,
             )
 
     def test_analyze_with_warnings(

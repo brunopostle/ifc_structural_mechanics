@@ -493,7 +493,6 @@ class GmshGeometryConverter:
         from ..analysis.boundary_condition_handling import get_constrained_dofs
 
         seeded: List[int] = []
-        already_registered = set(self._curve_point_registry.values())
 
         for conn in domain_model.connections:
             if not get_constrained_dofs(conn):
@@ -575,9 +574,9 @@ class GmshGeometryConverter:
 
         # Group members by their exact post-fragment tag frozenset.
         # Members with identical tag sets share the same physical group.
-        tag_key_to_entries: Dict[
-            frozenset, List[Tuple[str, List[int], int]]
-        ] = {}  # frozenset((dim, tag)) -> [(member_id, tags, dim), ...]
+        tag_key_to_entries: Dict[frozenset, List[Tuple[str, List[int], int]]] = (
+            {}
+        )  # frozenset((dim, tag)) -> [(member_id, tags, dim), ...]
 
         for member in domain_model.members:
             mid = member.id
@@ -620,9 +619,7 @@ class GmshGeometryConverter:
                     self.physical_group_map[phys_tag] = mid
                 phys_tag += 1
             except Exception as e:
-                logger.debug(
-                    f"Could not create physical group for {member_ids}: {e}"
-                )
+                logger.debug(f"Could not create physical group for {member_ids}: {e}")
 
         logger.info(f"Created {phys_tag - 1} physical groups")
 

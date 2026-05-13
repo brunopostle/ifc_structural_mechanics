@@ -75,6 +75,7 @@ class OutputParser(BaseParser):
 
     # Define success and failure patterns for CalculiX output
     SUCCESS_PATTERNS = [
+        "Job finished",  # CalculiX 2.x actual output
         "ANALYSIS COMPLETED",
         "ANALYSIS TERMINATED SUCCESSFULLY",
         "SOLUTION CONVERGED",

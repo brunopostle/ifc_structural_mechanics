@@ -20,7 +20,6 @@ Analytical solution (Euler, pinned-pinned, K=1):
 """
 
 import math
-import os
 import shutil
 import textwrap
 
@@ -30,12 +29,12 @@ import pytest
 CCX_AVAILABLE = shutil.which("ccx") is not None
 
 # Benchmark parameters
-BEAM_LENGTH = 1.0          # m
-YOUNG_MODULUS = 210e9      # Pa
+BEAM_LENGTH = 1.0  # m
+YOUNG_MODULUS = 210e9  # Pa
 POISSON_RATIO = 0.3
-SECTION_WIDTH = 0.1        # m
-SECTION_HEIGHT = 0.1       # m
-PRELOAD = 1.0              # N (unit load so eigenvalue = critical load in N)
+SECTION_WIDTH = 0.1  # m
+SECTION_HEIGHT = 0.1  # m
+PRELOAD = 1.0  # N (unit load so eigenvalue = critical load in N)
 
 MOMENT_OF_INERTIA = SECTION_WIDTH * SECTION_HEIGHT**3 / 12  # 8.333e-6 m⁴
 ANALYTICAL_PCR = math.pi**2 * YOUNG_MODULUS * MOMENT_OF_INERTIA / BEAM_LENGTH**2
@@ -140,7 +139,6 @@ class TestDirectCalculixBucklingValidation:
 
     def test_buckling_eigenvalue_parsed(self):
         """At least one eigenvalue should be extracted from the .dat file."""
-        dat_path = self.result_files.get("dat") or self.result_files.get("data")
         assert self.eigenvalues, (
             f"No buckling eigenvalues found in result files: {self.result_files}. "
             f"Check that CalculiX wrote a .dat file and that *BUCKLE step completed."
@@ -152,7 +150,9 @@ class TestDirectCalculixBucklingValidation:
         With a unit preload of 1 N, the eigenvalue λ₁ equals the critical
         load in Newtons. For a pinned-pinned Euler column: P_cr = π²EI/L².
         """
-        assert self.eigenvalues, "No eigenvalues to check — see test_buckling_eigenvalue_parsed"
+        assert (
+            self.eigenvalues
+        ), "No eigenvalues to check — see test_buckling_eigenvalue_parsed"
 
         # eigenvalues list contains (mode_number, value) tuples
         first_mode, first_eigenvalue = min(self.eigenvalues, key=lambda t: t[0])

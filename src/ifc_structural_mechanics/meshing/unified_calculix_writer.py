@@ -18,8 +18,6 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 import meshio
 import numpy as np
 
-from .mesh_mapper import MeshMapper
-
 # Import boundary condition and load handling
 from ..analysis.boundary_condition_handling import (
     write_analysis_steps,
@@ -31,6 +29,7 @@ from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError, MeshingError
 from ..utils.temp_dir import create_temp_subdir, get_temp_dir
+from .mesh_mapper import MeshMapper
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -951,8 +950,7 @@ class UnifiedCalculixWriter:
             f" {float(xi22):.6e}, {k_s:.6e}\n"
         )
         file.write(
-            f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
-            f" {beam_normal[2]:.6e}\n\n"
+            f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}," f" {beam_normal[2]:.6e}\n\n"
         )
 
         # Accumulate lumped gravity nodal loads for U1 self-weight
@@ -1022,9 +1020,7 @@ class UnifiedCalculixWriter:
             ):
                 # Non-standard section → U1 built-in Timoshenko + SECTION=GENERAL
                 if member.id in self._u1_members:
-                    self._write_beam_section_general(
-                        file, member, list(member_elems)
-                    )
+                    self._write_beam_section_general(file, member, list(member_elems))
                     sections_written += 1
                     continue
 
@@ -1171,7 +1167,10 @@ class UnifiedCalculixWriter:
             if conn.entity_type in ("point", "rigid"):
                 released = getattr(conn, "released_dofs_by_member", {})
                 self._write_point_connection(
-                    file, conn, real_members, constrained_node_dofs,
+                    file,
+                    conn,
+                    real_members,
+                    constrained_node_dofs,
                     released_dofs_by_member=released,
                 )
                 connections_written += 1
@@ -1179,7 +1178,10 @@ class UnifiedCalculixWriter:
                 # Legacy hinge: release all rotation DOFs for all real members.
                 released = {mid: [4, 5, 6] for mid in real_members}
                 self._write_point_connection(
-                    file, conn, real_members, constrained_node_dofs,
+                    file,
+                    conn,
+                    real_members,
+                    constrained_node_dofs,
                     released_dofs_by_member=released,
                 )
                 connections_written += 1
@@ -1286,9 +1288,7 @@ class UnifiedCalculixWriter:
         self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set
     ) -> None:
         """Write a rigid connection (same as point connection for now)."""
-        self._write_point_connection(
-            file, conn, member_ids, constrained_node_dofs
-        )
+        self._write_point_connection(file, conn, member_ids, constrained_node_dofs)
 
     def _get_member_endpoints(self, member_id: str):
         """
@@ -1303,7 +1303,12 @@ class UnifiedCalculixWriter:
         if member_id not in self._member_endpoint_cache:
             member = self.domain_model.get_member(member_id)
             endpoints = None
-            if member is not None and hasattr(member, "geometry") and member.geometry:
+            if (
+                member is not None
+                and not isinstance(member, SurfaceMember)
+                and hasattr(member, "geometry")
+                and member.geometry
+            ):
                 geom = member.geometry
                 if isinstance(geom, (list, tuple)) and len(geom) >= 2:
                     try:
@@ -1553,15 +1558,21 @@ class UnifiedCalculixWriter:
 
         # --- 1. Any support with rotational fixity (DOF 4-6)? ---
         for conn in model.connections:
-            real = [m for m in conn.connected_members if not m.startswith("dummy_member_")]
+            real = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
             if len(real) >= 2:
                 continue  # member-to-member connection
             if any(d in {4, 5, 6} for d in get_constrained_dofs(conn)):
-                return []  # rotationally restrained support found → not a pure mechanism
+                return (
+                    []
+                )  # rotationally restrained support found → not a pure mechanism
 
         # --- 2. Any moment-resisting connection between members? ---
         for conn in model.connections:
-            real = [m for m in conn.connected_members if not m.startswith("dummy_member_")]
+            real = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
             if len(real) < 2:
                 continue  # support
             if conn.entity_type == "hinge":

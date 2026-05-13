@@ -33,11 +33,11 @@ if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
 if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_utils")
 
-from ifc_structural_mechanics.domain.property import Material, Section
-from ifc_structural_mechanics.domain.structural_member import CurveMember
-from ifc_structural_mechanics.domain.structural_model import StructuralModel
-from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper
-from ifc_structural_mechanics.meshing.unified_calculix_writer import (
+from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
+from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
+from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
+from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
 

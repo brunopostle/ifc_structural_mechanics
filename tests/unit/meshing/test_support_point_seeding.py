@@ -13,6 +13,7 @@ import types
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 # ---------------------------------------------------------------------------
 # Stub gmsh and force-load the REAL gmsh_geometry module.
@@ -39,6 +40,7 @@ if "gmsh" not in sys.modules:
     _stub("gmsh")
 # Add the sub-objects the real gmsh_geometry module calls.
 import gmsh as _gmsh_mod  # noqa: E402  (already in sys.modules after stub)
+
 if not hasattr(_gmsh_mod, "model"):
     _gmsh_mod.model = MagicMock()
 if not hasattr(_gmsh_mod.model, "occ"):
@@ -53,11 +55,17 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
 # Force the REAL gmsh_geometry module to be loaded (remove any earlier stub).
 sys.modules.pop("ifc_structural_mechanics.meshing.gmsh_geometry", None)
 
-from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter  # noqa: E402
-from ifc_structural_mechanics.domain.structural_connection import PointConnection  # noqa: E402
-from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
+from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E402
+    PointConnection,
+)
+from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
+from ifc_structural_mechanics.meshing.gmsh_geometry import (  # noqa: E402
+    GmshGeometryConverter,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,7 +73,9 @@ from ifc_structural_mechanics.domain.property import Material, Section  # noqa: 
 
 _point_on_segment = GmshGeometryConverter._point_on_segment
 
-_MAT = Material(id="m", name="S", elastic_modulus=210e9, poisson_ratio=0.3, density=7850)
+_MAT = Material(
+    id="m", name="S", elastic_modulus=210e9, poisson_ratio=0.3, density=7850
+)
 _SEC = Section.create_rectangular_section(id="s", name="R", width=0.1, height=0.1)
 
 
@@ -85,22 +95,34 @@ class TestPointOnSegment:
         return np.array(coords, dtype=float)
 
     def test_midpoint_is_on_segment(self):
-        assert _point_on_segment(self._p([0.5, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert _point_on_segment(
+            self._p([0.5, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_point_at_start_is_not_strictly_inside(self):
-        assert not _point_on_segment(self._p([0, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert not _point_on_segment(
+            self._p([0, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_point_at_end_is_not_strictly_inside(self):
-        assert not _point_on_segment(self._p([1, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert not _point_on_segment(
+            self._p([1, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_point_off_line_returns_false(self):
-        assert not _point_on_segment(self._p([0.5, 0.5, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert not _point_on_segment(
+            self._p([0.5, 0.5, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_point_beyond_end_returns_false(self):
-        assert not _point_on_segment(self._p([1.5, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert not _point_on_segment(
+            self._p([1.5, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_point_before_start_returns_false(self):
-        assert not _point_on_segment(self._p([-0.1, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0]))
+        assert not _point_on_segment(
+            self._p([-0.1, 0, 0]), self._p([0, 0, 0]), self._p([1, 0, 0])
+        )
 
     def test_3d_segment_midpoint(self):
         a = self._p([1, 1, 0])
@@ -134,6 +156,14 @@ class TestPointOnSegment:
 class TestSeedSupportPoints:
     """Tests _seed_support_points() using a mocked Gmsh addPoint."""
 
+    @pytest.fixture(autouse=True)
+    def mock_gmsh_model(self):
+        # When real gmsh is in sys.modules (loaded by test_gmsh_utils.py earlier),
+        # the conditional stub at module level doesn't replace model/occ.  Patch
+        # model for the duration of these tests so OCC calls don't fail.
+        with patch.object(_gmsh_mod, "model", MagicMock()):
+            yield
+
     def _make_converter(self):
         conv = GmshGeometryConverter.__new__(GmshGeometryConverter)
         conv._curve_point_registry = {}
@@ -162,7 +192,6 @@ class TestSeedSupportPoints:
         """A point connection with a rigid stiffness (acts as a support)."""
         from ifc_structural_mechanics.domain.structural_connection import (
             PointConnection,
-            StructuralConnection,
         )
 
         conn = PointConnection(conn_id, list(position))
@@ -170,7 +199,7 @@ class TestSeedSupportPoints:
         conn.connect_member(member_id)
         conn.connect_member(f"dummy_member_1_{conn_id}")
         # Set translational stiffness (True = fixed) so get_constrained_dofs returns DOFs
-        from ifc_structural_mechanics.domain.structural_connection import StructuralConnection
+
         conn.set_stiffness_properties({"dx": 1e20, "dy": 1e20, "dz": 1e20})
         return conn
 
@@ -194,7 +223,12 @@ class TestSeedSupportPoints:
         conv = self._make_converter()
         # Pre-register the endpoint (as if member geometry was already created)
         from ifc_structural_mechanics.meshing.gmsh_geometry import COORD_PRECISION
-        key = (round(0.0, COORD_PRECISION), round(0.0, COORD_PRECISION), round(0.0, COORD_PRECISION))
+
+        key = (
+            round(0.0, COORD_PRECISION),
+            round(0.0, COORD_PRECISION),
+            round(0.0, COORD_PRECISION),
+        )
         conv._curve_point_registry[key] = 5  # already registered
 
         model = StructuralModel(id="t")

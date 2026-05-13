@@ -51,7 +51,7 @@ class TestCalculixRunner:
         # Configure the mock to return a successful result
         mock_result = MagicMock()
         mock_result.success = True
-        mock_result.stdout = "STEP TIME COMPLETED"
+        mock_result.stdout = "Job finished"
         mock_result.stderr = ""
         mock_run_subprocess.return_value = mock_result
 
@@ -128,7 +128,7 @@ class TestCalculixRunner:
             # Configure the mock to return a successful result
             mock_result = MagicMock()
             mock_result.success = True
-            mock_result.stdout = "STEP TIME COMPLETED"
+            mock_result.stdout = "Job finished"
             mock_result.stderr = ""
             mock_run.return_value = mock_result
 
@@ -164,7 +164,7 @@ class TestCalculixRunner:
         # Configure the mock to return a successful result
         mock_result = MagicMock()
         mock_result.success = True
-        mock_result.stdout = "STEP TIME COMPLETED"
+        mock_result.stdout = "Job finished"
         mock_result.stderr = ""
         mock_run_subprocess.return_value = mock_result
 

@@ -8,7 +8,7 @@ ALL members named in the pipe-separated string.
 
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 
@@ -43,24 +43,27 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
 
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
-from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
-from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
-    UnifiedCalculixWriter,
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
 )
+from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_MAT = Material(id="m", name="Steel", elastic_modulus=210e9, poisson_ratio=0.3, density=7850)
+_MAT = Material(
+    id="m", name="Steel", elastic_modulus=210e9, poisson_ratio=0.3, density=7850
+)
 _SEC = Section.create_rectangular_section(id="s", name="R", width=0.1, height=0.1)
 
 
 def _member(member_id, start=(0, 0, 0), end=(1, 0, 0)):
     return CurveMember(
-        id=member_id, geometry=[list(start), list(end)],
-        material=_MAT, section=_SEC,
+        id=member_id,
+        geometry=[list(start), list(end)],
+        material=_MAT,
+        section=_SEC,
     )
 
 
@@ -75,8 +78,13 @@ _ELEMENTS = {
 }
 
 
-def _make_mapper(members, element_physical_group=None, physical_group_names=None,
-                 nodes=None, elements=None):
+def _make_mapper(
+    members,
+    element_physical_group=None,
+    physical_group_names=None,
+    nodes=None,
+    elements=None,
+):
     """Build a MeshMapper with the given members and optional mesh state."""
     model = StructuralModel(id="t")
     for m in members:
@@ -182,7 +190,10 @@ class TestCreatePhysicalGroupsOverlapDetection:
 
     def _make_converter(self, member_curve_tags):
         """Build a minimal GmshGeometryConverter stub."""
-        from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter  # noqa: F401
+        from ifc_structural_mechanics.meshing.gmsh_geometry import (  # noqa: F401
+            GmshGeometryConverter,
+        )
+
         # GmshGeometryConverter is stubbed — test the logic directly via a
         # real instance built from the actual (non-stubbed) module. We need to
         # import the real module, which requires gmsh to be importable but NOT
@@ -197,10 +208,7 @@ class TestCreatePhysicalGroupsOverlapDetection:
         conv._member_surface_tags = {}
         conv.physical_group_map = {}
 
-        import ifc_structural_mechanics.meshing.gmsh_geometry as geo_mod
-
         # Grab the real method from the module's source and bind it
-        import types as _types
 
         # We can't import the real GmshGeometryConverter (gmsh is stubbed),
         # so test the overlap-detection logic separately here.
@@ -222,7 +230,6 @@ class TestCreatePhysicalGroupsOverlapDetection:
 
         # Simulate the logic directly (not via Gmsh)
         # Members A and B both map to curve tag 7 after fragment
-        member_curve_tags = {"A": [7], "B": [7]}
         tag_key_to_entries = {}
         entries_a = ("A", [7], 1)
         entries_b = ("B", [7], 1)

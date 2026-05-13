@@ -614,15 +614,6 @@ class PropertiesExtractor:
             tf = (tf_bot + tf_top) / 2.0
             h_web = max(h - tf_bot - tf_top, 0.0)
             area = b_bot * tf_bot + b_top * tf_top + tw * h_web
-            Iy = (
-                (b_bot * h**3) / 12
-                - (b_bot - tw) * h_web**3 / 12
-            )
-            Iz = (
-                tf_bot * b_bot**3 / 12
-                + tf_top * b_top**3 / 12
-                + h_web * tw**3 / 12
-            )
             # Store as symmetric "i" with averaged flanges; domain computes Iy/Iz
             return Section(
                 id=str(uuid.uuid4()),
@@ -680,7 +671,8 @@ class PropertiesExtractor:
                 self._safe_get_attribute(profile, "FlangeWidth", 0.1), self.length_scale
             )
             web_thickness = convert_length(
-                self._safe_get_attribute(profile, "WebThickness", 0.01), self.length_scale
+                self._safe_get_attribute(profile, "WebThickness", 0.01),
+                self.length_scale,
             )
             flange_thickness = convert_length(
                 self._safe_get_attribute(profile, "FlangeThickness", 0.01),
@@ -714,7 +706,8 @@ class PropertiesExtractor:
                 self._safe_get_attribute(profile, "FlangeWidth", 0.1), self.length_scale
             )
             web_thickness = convert_length(
-                self._safe_get_attribute(profile, "WebThickness", 0.01), self.length_scale
+                self._safe_get_attribute(profile, "WebThickness", 0.01),
+                self.length_scale,
             )
             flange_thickness = convert_length(
                 self._safe_get_attribute(profile, "FlangeThickness", 0.01),

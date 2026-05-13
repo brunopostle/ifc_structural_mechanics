@@ -462,6 +462,7 @@ def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
         mesh_size=0.1,
         verbose=True,
         gravity=False,
+        calculix_timeout=600,
     )
 
 

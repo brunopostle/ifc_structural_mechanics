@@ -6,14 +6,21 @@ including resource management, geometry conversion, and meshing operations.
 """
 
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 import numpy as np
 
+# Other test files stub out gmsh_utils so that modules importing gmsh can load
+# without a live Gmsh installation.  If that stub lands in sys.modules first
+# (api/ sorts before meshing/ during collection), our import below would get
+# an empty mock instead of the real module.  Evict it so we get the real one.
+sys.modules.pop("ifc_structural_mechanics.meshing.gmsh_utils", None)
+
 # Import the module under test
-from ifc_structural_mechanics.meshing.gmsh_utils import (
+from ifc_structural_mechanics.meshing.gmsh_utils import (  # noqa: E402
     GmshExecutableRunner,
     GmshGeometryHelper,
     GmshMeshingHelper,
