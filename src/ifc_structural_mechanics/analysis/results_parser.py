@@ -742,7 +742,9 @@ class ResultsParser(BaseParser):
             with open(dat_file) as f:
                 in_block = False
                 for line in f:
-                    if "BUCKLING FACTOR" in line:
+                    # CalculiX writes the section header with spaced letters:
+                    # "B U C K L I N G   F A C T O R   O U T P U T"
+                    if "B U C K L I N G" in line or "BUCKLING FACTOR" in line:
                         in_block = True
                         continue
                     if in_block:
@@ -751,9 +753,10 @@ class ResultsParser(BaseParser):
                             try:
                                 eigenvalues.append((int(parts[0]), float(parts[1])))
                             except ValueError:
-                                in_block = False
-                        elif parts:
-                            # Non-empty, non-data line — end of block
+                                pass  # Non-data line — skip, don't end block
+                        elif parts and eigenvalues:
+                            # End block only after data is collected so column
+                            # headers ("MODE NO  BUCKLING") don't prematurely stop
                             in_block = False
         except (IOError, OSError) as e:
             logger.warning(f"Error reading DAT file {dat_file}: {e}")

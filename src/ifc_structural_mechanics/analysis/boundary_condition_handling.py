@@ -513,6 +513,62 @@ def _write_u1_gravity_cloads(
     file.write("\n")
 
 
+def _compute_u1_distributed_cloads(
+    element_set_name: str,
+    load,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> Dict[int, List[float]]:
+    """Convert a distributed load on a U1 element set to equivalent nodal CLOADs.
+
+    U1 elements don't support *DLOAD.  For a load of q N/m in the global direction
+    given by ``load.get_force_vector()``, each element of length L contributes
+    q*L/2 at each end node.
+
+    Returns:
+        Dict mapping node_id → [fx, fy, fz] accumulated nodal forces.
+    """
+    import math
+
+    cloads: Dict[int, List[float]] = {}
+    if not hasattr(load, "get_force_vector"):
+        return cloads
+
+    try:
+        fvec = load.get_force_vector()
+        fx, fy, fz = float(fvec[0]), float(fvec[1]), float(fvec[2])
+    except Exception:
+        return cloads
+
+    magnitude = math.sqrt(fx * fx + fy * fy + fz * fz)
+    if magnitude < 1e-30:
+        return cloads
+
+    for elem_id in element_sets.get(element_set_name, []):
+        elem = elements_data.get(elem_id)
+        if not elem or len(elem.get("nodes", [])) < 2:
+            continue
+        n1, n2 = elem["nodes"][0], elem["nodes"][1]
+        c1 = node_coords.get(n1)
+        c2 = node_coords.get(n2)
+        if c1 is None or c2 is None:
+            continue
+        L = math.sqrt(
+            (c2[0] - c1[0]) ** 2 + (c2[1] - c1[1]) ** 2 + (c2[2] - c1[2]) ** 2
+        )
+        if L < 1e-12:
+            continue
+        f_half = L / 2.0
+        for nid in (n1, n2):
+            entry = cloads.setdefault(nid, [0.0, 0.0, 0.0])
+            entry[0] += fx * f_half
+            entry[1] += fy * f_half
+            entry[2] += fz * f_half
+
+    return cloads
+
+
 def _find_beam_elset(element_sets: Optional[Dict[str, List[int]]]) -> Optional[str]:
     """Return the name of a B31-only element set suitable for *EL FILE SF, or None.
 
@@ -585,6 +641,7 @@ def write_analysis_steps(
     gravity_direction: Optional[List[float]] = None,
     u1_gravity_nodal_loads: Optional[Dict[int, List[float]]] = None,
     u1_element_sets: Optional[set] = None,
+    elements_data: Optional[Dict[int, Dict]] = None,
 ) -> None:
     """
     Write analysis step definitions to the CalculiX input file.
@@ -605,6 +662,9 @@ def write_analysis_steps(
         u1_element_sets: Set of element set names that contain only U1 elements.
             *DLOAD is skipped for these sets because CalculiX treats P-type loads
             on unknown element types as facial loads, which crashes on U1.
+        elements_data: Optional dict mapping element_id → element dict (with "nodes"
+            key).  When provided, distributed loads on U1 sets are converted to
+            work-equivalent *CLOAD nodal forces instead of being dropped.
     """
     if not domain_model:
         logger.error("Cannot write analysis steps without domain model")
@@ -1021,6 +1081,9 @@ def _write_validated_loads_within_step(
             load for load in load_group.loads if not isinstance(load, PointLoad)
         ]
         if distributed_loads:
+            # Accumulate equivalent CLOADs for U1 members; written after DLOAD block.
+            u1_extra_cloads: Dict[int, List[float]] = {}
+
             file.write("*DLOAD\n")
             for load in distributed_loads:
                 # Get magnitude with validation
@@ -1106,13 +1169,31 @@ def _write_validated_loads_within_step(
                         )
                     elif u1_element_sets and element_set_name in u1_element_sets:
                         # U1 (Timoshenko) elements don't support *DLOAD P-type loads.
-                        # CalculiX treats unknown-element P-loads as facial loads and
-                        # segfaults when it tries to find face 2 of a 2-node element.
-                        # TODO: convert to work-equivalent *CLOAD nodal forces instead.
-                        logger.warning(
-                            f"Skipping DLOAD for {element_set_name} — U1 elements "
-                            "do not support *DLOAD; distributed load is not applied"
-                        )
+                        # Convert to work-equivalent *CLOAD nodal forces when element
+                        # connectivity is available; otherwise skip.
+                        if elements_data and element_sets and node_coords:
+                            partial = _compute_u1_distributed_cloads(
+                                element_set_name,
+                                load,
+                                element_sets,
+                                elements_data,
+                                node_coords,
+                            )
+                            for nid, fvec in partial.items():
+                                entry = u1_extra_cloads.setdefault(nid, [0.0, 0.0, 0.0])
+                                entry[0] += fvec[0]
+                                entry[1] += fvec[1]
+                                entry[2] += fvec[2]
+                            if partial:
+                                logger.info(
+                                    f"Converted DLOAD on {element_set_name} to "
+                                    f"equivalent CLOAD at {len(partial)} nodes"
+                                )
+                        else:
+                            logger.warning(
+                                f"Skipping DLOAD for {element_set_name} — U1 elements "
+                                "do not support *DLOAD; distributed load is not applied"
+                            )
                     elif isinstance(load, LineLoad):
                         file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
                         loads_written = True
@@ -1129,6 +1210,17 @@ def _write_validated_loads_within_step(
                     )
 
             file.write("\n")
+
+            # Write equivalent CLOADs for U1 distributed loads
+            if u1_extra_cloads:
+                file.write("** Distributed loads on U1 elements (equivalent nodal CLOADs)\n")
+                file.write("*CLOAD\n")
+                for node_id, forces in sorted(u1_extra_cloads.items()):
+                    for dof_idx, val in enumerate(forces):
+                        if abs(val) > 1e-30:
+                            file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
+                file.write("\n")
+                loads_written = True
 
     # Process loads directly on members (same fix applies)
     for member in domain_model.members:

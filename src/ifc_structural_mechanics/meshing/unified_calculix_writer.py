@@ -461,7 +461,15 @@ class UnifiedCalculixWriter:
         element's connectivity, and records them in ``StructuralModel.node_to_member``
         so that node-based FRD results (displacements, stresses) can be traced back
         to IFC entities without re-parsing the INP file.
+
+        For shell members, CalculiX internally expands S3/S4 elements and writes
+        FRD displacement results at expansion nodes (original_id + N, + 2N, + 3N
+        where N = max original node ID).  Register these expansion candidates so
+        per-member displacement attribution works after analysis.
         """
+        max_node_id = max(self.nodes.keys()) if self.nodes else 0
+        shell_types = {"S3", "S4", "S6", "S8"}
+
         for member in self.domain_model.members:
             short_id = self._get_short_id(member.id)
             member_set = f"MEMBER_{short_id}"
@@ -473,6 +481,16 @@ class UnifiedCalculixWriter:
                     node_ids.extend(elem["nodes"])
             if node_ids:
                 self.domain_model.register_node_memberships(node_ids, member.id)
+                has_shell = any(
+                    self.elements.get(eid, {}).get("type", "") in shell_types
+                    for eid in elem_ids
+                )
+                if has_shell and max_node_id > 0:
+                    for mult in range(1, 4):
+                        expanded = [int(nid) + max_node_id * mult for nid in node_ids]
+                        self.domain_model.register_node_memberships(
+                            expanded, member.id
+                        )
 
     def _write_calculix_input_file(self, output_file: str) -> None:
         """
@@ -535,6 +553,7 @@ class UnifiedCalculixWriter:
                 gravity_direction=self.analysis_config.get_gravity_direction(),
                 u1_gravity_nodal_loads=self._u1_gravity_nodal_loads,
                 u1_element_sets=self._u1_element_sets,
+                elements_data=dict(self.elements),
             )
 
     def _write_header(self, file: TextIO) -> None:
