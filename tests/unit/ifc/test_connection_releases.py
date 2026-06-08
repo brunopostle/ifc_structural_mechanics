@@ -6,7 +6,6 @@ _extract_end_releases() API which returns per-member released DOF lists.
 
 from unittest.mock import MagicMock
 
-
 from ifc_structural_mechanics.domain.structural_connection import StructuralConnection
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
 

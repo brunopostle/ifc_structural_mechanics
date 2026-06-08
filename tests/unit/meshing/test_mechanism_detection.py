@@ -10,7 +10,6 @@ import sys
 import types
 from unittest.mock import MagicMock
 
-
 # ---------------------------------------------------------------------------
 # Stubs so unified_calculix_writer can be imported without Gmsh / libGLU
 # ---------------------------------------------------------------------------

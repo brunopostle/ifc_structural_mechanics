@@ -35,7 +35,9 @@ if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
 
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
-from ifc_structural_mechanics.domain.structural_model import StructuralModel  # noqa: E402
+from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
+    StructuralModel,
+)
 from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,

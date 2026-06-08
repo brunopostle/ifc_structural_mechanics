@@ -1217,7 +1217,9 @@ def _write_validated_loads_within_step(
 
             # Write equivalent CLOADs for U1 distributed loads
             if u1_extra_cloads:
-                file.write("** Distributed loads on U1 elements (equivalent nodal CLOADs)\n")
+                file.write(
+                    "** Distributed loads on U1 elements (equivalent nodal CLOADs)\n"
+                )
                 file.write("*CLOAD\n")
                 for node_id, forces in sorted(u1_extra_cloads.items()):
                     for dof_idx, val in enumerate(forces):
