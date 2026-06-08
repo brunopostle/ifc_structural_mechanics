@@ -147,6 +147,7 @@ def test_create_meshing_config():
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
 @patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
 @patch("ifc_structural_mechanics.api.structural_analysis.ResultsParser")
+@patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
 @patch("os.path.exists")
 @patch("os.listdir")
@@ -156,6 +157,7 @@ def test_analyze_ifc_success_unified(
     mock_listdir,
     mock_exists,
     mock_ensure_directory,
+    mock_validate_model,
     mock_results_parser_class,
     mock_output_parser_class,
     mock_calculix_runner_class,
@@ -167,6 +169,7 @@ def test_analyze_ifc_success_unified(
     # Set up mocks
     mock_ensure_directory.return_value = "output_dir"
     mock_extract_model.return_value = mock_domain_model
+    mock_validate_model.return_value = []
 
     # Mock the unified workflow
     unified_inp_file = "output_dir/analysis.inp"
@@ -320,6 +323,7 @@ def test_analyze_ifc_analysis_error_unified(
 )
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
 @patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
 @patch("os.path.exists")
 @patch("shutil.copy2")
@@ -327,6 +331,7 @@ def test_analyze_ifc_with_warnings_unified(
     mock_copy,
     mock_exists,
     mock_ensure_directory,
+    mock_validate_model,
     mock_output_parser_class,
     mock_calculix_runner_class,
     mock_unified_workflow,
@@ -338,6 +343,7 @@ def test_analyze_ifc_with_warnings_unified(
     mock_ensure_directory.return_value = "output_dir"
     mock_extract_model.return_value = mock_domain_model
     mock_unified_workflow.return_value = "output_dir/analysis.inp"
+    mock_validate_model.return_value = []
 
     # Mock CalculiX runner
     mock_calculix_runner = MagicMock()
@@ -386,6 +392,77 @@ def test_analyze_ifc_with_warnings_unified(
     assert len(result["warnings"]) == 1
     assert result["warnings"][0]["message"] == "Test warning"
     assert len(result["errors"]) == 0
+
+
+@patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
+@patch(
+    "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
+)
+@patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
+@patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
+@patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
+@patch("os.path.exists")
+@patch("shutil.copy2")
+def test_validation_warnings_not_dropped_by_parse_step(
+    mock_copy,
+    mock_exists,
+    mock_ensure_directory,
+    mock_validate_model,
+    mock_output_parser_class,
+    mock_calculix_runner_class,
+    mock_unified_workflow,
+    mock_extract_model,
+    mock_domain_model,
+):
+    """Validation warnings must survive the CalculiX parse step (6al regression)."""
+    mock_ensure_directory.return_value = "output_dir"
+    mock_extract_model.return_value = mock_domain_model
+    mock_unified_workflow.return_value = "output_dir/analysis.inp"
+
+    validation_warning = {
+        "message": "Validation warning before CalculiX ran",
+        "severity": "warning",
+        "entity_type": None,
+        "ccx_id": None,
+        "domain_id": None,
+    }
+    mock_validate_model.return_value = [validation_warning]
+
+    mock_calculix_runner = MagicMock()
+    mock_calculix_runner_class.return_value = mock_calculix_runner
+    mock_calculix_runner.run_analysis.return_value = {
+        "message": "output_dir/analysis.msg"
+    }
+
+    parse_warning = {
+        "message": "CalculiX parse warning",
+        "severity": "warning",
+        "entity_type": None,
+        "ccx_id": None,
+        "domain_id": None,
+    }
+    mock_output_parser = MagicMock()
+    mock_output_parser_class.return_value = mock_output_parser
+    mock_output_parser.parse_output.return_value = {
+        "warnings": [parse_warning],
+        "errors": [],
+    }
+    mock_output_parser.check_convergence.return_value = (True, "Converged")
+
+    mock_exists.side_effect = lambda p: "analysis.msg" in p
+    mock_copy.return_value = None
+
+    with patch("builtins.open", MagicMock()) as mock_open:
+        mock_open.return_value.__enter__.return_value.read.return_value = "Output text"
+        result = analyze_ifc(ifc_path="path/to/test.ifc", output_dir="output_dir")
+
+    messages = [w["message"] for w in result["warnings"]]
+    assert (
+        "Validation warning before CalculiX ran" in messages
+    ), "Validation warning was overwritten by parse step"
+    assert "CalculiX parse warning" in messages
+    assert len(result["warnings"]) == 2
 
 
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")

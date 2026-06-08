@@ -785,6 +785,121 @@ class TestPerformanceAndScaling:
         assert len(writer.elements) == 1
 
 
+class TestGetBeamNormal:
+    """Regression tests for _get_beam_normal (c9l: wrong axis returned)."""
+
+    def _make_writer(self, member):
+        model = StructuralModel(id="normal_test", name="Normal Test")
+        model.add_member(member)
+        return UnifiedCalculixWriter(domain_model=model)
+
+    def _make_member(self, geometry, local_axis):
+        material = Material(
+            id="mat",
+            name="Steel",
+            elastic_modulus=210e9,
+            poisson_ratio=0.3,
+            density=7850.0,
+        )
+        section = Section.create_rectangular_section(
+            id="sec", name="300x600", width=0.3, height=0.6
+        )
+        m = CurveMember(
+            id="beam_1", geometry=geometry, material=material, section=section
+        )
+        m.local_axis = local_axis
+        return m
+
+    def test_normal_is_perpendicular_to_beam_axis_horizontal_beam(self):
+        """Horizontal beam with known IFC .Axis: returned normal must be ⊥ to beam axis."""
+        # Beam along X; IFC .Axis = (0, 0, 1) (web vertical)
+        # local_axis from get_1D_orientation:
+        #   xAxis = (1,0,0) (longitudinal)
+        #   zAxis_norm = (0,0,1) (IFC .Axis)
+        #   yAxis = cross((0,0,1), (1,0,0)) = (0,1,0) ... wait:
+        #   cross(z, x) = cross((0,0,1),(1,0,0)) = (0*0-1*0, 1*1-0*0, 0*0-0*1) = (0,1,0)
+        #   zAxis_final = cross((1,0,0),(0,1,0)) = (0,0,1)
+        local_axis = [
+            [1.0, 0.0, 0.0],  # [0] xAxis = longitudinal (WRONG to return this)
+            [0.0, 1.0, 0.0],  # [1] yAxis = perp to both (CORRECT to return this)
+            [0.0, 0.0, 1.0],  # [2] zAxis ≈ IFC .Axis
+        ]
+        member = self._make_member(
+            geometry=((0, 0, 0), (6, 0, 0)), local_axis=local_axis
+        )
+        writer = self._make_writer(member)
+
+        normal = np.array(writer._get_beam_normal(member), dtype=float)
+        beam_axis = np.array([1.0, 0.0, 0.0])
+
+        dot = abs(float(np.dot(normal, beam_axis)))
+        assert (
+            dot < 1e-6
+        ), f"Normal {normal} is not perpendicular to beam axis (dot={dot})"
+
+    def test_normal_is_perpendicular_for_vertical_column(self):
+        """Vertical column (beam along Z): normal must be ⊥ to (0,0,1)."""
+        # Beam along Z; IFC .Axis = (1,0,0)
+        # xAxis = (0,0,1), zAxis_norm = (1,0,0)
+        # yAxis = cross((1,0,0),(0,0,1)) = (0*1-0*0, 0*0-1*1, 1*0-0*0) = (0,-1,0)
+        # zAxis_final = cross((0,0,1),(0,-1,0)) = (0*0-1*(-1), 1*0-0*0, 0*(-1)-0*0) = (1,0,0)
+        local_axis = [
+            [0.0, 0.0, 1.0],  # [0] xAxis = longitudinal (vertical)
+            [0.0, -1.0, 0.0],  # [1] yAxis
+            [1.0, 0.0, 0.0],  # [2] zAxis ≈ IFC .Axis
+        ]
+        member = self._make_member(
+            geometry=((0, 0, 0), (0, 0, 3)), local_axis=local_axis
+        )
+        writer = self._make_writer(member)
+
+        normal = np.array(writer._get_beam_normal(member), dtype=float)
+        beam_axis = np.array([0.0, 0.0, 1.0])
+
+        dot = abs(float(np.dot(normal, beam_axis)))
+        assert (
+            dot < 1e-6
+        ), f"Normal {normal} is not perpendicular to beam axis (dot={dot})"
+
+    def test_normal_reflects_ifc_axis_rotation(self):
+        """Section rotated 90° about beam axis should produce a rotated normal."""
+        beam_axis_vec = np.array([1.0, 0.0, 0.0])
+
+        # IFC .Axis = (0,0,1): local_axis[1] = cross((0,0,1),(1,0,0)) = (0,1,0)
+        local_axis_0deg = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        # IFC .Axis = (0,1,0): local_axis[1] = cross((0,1,0),(1,0,0)) = (0,0,-1)
+        local_axis_90deg = [
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+        ]
+
+        m0 = self._make_member(
+            geometry=((0, 0, 0), (6, 0, 0)), local_axis=local_axis_0deg
+        )
+        m90 = self._make_member(
+            geometry=((0, 0, 0), (6, 0, 0)), local_axis=local_axis_90deg
+        )
+        w0 = self._make_writer(m0)
+        w90 = self._make_writer(m90)
+
+        n0 = np.array(w0._get_beam_normal(m0), dtype=float)
+        n90 = np.array(w90._get_beam_normal(m90), dtype=float)
+
+        # Both normals must be ⊥ to beam axis
+        assert abs(np.dot(n0, beam_axis_vec)) < 1e-6
+        assert abs(np.dot(n90, beam_axis_vec)) < 1e-6
+
+        # The two normals must differ (rotation is honoured)
+        assert not np.allclose(
+            n0, n90
+        ), "Rotating section 90° must change the beam normal"
+
+
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main(["-v", __file__])

@@ -172,9 +172,9 @@ def analyze_ifc(
                 output_text = f.read()
             parse_result = output_parser.parse_output(output_text)
 
-            # Add warnings and errors to result
-            result["warnings"] = parse_result.get("warnings", [])
-            result["errors"] = parse_result.get("errors", [])
+            # Add warnings and errors to result (extend to preserve pre-analysis warnings)
+            result["warnings"].extend(parse_result.get("warnings", []))
+            result["errors"].extend(parse_result.get("errors", []))
 
             # Check if analysis converged
             converged, reason = output_parser.check_convergence(output_text)

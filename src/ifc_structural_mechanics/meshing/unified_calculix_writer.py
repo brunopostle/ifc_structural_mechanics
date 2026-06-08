@@ -158,24 +158,23 @@ class UnifiedCalculixWriter:
         Returns:
             Tuple[float, float, float]: Normal vector (nx, ny, nz)
         """
-        # Use local axis from IFC if available
+        # Use local axis from IFC if available.
+        # local_axis = [xAxis, yAxis, zAxis_final] where xAxis is the longitudinal
+        # axis and yAxis = cross(IFC.Axis, xAxis) is already perpendicular to the
+        # beam axis.  Returning xAxis (index 0) was wrong — it is parallel to the
+        # beam and collapses to zero after CalculiX orthogonalisation.
         if hasattr(member, "local_axis") and member.local_axis is not None:
-            # local_axis is (xAxis, yAxis, zAxis) - try xAxis for beam normal
             if (
                 isinstance(member.local_axis, (tuple, list))
                 and len(member.local_axis) == 3
             ):
-                x_axis = member.local_axis[0]  # Get xAxis
-                logger.info(f"Using x-axis from IFC local coordinate system: {x_axis}")
-                return tuple(x_axis)
-            else:
-                logger.warning(f"Unexpected local_axis format: {member.local_axis}")
-                # Try to use it directly if it's already a 3-element vector
-                if (
-                    isinstance(member.local_axis, (tuple, list))
-                    and len(member.local_axis) == 3
-                ):
-                    return tuple(member.local_axis)
+                y_axis = member.local_axis[1]  # yAxis — perpendicular to beam axis
+                if isinstance(y_axis, (tuple, list, np.ndarray)) and len(y_axis) == 3:
+                    logger.info(
+                        f"Using y-axis from IFC local coordinate system as beam normal: {y_axis}"
+                    )
+                    return tuple(float(v) for v in y_axis)
+            logger.warning(f"Unexpected local_axis format: {member.local_axis}")
 
         # Fallback: compute from geometry if no local axis
         logger.warning(f"Member {member.id} has no local_axis, computing from geometry")
@@ -488,9 +487,7 @@ class UnifiedCalculixWriter:
                 if has_shell and max_node_id > 0:
                     for mult in range(1, 4):
                         expanded = [int(nid) + max_node_id * mult for nid in node_ids]
-                        self.domain_model.register_node_memberships(
-                            expanded, member.id
-                        )
+                        self.domain_model.register_node_memberships(expanded, member.id)
 
     def _write_calculix_input_file(self, output_file: str) -> None:
         """
