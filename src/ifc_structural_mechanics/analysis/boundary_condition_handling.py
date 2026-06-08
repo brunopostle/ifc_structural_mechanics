@@ -728,6 +728,7 @@ def write_analysis_steps(
             element_sets,
             node_coords,
             u1_element_sets=u1_element_sets,
+            elements_data=elements_data,
         )
         if gravity:
             gdir = gravity_direction or [0.0, 0.0, -1.0]
@@ -778,6 +779,7 @@ def write_analysis_steps(
                 node_coords,
                 target_group_id=load_case.id,
                 u1_element_sets=u1_element_sets,
+                elements_data=elements_data,
             )
             if not loads_written:
                 file.write(
@@ -817,6 +819,7 @@ def write_analysis_steps(
             element_sets,
             node_coords,
             u1_element_sets=u1_element_sets,
+            elements_data=elements_data,
         )
         if gravity:
             gdir = gravity_direction or [0.0, 0.0, -1.0]
@@ -1023,6 +1026,7 @@ def _write_validated_loads_within_step(
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
     target_group_id: Optional[str] = None,
     u1_element_sets: Optional[set] = None,
+    elements_data: Optional[Dict[int, Dict]] = None,
 ) -> bool:
     """
     Enhanced load writing with validation and deduplication.
