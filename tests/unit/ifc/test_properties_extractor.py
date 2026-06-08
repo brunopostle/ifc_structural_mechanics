@@ -510,3 +510,88 @@ class TestAsymmetricISectionExtraction:
         )
         sec = ext._create_asymmetric_i_section(profile)
         assert sec.area > 0
+
+
+class TestSectionApproximations:
+    """Sections that lose fidelity must record the loss in approximations."""
+
+    def test_asymmetric_i_has_approximation(self):
+        ext = _make_extractor()
+        profile = _profile(
+            {
+                "BottomFlangeWidth": 0.2,
+                "TopFlangeWidth": 0.1,
+                "OverallDepth": 0.3,
+                "WebThickness": 0.01,
+                "BottomFlangeThickness": 0.015,
+                "TopFlangeThickness": 0.01,
+            }
+        )
+        sec = ext._create_asymmetric_i_section(profile)
+        assert sec.approximations, "asymmetric I-section must record an approximation"
+        assert any("asymmetric" in a.lower() for a in sec.approximations)
+
+    def test_l_section_has_approximation(self):
+        ext = _make_extractor()
+        profile = _profile({"Depth": 0.1, "Width": 0.08, "Thickness": 0.008})
+        sec = ext._create_l_section(profile)
+        assert (
+            sec.approximations
+        ), "L-section must record a product-of-inertia approximation"
+        assert any("product of inertia" in a.lower() for a in sec.approximations)
+
+    def test_unsupported_profile_has_approximation(self):
+        ext = _make_extractor()
+        mock_ifc_entity = MagicMock()
+        mock_ifc_entity.id.return_value = 99
+
+        unsupported_profile = MagicMock()
+        # is_a() with no arg → type-name string; is_a(typename) → False for all known types
+        _known = {
+            "IfcRectangleProfileDef",
+            "IfcRectangleHollowProfileDef",
+            "IfcIShapeProfileDef",
+            "IfcAsymmetricIShapeProfileDef",
+            "IfcCircleHollowProfileDef",
+            "IfcLShapeProfileDef",
+            "IfcTShapeProfileDef",
+            "IfcChannelProfileDef",
+        }
+
+        def _is_a(*args):
+            if not args:
+                return "IfcZShapeProfileDef"
+            return args[0] not in _known
+
+        unsupported_profile.is_a.side_effect = _is_a
+
+        ext._find_related_profile = MagicMock(return_value=unsupported_profile)
+        sec = ext.extract_section(mock_ifc_entity)
+        assert (
+            sec.approximations
+        ), "unsupported profile must record a fallback approximation"
+        assert any("IfcZShapeProfileDef" in a for a in sec.approximations)
+
+    def test_symmetric_i_no_approximation(self):
+        ext = _make_extractor()
+        profile = _profile(
+            {
+                "OverallWidth": 0.15,
+                "OverallDepth": 0.25,
+                "WebThickness": 0.009,
+                "FlangeThickness": 0.012,
+                "FilletRadius": 0.0,
+            }
+        )
+        sec = ext._create_i_section(profile)
+        assert (
+            sec.approximations == []
+        ), "symmetric I-section must have no approximations"
+
+    def test_rectangular_section_no_approximation(self):
+        sec = Section.create_rectangular_section("s1", "rect", 0.1, 0.2)
+        assert sec.approximations == []
+
+    def test_circular_section_no_approximation(self):
+        sec = Section.create_circular_section("s2", "circ", 0.05)
+        assert sec.approximations == []

@@ -484,12 +484,18 @@ class PropertiesExtractor:
                 return self._create_c_section(profile)
 
             else:
+                profile_type = profile.is_a()
                 self.logger.warning(
-                    f"Unsupported profile type: {profile.is_a()} — "
+                    f"Unsupported profile type: {profile_type} — "
                     f"member will use the default section. "
                     f"Consider adding an extractor for this profile type."
                 )
-                return self._create_default_section()
+                section = self._create_default_section()
+                section.approximations.append(
+                    f"Unsupported profile type '{profile_type}' replaced with default "
+                    f"0.1×0.2 m rectangular section — all section properties are approximate"
+                )
+                return section
 
         except Exception as e:
             self.logger.error(f"Error extracting section for entity {entity.id()}: {e}")
@@ -627,6 +633,11 @@ class PropertiesExtractor:
                     "flange_thickness": tf,
                     "fillet_radius": 0.0,
                 },
+                approximations=[
+                    "Asymmetric I-section (IfcAsymmetricIShapeProfileDef) approximated as "
+                    "symmetric: top and bottom flanges averaged — section properties and "
+                    "neutral-axis location are approximate"
+                ],
             )
         except Exception as e:
             self.logger.warning(f"Error creating asymmetric I-section: {e}")
@@ -656,6 +667,11 @@ class PropertiesExtractor:
                     "height": depth,
                     "thickness": thickness,
                 },
+                approximations=[
+                    "L-section (angle) analysed with zero product of inertia: true principal "
+                    "axes are rotated relative to the geometric axes — bending response is "
+                    "approximate (IfcLShapeProfileDef)"
+                ],
             )
         except Exception as e:
             self.logger.warning(f"Error creating L-section: {e}")

@@ -193,3 +193,87 @@ class TestValidateModelWarningFormat:
             assert "message" in w
             assert "severity" in w
             assert w["severity"] == "warning"
+
+
+# ---------------------------------------------------------------------------
+# Section approximation warnings
+# ---------------------------------------------------------------------------
+
+
+def _section_with_approx(*msgs):
+    """Return a Section whose approximations list contains the given messages."""
+    sec = Section.create_rectangular_section(
+        id="sx", name="approx", width=0.1, height=0.1
+    )
+    sec.approximations = list(msgs)
+    return sec
+
+
+class TestValidateModelSectionApproximations:
+    def test_asymmetric_i_warning_reaches_result(self):
+        model = _empty_model()
+        member = _make_member(
+            "beam_asym",
+            material=_MATERIAL,
+            section=_section_with_approx(
+                "Asymmetric I-section (IfcAsymmetricIShapeProfileDef) approximated as "
+                "symmetric: top and bottom flanges averaged"
+            ),
+        )
+        member.ifc_guid = "3AbCdEfGhI"
+        model.add_member(member)
+        model.connections.append(MagicMock())
+        model.load_groups = [_make_group_with_loads("L1")]
+        warnings = _validate_model(model, gravity=True)
+        approx_warns = [w for w in warnings if "beam_asym" in w["message"]]
+        assert approx_warns, "expected a warning naming the member"
+        assert any("3AbCdEfGhI" in w["message"] for w in approx_warns)
+        assert any("asymmetric" in w["message"].lower() for w in approx_warns)
+        assert approx_warns[0]["domain_id"] == "beam_asym"
+        assert approx_warns[0]["ifc_guid"] == "3AbCdEfGhI"
+
+    def test_l_section_warning_reaches_result(self):
+        model = _empty_model()
+        member = _make_member(
+            "col_l",
+            material=_MATERIAL,
+            section=_section_with_approx(
+                "L-section (angle) analysed with zero product of inertia"
+            ),
+        )
+        member.ifc_guid = "LGuid123"
+        model.add_member(member)
+        model.connections.append(MagicMock())
+        model.load_groups = [_make_group_with_loads("L1")]
+        warnings = _validate_model(model, gravity=True)
+        approx_warns = [w for w in warnings if "col_l" in w["message"]]
+        assert approx_warns
+        assert any("product of inertia" in w["message"].lower() for w in approx_warns)
+
+    def test_unsupported_profile_warning_reaches_result(self):
+        model = _empty_model()
+        member = _make_member(
+            "beam_unk",
+            material=_MATERIAL,
+            section=_section_with_approx(
+                "Unsupported profile type 'IfcZShapeProfileDef' replaced with default section"
+            ),
+        )
+        member.ifc_guid = None
+        model.add_member(member)
+        model.connections.append(MagicMock())
+        model.load_groups = [_make_group_with_loads("L1")]
+        warnings = _validate_model(model, gravity=True)
+        approx_warns = [w for w in warnings if "beam_unk" in w["message"]]
+        assert approx_warns
+
+    def test_no_approximation_warning_for_clean_section(self):
+        model = _empty_model()
+        member = _make_member("ok_beam", material=_MATERIAL, section=_SECTION)
+        member.ifc_guid = "CleanGuid"
+        model.add_member(member)
+        model.connections.append(MagicMock())
+        model.load_groups = [_make_group_with_loads("L1")]
+        warnings = _validate_model(model, gravity=True)
+        approx_warns = [w for w in warnings if "ok_beam" in w["message"]]
+        assert not approx_warns, "clean section must produce no approximation warning"

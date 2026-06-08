@@ -6,7 +6,7 @@ used in structural analysis models.
 """
 
 import math
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 
 class Material:
@@ -177,6 +177,7 @@ class Section:
         area: float,
         dimensions: Dict[str, float],
         allow_incomplete_dims: bool = False,
+        approximations: Optional[List[str]] = None,
     ):
         """Initialize a Section with its properties.
 
@@ -187,6 +188,8 @@ class Section:
             area (float): Cross-sectional area in m²
             dimensions (Dict[str, float]): Dictionary of dimensions specific to the section type
             allow_incomplete_dims (bool): If True, allows incomplete dimensions (for testing)
+            approximations (List[str]): Human-readable descriptions of any fidelity losses
+                applied when mapping the original profile to this Section.
 
         Raises:
             ValueError: If required properties have invalid values
@@ -197,6 +200,7 @@ class Section:
         self.area = area
         self.dimensions = dimensions
         self.allow_incomplete_dims = allow_incomplete_dims
+        self.approximations: List[str] = list(approximations) if approximations else []
 
         self._validate()
         self._calculate_properties()

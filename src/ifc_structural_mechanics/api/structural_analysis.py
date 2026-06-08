@@ -456,6 +456,25 @@ def _validate_model(domain_model, gravity: bool) -> list:
             f"— CalculiX will reject them: {ids}{suffix}"
         )
 
+    # Warn about section approximations that affect analysis fidelity
+    for member in domain_model.members:
+        section = getattr(member, "section", None)
+        if not section:
+            continue
+        for approx in getattr(section, "approximations", []):
+            ifc_guid = getattr(member, "ifc_guid", None)
+            guid_part = f" (IFC {ifc_guid})" if ifc_guid else ""
+            warnings.append(
+                {
+                    "message": f"Member {member.id}{guid_part}: {approx}",
+                    "severity": "warning",
+                    "entity_type": "StructuralMember",
+                    "ccx_id": None,
+                    "domain_id": member.id,
+                    "ifc_guid": ifc_guid,
+                }
+            )
+
     # Check that at least one boundary condition (support) exists
     if not domain_model.connections:
         _warn(
