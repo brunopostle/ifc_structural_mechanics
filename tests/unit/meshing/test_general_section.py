@@ -51,6 +51,10 @@ def _make_writer(member):
     writer._write_beam_section_for_set = (
         UnifiedCalculixWriter._write_beam_section_for_set.__get__(writer)
     )
+    writer._compute_beam_axis = UnifiedCalculixWriter._compute_beam_axis.__get__(writer)
+    writer._orthogonal_beam_normal = (
+        UnifiedCalculixWriter._orthogonal_beam_normal.__get__(writer)
+    )
     return writer
 
 

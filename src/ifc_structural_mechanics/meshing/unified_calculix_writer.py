@@ -808,6 +808,79 @@ class UnifiedCalculixWriter:
             else:
                 file.write("\n")
 
+    def _compute_beam_axis(
+        self,
+        elem_ids: Optional[List[int]] = None,
+        member: Optional[CurveMember] = None,
+    ) -> Tuple[float, float, float]:
+        """Compute the unit beam axis, preferring mesh element node coords.
+
+        Falls back to the member's own geometry endpoints when element/node
+        data isn't available (or doesn't resolve), and finally to global Z.
+        """
+        if elem_ids:
+            for eid in elem_ids:
+                elem = self.elements.get(eid)
+                if not elem:
+                    continue
+                nodes = elem.get("nodes")
+                if not nodes or len(nodes) < 2:
+                    continue
+                n1 = self.nodes.get(nodes[0])
+                n2 = self.nodes.get(nodes[1])
+                if n1 is None or n2 is None:
+                    continue
+                axis = np.array(n2, dtype=float) - np.array(n1, dtype=float)
+                length = np.linalg.norm(axis)
+                if length > 1e-12:
+                    return tuple(axis / length)
+
+        if member is not None:
+            geometry = getattr(member, "geometry", None)
+            if isinstance(geometry, (list, tuple)) and len(geometry) >= 2:
+                start = np.array(geometry[0], dtype=float)
+                end = np.array(geometry[-1], dtype=float)
+                axis = end - start
+                length = np.linalg.norm(axis)
+                if length > 1e-12:
+                    return tuple(axis / length)
+
+        return (0.0, 0.0, 1.0)
+
+    def _orthogonal_beam_normal(
+        self,
+        raw_normal: Tuple[float, float, float],
+        beam_axis: Tuple[float, float, float],
+    ) -> Tuple[float, float, float]:
+        """Return raw_normal orthogonalised against beam_axis, unit length.
+
+        Subtracts the component of raw_normal parallel to beam_axis.  If the
+        result is (near) zero — i.e. raw_normal was parallel to the axis —
+        falls back to the first canonical perpendicular (global Y, X, or Z)
+        that isn't degenerate.  This is the single source of truth used by
+        both the native B31 (*BEAM SECTION) and U1 (SECTION=GENERAL) writers
+        so neither can emit a degenerate local system.
+        """
+        axis = np.array(beam_axis, dtype=float)
+        axis_len = np.linalg.norm(axis)
+        axis = axis / axis_len if axis_len > 1e-12 else np.array([0.0, 0.0, 1.0])
+
+        raw = np.array(raw_normal, dtype=float)
+        n = raw - np.dot(raw, axis) * axis
+        n_len = float(np.linalg.norm(n))
+        if n_len < 1e-10:
+            for cand in (
+                np.array([0.0, 1.0, 0.0]),
+                np.array([1.0, 0.0, 0.0]),
+                np.array([0.0, 0.0, 1.0]),
+            ):
+                n = cand - np.dot(cand, axis) * axis
+                n_len = float(np.linalg.norm(n))
+                if n_len > 1e-10:
+                    break
+        n = n / n_len
+        return (float(n[0]), float(n[1]), float(n[2]))
+
     def _write_beam_section_for_set(
         self,
         file: TextIO,
@@ -815,6 +888,7 @@ class UnifiedCalculixWriter:
         elset_name: str,
         material_id: str,
         beam_normal: tuple,
+        elem_ids: Optional[List[int]] = None,
     ) -> None:
         """Write a *BEAM SECTION definition for a B31 element set.
 
@@ -823,7 +897,14 @@ class UnifiedCalculixWriter:
         keyword and dimension data line.  Any other type that somehow reaches
         this path (which should not happen — they are retyped to U1 earlier)
         falls back to an equivalent RECT so CalculiX doesn't error out.
+
+        ``beam_normal`` is orthogonalised against the beam axis before being
+        written (safety net — mirrors the U1/GENERAL path) so a normal that
+        is parallel/near-parallel to the beam axis can never reach CalculiX.
         """
+        beam_axis = self._compute_beam_axis(elem_ids, member)
+        beam_normal = self._orthogonal_beam_normal(beam_normal, beam_axis)
+
         stype = getattr(getattr(member, "section", None), "section_type", None)
         native = get_native_section(stype)
 
@@ -995,38 +1076,12 @@ class UnifiedCalculixWriter:
         # *BEAM SECTION, SECTION=GENERAL
         # Data line 1: A, xi11, xi12(=0), xi22, k_s
         # Data line 2: beam normal direction (e2 — must be perpendicular to beam axis)
-        beam_normal_raw = np.array(self._get_beam_normal(member), dtype=float)
-
-        # Compute beam axis from the first element's nodes so we can check/fix
-        # whether the IFC-provided normal is parallel to the axis (common for
-        # vertical columns whose xAxis == zAxis == (0,0,1)).
-        beam_axis = np.array([0.0, 0.0, 1.0])  # fallback
-        for eid in elem_ids:
-            elem = self.elements.get(eid)
-            if elem is None:
-                continue
-            n1c = np.array(self.nodes[elem["nodes"][0]], dtype=float)
-            n2c = np.array(self.nodes[elem["nodes"][1]], dtype=float)
-            ax = n2c - n1c
-            if np.linalg.norm(ax) > 1e-12:
-                beam_axis = ax / np.linalg.norm(ax)
-                break
-
-        # Orthogonalise: subtract the component parallel to the beam axis
-        n = beam_normal_raw - np.dot(beam_normal_raw, beam_axis) * beam_axis
-        n_len = float(np.linalg.norm(n))
-        if n_len < 1e-10:
-            # Provided normal is (nearly) parallel to axis — choose a perpendicular
-            for cand in (
-                np.array([0.0, 1.0, 0.0]),
-                np.array([1.0, 0.0, 0.0]),
-                np.array([0.0, 0.0, 1.0]),
-            ):
-                n = cand - np.dot(cand, beam_axis) * beam_axis
-                n_len = float(np.linalg.norm(n))
-                if n_len > 1e-10:
-                    break
-        beam_normal = n / n_len
+        # Orthogonalised against the beam axis (common failure: vertical columns
+        # whose xAxis == zAxis == (0,0,1) make the raw IFC normal parallel to
+        # the axis) via the same helper used by the native B31 path.
+        beam_normal_raw = self._get_beam_normal(member)
+        beam_axis = self._compute_beam_axis(elem_ids, member)
+        beam_normal = self._orthogonal_beam_normal(beam_normal_raw, beam_axis)
 
         file.write(
             f"*BEAM SECTION, SECTION=GENERAL, ELSET={elset},"
@@ -1127,14 +1182,24 @@ class UnifiedCalculixWriter:
 
                         # Write beam section for this subset
                         self._write_beam_section_for_set(
-                            file, member, subset_name, material_id, beam_normal
+                            file,
+                            member,
+                            subset_name,
+                            material_id,
+                            beam_normal,
+                            elem_ids=element_ids,
                         )
                         sections_written += 1
                 else:
                     # No orientation groups (shouldn't happen, but fallback to single section)
                     beam_normal = self._get_beam_normal(member)
                     self._write_beam_section_for_set(
-                        file, member, member_set, material_id, beam_normal
+                        file,
+                        member,
+                        member_set,
+                        material_id,
+                        beam_normal,
+                        elem_ids=member_elems,
                     )
                     sections_written += 1
 
