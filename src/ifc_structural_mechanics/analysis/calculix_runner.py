@@ -152,6 +152,10 @@ class CalculixRunner:
                 need_retry = False
                 error_output = self._process_result.stdout + self._process_result.stderr
 
+                self._raise_if_known_gen3delem_user_element_bug(
+                    error_output, target_path
+                )
+
                 if "ERROR reading *ELEMENT: increase ne_" in error_output:
                     logger.warning(
                         "Detected 'increase ne_' error. Trying to modify input file."
@@ -276,6 +280,53 @@ class CalculixRunner:
             raise AnalysisError(
                 f"CalculiX analysis failed: {str(e)}", error_details=errors
             ) from e
+
+    @staticmethod
+    def _raise_if_known_gen3delem_user_element_bug(
+        error_output: str, input_file_path: Path
+    ) -> None:
+        """Detect a known CalculiX 2.23 crash and fail with an actionable message.
+
+        CalculiX's gen3delem.f never assigns a node count for *USER ELEMENT
+        (TYPE=U1) entries — its lakon-prefix filter excludes C3D/D/G/E/MASS
+        types but not 'U'. Whenever a model mixes a U1 element with *any*
+        other 1D/2D element (B31, S3, ...), the loop reuses whatever node
+        count a previously-processed element left behind, then reads the
+        (deliberately unset) SECTION=GENERAL thickness for the U1 element and
+        aborts with "gen3delem: first thickness ... is zero". This has been
+        confirmed by patching and rebuilding CalculiX 2.23 (still present
+        upstream as of 2026-07) — it is not something this project's .inp
+        writer can work around, since the crash is independent of element
+        ID ordering. See patches/calculix-gen3delem-user-element.patch.
+
+        Raises AnalysisError instead of letting the generic, misleading CCX
+        message reach the user when this specific combination is detected.
+        """
+        if "gen3delem" not in error_output or "thickness" not in error_output:
+            return
+        try:
+            inp_text = input_file_path.read_text()
+        except OSError:
+            return
+        element_types = set(
+            re.findall(r"(?im)^\*ELEMENT\s*,.*?TYPE\s*=\s*(\w+)", inp_text)
+        )
+        if "U1" in element_types and len(element_types) > 1:
+            raise AnalysisError(
+                "CalculiX crashed in gen3delem with 'first thickness ... is "
+                "zero'. This model mixes U1 (user-element) beams with other "
+                f"element types ({sorted(element_types)}); CalculiX 2.23 has "
+                "a confirmed bug where its gen3delem.f never recognises "
+                "TYPE=U1 elements, causing it to misread an unrelated, "
+                "always-unset thickness value whenever a U1 element "
+                "coexists with any other 1D/2D element in the same model. "
+                "This cannot be fixed by reordering or rewriting the .inp "
+                "file. Apply patches/calculix-gen3delem-user-element.patch "
+                "to your CalculiX source and rebuild, or avoid sections "
+                "that require a U1 element (I/T/L/C profiles, or members "
+                "affected by overlapping-geometry retyping) in models that "
+                "also contain native B31/S3 elements."
+            )
 
     def _prepare_command(self) -> List[str]:
         """

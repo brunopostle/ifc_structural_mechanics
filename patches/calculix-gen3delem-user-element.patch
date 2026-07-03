@@ -1,0 +1,34 @@
+# CalculiX gen3delem.f: *USER ELEMENT (TYPE=U1) crashes when mixed with any
+# other 1D/2D element ("first thickness ... in node N of element M is zero").
+#
+# Root cause: the lakon-prefix filter in gen3delem.f's node-count catalogue
+# loop excludes C3D/D/G/E/MASS element types but not 'U' (user elements).
+# When it reaches a U1 element, the local `numnod` variable is left at
+# whatever value the previously-processed B31/S3/etc. element set it to
+# (Fortran does not reset it), and the loop then reads
+# thicke(1,indexe+j) for that many nodes. *BEAM SECTION,SECTION=GENERAL
+# (the card U1 requires) never populates `thicke` at all
+# (beamgeneralsections.f guards this with `if(section.ne.'GENE')`), so this
+# read is always zero, and gen3delem aborts with exit code 201.
+#
+# Confirmed by minimal repro and by rebuilding CalculiX 2.23 with this fix
+# applied. Confirmed still present in upstream master as of 2026-07-03
+# (https://github.com/Dhondtguido/CalculiX, commit 6d460bc). A model
+# containing ONLY U1 elements (no other 1D/2D element) is unaffected.
+#
+# To apply: from a CalculiX source tree (e.g. the ccx_2.23 tarball from
+# dhondt.de, or a checkout of github.com/Dhondtguido/CalculiX), run:
+#   patch -p1 < patches/calculix-gen3delem-user-element.patch
+# then rebuild (see src/Makefile).
+--- a/src/gen3delem.f	2026-07-03 14:53:39.938457492 +0100
++++ b/src/gen3delem.f	2026-07-03 15:01:39.781472558 +0100
+@@ -119,7 +119,8 @@
+           if(ipkon(i).lt.0) cycle
+           if((lakon(i)(1:2).ne.'C3').and.(lakon(i)(1:1).ne.'D').and.
+      &         (lakon(i)(1:1).ne.'G').and.(lakon(i)(1:1).ne.'E').and.
+-     &         (lakon(i)(1:4).ne.'MASS')) then
++     &         (lakon(i)(1:4).ne.'MASS').and.
++     &         (lakon(i)(1:1).ne.'U')) then
+ !     
+ !     number of nodes belonging to the element
+ !     

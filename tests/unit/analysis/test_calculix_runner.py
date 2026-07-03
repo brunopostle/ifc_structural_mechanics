@@ -273,3 +273,50 @@ Simple Test
             assert any(
                 phrase in error_msg for phrase in ["timeout", "timed out"]
             ), f"Expected timeout-related error, got: {excinfo.value}"
+
+
+class TestGen3delemUserElementBugDetection:
+    """Tests for the known CalculiX gen3delem/U1 crash detection."""
+
+    ERROR_OUTPUT = (
+        " *ERROR in gen3delem: first thickness\n"
+        "       in node            1  of element           30\n"
+        "       is zero\n"
+    )
+
+    def test_raises_when_u1_mixed_with_native_elements(self, tmp_path):
+        inp_path = tmp_path / "analysis.inp"
+        inp_path.write_text(
+            "*ELEMENT, TYPE=B31, ELSET=ELSET_B31\n1, 1, 2\n\n"
+            "*ELEMENT, TYPE=S3, ELSET=ELSET_S3\n2, 1, 2, 3\n\n"
+            "*ELEMENT, TYPE=U1, ELSET=U1_M1\n3, 4, 5\n"
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            CalculixRunner._raise_if_known_gen3delem_user_element_bug(
+                self.ERROR_OUTPUT, inp_path
+            )
+        message = str(excinfo.value)
+        assert "gen3delem" in message
+        assert "patches/calculix-gen3delem-user-element.patch" in message
+
+    def test_does_not_raise_for_pure_u1_model(self, tmp_path):
+        inp_path = tmp_path / "analysis.inp"
+        inp_path.write_text("*ELEMENT, TYPE=U1, ELSET=U1_M1\n1, 1, 2\n")
+
+        # Should not raise - a pure-U1 model is not affected by this bug.
+        CalculixRunner._raise_if_known_gen3delem_user_element_bug(
+            self.ERROR_OUTPUT, inp_path
+        )
+
+    def test_does_not_raise_for_unrelated_error(self, tmp_path):
+        inp_path = tmp_path / "analysis.inp"
+        inp_path.write_text(
+            "*ELEMENT, TYPE=B31, ELSET=ELSET_B31\n1, 1, 2\n\n"
+            "*ELEMENT, TYPE=U1, ELSET=U1_M1\n2, 3, 4\n"
+        )
+
+        # Should not raise - error text doesn't match the known signature.
+        CalculixRunner._raise_if_known_gen3delem_user_element_bug(
+            "*ERROR in some other routine: unrelated failure", inp_path
+        )

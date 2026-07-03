@@ -343,6 +343,7 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 - **Mixed beam+shell instability**: When all supports fix only DOF 1-3 (no rotational restraint) and no moment-resisting connections exist, the structure is a near-mechanism under lateral load. `building_01` demonstrates this. The library now detects this condition via `_detect_mechanism_risk()` (called from `_write_calculix_input_file`) and emits a `STABILITY WARNING` in the log and the `.inp` file. The gravity-loaded variant (`building_01a`) is stable.
 - **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. `ccxquery` is intentionally standalone (a debugging tool for LLM agents), so this duplication is by design.
 - **Linear buckling**: The `linear_buckling` analysis type exists in the CLI but has not been validated against known solutions.
+- **CalculiX bug — U1 elements crash when mixed with any other 1D/2D element**: Confirmed CalculiX 2.23 bug (still present in upstream master as of 2026-07-03): `gen3delem.f`'s node-count filter excludes C3D/D/G/E/MASS element types but not `U` (user elements), so when it processes a `TYPE=U1` element it reuses whatever node count a previously-processed B31/S3/etc. element left behind, then reads the (always-unset, by design) `SECTION=GENERAL` thickness and aborts with `gen3delem: first thickness ... is zero`. Confirmed independent of element ID ordering — only a model with *zero* other 1D/2D elements alongside U1 is safe. Not fixable from the `.inp`-writer side; `patches/calculix-gen3delem-user-element.patch` fixes it at the source (add `.and.(lakon(i)(1:1).ne.'U')` to the filter) — apply it to your CalculiX build and rebuild. `CalculixRunner._raise_if_known_gen3delem_user_element_bug()` detects the signature and raises a clear, actionable `AnalysisError` instead of surfacing CCX's generic message. Affects any model needing a U1 member (non-native I/T/L/C section, or overlapping-geometry retyping) alongside native B31/S3 elements — i.e. most real building models. See `ifc_structural_mechanics-eez`.
 
 ## Boundary Condition Handling
 
@@ -356,7 +357,7 @@ The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this. A
 Connection EQUATION constraints: rigid connections always write DOF 1-6 equations (translations + rotations). CalculiX KNOT generation is triggered only by *shared nodes* between beam and shell elements, not by EQUATION constraints between separate nodes — so DOF 4-6 equations between beam nodes and shell nodes are safe.
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -376,8 +377,6 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
@@ -390,6 +389,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
