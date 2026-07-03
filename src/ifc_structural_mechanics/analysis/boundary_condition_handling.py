@@ -1165,9 +1165,13 @@ def _write_validated_loads_within_step(
 
                 # Write the load if we found a valid element set that exists
                 if element_set_name:
-                    # Check if this element set actually exists (may be empty
-                    # if member was merged during fragment)
-                    if element_sets and element_set_name not in element_sets:
+                    # Check if this element set actually exists and is
+                    # non-empty (may be empty if the member was merged during
+                    # fragment, or lost all its elements to an overlapping
+                    # member during overlap resolution) — an empty set has no
+                    # corresponding *ELSET card in the file, so referencing it
+                    # by name in *DLOAD is a fatal CalculiX error.
+                    if element_sets and not element_sets.get(element_set_name):
                         logger.debug(
                             f"Skipping DLOAD for {element_set_name} — element set not defined"
                         )
@@ -1266,8 +1270,9 @@ def _write_validated_loads_within_step(
             else:
                 element_set_name = f"MEMBER_{member.id}"
 
-            # Skip if element set doesn't exist (member merged during fragment)
-            if element_sets and element_set_name not in element_sets:
+            # Skip if element set doesn't exist or is empty (member merged
+            # during fragment, or lost all elements during overlap resolution)
+            if element_sets and not element_sets.get(element_set_name):
                 logger.debug(
                     f"Skipping member DLOAD for {member.id} — element set not defined"
                 )

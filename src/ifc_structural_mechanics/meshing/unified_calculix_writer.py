@@ -263,7 +263,10 @@ class UnifiedCalculixWriter:
             # Step 2b: Identify non-standard-section members and retype to U1
             self._identify_and_retype_u1_members()
 
-            # Step 2c: Register node→member memberships for result export
+            # Step 2c: Resolve remaining overlapping-geometry element ownership
+            self._resolve_overlapping_element_sets()
+
+            # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
             # Step 3: Write complete CalculiX input file
@@ -483,6 +486,43 @@ class UnifiedCalculixWriter:
                     f"removed from native element set"
                 )
                 self.element_sets[member_set] = filtered
+
+    def _resolve_overlapping_element_sets(self) -> None:
+        """Ensure every mesh element belongs to exactly one member's set.
+
+        MeshMapper's shared-element-assignment fallback (used when two
+        members have overlapping IFC geometry) can list the same element in
+        more than one member's element_sets entry. Exactly one member may
+        claim an element in the output file — CalculiX cannot have two
+        *BEAM SECTION/*SHELL SECTION cards cover the same element, and every
+        downstream consumer of element_sets (raw *ELSET cards, orientation
+        grouping, nodal thickness, node-membership registration) reads the
+        same dict, so resolving ownership once here — rather than patching
+        each consumer separately — keeps them all consistent.
+
+        The first member encountered in domain_model.members order keeps a
+        shared element; later members lose it (but keep whatever elements
+        they don't share with an earlier member). Type-based ownership
+        (native vs. U1) is already resolved by _identify_and_retype_u1_members()
+        before this runs, so this pass only needs to break ties between
+        members of the same kind (e.g. two overlapping shells).
+        """
+        already_claimed: set = set()
+        for member in self.domain_model.members:
+            short_id = self._get_short_id(member.id)
+            member_set = f"MEMBER_{short_id}"
+            elem_ids = self.element_sets.get(member_set)
+            if not elem_ids:
+                continue
+            remaining = [eid for eid in elem_ids if eid not in already_claimed]
+            if len(remaining) != len(elem_ids):
+                logger.warning(
+                    f"Member {member.id}: {len(elem_ids) - len(remaining)} "
+                    f"element(s) already claimed by an earlier-processed "
+                    f"overlapping member — excluded from this member's set"
+                )
+                self.element_sets[member_set] = remaining
+            already_claimed.update(remaining)
 
     def _register_node_memberships(self) -> None:
         """Register mesh node IDs to member IDs in the domain model.
@@ -1028,11 +1068,16 @@ class UnifiedCalculixWriter:
                     self._u1_gravity_nodal_loads[node_id] = existing
 
     def _write_sections(self, file: TextIO) -> None:
-        """Write section definitions for members."""
+        """Write section definitions for members.
+
+        By the time this runs, self.element_sets has already been resolved so
+        that each element belongs to exactly one member's set (see
+        _resolve_overlapping_element_sets() and _identify_and_retype_u1_members()),
+        so no further deduplication is needed here.
+        """
         file.write("** Section Definitions\n")
 
         sections_written = 0
-        already_sectioned_elements: set = set()
 
         # Split beam element sets by orientation
         beam_orientation_groups = self._split_beam_sets_by_orientation()
@@ -1046,27 +1091,7 @@ class UnifiedCalculixWriter:
                 logger.warning(f"No elements for member {member.id}, skipping section")
                 continue
 
-            # Deduplication guard: an element already covered by a previously
-            # written section (overlapping geometry) is dropped from this
-            # member's set rather than skipping the whole member — a member
-            # may share only some of its elements with another member.
-            member_elems = set(self.element_sets[member_set])
-            claimed = member_elems & already_sectioned_elements
-            if claimed:
-                logger.warning(
-                    f"Member {member.id}: {len(claimed)} element(s) already "
-                    f"assigned to another section (geometry overlap) — "
-                    f"excluded from this section"
-                )
-                member_elems -= claimed
-            if not member_elems:
-                logger.warning(
-                    f"Member {member.id}: no elements remain after overlap "
-                    f"resolution, skipping section"
-                )
-                continue
-            already_sectioned_elements.update(member_elems)
-
+            member_elems = self.element_sets[member_set]
             material_id = member.material.id if member.material else "DEFAULT"
 
             # Write beam sections
@@ -1077,7 +1102,7 @@ class UnifiedCalculixWriter:
             ):
                 # Non-standard section → U1 built-in Timoshenko + SECTION=GENERAL
                 if member.id in self._u1_members:
-                    self._write_beam_section_general(file, member, list(member_elems))
+                    self._write_beam_section_general(file, member, member_elems)
                     sections_written += 1
                     continue
 
@@ -1085,19 +1110,12 @@ class UnifiedCalculixWriter:
                 if member_set in beam_orientation_groups:
                     orientation_groups = beam_orientation_groups[member_set]
 
-                    # Write a section for each orientation group, restricted to
-                    # elements this member still owns after overlap resolution
-                    ori_idx = 0
-                    for normal_key, group_element_ids in orientation_groups.items():
-                        element_ids = [
-                            eid for eid in group_element_ids if eid in member_elems
-                        ]
-                        if not element_ids:
-                            continue
-                        ori_idx += 1
-
+                    # Write a section for each orientation group
+                    for ori_idx, (normal_key, element_ids) in enumerate(
+                        orientation_groups.items()
+                    ):
                         # Create sub-element-set for this orientation
-                        subset_name = f"{member_set}_ORI{ori_idx}"
+                        subset_name = f"{member_set}_ORI{ori_idx+1}"
 
                         # Write the element set definition
                         file.write(f"*ELSET, ELSET={subset_name}\n")
@@ -1114,15 +1132,9 @@ class UnifiedCalculixWriter:
                         sections_written += 1
                 else:
                     # No orientation groups (shouldn't happen, but fallback to single section)
-                    subset_name = f"{member_set}_ORI1"
-                    file.write(f"*ELSET, ELSET={subset_name}\n")
-                    self._write_list_in_chunks(
-                        file, sorted(member_elems), chunk_size=16
-                    )
-                    file.write("\n")
                     beam_normal = self._get_beam_normal(member)
                     self._write_beam_section_for_set(
-                        file, member, subset_name, material_id, beam_normal
+                        file, member, member_set, material_id, beam_normal
                     )
                     sections_written += 1
 

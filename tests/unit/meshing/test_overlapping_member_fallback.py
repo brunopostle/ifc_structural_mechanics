@@ -1,6 +1,5 @@
 """Tests for overlapping-member spatial fallback and section deduplication."""
 
-import io
 import logging
 import sys
 import types
@@ -141,11 +140,21 @@ class TestSpatialFallback:
         assert any("sharing" in r.message.lower() for r in caplog.records)
 
 
-class TestSectionDeduplication:
-    """_write_sections() deduplication guard for overlapping members."""
+class TestResolveOverlappingElementSets:
+    """_resolve_overlapping_element_sets() ownership resolution for members
+    sharing mesh elements via the overlapping-geometry fallback.
 
-    def test_duplicate_section_skipped(self, caplog):
-        """When two members share elements, only the first section is written."""
+    This is the single source-of-truth resolution step: it mutates
+    self.element_sets directly so every downstream consumer (raw *ELSET
+    cards, orientation grouping, nodal thickness, node-membership
+    registration, section writing) sees a consistent, non-overlapping
+    assignment — rather than each consumer re-implementing its own
+    deduplication (which previously caused mismatches, e.g. beads issue 51j).
+    """
+
+    def test_full_overlap_second_member_loses_all_elements(self, caplog):
+        """Two members with identical element sets: the first keeps them,
+        the second ends up with none."""
         model = StructuralModel(id="test")
         mat = Material(
             id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3
@@ -168,29 +177,22 @@ class TestSectionDeduplication:
             "MEMBER_ma": [10, 11],
             "MEMBER_mb": [10, 11],  # same elements — overlap
         }
-        writer.defined_element_sets = {"MEMBER_ma", "MEMBER_mb"}
-        writer._u1_members = set()  # no U1 elements in this test
         writer._get_short_id = lambda mid: mid
-        writer._split_beam_sets_by_orientation = MagicMock(return_value={})
-        writer._get_beam_normal = MagicMock(return_value=(0.0, 1.0, 0.0))
-        writer._write_beam_section_for_set = MagicMock()
-        writer._write_sections = UnifiedCalculixWriter._write_sections.__get__(writer)
-
-        buf = io.StringIO()
-        with caplog.at_level(logging.WARNING):
-            writer._write_sections(buf)
-
-        # Only one section should have been written (ma); mb is skipped
-        assert writer._write_beam_section_for_set.call_count == 1
-        assert any(
-            "overlap" in r.message.lower() or "already" in r.message.lower()
-            for r in caplog.records
+        writer._resolve_overlapping_element_sets = (
+            UnifiedCalculixWriter._resolve_overlapping_element_sets.__get__(writer)
         )
 
-    def test_partial_overlap_writes_remaining_elements(self, caplog):
-        """A member sharing only SOME elements with an earlier member must
-        still get a section for its remaining, unclaimed elements — not have
-        its whole section skipped (regression for beads issue 51j)."""
+        with caplog.at_level(logging.WARNING):
+            writer._resolve_overlapping_element_sets()
+
+        assert writer.element_sets["MEMBER_ma"] == [10, 11]
+        assert writer.element_sets["MEMBER_mb"] == []
+        assert any("already claimed" in r.message.lower() for r in caplog.records)
+
+    def test_partial_overlap_keeps_unclaimed_elements(self, caplog):
+        """A member sharing only SOME elements with an earlier member keeps
+        its remaining, unclaimed elements (regression for beads issue 51j —
+        the whole member used to lose ALL its elements on any overlap)."""
         model = StructuralModel(id="test")
         mat = Material(
             id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3
@@ -209,47 +211,54 @@ class TestSectionDeduplication:
 
         writer = MagicMock(spec=UnifiedCalculixWriter)
         writer.domain_model = model
-        writer.elements = {
-            10: {"type": "B31", "nodes": [1, 2]},
-            11: {"type": "B31", "nodes": [2, 3]},
-            12: {"type": "B31", "nodes": [3, 4]},
-        }
         writer.element_sets = {
             "MEMBER_ma": [10],
             "MEMBER_mb": [10, 11, 12],  # shares element 10 with ma
         }
-        writer.defined_element_sets = {"MEMBER_ma", "MEMBER_mb"}
-        writer._u1_members = set()
         writer._get_short_id = lambda mid: mid
-        writer._split_beam_sets_by_orientation = MagicMock(return_value={})
-        writer._get_beam_normal = MagicMock(return_value=(0.0, 1.0, 0.0))
-        writer._write_beam_section_for_set = MagicMock()
-        writer._write_list_in_chunks = (
-            UnifiedCalculixWriter._write_list_in_chunks.__get__(writer)
+        writer._resolve_overlapping_element_sets = (
+            UnifiedCalculixWriter._resolve_overlapping_element_sets.__get__(writer)
         )
-        writer._write_sections = UnifiedCalculixWriter._write_sections.__get__(writer)
 
-        buf = io.StringIO()
         with caplog.at_level(logging.WARNING):
-            writer._write_sections(buf)
+            writer._resolve_overlapping_element_sets()
 
-        # Both members get a section: ma with element 10, mb with only the
-        # two elements (11, 12) that weren't already claimed by ma.
-        assert writer._write_beam_section_for_set.call_count == 2
-        mb_elset_lines = [
-            line
-            for line in buf.getvalue().splitlines()
-            if line.startswith("*ELSET, ELSET=MEMBER_mb")
-        ]
-        assert len(mb_elset_lines) == 1
-        elset_start = buf.getvalue().index(mb_elset_lines[0])
-        elset_body = buf.getvalue()[elset_start:].splitlines()[1]
-        written_ids = {int(x.strip()) for x in elset_body.split(",") if x.strip()}
-        assert written_ids == {11, 12}
-        assert any(
-            "already" in r.message.lower() and "excluded" in r.message.lower()
-            for r in caplog.records
+        assert writer.element_sets["MEMBER_ma"] == [10]
+        assert writer.element_sets["MEMBER_mb"] == [11, 12]
+
+    def test_no_overlap_leaves_sets_untouched(self):
+        """Members with disjoint element sets are unaffected."""
+        model = StructuralModel(id="test")
+        mat = Material(
+            id="m1", name="S", density=7850.0, elastic_modulus=210e9, poisson_ratio=0.3
         )
+        sec = Section.create_rectangular_section(
+            id="s1", name="R", width=0.1, height=0.2
+        )
+        ma = CurveMember(
+            id="ma", geometry=[[0, 0, 0], [1, 0, 0]], material=mat, section=sec
+        )
+        mb = CurveMember(
+            id="mb", geometry=[[1, 0, 0], [2, 0, 0]], material=mat, section=sec
+        )
+        model.add_member(ma)
+        model.add_member(mb)
+
+        writer = MagicMock(spec=UnifiedCalculixWriter)
+        writer.domain_model = model
+        writer.element_sets = {
+            "MEMBER_ma": [10, 11],
+            "MEMBER_mb": [12, 13],
+        }
+        writer._get_short_id = lambda mid: mid
+        writer._resolve_overlapping_element_sets = (
+            UnifiedCalculixWriter._resolve_overlapping_element_sets.__get__(writer)
+        )
+
+        writer._resolve_overlapping_element_sets()
+
+        assert writer.element_sets["MEMBER_ma"] == [10, 11]
+        assert writer.element_sets["MEMBER_mb"] == [12, 13]
 
 
 class TestU1RetypeStripsSharedElements:
