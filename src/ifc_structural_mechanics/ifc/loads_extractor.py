@@ -325,12 +325,8 @@ class LoadsExtractor:
                             hasattr(obj, "GlobalId")
                             and hasattr(obj, "is_a")
                             and callable(obj.is_a)
-                            and (
-                                obj.is_a("IfcStructuralPointAction")
-                                or obj.is_a("IfcStructuralLinearAction")
-                                or obj.is_a("IfcStructuralCurveAction")
-                                or obj.is_a("IfcStructuralPlanarAction")
-                            )
+                            # Any action: point, curve/linear, surface/planar
+                            and obj.is_a("IfcStructuralAction")
                         ):
                             load = self._create_domain_load(obj)
                             if load:
@@ -354,11 +350,11 @@ class LoadsExtractor:
                             if (
                                 hasattr(obj, "is_a")
                                 and callable(obj.is_a)
-                                and (
-                                    obj.is_a("IfcStructuralPointAction")
-                                    or obj.is_a("IfcStructuralLinearAction")
-                                    or obj.is_a("IfcStructuralPlanarAction")
-                                )
+                                # Any action: point, curve/linear,
+                                # surface/planar. Listing subtypes here once
+                                # dropped IfcStructuralCurveAction, so loads
+                                # assigned straight to a load case lost its name.
+                                and obj.is_a("IfcStructuralAction")
                             ):
                                 load = self._create_domain_load(obj)
                                 if load:

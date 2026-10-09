@@ -120,13 +120,15 @@ class TestUnifiedAnalysisWorkflow:
         output_file = os.path.join(working_dir, "unified_analysis.inp")
 
         # Mock the external dependencies with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock geometry converter
             mock_geo_converter = MagicMock()
@@ -216,13 +218,15 @@ class TestUnifiedAnalysisWorkflow:
         input_file = os.path.join(working_dir, "unified_test.inp")
 
         # Mock the meshing part but use real CalculiX runner with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock geometry and meshing
             mock_geo_converter = MagicMock()
@@ -375,8 +379,9 @@ class TestUnifiedAnalysisWorkflow:
         mock_mesh.cells = MagicMock()
         mock_mesh.cells.items = mock_cell_items
 
-        with patch("meshio.read", return_value=mock_mesh), patch(
-            "builtins.open", MagicMock()
+        with (
+            patch("meshio.read", return_value=mock_mesh),
+            patch("builtins.open", MagicMock()),
         ):
 
             # Test the function
@@ -412,11 +417,14 @@ class TestUnifiedAnalysisWorkflow:
         output_file = os.path.join(working_dir, "failed.inp")
 
         # Mock meshing to fail with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+        ):
 
             # Mock geometry converter
             mock_geo_converter = MagicMock()
@@ -443,13 +451,15 @@ class TestUnifiedAnalysisWorkflow:
         output_file = os.path.join(working_dir, "preservation_test.inp")
 
         # Create test with triangular elements to verify 3-node preservation
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock components
             mock_geo_converter = MagicMock()
@@ -556,13 +566,15 @@ class TestUnifiedAnalysisWorkflow:
         output_file = os.path.join(working_dir, "performance_test.inp")
 
         # Mock the workflow for performance test with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock components
             mock_geo_converter = MagicMock()
@@ -623,12 +635,13 @@ class TestUnifiedAnalysisWorkflow:
         analysis_config._config["analysis_type"] = "linear_static"
 
         # This should work without issues with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ), patch("src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"), patch(
-            "meshio.read"
-        ), patch(
-            "builtins.open", MagicMock()
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ),
+            patch("src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"),
+            patch("meshio.read"),
+            patch("builtins.open", MagicMock()),
         ):
 
             result_file = run_complete_analysis_workflow(
@@ -663,8 +676,9 @@ class TestUnifiedAnalysisWorkflow:
         mock_mesh.cells = MagicMock()
         mock_mesh.cells.items = mock_cell_items
 
-        with patch("meshio.read", return_value=mock_mesh), patch(
-            "builtins.open", MagicMock()
+        with (
+            patch("meshio.read", return_value=mock_mesh),
+            patch("builtins.open", MagicMock()),
         ):
 
             # Test the old-style interface
@@ -685,13 +699,15 @@ class TestUnifiedAnalysisWorkflow:
         workflow_steps = []
 
         # Mock each component and track calls with correct paths
-        with patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock geometry converter
             def mock_convert_model(model):

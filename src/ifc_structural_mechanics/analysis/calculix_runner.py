@@ -155,6 +155,7 @@ class CalculixRunner:
                 self._raise_if_known_gen3delem_user_element_bug(
                     error_output, target_path
                 )
+                self._raise_if_singular_system(error_output, target_path)
 
                 if "ERROR reading *ELEMENT: increase ne_" in error_output:
                     logger.warning(
@@ -280,6 +281,48 @@ class CalculixRunner:
             raise AnalysisError(
                 f"CalculiX analysis failed: {str(e)}", error_details=errors
             ) from e
+
+    @staticmethod
+    def _raise_if_singular_system(error_output: str, input_file_path: Path) -> None:
+        """Diagnose a solver abort during factorisation, which CalculiX leaves silent.
+
+        When the stiffness matrix is singular the SPOOLES factorisation aborts
+        the process: the last thing CalculiX prints is "Factoring the system of
+        equations", with no ``*ERROR`` line and no "Job finished". Without this
+        check the user only sees a bare return code.
+
+        Raises AnalysisError naming the likely cause. If the model mixes U1 and
+        B31 beams the message says so, because CalculiX does not transfer
+        rotation between them at a shared node (ifc_structural_mechanics-aiz.14).
+        """
+        if "Factoring the system of equations" not in error_output:
+            return
+        if "*ERROR" in error_output or "Job finished" in error_output:
+            return
+        message = (
+            "CalculiX stopped while factorising the stiffness matrix and "
+            "reported no error, which normally means the matrix is singular: "
+            "the structure, or part of it, is a mechanism. Check that the "
+            "supports restrain every rigid-body motion (including a member "
+            "spinning about its own axis), that members meant to be connected "
+            "share a connection, and that end releases do not leave a member "
+            "free to rotate."
+        )
+        try:
+            inp_text = input_file_path.read_text()
+        except OSError:
+            inp_text = ""
+        element_types = set(
+            re.findall(r"(?im)^\*ELEMENT\s*,.*?TYPE\s*=\s*(\w+)", inp_text)
+        )
+        if "U1" in element_types and "B31" in element_types:
+            message += (
+                " This model mixes U1 beams (I/T/L/C sections) with native B31 "
+                "beams; CalculiX transfers no moment between the two at a "
+                "shared node, so those joints act as pins and can turn a "
+                "frame into a mechanism."
+            )
+        raise AnalysisError(message)
 
     @staticmethod
     def _raise_if_known_gen3delem_user_element_bug(

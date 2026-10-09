@@ -14,13 +14,7 @@ from ccxquery import (
     results,
 )
 from ccxquery import sections as sections_mod
-from ccxquery import (
-    sets,
-    status,
-    steps,
-    stresses,
-    summary,
-)
+from ccxquery import sets, status, steps, stresses, summary
 from ccxquery.parsers.dat_parser import parse_dat
 from ccxquery.parsers.frd_parser import parse_frd
 from ccxquery.parsers.inp_parser import parse_inp

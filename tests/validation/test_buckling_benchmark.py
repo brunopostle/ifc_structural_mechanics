@@ -9,14 +9,19 @@ Benchmark problem:
     - Pinned-pinned column, L = 1.0 m, 10 B31 beam elements along x-axis
     - Square cross-section 0.1 × 0.1 m
     - E = 210 GPa, ν = 0.3
-    - Unit axial compressive load P_ref = 1 N applied at free end (node 11, x=1)
-    - Pinned BCs: node 1 fixed in DOF 1-3, node 11 fixed in DOF 2-3
+    - Unit axial compressive load P_ref = 1 N applied at free end (node 11, x=1),
+      defined inside the *BUCKLE step (CalculiX scales only those loads)
+    - Pinned BCs: node 1 fixed in DOF 1-4, node 11 fixed in DOF 2-3. DOF 4 at
+      node 1 removes the rigid-body spin about the column axis; without it the
+      system is singular and the eigenvalue is noise.
 
 Analytical solution (Euler, pinned-pinned, K=1):
     - I = bh³/12 = 8.333×10⁻⁶ m⁴
     - P_cr = π²EI / L² = π² × 210e9 × 8.333e-6 ≈ 1.728×10⁷ N
     - CalculiX first eigenvalue λ₁ should satisfy: P_cr = λ₁ × P_ref
       → λ₁ ≈ 1.728×10⁷ (when P_ref = 1 N)
+    - B31 is shear-flexible, so the FEA value sits about 2% below Euler for this
+      stocky column (L/h = 10): P_cr / (1 + P_cr / (κGA)) ≈ 1.684×10⁷ N.
 """
 
 import math
@@ -47,7 +52,7 @@ def _write_euler_column_inp(inp_path: str) -> None:
 
     11 nodes along x-axis (0.0 to 1.0, spacing 0.1 m), 10 B31 elements.
     Pinned BCs at both ends; unit compressive load at free end.
-    Two steps: static preload, then buckling extraction of 1 mode.
+    One *BUCKLE step containing the reference load.
     """
     inp_content = textwrap.dedent(
         """\
@@ -82,7 +87,7 @@ def _write_euler_column_inp(inp_path: str) -> None:
         *MATERIAL, NAME=STEEL
         *ELASTIC
         210.0E9, 0.3
-        ** Pinned support at x=0: fix all translations, allow rotations
+        ** Pinned support at x=0: fix translations and the twist about the axis
         *NSET, NSET=PIN_BASE
         1
         ** Pinned support at x=1: fix lateral translations only (allow x-movement for compression)
@@ -91,18 +96,14 @@ def _write_euler_column_inp(inp_path: str) -> None:
         *NSET, NSET=LOADED
         11
         *BOUNDARY
-        PIN_BASE, 1, 3, 0.0
+        PIN_BASE, 1, 4, 0.0
         PIN_TOP, 2, 3, 0.0
-        ** Step 1: apply unit compressive preload
-        *STEP
-        *STATIC
-        *CLOAD
-        LOADED, 1, -1.0
-        *END STEP
-        ** Step 2: extract first buckling mode
+        ** Buckle step: the unit compressive load is the reference load
         *STEP
         *BUCKLE
         1
+        *CLOAD
+        LOADED, 1, -1.0
         *NODE FILE
         U
         *END STEP

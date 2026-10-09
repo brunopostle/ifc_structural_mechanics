@@ -5,7 +5,7 @@ GlobalIds with correct structure, plausible displacement values, and the
 right number of members for each example model.
 
 Fast models (beam_01, portal_01, slab_01) run as part of the normal suite.
-building_01a is marked slow.
+building_02 is marked slow.
 """
 
 import json
@@ -229,64 +229,44 @@ class TestSlab01ResultsJson:
 
 
 # ---------------------------------------------------------------------------
-# building_01a — multi-storey building under self-weight (slow)
+# building_02 — multi-storey building under self-weight (slow)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not CCX_AVAILABLE, reason="CalculiX (ccx) not installed")
-class TestBuilding01aResultsJson:
-    """results.json checks for building_01a.ifc."""
+class TestBuilding02ResultsJson:
+    """results.json checks for building_02.ifc."""
 
-    def test_schema_valid(self, tmp_path):
-        output_dir = str(tmp_path / "building_01a")
-        analyze_ifc(
-            ifc_path=_ifc("building_01a.ifc"),
-            output_dir=output_dir,
-            mesh_size=2.0,
-            gravity=True,
-        )
+    def test_schema_valid(self, building_02_run):
+        _, output_dir = building_02_run
         data = _load_results_json(output_dir)
         _assert_schema(data)
 
-    def test_many_members(self, tmp_path):
-        """building_01a has many structural members."""
-        output_dir = str(tmp_path / "building_01a")
-        analyze_ifc(
-            ifc_path=_ifc("building_01a.ifc"),
-            output_dir=output_dir,
-            mesh_size=2.0,
-            gravity=True,
-        )
+    def test_many_members(self, building_02_run):
+        """building_02 has many structural members."""
+        _, output_dir = building_02_run
         data = _load_results_json(output_dir)
-        logger.info(f"building_01a member count: {len(data['members'])}")
+        logger.info(f"building_02 member count: {len(data['members'])}")
         assert len(data["members"]) >= 10
 
-    def test_displacement_plausible(self, tmp_path):
-        """building_01a max displacement should be in (0, 1] m (analytical: ~14 mm)."""
-        output_dir = str(tmp_path / "building_01a")
-        analyze_ifc(
-            ifc_path=_ifc("building_01a.ifc"),
-            output_dir=output_dir,
-            mesh_size=2.0,
-            gravity=True,
-        )
+    @pytest.mark.xfail(
+        strict=True,
+        reason="building_02 is near-singular under self-weight (ifc_structural_mechanics-aiz.15)",
+    )
+    def test_displacement_plausible(self, building_02_run):
+        """building_02 max displacement should be in (0, 1] m."""
+        _, output_dir = building_02_run
         data = _load_results_json(output_dir)
         max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
-        logger.info(f"building_01a max displacement: {max_disp * 1000:.1f} mm")
+        logger.info(f"building_02 max displacement: {max_disp * 1000:.1f} mm")
         assert (
             0 < max_disp < 1.0
         ), f"Displacement {max_disp:.3f} m — possible mesh disconnectivity regression"
 
-    def test_all_members_have_guid(self, tmp_path):
-        """Every member in building_01a should trace back to an IFC GlobalId."""
-        output_dir = str(tmp_path / "building_01a")
-        analyze_ifc(
-            ifc_path=_ifc("building_01a.ifc"),
-            output_dir=output_dir,
-            mesh_size=2.0,
-            gravity=True,
-        )
+    def test_all_members_have_guid(self, building_02_run):
+        """Every member in building_02 should trace back to an IFC GlobalId."""
+        _, output_dir = building_02_run
         data = _load_results_json(output_dir)
         missing_guid = [m["id"] for m in data["members"] if not m.get("ifc_guid")]
         assert missing_guid == [], f"Members missing ifc_guid: {missing_guid}"

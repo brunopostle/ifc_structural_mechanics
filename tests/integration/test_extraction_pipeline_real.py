@@ -108,3 +108,21 @@ class TestIFCExtraction:
                         print(f"    - Area load on surface {load.surface_reference}")
                     else:
                         print(f"    - Generic load of type {load.load_type}")
+
+
+def test_curve_action_assigned_to_load_case_keeps_case_name():
+    """A curve action assigned straight to a load case stays in that case.
+
+    portal_01 has one IfcStructuralCurveAction grouped under an
+    IfcStructuralLoadCase. It used to be dropped from the case and picked up by
+    the "Default Load Group" fallback, so results were labelled "step_1".
+    """
+    path = os.path.join("examples", "analysis-models", "ifcFiles", "portal_01.ifc")
+    if not os.path.exists(path):
+        pytest.skip(f"Test file not found: {path}")
+
+    model = Extractor(path).extract_model()
+
+    cases = [g for g in model.load_groups if g.is_load_case and g.loads]
+    assert [g.name for g in cases] == ["Structural Load Case #1"]
+    assert all(g.name != "Default Load Group" for g in model.load_groups)

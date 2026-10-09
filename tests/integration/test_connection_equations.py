@@ -24,7 +24,7 @@ from ifc_structural_mechanics.meshing.unified_calculix_writer import (
 logger = logging.getLogger(__name__)
 
 IFC_MODELS_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
-BUILDING_01A = os.path.join(IFC_MODELS_DIR, "building_01a.ifc")
+BUILDING_02 = os.path.join(IFC_MODELS_DIR, "building_02.ifc")
 STRUCTURE_01 = os.path.join(IFC_MODELS_DIR, "structure_01.ifc")
 
 
@@ -161,16 +161,15 @@ class TestConnectionEquations:
         )
 
     @pytest.mark.slow
-    def test_equation_node_distances_building(self, tmp_path):
-        """All equation pairs in building_01a should connect nearby nodes (<0.5m)."""
-        ifc_path = _get_ifc_path(BUILDING_01A)
-        model, inp_file = _generate_inp(ifc_path, tmp_path, mesh_size=2.0)
+    def test_equation_node_distances_building(self, building_02_run):
+        """All equation pairs in building_02 should connect nearby nodes (<0.5m)."""
+        inp_file = os.path.join(building_02_run[1], "analysis.inp")
 
         nodes = _parse_nodes(inp_file)
         pairs = _parse_equation_pairs(inp_file)
 
         if not pairs:
-            pytest.skip("No equations found in building_01a INP")
+            pytest.skip("No equations found in building_02 INP")
 
         distances = []
         for n1, d1, n2, d2 in pairs:
@@ -184,7 +183,7 @@ class TestConnectionEquations:
         far_count = np.sum(distances > 0.5)
 
         logger.info(
-            f"building_01a: {len(pairs)} equations, "
+            f"building_02: {len(pairs)} equations, "
             f"max dist={max_dist:.3f}m, median={median_dist:.3f}m, "
             f">0.5m: {far_count}"
         )
@@ -197,10 +196,10 @@ class TestConnectionEquations:
         assert median_dist < 0.5, f"Median equation distance {median_dist:.3f}m > 0.5m"
 
     @pytest.mark.slow
-    def test_connection_count_building(self, tmp_path):
+    def test_connection_count_building(self, building_02_run, building_02_model):
         """Building model should produce a reasonable number of connections."""
-        ifc_path = _get_ifc_path(BUILDING_01A)
-        model, inp_file = _generate_inp(ifc_path, tmp_path, mesh_size=2.0)
+        model = building_02_model
+        inp_file = os.path.join(building_02_run[1], "analysis.inp")
 
         pairs = _parse_equation_pairs(inp_file)
 
@@ -214,7 +213,7 @@ class TestConnectionEquations:
                 real_connections += 1
 
         logger.info(
-            f"building_01a: {real_connections} real connections, "
+            f"building_02: {real_connections} real connections, "
             f"{len(pairs)} equation pairs written"
         )
 

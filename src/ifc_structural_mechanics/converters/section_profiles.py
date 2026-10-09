@@ -64,7 +64,10 @@ class SectionProfile(NamedTuple):
 
 
 def _fmt_rect(d: dict) -> str:
-    return f"{d['width']:.6e}, {d['height']:.6e}"
+    # CalculiX RECT: a (along the section 1 direction, depth), b (width).
+    # The writer gives the IFC local z as the 1 direction, and the IFC profile
+    # depth (YDim) lies along local z.
+    return f"{d['height']:.6e}, {d['width']:.6e}"
 
 
 def _fmt_circ(d: dict) -> str:

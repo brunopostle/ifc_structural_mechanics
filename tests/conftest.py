@@ -26,6 +26,50 @@ def pytest_configure(config):
     )
 
 
+BUILDING_02_IFC = (
+    Path(__file__).parent.parent
+    / "examples"
+    / "analysis-models"
+    / "ifcFiles"
+    / "building_02.ifc"
+)
+
+
+@pytest.fixture(scope="session")
+def building_02_run(tmp_path_factory):
+    """Run building_02 through the full pipeline once for the whole session.
+
+    The run takes over a minute, so every slow test shares it. Returns
+    ``(result, output_dir)`` from ``analyze_ifc`` with a 2 m mesh and gravity.
+    """
+    if not BUILDING_02_IFC.exists():
+        pytest.skip(f"IFC file not found: {BUILDING_02_IFC}")
+    if shutil.which("ccx") is None:
+        pytest.skip("CalculiX (ccx) not installed")
+
+    from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
+
+    output_dir = str(tmp_path_factory.mktemp("building_02"))
+    result = analyze_ifc(
+        ifc_path=str(BUILDING_02_IFC),
+        output_dir=output_dir,
+        mesh_size=2.0,
+        gravity=True,
+    )
+    return result, output_dir
+
+
+@pytest.fixture(scope="session")
+def building_02_model():
+    """Domain model extracted from building_02, shared across the session."""
+    if not BUILDING_02_IFC.exists():
+        pytest.skip(f"IFC file not found: {BUILDING_02_IFC}")
+
+    from ifc_structural_mechanics.ifc.extractor import Extractor
+
+    return Extractor(str(BUILDING_02_IFC)).extract_model()
+
+
 # Define a consistent temp directory
 PERSISTENT_TEST_DIR = Path("/tmp/ifc_structural_analysis_tests")
 

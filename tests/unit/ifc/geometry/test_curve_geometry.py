@@ -177,15 +177,20 @@ def test_extract_curve_geometry():
     mock_entity.ObjectPlacement = Mock()
 
     # Test with Edge representation
-    with patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_representation"
-    ) as mock_get_rep, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_edge_representation"
-    ) as mock_extract_edge, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_transformation"
-    ) as mock_get_transform, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.transform_vectors"
-    ) as mock_transform:
+    with (
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_representation"
+        ) as mock_get_rep,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_edge_representation"
+        ) as mock_extract_edge,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_transformation"
+        ) as mock_get_transform,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.transform_vectors"
+        ) as mock_transform,
+    ):
 
         # Setup mocks
         mock_rep = Mock()
@@ -215,17 +220,23 @@ def test_extract_curve_geometry_with_fallbacks():
     mock_entity.ObjectPlacement = Mock()
 
     # Test with fallback to Axis representation
-    with patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_representation"
-    ) as mock_get_rep, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_edge_representation"
-    ) as mock_extract_edge, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_axis_representation"
-    ) as mock_extract_axis, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_transformation"
-    ) as mock_get_transform, patch(
-        "ifc_structural_mechanics.ifc.geometry.curve_geometry.transform_vectors"
-    ) as mock_transform:
+    with (
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_representation"
+        ) as mock_get_rep,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_edge_representation"
+        ) as mock_extract_edge,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.extract_from_axis_representation"
+        ) as mock_extract_axis,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.get_transformation"
+        ) as mock_get_transform,
+        patch(
+            "ifc_structural_mechanics.ifc.geometry.curve_geometry.transform_vectors"
+        ) as mock_transform,
+    ):
 
         # Setup mocks for first attempt (edge) to fail
         mock_edge_rep = None

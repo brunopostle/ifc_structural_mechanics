@@ -343,6 +343,32 @@ class Section:
         self.shear_area_y = 0.9 * self.area  # Approximation for circular
         self.shear_area_z = 0.9 * self.area  # Approximation for circular
 
+    @staticmethod
+    def _inertia_of_rectangles(
+        rectangles: List[Tuple[float, float, float, float]],
+    ) -> Tuple[float, float, float]:
+        """Return centroidal ``(Iy, Iz, Iyz)`` of a section built from rectangles.
+
+        Each rectangle is ``(y_min, y_max, z_min, z_max)`` in the section plane,
+        with y across the width (IFC profile X) and z up the depth (IFC profile
+        Y). ``Iy`` is the second moment about the centroidal y axis (resists
+        bending in the depth direction), ``Iz`` about the centroidal z axis, and
+        ``Iyz`` the product of inertia. Exact for any union of non-overlapping
+        axis-aligned rectangles.
+        """
+        area = sum((y1 - y0) * (z1 - z0) for y0, y1, z0, z1 in rectangles)
+        cy = sum((y1 - y0) * (z1 - z0) * (y0 + y1) / 2 for y0, y1, z0, z1 in rectangles)
+        cz = sum((y1 - y0) * (z1 - z0) * (z0 + z1) / 2 for y0, y1, z0, z1 in rectangles)
+        cy, cz = cy / area, cz / area
+        i_y = i_z = i_yz = 0.0
+        for y0, y1, z0, z1 in rectangles:
+            w, d = y1 - y0, z1 - z0
+            dy, dz = (y0 + y1) / 2 - cy, (z0 + z1) / 2 - cz
+            i_y += w * d**3 / 12 + w * d * dz**2
+            i_z += d * w**3 / 12 + w * d * dy**2
+            i_yz += w * d * dy * dz
+        return i_y, i_z, i_yz
+
     def _calculate_i_properties(self) -> None:
         """Calculate properties for I-section."""
         b = self.dimensions["width"]
@@ -350,12 +376,16 @@ class Section:
         tw = self.dimensions["web_thickness"]
         tf = self.dimensions["flange_thickness"]
 
-        # Calculate moments of inertia
-        # Strong axis (y-axis) - vertical web
-        self.moment_of_inertia_y = (b * h**3) / 12 - (b - tw) * (h - 2 * tf) ** 3 / 12
-
-        # Weak axis (z-axis) - horizontal flanges
-        self.moment_of_inertia_z = (2 * tf * b**3) / 12 + tw * (h - 2 * tf) ** 3 / 12
+        # Two flanges and a web, centred on the origin
+        self.moment_of_inertia_y, self.moment_of_inertia_z, _ = (
+            self._inertia_of_rectangles(
+                [
+                    (-b / 2, b / 2, h / 2 - tf, h / 2),
+                    (-b / 2, b / 2, -h / 2, -h / 2 + tf),
+                    (-tw / 2, tw / 2, -h / 2 + tf, h / 2 - tf),
+                ]
+            )
+        )
 
         # Approximate torsional constant
         self.torsional_constant = (1 / 3) * (b * tf**3 * 2 + (h - 2 * tf) * tw**3)
@@ -374,21 +404,15 @@ class Section:
         tw = self.dimensions["web_thickness"]
         tf = self.dimensions["flange_thickness"]
 
-        # Calculate centroid position from bottom
-        Af = b * tf  # Area of flange
-        Aw = tw * (h - tf)  # Area of web
-        y_centroid = (Af * (h - tf / 2) + Aw * (h - tf) / 2) / (Af + Aw)
-
-        # Calculate moments of inertia about centroidal axes
-        # Strong axis (y-axis) - vertical web
-        Iy_flange = (b * tf**3) / 12 + Af * (h - tf / 2 - y_centroid) ** 2
-        Iy_web = (tw * (h - tf) ** 3) / 12 + Aw * ((h - tf) / 2 - y_centroid) ** 2
-        self.moment_of_inertia_y = Iy_flange + Iy_web
-
-        # Weak axis (z-axis) - horizontal flange
-        Iz_flange = (tf * b**3) / 12
-        Iz_web = (tw**3 * (h - tf)) / 12
-        self.moment_of_inertia_z = Iz_flange + Iz_web
+        # Flange on top of a web
+        self.moment_of_inertia_y, self.moment_of_inertia_z, _ = (
+            self._inertia_of_rectangles(
+                [
+                    (-b / 2, b / 2, h - tf, h),
+                    (-tw / 2, tw / 2, 0.0, h - tf),
+                ]
+            )
+        )
 
         # Approximate torsional constant
         self.torsional_constant = (1 / 3) * (b * tf**3 + (h - tf) * tw**3)
@@ -406,27 +430,18 @@ class Section:
         h = self.dimensions["height"]
         t = self.dimensions["thickness"]
 
-        # Calculate centroid position from corner
-        Ax = t * h  # Area in x-direction
-        Az = t * w  # Area in z-direction
-        A = Ax + Az - t**2  # Total area (subtracting overlap)
-
-        cx = (Az * w / 2) / A  # Centroid x-coordinate
-        cy = (Ax * h / 2) / A  # Centroid y-coordinate
-
-        # Calculate moments of inertia about centroidal axes
-        # These are simplified approximations
-        Ixx = (t * h**3) / 3 - t * cy**2
-        Izz = (t * w**3) / 3 - t * cx**2
-        Ixz = t * cx * cy
-
-        # Calculate principal moments of inertia
-        avg = (Ixx + Izz) / 2
-        diff = (Ixx - Izz) / 2
-        rad = math.sqrt(diff**2 + Ixz**2)
-
-        self.moment_of_inertia_y = avg + rad  # Major principal moment
-        self.moment_of_inertia_z = avg - rad  # Minor principal moment
+        # Vertical leg plus the rest of the horizontal leg. The values are
+        # about the geometric (leg-parallel) centroidal axes, which is the frame
+        # the section is written in. An angle's principal axes are rotated from
+        # these (non-zero product of inertia); that coupling is not modelled.
+        self.moment_of_inertia_y, self.moment_of_inertia_z, _ = (
+            self._inertia_of_rectangles(
+                [
+                    (0.0, t, 0.0, h),
+                    (t, w, 0.0, t),
+                ]
+            )
+        )
 
         # Approximate torsional constant
         self.torsional_constant = (1 / 3) * t**3 * (w + h - t)
@@ -445,23 +460,15 @@ class Section:
         tw = self.dimensions["web_thickness"]
         tf = self.dimensions["flange_thickness"]
 
-        # Calculate centroid position from web
-        Aw = tw * h  # Area of web
-        Af = 2 * tf * b  # Area of flanges
-        A = Aw + Af
-
-        # For symmetric C-section, centroid is offset from web
-        cx = (Af * b / 2) / A
-
-        # Calculate moments of inertia
-        # Strong axis (y-axis) - vertical web
-        self.moment_of_inertia_y = (tw * h**3) / 12 + 2 * (
-            (tf * b**3) / 12 + tf * b * (h / 2) ** 2
-        )
-
-        # Weak axis (z-axis) - horizontal flanges
-        self.moment_of_inertia_z = (h * tw**3) / 12 + 2 * (
-            b * tf**3 / 12 + b * tf * cx**2
+        # Full-depth web with a flange at top and bottom
+        self.moment_of_inertia_y, self.moment_of_inertia_z, _ = (
+            self._inertia_of_rectangles(
+                [
+                    (0.0, tw, 0.0, h),
+                    (tw, b, 0.0, tf),
+                    (tw, b, h - tf, h),
+                ]
+            )
         )
 
         # Approximate torsional constant

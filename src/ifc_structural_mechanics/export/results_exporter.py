@@ -48,7 +48,7 @@ import json
 import logging
 import math
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class ResultsExporter:
         self.model = domain_model
         self.parsed_results = parsed_results
         self.limits = limits or {}
+        self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -191,22 +192,48 @@ class ResultsExporter:
             result["by_load_case"] = by_load_case
         return result
 
-    def _member_displacements(self, node_ids: set) -> Dict[str, Dict[str, float]]:
-        """Return per-load-case displacement stats for the given node set."""
-        by_lc: Dict[str, List[float]] = defaultdict(list)
-        for r in self.parsed_results.get("displacement", []):
+    def _node_index(self, kind: str) -> Dict[int, List[Tuple[str, float]]]:
+        """Return ``{node_id: [(load_case, value), ...]}`` for one result kind.
+
+        Built once per kind and cached, so per-member lookups cost the size of
+        the member rather than a scan of every result in the model. ``value`` is
+        the displacement magnitude for ``"displacement"`` and the von Mises
+        stress for ``"stress"``.
+        """
+        if kind in self._node_index_cache:
+            return self._node_index_cache[kind]
+        index: Dict[int, List[Tuple[str, float]]] = defaultdict(list)
+        for r in self.parsed_results.get(kind, []):
             try:
                 nid = int(r.reference_element)
             except (ValueError, TypeError):
                 continue
-            if nid not in node_ids:
-                continue
-            mag = r.get_magnitude()
-            lc = r.metadata.get("load_case", "_combined")
-            by_lc[lc].append(mag)
+            if kind == "stress":
+                try:
+                    value = r.get_von_mises_stress()
+                except (ValueError, KeyError):
+                    continue
+            else:
+                value = r.get_magnitude()
+            index[nid].append((r.metadata.get("load_case", "_combined"), value))
+        self._node_index_cache[kind] = index
+        return index
 
+    def _member_max(self, kind: str, node_ids: set) -> Dict[str, float]:
+        """Return the per-load-case maximum of *kind* over the given nodes."""
+        index = self._node_index(kind)
+        maxima: Dict[str, float] = {}
+        for nid in node_ids:
+            for lc, value in index.get(nid, ()):
+                if lc not in maxima or value > maxima[lc]:
+                    maxima[lc] = value
+        return maxima
+
+    def _member_displacements(self, node_ids: set) -> Dict[str, Dict[str, float]]:
+        """Return per-load-case displacement stats for the given node set."""
         return {
-            lc: {"max_displacement_m": max(mags)} for lc, mags in by_lc.items() if mags
+            lc: {"max_displacement_m": value}
+            for lc, value in self._member_max("displacement", node_ids).items()
         }
 
     def _member_stresses(self, node_ids: set) -> Dict[str, Dict[str, float]]:
@@ -215,25 +242,9 @@ class ResultsExporter:
         Node IDs that don't appear in ``node_ids`` (e.g. CalculiX-expanded
         beam brick nodes) are silently skipped.
         """
-        by_lc: Dict[str, List[float]] = defaultdict(list)
-        for r in self.parsed_results.get("stress", []):
-            try:
-                nid = int(r.reference_element)
-            except (ValueError, TypeError):
-                continue
-            if nid not in node_ids:
-                continue
-            try:
-                vm = r.get_von_mises_stress()
-            except (ValueError, KeyError):
-                continue
-            lc = r.metadata.get("load_case", "_combined")
-            by_lc[lc].append(vm)
-
         return {
-            lc: {"max_von_mises_Pa": max(values)}
-            for lc, values in by_lc.items()
-            if values
+            lc: {"max_von_mises_Pa": value}
+            for lc, value in self._member_max("stress", node_ids).items()
         }
 
     def _member_section_forces(self, elem_ids: set) -> Dict[str, Dict[str, float]]:

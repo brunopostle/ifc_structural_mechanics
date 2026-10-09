@@ -229,11 +229,10 @@ class TestUnifiedMeshingWorkflow:
         mock_mesh.cells = mock.MagicMock()
         mock_mesh.cells.items = mock_items
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".msh"
-        ) as temp_mesh_file, tempfile.NamedTemporaryFile(
-            suffix=".inp"
-        ) as temp_inp_file:
+        with (
+            tempfile.NamedTemporaryFile(suffix=".msh") as temp_mesh_file,
+            tempfile.NamedTemporaryFile(suffix=".inp") as temp_inp_file,
+        ):
 
             # Write something to the mesh file so it exists
             temp_mesh_file.write(b"# Test mesh file")
@@ -281,13 +280,15 @@ class TestUnifiedMeshingWorkflow:
         try:
             # Mock the dependencies that are imported in the unified_calculix_writer module
             # We need to patch them where they are used, not where they are defined
-            with mock.patch(
-                "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-            ) as mock_geo_conv, mock.patch(
-                "ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-            ) as mock_gmsh_runner, mock.patch(
-                "meshio.read"
-            ) as mock_meshio_read:
+            with (
+                mock.patch(
+                    "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+                ) as mock_geo_conv,
+                mock.patch(
+                    "ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+                ) as mock_gmsh_runner,
+                mock.patch("meshio.read") as mock_meshio_read,
+            ):
 
                 # Mock geometry converter
                 mock_geo_converter = mock.MagicMock()
@@ -392,8 +393,9 @@ class TestUnifiedMeshingWorkflow:
         mock_mesh.cells = mock.MagicMock()
         mock_mesh.cells.items = mock_cell_items
 
-        with mock.patch("meshio.read", return_value=mock_mesh), mock.patch(
-            "builtins.open", mock.mock_open()
+        with (
+            mock.patch("meshio.read", return_value=mock_mesh),
+            mock.patch("builtins.open", mock.mock_open()),
         ):
 
             # Test the function
@@ -520,13 +522,15 @@ class TestSimplifiedWorkflow:
         output_file = os.path.abspath(os.path.join(tmp_path, "simple_beam.inp"))
 
         # Mock the workflow components - patch at the source modules
-        with mock.patch(
-            "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ) as mock_geo_conv, mock.patch(
-            "ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ) as mock_gmsh_runner, mock.patch(
-            "meshio.read"
-        ) as mock_meshio_read:
+        with (
+            mock.patch(
+                "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ) as mock_geo_conv,
+            mock.patch(
+                "ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
+            ) as mock_gmsh_runner,
+            mock.patch("meshio.read") as mock_meshio_read,
+        ):
 
             # Mock geometry converter
             mock_geo_converter = mock.MagicMock()
@@ -631,14 +635,13 @@ class TestSimplifiedWorkflow:
         system_config = SystemConfig()
 
         # Test that the workflow function accepts all config parameters
-        with mock.patch(
-            "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
-        ), mock.patch(
-            "ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"
-        ), mock.patch(
-            "meshio.read"
-        ), mock.patch(
-            "builtins.open", mock.mock_open()
+        with (
+            mock.patch(
+                "ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
+            ),
+            mock.patch("ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"),
+            mock.patch("meshio.read"),
+            mock.patch("builtins.open", mock.mock_open()),
         ):
 
             # This should not raise any exceptions

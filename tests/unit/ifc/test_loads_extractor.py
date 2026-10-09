@@ -30,7 +30,10 @@ class TestLoadsExtractor:
         self.point_load = MagicMock()
         self.point_load.GlobalId = "pl1"
         self.point_load.is_a.return_value = False  # Default
-        self.point_load.is_a.side_effect = lambda x: x == "IfcStructuralPointAction"
+        self.point_load.is_a.side_effect = lambda x: x in (
+            "IfcStructuralPointAction",
+            "IfcStructuralAction",
+        )
         self.point_load.ForceX = 1000.0
         self.point_load.ForceY = 0.0
         self.point_load.ForceZ = -2000.0
@@ -51,7 +54,10 @@ class TestLoadsExtractor:
         self.line_load = MagicMock()
         self.line_load.GlobalId = "ll1"
         self.line_load.is_a.return_value = False  # Default
-        self.line_load.is_a.side_effect = lambda x: x == "IfcStructuralLinearAction"
+        self.line_load.is_a.side_effect = lambda x: x in (
+            "IfcStructuralLinearAction",
+            "IfcStructuralAction",
+        )
         self.line_load.ForceX = 0.0
         self.line_load.ForceY = 0.0
         self.line_load.ForceZ = -5000.0
@@ -72,7 +78,10 @@ class TestLoadsExtractor:
         self.area_load = MagicMock()
         self.area_load.GlobalId = "al1"
         self.area_load.is_a.return_value = False  # Default
-        self.area_load.is_a.side_effect = lambda x: x == "IfcStructuralPlanarAction"
+        self.area_load.is_a.side_effect = lambda x: x in (
+            "IfcStructuralPlanarAction",
+            "IfcStructuralAction",
+        )
         self.area_load.ForceX = 0.0
         self.area_load.ForceY = 0.0
         self.area_load.ForceZ = -2000.0

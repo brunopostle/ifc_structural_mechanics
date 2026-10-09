@@ -118,17 +118,17 @@ class TestGmshRunner:
         self.runner.use_python_api = False
 
         # Create necessary mocks with direct patching
-        with mock.patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
-        ) as mock_run_subprocess, mock.patch.object(
-            self.runner, "_create_temp_geo_file"
-        ) as mock_create_geo, mock.patch.object(
-            self.runner, "_prepare_command"
-        ) as mock_prepare_cmd, mock.patch.object(
-            self.runner, "_handle_output"
-        ) as mock_handle_output, mock.patch.object(
-            self.runner, "_validate_mesh_quality"
-        ) as mock_validate_quality:
+        with (
+            mock.patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
+            ) as mock_run_subprocess,
+            mock.patch.object(self.runner, "_create_temp_geo_file") as mock_create_geo,
+            mock.patch.object(self.runner, "_prepare_command") as mock_prepare_cmd,
+            mock.patch.object(self.runner, "_handle_output") as mock_handle_output,
+            mock.patch.object(
+                self.runner, "_validate_mesh_quality"
+            ) as mock_validate_quality,
+        ):
 
             # Setup mock return values
             geo_file = create_temp_file(prefix="test", suffix=".geo")
@@ -163,15 +163,14 @@ class TestGmshRunner:
         self.runner.use_python_api = False
 
         # Create necessary mocks with direct patching
-        with mock.patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
-        ) as mock_run_subprocess, mock.patch.object(
-            self.runner, "_create_temp_geo_file"
-        ) as mock_create_geo, mock.patch.object(
-            self.runner, "_prepare_command"
-        ) as mock_prepare_cmd, mock.patch.object(
-            self.runner, "_handle_output"
-        ) as mock_handle_output:
+        with (
+            mock.patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
+            ) as mock_run_subprocess,
+            mock.patch.object(self.runner, "_create_temp_geo_file") as mock_create_geo,
+            mock.patch.object(self.runner, "_prepare_command") as mock_prepare_cmd,
+            mock.patch.object(self.runner, "_handle_output") as mock_handle_output,
+        ):
 
             # Setup mock return values
             geo_file = create_temp_file(prefix="test", suffix=".geo")
@@ -205,13 +204,13 @@ class TestGmshRunner:
         self.runner.use_python_api = False
 
         # Create necessary mocks with direct patching
-        with mock.patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
-        ) as mock_run_subprocess, mock.patch.object(
-            self.runner, "_create_temp_geo_file"
-        ) as mock_create_geo, mock.patch.object(
-            self.runner, "_prepare_command"
-        ) as mock_prepare_cmd:
+        with (
+            mock.patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
+            ) as mock_run_subprocess,
+            mock.patch.object(self.runner, "_create_temp_geo_file") as mock_create_geo,
+            mock.patch.object(self.runner, "_prepare_command") as mock_prepare_cmd,
+        ):
 
             # Setup mock return values
             geo_file = create_temp_file(prefix="test", suffix=".geo")
@@ -286,13 +285,13 @@ class TestGmshRunner:
         output_path = create_temp_file(prefix="output", suffix=".vtk")
 
         # Create necessary mocks with direct patching
-        with mock.patch(
-            "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
-        ) as mock_run_subprocess, mock.patch.object(
-            self.runner, "_prepare_command"
-        ) as mock_prepare_command, mock.patch.object(
-            self.runner, "_handle_output"
-        ) as mock_handle_output:
+        with (
+            mock.patch(
+                "src.ifc_structural_mechanics.meshing.gmsh_runner.run_subprocess"
+            ) as mock_run_subprocess,
+            mock.patch.object(self.runner, "_prepare_command") as mock_prepare_command,
+            mock.patch.object(self.runner, "_handle_output") as mock_handle_output,
+        ):
 
             # Configure prepare_command
             mock_prepare_command.return_value = [
@@ -347,14 +346,19 @@ class TestGmshRunner:
                 )
 
         # Now mock the meshing config methods for this test
-        with mock.patch.object(
-            test_runner.meshing_config, "get_mesh_dimension", return_value=3
-        ), mock.patch.object(
-            test_runner.meshing_config, "get_min_element_size", return_value=0.01
-        ), mock.patch.object(
-            test_runner.meshing_config, "get_max_element_size", return_value=1.0
-        ), mock.patch.object(
-            test_runner.meshing_config, "get_additional_options", return_value={}
+        with (
+            mock.patch.object(
+                test_runner.meshing_config, "get_mesh_dimension", return_value=3
+            ),
+            mock.patch.object(
+                test_runner.meshing_config, "get_min_element_size", return_value=0.01
+            ),
+            mock.patch.object(
+                test_runner.meshing_config, "get_max_element_size", return_value=1.0
+            ),
+            mock.patch.object(
+                test_runner.meshing_config, "get_additional_options", return_value={}
+            ),
         ):
             # Test meshing command
             input_file = create_temp_file(prefix="input", suffix=".geo")

@@ -12,6 +12,7 @@ import pytest
 from ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
 from ifc_structural_mechanics.config.system_config import SystemConfig
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
 from ifc_structural_mechanics.utils.temp_dir import (
     cleanup_temp_dir,
     create_temp_file,
@@ -320,3 +321,49 @@ class TestGen3delemUserElementBugDetection:
         CalculixRunner._raise_if_known_gen3delem_user_element_bug(
             "*ERROR in some other routine: unrelated failure", inp_path
         )
+
+
+class TestSingularSystemDetection:
+    """Tests for diagnosing a silent abort during factorisation."""
+
+    ABORTED = (
+        " Using up to 1 cpu(s) for the symmetric stiffness/mass contributions.\n"
+        " Factoring the system of equations using the symmetric spooles solver\n"
+        " Using 1 cpu for spooles.\n"
+    )
+
+    def test_raises_singular_matrix_message(self, tmp_path):
+        inp = tmp_path / "model.inp"
+        inp.write_text("*ELEMENT, TYPE=B31, ELSET=E\n1, 1, 2\n")
+
+        with pytest.raises(AnalysisError) as exc_info:
+            CalculixRunner._raise_if_singular_system(self.ABORTED, inp)
+
+        message = str(exc_info.value)
+        assert "singular" in message
+        assert "mechanism" in message
+        assert "U1" not in message
+
+    def test_mentions_u1_b31_joints_when_mixed(self, tmp_path):
+        inp = tmp_path / "model.inp"
+        inp.write_text(
+            "*ELEMENT, TYPE=B31, ELSET=E\n1, 1, 2\n"
+            "*ELEMENT, TYPE=U1, ELSET=U\n2, 2, 3\n"
+        )
+
+        with pytest.raises(AnalysisError) as exc_info:
+            CalculixRunner._raise_if_singular_system(self.ABORTED, inp)
+
+        assert "U1" in str(exc_info.value)
+
+    def test_does_not_raise_when_ccx_reported_an_error(self, tmp_path):
+        inp = tmp_path / "model.inp"
+        inp.write_text("*ELEMENT, TYPE=B31, ELSET=E\n1, 1, 2\n")
+        CalculixRunner._raise_if_singular_system(
+            self.ABORTED + " *ERROR in something\n", inp
+        )
+
+    def test_does_not_raise_before_factorisation(self, tmp_path):
+        inp = tmp_path / "model.inp"
+        inp.write_text("*ELEMENT, TYPE=B31, ELSET=E\n1, 1, 2\n")
+        CalculixRunner._raise_if_singular_system(" *ERROR reading *ELEMENT\n", inp)

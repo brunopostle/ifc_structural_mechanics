@@ -1,4 +1,4 @@
-"""Tests for linear buckling two-step INP writing."""
+"""Tests for linear buckling INP step writing."""
 
 import io
 
@@ -43,50 +43,30 @@ class TestBucklingStepWriting:
         write_analysis_steps(buf, model, analysis_type="linear_buckling", **kwargs)
         return buf.getvalue()
 
-    def test_two_step_blocks(self):
-        """Buckling analysis must produce exactly two *STEP/*END STEP pairs."""
+    def test_single_step_block(self):
+        """Buckling analysis is one *STEP/*END STEP pair."""
         text = self._get_text()
-        assert text.count("*STEP") == 2
-        assert text.count("*END STEP") == 2
+        assert text.count("*STEP") == 1
+        assert text.count("*END STEP") == 1
 
-    def test_first_step_is_static(self):
-        """First step must be *STATIC (pre-stress)."""
+    def test_no_static_prestress_step(self):
+        """No *STATIC step: loads there would be preload, not reference load."""
         text = self._get_text()
-        lines = text.splitlines()
-        step_lines = [ln for ln in lines if ln.strip().startswith("*STEP")]
-        assert step_lines[0].strip() == "*STEP"
-        # Next non-empty/non-comment line after *STEP should be *STATIC
-        idx = lines.index(step_lines[0])
-        for ln in lines[idx + 1 :]:
-            if ln.strip() and not ln.strip().startswith("**"):
-                assert ln.strip() == "*STATIC"
-                break
-
-    def test_second_step_has_perturbation(self):
-        """Second step must carry PERTURBATION keyword."""
-        text = self._get_text()
-        step_lines = [
-            ln.strip() for ln in text.splitlines() if ln.strip().startswith("*STEP")
-        ]
-        assert len(step_lines) == 2
-        assert "PERTURBATION" in step_lines[1]
+        assert "*STATIC" not in text
+        assert "PERTURBATION" not in text
 
     def test_buckle_keyword_present_once(self):
-        """*BUCKLE must appear exactly once (in the second step)."""
+        """*BUCKLE must appear exactly once."""
         text = self._get_text()
         assert text.count("*BUCKLE") == 1
 
-    def test_no_cload_or_dload_after_second_step(self):
-        """The perturbation step must not contain *CLOAD or *DLOAD."""
-        text = self._get_text()
-        # Find content after the second *STEP line
-        parts = text.split("*STEP")
-        assert len(parts) >= 3  # preamble + step1 + step2
-        second_step_content = parts[-1]
-        assert "*CLOAD" not in second_step_content
-        assert "*DLOAD" not in second_step_content
+    def test_loads_are_inside_buckle_step(self):
+        """Reference loads must follow *BUCKLE and precede *END STEP.
 
-    def test_static_appears_once(self):
-        """*STATIC must appear exactly once (only in the pre-stress step)."""
-        text = self._get_text()
-        assert text.count("*STATIC") == 1
+        CalculiX only scales loads defined inside the buckle step; a buckle step
+        with no loads of its own returns meaningless factors.
+        """
+        text = self._get_text(gravity=True)
+        buckle = text.index("*BUCKLE")
+        end = text.index("*END STEP")
+        assert buckle < text.index("*DLOAD") < end

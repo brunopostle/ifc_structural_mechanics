@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 IFC_MODELS_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 SLAB_01 = os.path.join(IFC_MODELS_DIR, "slab_01.ifc")
-BUILDING_01A = os.path.join(IFC_MODELS_DIR, "building_01a.ifc")
+BUILDING_02 = os.path.join(IFC_MODELS_DIR, "building_02.ifc")
 
 
 def _get_ifc_path(relative_path: str) -> str:
@@ -114,10 +114,12 @@ class TestElementMemberMapping:
         )
 
     @pytest.mark.slow
-    def test_element_centroids_near_member_geometry_building(self, tmp_path):
+    def test_element_centroids_near_member_geometry_building(
+        self, building_02_run, building_02_model
+    ):
         """Element centroids should be spatially close to their assigned member."""
-        ifc_path = _get_ifc_path(BUILDING_01A)
-        model, inp_file = _run_workflow_to_inp(ifc_path, tmp_path, mesh_size=2.0)
+        model = building_02_model
+        inp_file = os.path.join(building_02_run[1], "analysis.inp")
 
         # Parse nodes and element-to-member from INP
         nodes = _parse_nodes(inp_file)

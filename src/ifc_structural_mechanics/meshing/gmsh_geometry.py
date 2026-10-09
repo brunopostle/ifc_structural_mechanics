@@ -1093,7 +1093,7 @@ class GmshGeometryConverter:
 
     def save_mapping(self, file_path: str) -> None:
         """Save mapping (deprecated - traceability is now in domain model)."""
-        logger.warning(
+        logger.debug(
             "Mapping file generation deprecated - traceability is in domain model"
         )
 

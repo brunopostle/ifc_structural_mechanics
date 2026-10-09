@@ -19,7 +19,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install lint tools
-        run: pip install "black==25.1.0" isort flake8 ruff
+        run: pip install "black==25.1.0" "isort==9.0.2" "flake8==7.4.1" "ruff==0.16.4"
 
       - name: Run all lint checks
         run: |
@@ -57,7 +57,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ".[dev]"
-          pip install ruff
 
       - name: Run fast tests
         run: pytest -m "not slow" --cov=ifc_structural_mechanics --cov-report=xml -v

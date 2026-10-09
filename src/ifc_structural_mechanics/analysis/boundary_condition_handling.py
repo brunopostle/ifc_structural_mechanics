@@ -108,7 +108,7 @@ def write_boundary_conditions(
 
         # Find nodes that correspond to this connection's position
         if hasattr(connection, "position") and connection.position:
-            bc_nodes = find_nodes_at_position(
+            bc_nodes = find_support_nodes(
                 connection.position, node_coords, tolerance=0.1
             )
 
@@ -164,7 +164,7 @@ def write_boundary_conditions(
                     bc_position = points[
                         0
                     ]  # Adjust this logic based on your specific model
-                    bc_nodes = find_nodes_at_position(
+                    bc_nodes = find_support_nodes(
                         bc_position, node_coords, tolerance=0.1
                     )
 
@@ -312,14 +312,11 @@ def write_point_load(
         logger.warning(f"Point load {load.id} missing position information")
         return False
 
-    # Find nodes at the load position
-    load_nodes = find_nodes_at_position(load.position, node_coords, tolerance=0.1)
-
-    if not load_nodes:
-        # If no exact match, find closest node
-        closest_node = find_closest_node(load.position, node_coords)
-        if closest_node:
-            load_nodes = [closest_node]
+    # A point load acts on exactly one node. *CLOAD on a node set applies the
+    # full force to every node in it, so a set of several nearby nodes would
+    # multiply the load.
+    closest_node = find_closest_node(load.position, node_coords)
+    load_nodes = [closest_node] if closest_node else []
 
     if not load_nodes:
         logger.warning(
@@ -714,13 +711,16 @@ def write_analysis_steps(
 
     file.write("** Analysis Steps\n")
 
-    # Linear buckling: two-step (static pre-stress + perturbation buckle)
+    # Linear buckling: a single *BUCKLE step carrying the reference loads.
+    # CalculiX scales the loads defined *inside* the buckle step; the reported
+    # buckling factor multiplies those loads. Loads placed in a preceding
+    # *STATIC step are only a fixed preload, and a buckle step without loads of
+    # its own returns meaningless factors (ifc_structural_mechanics-ziq).
     if analysis_type == "linear_buckling":
-        # Step 1: static pre-stress with all loads
         file.write("*STEP\n")
-        file.write("*STATIC\n")
-        file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
-        file.write("** Loads within step\n")
+        file.write("*BUCKLE\n")
+        file.write("10\n\n")
+        file.write("** Reference loads (buckling factor multiplies these)\n")
         loads_written = _write_validated_loads_within_step(
             file,
             domain_model,
@@ -739,16 +739,7 @@ def write_analysis_steps(
             _write_u1_gravity_cloads(file, u1_gravity_nodal_loads or {})
             loads_written = True
         if not loads_written:
-            file.write("** CRITICAL WARNING: No loads written to pre-stress step\n\n")
-        file.write("*NODE FILE\n")
-        file.write("U\n")
-        file.write("*EL FILE\n")
-        file.write("S, E\n")
-        file.write("*END STEP\n\n")
-        # Step 2: eigenvalue buckling (no loads — perturbation uses previous stress state)
-        file.write("*STEP, PERTURBATION\n")
-        file.write("*BUCKLE\n")
-        file.write("10\n\n")
+            file.write("** CRITICAL WARNING: No loads written to buckle step\n\n")
         file.write("*NODE FILE\n")
         file.write("U\n")
         file.write("*END STEP\n\n")
@@ -941,6 +932,45 @@ def find_nodes_at_position(
             matching_nodes.append(node_id)
 
     return matching_nodes
+
+
+def find_support_nodes(
+    position: List[float],
+    node_coords: Dict[int, Tuple[float, float, float]],
+    tolerance: float = 0.1,
+    coincidence: float = 1e-3,
+) -> List[int]:
+    """Find the mesh node(s) that a point support at *position* acts on.
+
+    Returns the node nearest to *position*, provided it lies within
+    *tolerance*, together with any node coincident with it (within
+    *coincidence*). Beam and shell meshes keep separate nodes at the same
+    location, so a support where a column meets a slab restrains both.
+
+    Unlike ``find_nodes_at_position`` this never returns a neighbouring mesh
+    node. Taking every node inside the tolerance radius restrained two adjacent
+    nodes whenever the element size was at or below the tolerance, which
+    shortens the span and turns a pinned support into a clamped one.
+
+    Args:
+        position: The support position [x, y, z].
+        node_coords: Dictionary of node coordinates.
+        tolerance: Largest accepted distance from *position* to the nearest node.
+        coincidence: Distance within which other nodes count as the same point.
+
+    Returns:
+        Node IDs sorted ascending; empty if no node is within *tolerance*.
+    """
+    if not node_coords:
+        return []
+    ids = np.fromiter(node_coords.keys(), dtype=np.int64, count=len(node_coords))
+    coords = np.array(list(node_coords.values()), dtype=float)
+    distances = np.linalg.norm(coords - np.asarray(position, dtype=float), axis=1)
+    nearest = int(np.argmin(distances))
+    if distances[nearest] > tolerance:
+        return []
+    coincident = np.linalg.norm(coords - coords[nearest], axis=1) <= coincidence
+    return sorted(int(i) for i in ids[coincident])
 
 
 def extract_curve_endpoints(geometry: Any) -> List[List[float]]:

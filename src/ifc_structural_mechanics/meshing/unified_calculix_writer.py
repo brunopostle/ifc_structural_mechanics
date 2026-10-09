@@ -141,39 +141,33 @@ class UnifiedCalculixWriter:
         return self.short_id_map[full_id]
 
     def _get_beam_normal(self, member: CurveMember) -> Tuple[float, float, float]:
-        """
-        Get beam normal vector from member's local axis.
+        """Return the cross-section "1" direction for a beam member.
 
-        CalculiX requires a normal vector for beam elements that is perpendicular
-        to the beam axis. This method uses the local_axis extracted from IFC.
+        CalculiX's ``*BEAM SECTION`` second data line is the direction of the
+        section's local 1 axis. The first section dimension (RECT ``a``, BOX
+        ``a``) is measured along it, and for ``SECTION=GENERAL`` the first
+        inertia (``I11``) resists loads acting along it.
 
-        The local_axis from IFC is a tuple of (xAxis, yAxis, zAxis) where:
-        - xAxis: Local X direction
-        - yAxis: Local Y direction (used as beam normal in CalculiX)
-        - zAxis: Beam axis direction
+        IFC defines the member's local z by ``IfcStructuralCurveMember.Axis``
+        and maps the profile's Y dimension (depth) onto it. So the direction
+        written here is the IFC local z, paired with depth-first dimensions and
+        ``I11 = Iy``. ``local_axis`` is ``(xAxis, yAxis, zAxis)`` with xAxis
+        along the member.
 
         Args:
             member: CurveMember with local_axis from IFC transformation
 
         Returns:
-            Tuple[float, float, float]: Normal vector (nx, ny, nz)
+            Tuple[float, float, float]: Direction of the section 1 axis.
         """
-        # Use local axis from IFC if available.
-        # local_axis = [xAxis, yAxis, zAxis_final] where xAxis is the longitudinal
-        # axis and yAxis = cross(IFC.Axis, xAxis) is already perpendicular to the
-        # beam axis.  Returning xAxis (index 0) was wrong — it is parallel to the
-        # beam and collapses to zero after CalculiX orthogonalisation.
         if hasattr(member, "local_axis") and member.local_axis is not None:
             if (
                 isinstance(member.local_axis, (tuple, list))
                 and len(member.local_axis) == 3
             ):
-                y_axis = member.local_axis[1]  # yAxis — perpendicular to beam axis
-                if isinstance(y_axis, (tuple, list, np.ndarray)) and len(y_axis) == 3:
-                    logger.info(
-                        f"Using y-axis from IFC local coordinate system as beam normal: {y_axis}"
-                    )
-                    return tuple(float(v) for v in y_axis)
+                z_axis = member.local_axis[2]
+                if isinstance(z_axis, (tuple, list, np.ndarray)) and len(z_axis) == 3:
+                    return tuple(float(v) for v in z_axis)
             logger.warning(f"Unexpected local_axis format: {member.local_axis}")
 
         # Fallback: compute from geometry if no local axis
@@ -939,7 +933,8 @@ class UnifiedCalculixWriter:
                 f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
                 f" SECTION=RECT\n"
             )
-            file.write(f"{width:.6e}, {height:.6e}\n")
+            # Depth first: it lies along the section 1 direction.
+            file.write(f"{height:.6e}, {width:.6e}\n")
             file.write(
                 f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
                 f" {beam_normal[2]:.6e}\n\n"
@@ -1236,7 +1231,7 @@ class UnifiedCalculixWriter:
         node_coords = dict(self.nodes)
 
         from ..analysis.boundary_condition_handling import (
-            find_nodes_at_position,
+            find_support_nodes,
             get_constrained_dofs,
         )
 
@@ -1247,9 +1242,7 @@ class UnifiedCalculixWriter:
 
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
-                bc_nodes = find_nodes_at_position(
-                    conn.position, node_coords, tolerance=0.1
-                )
+                bc_nodes = find_support_nodes(conn.position, node_coords, tolerance=0.1)
 
                 if not bc_nodes:
                     continue
@@ -1770,10 +1763,18 @@ class UnifiedCalculixWriter:
             if member_set not in self.element_sets or not self.element_sets[member_set]:
                 continue
 
-            # Group elements by their computed normal
+            # Group elements by section direction. The IFC orientation wins;
+            # the purely geometric default is only for members without one.
+            has_ifc_axis = getattr(member, "local_axis", None) is not None
+            section_direction = self._get_beam_normal(member) if has_ifc_axis else None
             groups = {}
             for elem_id in self.element_sets[member_set]:
-                normal = self._compute_element_normal(elem_id)
+                if section_direction is not None:
+                    normal = self._orthogonal_beam_normal(
+                        section_direction, self._compute_beam_axis([elem_id], member)
+                    )
+                else:
+                    normal = self._compute_element_normal(elem_id)
                 # Round to avoid floating point comparison issues
                 normal_key = tuple(round(x, 6) for x in normal)
 
@@ -1787,7 +1788,7 @@ class UnifiedCalculixWriter:
 
     def _save_mapping(self, mapping_file: str) -> None:
         """Save domain to CalculiX mapping (deprecated - now in domain model)."""
-        logger.warning(
+        logger.debug(
             "Mapping file generation deprecated - traceability is in domain model"
         )
 
@@ -1919,11 +1920,11 @@ def run_complete_analysis_workflow(
             intermediate_dir = Path(intermediate_files_dir)
             intermediate_dir.mkdir(exist_ok=True)
             mesh_file = str(intermediate_dir / f"mesh_{domain_model.id}.msh")
-            mapping_file = str(intermediate_dir / f"mapping_{domain_model.id}.json")
         else:
             temp_dir = get_temp_dir()
             mesh_file = str(Path(temp_dir) / f"mesh_{domain_model.id}.msh")
-            mapping_file = None
+        # Traceability lives in the domain model; no mapping file is written.
+        mapping_file = None
 
         mesh_file = gmsh_runner.generate_mesh_file(mesh_file)
         logger.info(f"Generated mesh file: {mesh_file}")
