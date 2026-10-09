@@ -22,7 +22,7 @@ pip install -e ".[viz]"
 # Run all tests
 pytest
 
-# Skip slow end-to-end tests (building_01a etc.)
+# Skip slow end-to-end tests (building_02)
 pytest -m "not slow"
 
 # Run with coverage
@@ -74,13 +74,13 @@ ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ### Visualization
 ```bash
 # Visualize displacement results (auto-scales)
-python visualize.py building_01a
+python visualize.py building_02
 
 # Visualize stress results
 python visualize.py slab_01 --field stress
 
 # Save screenshot (non-interactive)
-python visualize.py building_01a --screenshot result.png
+python visualize.py building_02 --screenshot result.png
 
 # Custom scale factor
 python visualize.py portal_01 --scale 500
@@ -167,7 +167,6 @@ Configuration system with three main classes:
 #### 7. API (`src/ifc_structural_mechanics/api/`)
 Public-facing API for users:
 - `structural_analysis.py`: Main entry point with `run_enhanced_analysis()` (preferred) and `analyze_ifc()` functions
-- `structural_model.py`: Model extraction API
 
 #### 8. CLI (`src/ifc_structural_mechanics/cli/`)
 Command-line interface:
@@ -220,11 +219,11 @@ Command-line interface:
   - `test_ifc_to_geo.py`: Tests IFC → Gmsh mesh conversion, outputs `.msh` files for inspection
   - `test_building_analysis.py`, `test_physical_group_mapping.py`, etc.: Regression tests for mesh connectivity fixes
 - **Validation tests** (`tests/validation/`): Numerical accuracy tests against analytical solutions
-  - Tier 1: Direct CalculiX input/output tests
-  - Tier 2: Full pipeline tests (IFC → results)
+  - Tier 1: Direct CalculiX input/output tests (hand-written `.inp`)
+  - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam theory. Add a case here whenever a change touches sections, orientation, supports or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: End-to-end building model tests are marked `@pytest.mark.slow`. Skip with `-m "not slow"`.
+- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 90 s in total). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -240,7 +239,7 @@ Command-line interface:
 ### Python Packages
 Core: numpy, scipy, ifcopenshell, gmsh, meshio, click, pyyaml, pandas
 Visualization: pyvista (optional, for result visualization)
-Dev: pytest, pytest-cov, black, isort, flake8, ruff, mypy
+Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 
 ## Key File Locations
 
@@ -258,12 +257,12 @@ Dev: pytest, pytest-cov, black, isort, flake8, ruff, mypy
 ## Code Style
 
 - Line length: 88 characters (Black default)
-- Python versions: 3.8, 3.9, 3.10
-- Type hints: Required for public APIs (enforced by mypy)
+- Python versions: 3.9, 3.10, 3.11 (the CI matrix)
+- Type hints: Required for public APIs. mypy is configured but not run in CI
 - Docstrings: Required for all public classes and functions (Google style)
 - Import order: isort with Black profile
-- Linting: flake8 config in `.flake8` (max-line-length=88, extend-ignore=E203,E501); ruff for additional checks
-- All four tools must pass cleanly: `black`, `isort`, `flake8`, `ruff`
+- Linting: flake8 config in `.flake8` (max-line-length=88, extend-ignore=E203,E501); ruff rules are set in `pyproject.toml` (`E`, `F`, `W`; isort owns import order)
+- All four tools must pass cleanly: `black`, `isort`, `flake8`, `ruff`. CI pins their versions in `.github/workflows/ci.yml`; use the same ones
 
 ## Working with IFC Files
 
@@ -335,15 +334,46 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 
 ## Known Limitations
 
-- **Load cases**: Only a subset of IFC load cases may be written to the INP. Models with multiple `IfcStructuralLoadCase` (e.g., Dead, Live, Wind, Earthquake) may only get some cases applied. Each load case should ideally map to a separate `*STEP`.
-- **Connection geometry**: `_find_connection_nodes_at_location()` uses member geometry endpoints from the domain model to target the right mesh node (tight 10 mm tolerance). Falls back to 0.5 m proximity for members without geometry. This is more robust than the old proximity-only search.
-- **Intermediate support positions**: `write_boundary_conditions()` finds support nodes via `find_nodes_at_position()` with a 0.1 m tolerance. If a support connection is not at a beam endpoint (e.g. it is an intermediate point along the beam), Gmsh may not place a mesh node there and the support is silently omitted. `grid_of_beams` is an example — its corner supports are 0.1 m inside the beam span.
-- **Overlapping members (partial)**: Members with *identical* post-fragment geometry tags now share a combined physical group ("A||B") so both receive elements. Members with *partially* overlapping geometry (e.g. a short stub inside a longer beam) may still lose elements; the spatial-proximity fallback handles these cases.
-- **Self-weight models**: IFC models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) produce zero loads unless `--gravity` is passed to the CLI. The library has no way to auto-detect that gravity is the intended load; it must be requested explicitly.
-- **Mixed beam+shell instability**: When all supports fix only DOF 1-3 (no rotational restraint) and no moment-resisting connections exist, the structure is a near-mechanism under lateral load. `building_01` demonstrates this. The library now detects this condition via `_detect_mechanism_risk()` (called from `_write_calculix_input_file`) and emits a `STABILITY WARNING` in the log and the `.inp` file. The gravity-loaded variant (`building_01a`) is stable.
-- **FRD/DAT parsing duplication**: `results_parser.py` and `ccxquery/parsers/` independently implement the same FRD/DAT parsing logic. `ccxquery` is intentionally standalone (a debugging tool for LLM agents), so this duplication is by design.
-- **Linear buckling**: The `linear_buckling` analysis type exists in the CLI but has not been validated against known solutions.
-- **CalculiX bug — U1 elements crash when mixed with any other 1D/2D element**: Confirmed CalculiX 2.23 bug (still present in upstream master as of 2026-07-03): `gen3delem.f`'s node-count filter excludes C3D/D/G/E/MASS element types but not `U` (user elements), so when it processes a `TYPE=U1` element it reuses whatever node count a previously-processed B31/S3/etc. element left behind, then reads the (always-unset, by design) `SECTION=GENERAL` thickness and aborts with `gen3delem: first thickness ... is zero`. Confirmed independent of element ID ordering — only a model with *zero* other 1D/2D elements alongside U1 is safe. Not fixable from the `.inp`-writer side; `patches/calculix-gen3delem-user-element.patch` fixes it at the source (add `.and.(lakon(i)(1:1).ne.'U')` to the filter) — apply it to your CalculiX build and rebuild. `CalculixRunner._raise_if_known_gen3delem_user_element_bug()` detects the signature and raises a clear, actionable `AnalysisError` instead of surfacing CCX's generic message. Affects any model needing a U1 member (non-native I/T/L/C section, or overlapping-geometry retyping) alongside native B31/S3 elements — i.e. most real building models. See `ifc_structural_mechanics-eez`.
+Open bugs and proposed work are tracked in beads (`bd list --status=open`), not
+here. This section only records the constraints that shape day-to-day work.
+
+- **Stock CalculiX is the target** (decision 2026-10-09). The local `ccx` may be
+  a patched Copr build; CI uses the distribution package. Do not rely on the
+  gen3delem patch in `patches/`.
+- **U1 beams (I/T/L/C sections) are only correct in all-U1 models.** On stock
+  CalculiX a U1 element next to any other 1D/2D element crashes in gen3delem
+  (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it).
+  On a patched build the model runs but a U1 beam and a B31 beam sharing a node
+  transfer no moment, so the joint is a pin (`aiz.14`). The planned replacement
+  is an equivalent-stiffness RECT on B31 (`31a`).
+- **No beam section forces or utilisation yet.** CalculiX only writes them in
+  2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
+  FORCES`), which averages shell stress through the thickness (`aiz.13`).
+- **`building_01` does not solve** (singular matrix) and **`building_02` is
+  near-singular** (results swing with mesh size and under self-weight, `aiz.15`).
+  Treat multi-member building results as unverified.
+- **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
+  (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
+  otherwise.
+- **Buckling factors** come from a single `*BUCKLE` step that contains the
+  loads. CalculiX scales only loads defined inside that step; a preceding
+  `*STATIC` step is a fixed preload. Validated for one Euler column only.
+- **FRD/DAT parsing is duplicated on purpose** between `results_parser.py` and
+  `ccxquery/parsers/`; `ccxquery` is a standalone debugging tool.
+
+## Beam Section Orientation
+
+CalculiX's `*BEAM SECTION` second data line is the direction of the section's
+local 1 axis. The first dimension (`RECT a`, `BOX a`) is measured along it, and
+for `SECTION=GENERAL` the first inertia `I11` resists loads acting along it.
+
+IFC maps the profile's Y dimension (depth) onto the member's local z, which
+`IfcStructuralCurveMember.Axis` defines. So the writer always gives CalculiX the
+**IFC local z** (`member.local_axis[2]`, via `_get_beam_normal()`), with
+**depth-first dimensions** and **`I11 = Iy`**. In the domain model
+`moment_of_inertia_y` is the strong-axis value for a section deeper than wide.
+A purely geometric default is used only when a member has no `local_axis`.
+`tests/validation/test_pipeline_benchmarks.py` checks both axes.
 
 ## Boundary Condition Handling
 
@@ -353,6 +383,12 @@ The system uses `utils/temp_dir.py` for managing temporary files during analysis
 - Numeric measure — spring stiffness in project units
 
 The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this. After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
+
+Support nodes: `find_support_nodes()` returns the single mesh node nearest the
+connection position (within 0.1 m) plus any node coincident with it (beam and
+shell meshes keep separate nodes at one point). It never returns a neighbouring
+node; doing so fixed two adjacent nodes on fine meshes. Point loads go to the
+single nearest node.
 
 Connection EQUATION constraints: rigid connections always write DOF 1-6 equations (translations + rotations). CalculiX KNOT generation is triggered only by *shared nodes* between beam and shell elements, not by EQUATION constraints between separate nodes — so DOF 4-6 equations between beam nodes and shell nodes are safe.
 

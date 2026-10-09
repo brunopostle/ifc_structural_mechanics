@@ -4,14 +4,13 @@ This report documents numerical accuracy tests for the `ifc_structural_mechanics
 pipeline. Tests are grouped into two tiers:
 
 - **Tier 1** — hand-crafted CalculiX input files run directly against the solver. These
-  tests isolate the solver and result parser from the IFC extraction and meshing stages,
-  and compare against known analytical solutions.
-- **Tier 2** — full IFC → Gmsh → CalculiX pipeline run against real IFC files. These
-  check that the end-to-end workflow produces physically plausible results, but do not
-  have analytical reference solutions to compare against.
+  isolate the solver and result parser from IFC extraction, meshing and input writing.
+- **Tier 2** — the full IFC → Gmsh → CalculiX → `results.json` pipeline, compared with
+  closed-form beam theory. These are the tests that catch errors in section orientation,
+  section properties, supports and loads.
 
-The Tier 1 tests are in `tests/validation/` and are run automatically by `pytest`. They
-require CalculiX to be installed (`ccx` on PATH) and are skipped otherwise.
+All of them live in `tests/validation/`, run under `pytest`, and are skipped when `ccx`
+is not on the PATH. Figures below were measured on 2026-10-09 with CalculiX 2.23.
 
 ---
 
@@ -123,11 +122,8 @@ Total vertical reaction (sum of both supports):
 
 ### Notes
 
-A symmetric (square) cross-section is used deliberately to avoid sensitivity to beam
-normal vector orientation. For asymmetric sections (I-sections, T-sections, etc.) the
-orientation of the cross-section relative to the bending plane significantly affects
-results. This is a known limitation; see `VISION.md` Phase 1 for the planned
-`SECTION=GENERAL` work.
+A square cross-section is used so that this test does not depend on section
+orientation. Orientation is covered by the Tier 2 tests below.
 
 At pin supports, the cross-section is free to rotate. The expanded corner nodes at x = 0
 and x = 2 therefore have non-zero transverse displacement due to end rotation. The test
@@ -136,45 +132,98 @@ rotation makes upper and lower corners displace in opposite directions).
 
 ---
 
-## Tier 2: Full Pipeline — Example Model Regression Baselines
+## Tier 1: Euler Column Buckling
 
-These results were obtained by running the full IFC → Gmsh → CalculiX pipeline on the
-example models in `examples/analysis-models/`. They are regression baselines, not
-comparisons against independent analytical solutions. Significant changes from these
-values indicate a regression in the pipeline.
+**Source**: `tests/validation/test_buckling_benchmark.py`
 
-| Model | Load flag | Max displacement | Reaction | Notes |
-|-------|-----------|-----------------|----------|-------|
-| `beam_01` | — | 0.26 mm | 20 kN | Simply supported beam, point load |
-| `portal_01` | — | 0.55 mm | 1265 / 5007 N | Portal frame |
-| `cantilever_01` | `--gravity` | 1.1 mm | 69 / 15 N | Cantilever, self-weight |
-| `slab_01` | `--gravity` | 0.39 mm | 198 kN | Flat slab |
-| `structure_01` | `--gravity` | 2.8 mm | 634 kN | Mixed beam/shell structure |
-| `building_01a` | `--gravity` | 14 mm | 275 kN | Multi-storey building, gravity |
-| `building_02` | — | 80 mm | 29 MN | Larger building, lateral load |
+Pinned-pinned column, L = 1.0 m, 0.1 × 0.1 m square, E = 210 GPa, 10 B31 elements, unit
+axial load defined inside the `*BUCKLE` step. Twist about the column axis is restrained
+at one end; without that the model is singular.
 
-Models not in the table are known to have unresolved issues:
+| Quantity | Analytical | FEA | Error |
+|----------|-----------|-----|-------|
+| Critical load P_cr | 1.727 × 10⁷ N (Euler) | 1.693 × 10⁷ N | 2.0% |
 
-| Model | Issue |
-|-------|-------|
-| `grid_of_beams` | Near-mechanism: corner supports at intermediate beam positions are not located by the node search (known limitation). No material density in IFC, so gravity load produces near-zero self-weight. |
-| `building_01` | Near-mechanism under lateral load: pinned column bases with no moment-resisting connections. This is a modelling issue, not a solver issue — `building_01a` (gravity load only) is stable. |
+B31 is shear-flexible, so for this stocky column (L/h = 10) the shear-corrected value is
+1.684 × 10⁷ N and the FEA result sits between the two.
+
+**Tolerance**: 5%. **Status**: PASS
+
+CalculiX scales only the loads defined inside the `*BUCKLE` step. Loads in a preceding
+`*STATIC` step act as a fixed preload, and a buckle step with no loads of its own returns
+meaningless factors.
+
+---
+
+## Tier 2: Full Pipeline Against Beam Theory
+
+**Source**: `tests/validation/test_pipeline_benchmarks.py`
+
+Each case starts from an IFC file, runs `analyze_ifc()` with a 0.05 m mesh, and reads the
+answer from `results.json`. Variants of `cantilever_01.ifc` are made in memory by rotating
+the member's `Axis` or replacing its profile. Reference values are Timoshenko beam theory
+(bending plus shear deflection).
+
+`cantilever_01`: L = 3 m, fully fixed at one end, E = 210 MPa, ν = 0.2, ρ = 7.8 kg/m³,
+loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midspan,
+0.3 m square, E = 30 GPa.
+
+| Case | Section and element | Reference | Pipeline | Error |
+|------|---------------------|-----------|----------|-------|
+| Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B31 | 0.2814 mm | 0.2806 mm | 0.3% |
+| Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B31 | 1.1115 mm | 1.1106 mm | 0.1% |
+| Cantilever reaction | 0.2 × 0.4 rectangle, B31 | 18.36 N | 18.21 N | 0.8% |
+| Cantilever, strong axis | 200 × 400 I, U1 | 0.1419 mm | 0.1419 mm | < 0.1% |
+| Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6140 mm | < 0.1% |
+| Fixed-fixed beam, midspan | 0.3 m square, B31 | 0.3505 mm | 0.3467 mm | 1.1% |
+| Fixed-fixed beam, reaction | 0.3 m square, B31 | 20.00 kN | 20.00 kN | 0.0% |
+
+**Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
+
+The reaction under self-weight is low by half an element's weight: CalculiX does not
+report the share of a distributed load that lands on the restrained node.
+
+The cantilever's strong-axis orientation was confirmed independently against
+IfcOpenShell's Code_Aster reference for the same file
+(`examples/analysis-models/models/cantilever_01/cantilever_01.comm`), which places the
+0.4 m dimension along the member's local z.
+
+These tests exist because of what they found when first written: beam sections rotated
+90° (strong and weak axes swapped), point supports restraining neighbouring mesh nodes,
+and wrong inertia formulas for I, L and C sections.
+
+---
+
+## Example Model Baselines
+
+Full pipeline, default 1.0 m mesh. These are **regression baselines, not validated
+results**, except where a Tier 2 test covers the model.
+
+| Model | Load flag | Max displacement | Vertical reaction | Standing |
+|-------|-----------|------------------|-------------------|----------|
+| `beam_01` | — | 0.26 mm | 20.0 kN | Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 25% stiff |
+| `cantilever_01` | `--gravity` | 0.28 mm | 15 N | Covered by Tier 2 |
+| `portal_01` | — | 3.1 mm | 85.4 kN | Unchecked. All-U1 model |
+| `slab_01` | `--gravity` | 0.39 mm | 198 kN | Unchecked |
+| `structure_01` | `--gravity` | 2.9 mm | 630 kN | Unchecked |
+| `grid_of_beams` | `--gravity` | 0.49 mm | 0.24 kN | Unchecked |
+| `building_02` | — | 14 mm (Live), 365 mm (Extra_dead) | 29.4 MN | Near-singular: earlier runs gave 22 and 25 mm, and 12.6 km under self-weight |
+| `building_01` | — | — | — | Fails: singular stiffness matrix |
+
+The submodule ships Code_Aster inputs and results for `portal_01`, `grid_of_beams`,
+`slab_01` and `structure_01`; comparing against them is the obvious next check.
 
 ---
 
 ## What is not yet validated
 
-The following are not covered by current Tier 1 tests. They represent areas where
-numerical accuracy is less certain:
-
-- **Non-square beam sections**: I-sections, T-sections, L-sections. Currently
-  approximated as equivalent rectangles in CalculiX. The approximation cannot match
-  both strong-axis and weak-axis moments of inertia simultaneously. A `SECTION=GENERAL`
-  implementation (see `VISION.md`) would remove this limitation.
-- **Shell/plate elements**: `IfcStructuralSurfaceMember` (slabs, walls). No Tier 1
-  benchmark with analytical reference solution exists yet.
-- **Linear buckling**: The two-step buckling INP is implemented but eigenvalue results
-  have not been compared against an analytical Euler column solution.
-- **Distributed loads on beams**: `IfcStructuralCurveAction` handling is exercised by
-  integration tests but not compared against analytical results (e.g. `wL⁴/(8EI)` for
-  uniformly distributed load on a cantilever).
+- **Distributed loads** (`IfcStructuralCurveAction`): exercised by `portal_01` but not
+  compared with a reference.
+- **Pinned and roller supports** through the pipeline (Tier 1 covers them in CalculiX only).
+- **Shell members**: no plate-theory benchmark for `IfcStructuralSurfaceMember`.
+- **T, L and C sections**: section properties are unit-tested against hand calculations,
+  but no pipeline benchmark exists. L sections ignore the product of inertia.
+- **Frames and buildings**: no multi-member model has been checked against a reference,
+  and the two building models show the pipeline is not yet sound for them.
+- **Mixed U1 and B31 beams**: known to be wrong (joints act as pins).
+- **Buckling** beyond the single Euler column.

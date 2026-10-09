@@ -117,121 +117,71 @@ no FEA knowledge — they only consume the JSON schema.
 
 ## Milestones
 
-### Phase 1 — Reliable core analysis *(complete)*
+Individual tasks and bugs are tracked in the `bd` (beads) issue database, not
+here. This section states what each phase is for and where it stands; run
+`bd list --status=open` for the work itself.
 
-**Section properties via `SECTION=GENERAL`** *(done)*
+### Phase 1 — Reliable core analysis *(in progress)*
 
-CalculiX B31 beam elements accept `SECTION=GENERAL`, where cross-sectional properties
-are supplied directly: area A, moments of inertia I11/I22, product of inertia I12, and
-St. Venant torsional constant IT. This unlocks the full range of IFC profile types
-without any approximation:
+The pipeline runs end to end and single members agree with beam theory
+(`docs/validation_report.md`). It is not yet reliable for whole buildings.
 
-- `IfcIShapeProfileDef`, `IfcTShapeProfileDef`, `IfcLShapeProfileDef`,
-  `IfcCShapeProfileDef`, `IfcUShapeProfileDef`: computed analytically from explicit
-  geometric dimensions in the IFC entity
-- `IfcArbitraryClosedProfileDef`: computed numerically from polygon coordinates
-  (shoelace formula for area, numerical integration for Iy/Iz/Iyz)
-- Property sets (`Pset_SectionCommon` etc.): pre-computed values stored in the IFC
-  file can be used as a fallback or override
+What holds it back:
 
-`SECTION=GENERAL` does not produce per-fibre stresses at the CalculiX level — CalculiX
-outputs section forces and moments (N, My, Mz, Vy, Vz, T). Utilisation ratios
-(σ = M/I × y_max) are computed in the JSON output layer using the same section
-properties already extracted from IFC. This is sufficient for code-checking.
+- **Open sections on stock CalculiX.** I, T, L and C profiles use U1 user
+  elements with `SECTION=GENERAL`, which cannot be mixed with other element
+  types: stock CalculiX crashes, and a patched build leaves the joints pinned.
+  The decision (2026-10-09) is to stay on stock CalculiX and analyse these
+  profiles as B31 with a stiffness-equivalent rectangular section.
+- **Multi-member models.** `building_01` is singular and `building_02` is
+  near-singular. Until those are understood, connectivity between members
+  cannot be trusted.
+- **Validation coverage.** Distributed loads, pinned supports, plates and
+  frames have no benchmark yet.
 
-The existing RECT/CIRC/PIPE/BOX paths are retained where CalculiX's built-in section
-integration is preferred.
-
-**Remaining known limitations (acknowledged, lower priority):**
-
-- **Connection topology**: connections are resolved by geometric proximity rather than
-  `IfcRelConnectsStructuralMember` relationship data. Closely spaced but unconnected
-  members can be incorrectly joined.
-- **Intermediate supports**: supports at intermediate points on a beam (not at endpoints)
-  may be silently omitted if Gmsh does not place a node there.
-- **Partial end-releases**: only full pins (all rotational DOFs released) are modelled.
-  Per-DOF partial releases are out of scope.
+**Done when**: every example model either agrees with an independent reference
+or fails with a message that names the cause.
 
 ### Phase 2 — JSON results output *(partially done)*
 
-**Done:**
+`results.json` exists, is keyed to IFC GlobalIds, carries per-load-case
+displacement and stress envelopes, and has a `status` field driven by optional
+limits. The schema is documented in `export/results_exporter.py`.
 
-- [x] JSON schema defined (summary level: per-member envelope + per-load-case breakdown,
-  global displacement stats, total reactions). Schema documented in
-  `export/results_exporter.py` module docstring.
-- [x] `ResultsExporter` implemented — consumes `StructuralModel` + `parsed_results`,
-  writes `results.json` keyed to IFC GlobalIds
-- [x] Load case axis in results (per-case `max_displacement_m`, `max_von_mises_Pa`)
-- [x] `status` field framework in place (`ok` / `fail` driven by optional `limits` dict)
-- [x] Node→member traceability: `StructuralModel.node_to_member` populated by the
-  meshing pipeline so node-based FRD results map back to IFC entities
+Missing: beam section forces (N, V, M), the utilisation ratio that depends on
+them, per-load-case reactions, and a CLI flag for limits. CalculiX does write
+section forces, but only in its 2D output mode, where shell stress is averaged
+through the thickness; the design has to get both.
 
-**Remaining:**
+**Done when**: `ifc-analysis analyze model.ifc --output ./results` writes a
+`results.json` from which a script can find the most-utilised member by
+GlobalId, beams included.
 
-- [ ] **Beam section forces**: For B31 beam elements, CalculiX 2.22 internally expands
-  to C3D8I bricks, and `*EL FILE, SF` (section forces) is silently ignored — the FRD
-  contains no SF dataset. This is a CalculiX 2.22 limitation; the output request and
-  parser infrastructure are already in place. Options to resolve: (a) test with a newer
-  CalculiX version that may fix B31 SF output; (b) post-process section forces from the
-  expanded C3D8I stress results (integration over cross-section); (c) use `*NODE FILE`
-  with custom user output. Shell element (S8R) stress results already work correctly via
-  `node_to_member`.
-- [ ] **Utilisation ratio**: blocked on beam section forces above. The computation
-  (σ_max = |N|/A + |Mf1|/Iy × y_max + |Mf2|/Iz × z_max) and `get_extreme_fibre_distances()`
-  are already implemented in `ResultsExporter` and `Section` respectively; they activate
-  automatically once section force records are non-empty.
-- [ ] **`--limits` CLI flag**: expose the `limits` dict as CLI arguments so users can
-  set pass/fail thresholds without touching Python (e.g. `--limit-stress 250e6`).
-- [ ] **Integration tests**: assert `results.json` content for all example models
-  (displacement, stress, load case labels, member count).
+### Phase 3 — Bonsai wrapper *(separate repo, not started)*
 
-**Done when**: `ifc-analysis analyze model.ifc --output ./results` writes `results.json`
-that a script can consume to find the most-stressed member by GlobalId — including beam
-members.
+A Bonsai panel that runs this library on the active IFC file and paints the
+results in the viewport: per-member colour overlay, load case switcher, results
+table with click-to-select, displacement scale.
 
-### Phase 3 — Bonsai wrapper *(separate repo)*
+**Done when**: an engineer can open an IFC structural model in Bonsai, click
+"Run Analysis", and see stress colours on the members within the same session.
 
-- [ ] Bonsai panel that invokes this library and receives JSON
-- [ ] Per-member colour overlay in the Blender viewport
-- [ ] Load case switcher
-- [ ] Results table with click-to-select
-- [ ] Displacement scale slider
+### Phase 4 — BCF output *(separate package, not started)*
 
-**Done when**: an engineer can open an IFC structural model in Bonsai, click "Run
-Analysis", and see stress colours on the members within the same session.
+A BCF writer that turns `results.json` plus the IFC file into one issue per
+member over a threshold, with a viewpoint on the element.
 
-### Phase 4 — BCF output module *(separate package)*
+### Phase 5 — PDF report *(separate package, not started)*
 
-- [ ] BCF 2.1 writer that consumes `results.json` and an IFC file
-- [ ] One BCF issue per member exceeding a threshold, with viewpoint pointing at the
-  element
-- [ ] Rendered stress/displacement image attached to each issue
-- [ ] CLI: `ifc-analysis-to-bcf results.json model.ifc --output issues.bcf`
+A generated summary from `results.json`: model overview, load cases, per-member
+table, reactions, pass/fail.
 
-### Phase 5 — PDF report module *(separate package)*
+### Phase 6 — Documentation *(not started)*
 
-- [ ] Auto-generated PDF from `results.json`: model overview, load case summary,
-  per-member table, reaction table, pass/fail status
-- [ ] CLI: `ifc-analysis-to-pdf results.json --output report.pdf`
+Four documents for four audiences: a user guide for engineers authoring IFC
+structural models, an API and JSON schema reference, an architecture guide for
+contributors, and the validation report.
 
-### Phase 6 — Full technical documentation
-
-The library is only as useful as its documentation. Target audiences are different and
-need separate documents:
-
-- **User guide**: how to author an IFC structural model that this tool can analyse —
-  which IFC entities are required, which profile types are supported, how to set up load
-  cases, what the output means. Aimed at structural engineers using Bonsai.
-- **API reference**: auto-generated from docstrings (Sphinx or MkDocs). Covers the
-  public Python API (`run_enhanced_analysis`, `StructuralModel`, `ResultsExporter`) and
-  the JSON results schema. Aimed at developers building wrappers or consuming output.
-- **Architecture guide**: the pipeline from IFC → domain model → Gmsh → CalculiX →
-  JSON, traceability chain, extension points (adding new member types, section types,
-  load types). Aimed at contributors.
-- **Validation report**: for each supported model type, the analytical reference solution
-  and the library's result, confirming accuracy bounds. Aimed at engineers assessing
-  fitness for use.
-
-**Done when**: a structural engineer unfamiliar with FEA can set up an IFC model, run
-the analysis, and interpret the results using only the documentation — without reading
-source code.
+**Done when**: a structural engineer unfamiliar with FEA can set up an IFC
+model, run the analysis, and interpret the results using only the
+documentation.

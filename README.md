@@ -17,22 +17,42 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections)
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
-- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX B31 sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor)
+- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX B31 sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor). Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Connection End-Releases**: Rotational releases read from `IfcRelConnectsStructuralMember.AppliedCondition` and modelled as pinned connections
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
 ### Known Limitations
 
-This software is under active development. The following limitations are known:
+Open bugs and planned work are tracked in the project's `bd` (beads) issue
+database; `bd list --status=open` shows the current list. The points below are
+the ones a user needs to know before trusting a result.
 
-- **Overlapping members (partial)**: Members with *partially* overlapping geometry (e.g. a short stub beam embedded in a longer beam) may still lose element assignments after mesh fragmentation. A spatial-proximity fallback handles these rare cases. Members with *identical* geometry (exact overlap) are now correctly handled: they share a single physical group and receive the same finite elements.
-- **Linear buckling**: The `linear_buckling` analysis type produces two CalculiX steps (static pre-stress + perturbation buckle) and parses eigenvalue multipliers from the `.dat` file, but results have not been validated against published benchmarks.
-- **Section types**: Rectangular, circular, pipe (hollow circle), and box (hollow rectangle) profiles use native CalculiX B31 beam sections, where CalculiX derives the stiffness from the supplied dimensions. I, T, L (angle), and C (channel) profiles are instead analysed with CalculiX U1 (Timoshenko) elements via a *general* section that supplies only area, the two principal second moments of area, and a shear correction factor. The U1 general section cannot represent a product of inertia (the `xi12` term is forced to zero) or a section offset/eccentricity, so:
-  - **Asymmetric sections are approximated as symmetric**: `IfcAsymmetricIShapeProfileDef` has its top and bottom flanges averaged before the section properties are computed, losing the asymmetry.
-  - **L (angle) sections are approximated**: their true principal axes are rotated relative to the geometric axes (a non-zero product of inertia), which the general section cannot express, so the bending behaviour about the principal axes is not reproduced exactly.
-- **Section orientation about the beam axis**: The cross-section's rotational orientation about the member's longitudinal axis (the `IfcStructuralCurveMember.Axis` direction) is **not currently reproduced faithfully**. For symmetric sections (circle, square, pipe) this is immaterial, but for directional sections (rectangle, I, T, C) the section is placed in a default orientation, which can interchange the strong and weak bending axes. This is a known bug under active repair (tracked in the issue tracker), not an inherent limitation.
-- **Self-weight loads**: Models without explicit `IfcStructuralLoadCase` entries (e.g. `cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) rely entirely on self-weight. Pass `--gravity` to include it; without that flag, no loads are applied and displacements will be zero.
-- **Mixed beam+shell instability**: When all column-base supports fix only translational DOFs (no rotational restraint) and no moment-resisting connections exist, the structure is a near-mechanism under lateral loads. The library now detects this condition and emits a `STABILITY WARNING` in both the log and the generated `.inp` file, but does not automatically alter the model.
+- **Multi-member building models are unverified.** `building_01` does not solve
+  (singular stiffness matrix) and `building_02` solves but is near-singular: its
+  displacements change several-fold with mesh size and reach kilometres under
+  self-weight. Single members and small frames agree with hand calculations (see
+  the validation report).
+- **I, T, L and C sections only work when every beam in the model has one.**
+  These profiles are analysed with CalculiX U1 (Timoshenko) elements and a
+  general section (`A`, `Iy`, `Iz`, shear factor). Stock CalculiX crashes when a
+  U1 element shares a model with any other beam or shell element. A patched
+  build runs, but transfers no moment between a U1 beam and a native beam at a
+  shared node, so the joint behaves as a pin. Rectangular, circular, pipe and box
+  sections use native B31 sections and do not have this problem.
+- **Open-section approximations.** The general section has no product of inertia
+  and no offset. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
+  L (angle) sections are analysed about their leg-parallel axes rather than
+  their rotated principal axes.
+- **No beam section forces or utilisation ratios yet.** `results.json` reports
+  displacements, von Mises stress and total reactions. Per-member axial force,
+  shear and moment are not available.
+- **Reactions are a single total**, not one per load case.
+- **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
+  (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
+  otherwise and return zero displacement.
+- **Linear buckling** is validated for one Euler column only.
+- **Members without an IFC `Axis`** are given a default section orientation,
+  which for a non-square section may not be the one intended.
 
 ## Installation
 
@@ -40,8 +60,8 @@ This software is under active development. The following limitations are known:
 
 Install these separately before installing this library:
 
-- **Python 3.8 or later**
-- **CalculiX** (`ccx` executable) — finite element solver
+- **Python 3.9 or later** (CI tests 3.9, 3.10 and 3.11)
+- **CalculiX** (`ccx` executable) — finite element solver. The unmodified distribution package is the supported target
 - **Gmsh with Python API** — mesh generation (`pip install gmsh`)
 - **IfcOpenShell** — IFC file parsing (`pip install ifcopenshell`)
 
@@ -128,7 +148,7 @@ Results can be visualized using the `visualize.py` script. This requires PyVista
 python visualize.py slab_01
 
 # Visualize stress distribution
-python visualize.py building_01a --field stress
+python visualize.py structure_01 --field stress
 
 # Save screenshot (non-interactive)
 python visualize.py portal_01 --screenshot result.png
@@ -164,17 +184,20 @@ The script expects:
 
 The repository includes example IFC structural models (as a git submodule in `examples/analysis-models/`):
 
-| Model | Description | `--gravity` | Status |
-|-------|-------------|-------------|--------|
-| `beam_01` | Simply supported beam, point load | No | Working — 0.26 mm max disp, 20 kN reaction |
-| `cantilever_01` | Cantilever beam, self-weight | **Yes** | Working — 1.1 mm tip deflection |
-| `portal_01` | Portal frame, distributed load | No | Working — 0.55 mm max disp |
-| `grid_of_beams` | Grid of beams, self-weight | **Yes** | Partial — near-zero reactions (no density in IFC); corner supports at intermediate beam positions not located by node search |
-| `slab_01` | Flat slab, self-weight | **Yes** | Working — 0.39 mm max disp, 198 kN reaction |
-| `structure_01` | Mixed structure, self-weight | **Yes** | Working — 2.8 mm max disp, 634 kN reaction |
-| `building_01` | Multi-storey building, lateral planar forces | No | Unstable — pinned column bases with no moment connections creates a near-mechanism under lateral load |
-| `building_01a` | Multi-storey building, self-weight | **Yes** | Working — 14 mm max disp, 275 kN reaction |
-| `building_02` | Larger multi-storey building, planar forces | No | Working — 80 mm max disp, 29 MN reaction |
+| Model | Description | `--gravity` | Max displacement | Vertical reaction | Status |
+|-------|-------------|-------------|------------------|-------------------|--------|
+| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.26 mm (0.35 mm at a 0.05 m mesh; hand value 0.35 mm) | 20.0 kN | Verified |
+| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm (hand value 0.28 mm) | 15 N at this mesh (weight 18.4 N; converges with refinement) | Verified |
+| `portal_01` | Portal frame of I-sections, distributed load | No | 3.1 mm | 85.4 kN | Runs; not independently checked |
+| `slab_01` | Flat slab, self-weight | **Yes** | 0.39 mm | 198 kN | Runs; not independently checked |
+| `structure_01` | Beams and slab, self-weight | **Yes** | 2.9 mm | 630 kN | Runs; not independently checked |
+| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.49 mm | 0.24 kN | Runs; corner supports sit 0.1 m inside the beam ends |
+| `building_02` | Larger multi-storey building, two load cases | No | 14 mm / 365 mm | 29.4 MN | Near-singular; do not trust |
+| `building_01` | Multi-storey building, lateral loads | No | — | — | Fails: singular stiffness matrix |
+
+Values are from the default 1.0 m mesh with CalculiX 2.23, measured on
+2026-10-09. A coarse mesh under-predicts beam deflection, as the `beam_01` row
+shows; use `--mesh-size` to refine.
 
 To run an example:
 
@@ -218,11 +241,12 @@ pip install -e ".[dev]"
 black src/ tests/
 isort src/ tests/
 
-# Type checking
-mypy src/
+# Linting (all four must pass; CI pins the versions)
+flake8 src/ tests/
+ruff check src/ tests/
 
-# Linting
-flake8 src/
+# Type checking (configured, not enforced in CI)
+mypy src/
 ```
 
 ## Architecture
