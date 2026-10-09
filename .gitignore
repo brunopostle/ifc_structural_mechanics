@@ -85,3 +85,4 @@ Thumbs.db
 *.db
 .beads-credential-key
 .beads/proxieddb/
+.beads.gate.lock
