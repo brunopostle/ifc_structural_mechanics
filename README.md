@@ -80,6 +80,13 @@ the ones a user needs to know before trusting a result.
   step, before and after. The step under a point load is recovered only on
   members of four or more quadratic elements; on shorter ones, and with
   `--element-order 1`, the shear there is the average of the two sides.
+- **Implausible results are flagged, not judged.** A model can solve with
+  nothing wrong in the solver's eyes and displacements of metres. The
+  analysis warns when a member distorts by more than 1/100 of its own size
+  (it is probably not connected or supported as intended), naming the load
+  case and the worst member, and when any displacement exceeds 5% of the size
+  of the model (probably a mechanism). These limits are far above
+  serviceability; passing them says nothing about a design.
 - **Displacements are read on the faces of the solid elements** CalculiX
   expands beams and shells into, so a member that rotates reports a few
   percent more than its axis moves.

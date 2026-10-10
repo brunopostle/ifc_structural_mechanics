@@ -446,7 +446,11 @@ beam, and beam and slab axes are at the level the IFC gives them, so there is no
 composite action.
 
 With `--strict-connections` the ties are left out and the analysis is of the connections
-in the file alone: 462, 42 and 120 mm for the three cases, as before.
+in the file alone: 462, 42 and 120 mm for the three cases, as before. That run now ends
+with a warning: "Load case Live: member 2v2zbtMavCUv4$UquJwvIb distorts by 462 mm over its
+23.1 m (1/50), more than 1/100. It is probably not connected or supported as intended."
+The default run, where the same slab distorts by 25.8 mm (about 1/900), raises none, and
+neither does any other example model.
 
 Per-member values in `results.json` were wrong on this model until 2026-10-10: the nodes
 of the solids CalculiX expands each element into were guessed from the mesh node numbers.

@@ -382,6 +382,12 @@ here. This section only records the constraints that shape day-to-day work.
   to point the way the member does (first point of its geometry to the last)
   so signs are the same along a member. `results.json` has the envelope and
   the signed diagram.
+- **`analysis/plausibility.py` warns about results too large to believe**:
+  a member distorting by more than 1/100 of its size
+  (`max_relative_displacement_m`, which leaves out rigid movement), or any
+  displacement over 5% of the model's size. `building_02` with
+  `--strict-connections` is the case it was written for. A warning here
+  means look at connections and supports before anything else.
 - **Nodal stresses are averaged between elements that share nodes**, so a
   force that jumps at a cross-section (shear under a point load) comes out as
   the mean of the two sides. `ResultsExporter._restore_jumps()` puts the step

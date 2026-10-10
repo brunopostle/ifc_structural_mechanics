@@ -164,7 +164,9 @@ because CalculiX only writes them itself in a mode that loses shell bending
 stress.
 
 The same forces are given along each member, signed, as diagrams in axes the
-file states.
+file states. Results too large to be believed (a member distorting by more
+than 1/100 of its size, a displacement over 5% of the model) raise a warning
+that names the load case and the member.
 
 Missing: checks beyond normal stress (shear, buckling, concrete), utilisation
 for shells, per-node displacement detail, and a CLI flag for limits.
