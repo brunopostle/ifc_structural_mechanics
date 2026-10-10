@@ -64,13 +64,22 @@ the ones a user needs to know before trusting a result.
   centroid and member axis. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
   L (angle) sections are analysed about their leg-parallel axes rather than
   their rotated principal axes.
-- **Beam results are envelopes over the member.** For every beam and column
-  and every load case `results.json` gives the largest axial force, shear
-  forces, bending moments and torque, and the largest normal stress they
-  produce in the member's real section (`|N|/A + |M|/W` about both axes; no
-  shear, torsion or buckling). A `utilisation_ratio` is that stress over the
-  yield stress, for materials whose IFC definition has a `YieldStress`. Force
-  diagrams along a member and the signs of the forces are not exported.
+- **Beam results.** For every beam and column and every load case
+  `results.json` gives the largest axial force (tension and compression
+  separately), shear forces, bending moments and torque, and the largest
+  normal stress they produce in the member's real section (`|N|/A + |M|/W`
+  about both axes; no shear, torsion or buckling). A `utilisation_ratio` is
+  that stress over the yield stress, for materials whose IFC definition has a
+  `YieldStress`.
+- **Force diagrams** (`section_force_diagrams`) list the same six forces with
+  their signs along each member, in the axes given by `section_axes`: `x` from
+  the first point of the member's IFC edge to the last, `1` along the
+  profile's depth, `2 = x × 1`. Each force is what the part of the member
+  beyond a cross-section exerts on the part before it; a moment is positive
+  when it puts the + side of its axis in tension. A distance listed twice is a
+  step, before and after. The step under a point load is recovered only on
+  members of four or more quadratic elements; on shorter ones, and with
+  `--element-order 1`, the shear there is the average of the two sides.
 - **Displacements are read on the faces of the solid elements** CalculiX
   expands beams and shells into, so a member that rotates reports a few
   percent more than its axis moves.

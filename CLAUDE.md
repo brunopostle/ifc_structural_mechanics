@@ -378,8 +378,16 @@ here. This section only records the constraints that shape day-to-day work.
   (`OUTPUT=2D` + `SECTION FORCES`), which averages shell stress through the
   thickness. At each cross-section of an expanded element that has nodes, the
   nodal stresses are interpolated and integrated in the axes the writer
-  recorded for the element (`StructuralModel.beam_section_frames`). Only
-  envelopes of magnitudes are exported; there are no diagrams and no signs.
+  recorded for the element (`StructuralModel.beam_section_frames`), turned
+  to point the way the member does (first point of its geometry to the last)
+  so signs are the same along a member. `results.json` has the envelope and
+  the signed diagram.
+- **Nodal stresses are averaged between elements that share nodes**, so a
+  force that jumps at a cross-section (shear under a point load) comes out as
+  the mean of the two sides. `ResultsExporter._restore_jumps()` puts the step
+  back for N, V and T from the elements' own middle cross-sections; it needs
+  four quadratic elements in the member. At a joint the nodes are separate
+  and the values are already one-sided.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and
   13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
   in the file. `building_02` solves, its reactions match the applied loads and its

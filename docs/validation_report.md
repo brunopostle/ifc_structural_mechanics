@@ -226,6 +226,15 @@ stand-in, but their resultants are the member's real forces, and the stress repo
 `|N|/A + |Mf1| y/Iy + |Mf2| z/Iz` with the properties of the real section. That is why the
 I-section rows agree with hand values although no I-shaped stress field was ever computed.
 
+The forces are also exported along each member with their signs
+(`section_force_diagrams`). Two cases are tested point by point at 1% of the largest
+value: the cantilever, where V = −w (L − x) and M = w (L − x)² / 2 at all 121
+cross-sections, and the fixed-fixed beam, where the shear is −P/2 up to midspan and +P/2
+after it, with both values listed at midspan, and the moment runs from +P L/8 at the
+supports to −P L/8 under the load. The solver's own stress at the loaded cross-section is
+the average of the two sides, which would give zero shear there; the step is rebuilt
+from the cross-sections at the middle of each element, which belong to one element only.
+
 Two checks without a hand value: in `portal_01` each column carries 42.70 kN, half the
 85.41 kN reaction, and the beam's end shear is the same 42.70 kN, while the column shear
 and the beam's axial force are both 12.41 kN. In `structure_01` the pin-ended column has
