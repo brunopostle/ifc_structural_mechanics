@@ -1138,6 +1138,12 @@ class UnifiedCalculixWriter:
         """
         beam_axis = self._compute_beam_axis(elem_ids, member)
         beam_normal = self._orthogonal_beam_normal(beam_normal, beam_axis)
+        # Section forces are recovered in these axes after the analysis
+        for elem_id in elem_ids or []:
+            self.domain_model.beam_section_frames[elem_id] = (
+                tuple(float(v) for v in beam_axis),
+                tuple(float(v) for v in beam_normal),
+            )
 
         stype = getattr(getattr(member, "section", None), "section_type", None)
         native = get_native_section(stype)

@@ -20,9 +20,13 @@ from ifc_structural_mechanics.ifc.properties_extractor import (  # noqa: E402
     PropertiesExtractor,
 )
 
+# An entity is only valid while its file is alive
+_FILES = []
+
 
 def _profile(ifc_class, **attributes):
     model = ifcopenshell.file(schema="IFC4")
+    _FILES.append(model)
     return model.create_entity(
         ifc_class, ProfileType="AREA", ProfileName="benchmark", **attributes
     )

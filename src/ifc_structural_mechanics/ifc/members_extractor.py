@@ -775,6 +775,21 @@ class MembersExtractor:
         else:
             elastic_modulus = 210e9  # Pa, already SI
 
+        # Yield stress, where the file gives one (Pset_MaterialSteel). A
+        # concrete's compressive strength is not used: it is not a limit on
+        # the normal stress of a member.
+        yield_strength = None
+        for pset in psets:
+            for prop in getattr(pset, "Properties", None) or []:
+                if getattr(prop, "Name", "") != "YieldStress":
+                    continue
+                try:
+                    value = float(prop.NominalValue.wrappedValue)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if value > 0:
+                    yield_strength = value * self.pressure_scale
+
         # Create material with extracted properties or defaults, converted to SI units
         return Material(
             id=(
@@ -786,6 +801,7 @@ class MembersExtractor:
             density=density,
             elastic_modulus=elastic_modulus,
             poisson_ratio=poisson_ratio,
+            yield_strength=yield_strength,
         )
 
     def _create_section(self, profile):

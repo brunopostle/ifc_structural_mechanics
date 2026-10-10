@@ -21,6 +21,7 @@ from ..domain.result import (
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
 from .base_parser import BaseParser
+from .section_forces import element_section_forces
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -71,8 +72,10 @@ class ResultsParser(BaseParser):
         super().__init__(mapper=None)
         self.domain_model = domain_model
         self.load_case_names: Optional[List[str]] = load_case_names
-        # Node IDs of each element in the last FRD file parsed
+        # Node IDs of each element, and node positions, in the last FRD file
+        # parsed
         self.element_nodes: Dict[int, List[int]] = {}
+        self.node_coordinates: Dict[int, List[float]] = {}
 
         # Define mappings from CalculiX result codes to domain result properties
         self.result_type_mappings = {
@@ -227,6 +230,36 @@ class ResultsParser(BaseParser):
             raise ResultProcessingError(
                 f"Failed to parse displacement results: {str(e)}"
             ) from e
+
+    def parse_node_coordinates(self, frd_file: str) -> Dict[int, List[float]]:
+        """Read the node block of an FRD file.
+
+        These are the nodes results are reported on, including the ones
+        CalculiX creates when it expands beams and shells into solids.
+
+        Args:
+            frd_file (str): Path to the FRD file.
+
+        Returns:
+            Dict[int, List[float]]: Position of each node; empty if the file
+            is missing or has no node block.
+        """
+        coordinates: Dict[int, List[float]] = {}
+        if not os.path.exists(frd_file):
+            return coordinates
+        in_block = False
+        with open(frd_file, "r") as fh:
+            for line in fh:
+                if not in_block:
+                    in_block = line.startswith("    2C")
+                    continue
+                if line.startswith(" -1"):
+                    coordinates[int(line[3:13])] = [
+                        float(line[13 + 12 * i : 25 + 12 * i]) for i in range(3)
+                    ]
+                elif line.startswith(" -3"):
+                    break
+        return coordinates
 
     def parse_element_nodes(self, frd_file: str) -> Dict[int, List[int]]:
         """Read the element connectivity block of an FRD file.
@@ -937,6 +970,7 @@ class ResultsParser(BaseParser):
             ResultProcessingError: If result files cannot be parsed.
         """
         self.element_nodes = {}
+        self.node_coordinates = {}
         parsed_results = {
             "displacement": [],
             "stress": [],
@@ -966,6 +1000,7 @@ class ResultsParser(BaseParser):
 
                 # Element connectivity, for attributing results to members
                 self.element_nodes = self.parse_element_nodes(frd_file)
+                self.node_coordinates = self.parse_node_coordinates(frd_file)
 
             # Parse DAT file for reaction forces and buckling eigenvalues
             if "data" in result_files:
@@ -984,6 +1019,12 @@ class ResultsParser(BaseParser):
                 section_forces = self.parse_beam_section_forces(dat_file)
                 parsed_results["section_forces"].extend(section_forces)
 
+            # Beam section forces, integrated from the stresses of the solids
+            # the beams were expanded into
+            computed = self.compute_beam_section_forces(parsed_results["stress"])
+            if computed:
+                parsed_results["section_forces"] = computed
+
             # Map results to domain model entities if a model is provided
             if self.domain_model:
                 self._map_results_to_domain(parsed_results)
@@ -995,6 +1036,53 @@ class ResultsParser(BaseParser):
             raise ResultProcessingError(
                 f"Failed to parse result files: {str(e)}"
             ) from e
+
+    def compute_beam_section_forces(self, stresses: List[StressResult]) -> List[Dict]:
+        """Integrate section forces for every beam element with a known frame.
+
+        Uses the element connectivity and node positions of the last FRD file
+        parsed and the section axes the input writer recorded in the model
+        (``StructuralModel.beam_section_frames``). See
+        ``analysis/section_forces.py`` for the method and the conventions.
+
+        Args:
+            stresses (List[StressResult]): Nodal stresses, tagged by load case.
+
+        Returns:
+            List[Dict]: One record per element, cross-section and load case,
+            with ``element_id``, ``load_case``, ``position``, ``N``, ``Vf1``,
+            ``Vf2``, ``T``, ``Mf1`` and ``Mf2``. Empty when the model has no
+            beam frames or the file no connectivity.
+        """
+        frames = getattr(self.domain_model, "beam_section_frames", None) or {}
+        if not isinstance(frames, dict) or not frames or not self.element_nodes:
+            return []
+        wanted = {node for elem in frames for node in self.element_nodes.get(elem, ())}
+        components = ("sxx", "syy", "szz", "sxy", "syz", "sxz")
+        by_case: Dict[str, Dict[int, List[float]]] = {}
+        for result in stresses:
+            try:
+                node = int(result.reference_element)
+            except (TypeError, ValueError):
+                continue
+            if node not in wanted:
+                continue
+            case = result.metadata.get("load_case", "_combined")
+            by_case.setdefault(case, {})[node] = [
+                result.values.get(name, 0.0) for name in components
+            ]
+
+        records: List[Dict] = []
+        for case, nodal in by_case.items():
+            for elem, (axis, direction_1) in frames.items():
+                nodes = self.element_nodes.get(elem)
+                if not nodes:
+                    continue
+                for forces in element_section_forces(
+                    nodes, self.node_coordinates, nodal, axis, direction_1
+                ):
+                    records.append({"element_id": elem, "load_case": case, **forces})
+        return records
 
     def _map_results_to_domain(self, results: Dict[str, List[Result]]) -> None:
         """
@@ -1016,6 +1104,8 @@ class ResultsParser(BaseParser):
             # Add all results to the domain model
             for result_type, result_list in results.items():
                 for result in result_list:
+                    if not hasattr(result, "validate"):
+                        continue  # eigenvalue tuples, section force records
                     if result.validate():
                         self.domain_model.results.append(result)
                     else:

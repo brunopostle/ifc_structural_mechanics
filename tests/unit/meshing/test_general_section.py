@@ -1,21 +1,9 @@
-"""Tests for non-standard section handling and U1 beam element output.
-
-Architecture (as of Phase 2):
-- Non-standard sections (I, T, L, C, arbitrary) are handled by U1 elements
-  via _write_beam_section_general() (uses *BEAM SECTION SECTION=GENERAL).
-- _write_beam_section_for_set() is only called for B31 elements with standard
-  sections (RECT/CIRC/PIPE/BOX).  Non-standard profiles that somehow reach
-  this path fall back to an equivalent RECT (preserves A and Iy).
-- When U1 elements are present the writer adds BEAM_B31 to element_sets
-  (possibly empty) as a sentinel so that _find_beam_elset() knows not to
-  fall back to ELSET_LINE* (which would include U1 elements that crash on SF).
-"""
+"""Tests for the output requests of a step and for U1 general sections."""
 
 import io
 from unittest.mock import MagicMock
 
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
-    _find_beam_elset,
     _write_step_output_requests,
 )
 from ifc_structural_mechanics.domain.property import Material, Section
@@ -85,102 +73,34 @@ def _i_member():
 
 
 # ---------------------------------------------------------------------------
-# _find_beam_elset
-# ---------------------------------------------------------------------------
-
-
-class TestFindBeamElset:
-    def test_returns_line2_set(self):
-        element_sets = {"ELSET_LINE2": [1, 2, 3], "ELSET_TRIANGLE6": [4, 5]}
-        assert _find_beam_elset(element_sets) == "ELSET_LINE2"
-
-    def test_returns_line_set(self):
-        element_sets = {"ELSET_LINE": [1, 2], "ELSET_QUAD8": [3, 4]}
-        assert _find_beam_elset(element_sets) == "ELSET_LINE"
-
-    def test_returns_none_for_shell_only(self):
-        element_sets = {"ELSET_TRIANGLE6": [1, 2], "ELSET_QUAD8": [3]}
-        assert _find_beam_elset(element_sets) is None
-
-    def test_returns_none_for_empty_dict(self):
-        assert _find_beam_elset({}) is None
-
-    def test_returns_none_for_none(self):
-        assert _find_beam_elset(None) is None
-
-    def test_skips_empty_beam_set(self):
-        """An ELSET_LINE with no elements should not be returned."""
-        element_sets = {"ELSET_LINE": [], "ELSET_TRIANGLE6": [1]}
-        assert _find_beam_elset(element_sets) is None
-
-    # ---- BEAM_B31 sentinel tests (U1 element support) ----
-
-    def test_beam_b31_non_empty_returned(self):
-        """Mixed B31+U1 model: BEAM_B31 is non-empty → return it for SF output."""
-        element_sets = {
-            "BEAM_B31": [1, 2],
-            "ELSET_LINE": [1, 2, 3, 4],  # U1 + B31 mixed
-        }
-        assert _find_beam_elset(element_sets) == "BEAM_B31"
-
-    def test_beam_b31_empty_returns_none(self):
-        """All-U1 model: BEAM_B31 present but empty → None (skip SF output)."""
-        element_sets = {
-            "BEAM_B31": [],  # sentinel: U1 elements exist, no B31
-            "ELSET_LINE": [1, 2, 3],  # all U1 elements
-        }
-        assert _find_beam_elset(element_sets) is None
-
-    def test_beam_b31_empty_does_not_fall_through_to_line(self):
-        """BEAM_B31=[] must suppress the ELSET_LINE fallback (prevents SF crash)."""
-        element_sets = {
-            "BEAM_B31": [],
-            "ELSET_LINE2": [10, 11, 12],  # would be returned without sentinel
-        }
-        # Must be None, not "ELSET_LINE2"
-        assert _find_beam_elset(element_sets) is None
-
-
-# ---------------------------------------------------------------------------
-# _write_step_output_requests with/without beam_elset
+# _write_step_output_requests
 # ---------------------------------------------------------------------------
 
 
 class TestStepOutputRequests:
-    def test_sf_written_when_beam_elset_provided(self):
+    def test_section_forces_are_not_requested(self):
+        """They are integrated from the stresses; see analysis/section_forces."""
         buf = io.StringIO()
-        _write_step_output_requests(buf, beam_elset="ELSET_LINE2")
-        text = buf.getvalue()
-        assert "EL FILE" in text
-        assert "ELSET=ELSET_LINE2" in text
-        assert "SF" in text
-
-    def test_sf_not_written_without_beam_elset(self):
-        buf = io.StringIO()
-        _write_step_output_requests(buf, beam_elset=None)
+        _write_step_output_requests(buf)
         text = buf.getvalue()
         assert "SF" not in text
+        assert "SECTION FORCES" not in text
 
-    def test_node_file_always_written(self):
-        for beam_elset in (None, "ELSET_LINE"):
-            buf = io.StringIO()
-            _write_step_output_requests(buf, beam_elset=beam_elset)
-            assert "*NODE FILE" in buf.getvalue()
-
-    def test_end_step_always_written(self):
+    def test_node_file_and_end_step_written(self):
         buf = io.StringIO()
-        _write_step_output_requests(buf, beam_elset=None)
+        _write_step_output_requests(buf)
+        assert "*NODE FILE" in buf.getvalue()
         assert "*END STEP" in buf.getvalue()
 
     def test_s_e_suppressed_for_u1_elements(self):
         """has_u1_elements=True → no *EL FILE S, E (U1 segfaults on stress output)."""
         buf = io.StringIO()
-        _write_step_output_requests(buf, beam_elset=None, has_u1_elements=True)
+        _write_step_output_requests(buf, has_u1_elements=True)
         text = buf.getvalue()
         assert "S, E" not in text
 
     def test_s_e_written_without_u1(self):
         """Default (no U1) → *EL FILE S, E is written."""
         buf = io.StringIO()
-        _write_step_output_requests(buf, beam_elset=None, has_u1_elements=False)
+        _write_step_output_requests(buf, has_u1_elements=False)
         assert "S, E" in buf.getvalue()

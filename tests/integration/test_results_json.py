@@ -276,6 +276,31 @@ class TestBuilding02ResultsJson:
         ]
         assert incomplete == []
 
+    def test_every_beam_and_column_has_section_forces(self, building_02_run):
+        """And a normal stress from them, for every load case."""
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        curves = [m for m in data["members"] if m["type"] == "curve"]
+        assert len(curves) == 640
+        for member in curves:
+            for case in data["load_cases"]:
+                entry = member["by_load_case"][case]
+                assert set(entry["section_forces"]) == {
+                    "max_N_N",
+                    "max_T_Nm",
+                    "max_Mf1_Nm",
+                    "max_Mf2_Nm",
+                    "max_Vf1_N",
+                    "max_Vf2_N",
+                }
+                assert entry["max_normal_stress_Pa"] >= 0
+
+    def test_surface_members_have_no_section_forces(self, building_02_run):
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        surfaces = [m for m in data["members"] if m["type"] == "surface"]
+        assert not any("section_forces" in m["envelope"] for m in surfaces)
+
     def test_largest_member_displacement_is_the_global_one(self, building_02_run):
         """Each load case's maximum is found on some member, and on no more."""
         _, output_dir = building_02_run

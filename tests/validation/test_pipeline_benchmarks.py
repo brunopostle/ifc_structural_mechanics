@@ -189,6 +189,15 @@ def _max_vertical_deflection(data: dict) -> float:
     return data["global_displacements"]["envelope"]["max_tz_m"]
 
 
+FORCE_TOLERANCE = 0.01
+
+
+def _curve_member_envelope(data: dict) -> dict:
+    """The envelope of the model's only curve member."""
+    (member,) = [m for m in data["members"] if m["type"] == "curve"]
+    return member["envelope"]
+
+
 class TestRectangularCantileverSelfWeight:
     """cantilever_01 under gravity, native rectangular section (B32R)."""
 
@@ -215,6 +224,32 @@ class TestRectangularCantileverSelfWeight:
         assert _max_vertical_deflection(data) == pytest.approx(
             expected, rel=DEFLECTION_TOLERANCE
         )
+
+    def test_section_forces_at_the_root(self, tmp_path):
+        """Shear w L, moment w L^2 / 2 and the bending stress that goes with it."""
+        data = _run(CANTILEVER, tmp_path, gravity=True)
+        envelope = _curve_member_envelope(data)
+        load = CANT_RHO * G_ACCEL * 0.2 * 0.4
+        moment = load * CANT_L**2 / 2
+        forces = envelope["section_forces"]
+        assert forces["max_Vf1_N"] == pytest.approx(load * CANT_L, rel=FORCE_TOLERANCE)
+        assert forces["max_Mf1_Nm"] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        assert forces["max_Mf2_Nm"] < 1e-3 * moment
+        assert forces["max_N_N"] < 1e-3 * load * CANT_L
+        assert envelope["max_normal_stress_Pa"] == pytest.approx(
+            moment / (0.2 * 0.4**3 / 12) * 0.2, rel=FORCE_TOLERANCE
+        )
+
+    def test_weak_axis_forces_are_reported_about_the_other_axis(self, tmp_path):
+        path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0))
+        data = _run(path, tmp_path, gravity=True)
+        forces = _curve_member_envelope(data)["section_forces"]
+        load = CANT_RHO * G_ACCEL * 0.2 * 0.4
+        assert forces["max_Vf2_N"] == pytest.approx(load * CANT_L, rel=FORCE_TOLERANCE)
+        assert forces["max_Mf2_Nm"] == pytest.approx(
+            load * CANT_L**2 / 2, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Mf1_Nm"] < 1e-3 * forces["max_Mf2_Nm"]
 
     def test_reaction_balances_self_weight(self, tmp_path):
         """Vertical reaction equals the member's weight.
@@ -293,7 +328,7 @@ class TestISectionAsEquivalentRectangle:
             weight, rel=0.02
         )
 
-    def test_no_stress_is_reported(self, tmp_path):
+    def test_solver_stress_is_not_reported(self, tmp_path):
         """The stresses in the result file are the rectangle's, not the section's."""
         path = _cantilever_variant(tmp_path, i_profile=True)
         data = _run(path, tmp_path, gravity=True)
@@ -301,6 +336,30 @@ class TestISectionAsEquivalentRectangle:
         assert member["section_model"] == "equivalent_rectangle"
         assert "max_von_mises_Pa" not in member["envelope"]
         assert member["envelope"]["max_displacement_m"] > 0
+
+    @pytest.mark.parametrize(
+        "axis, inertia, fibre, moment_key",
+        [
+            (None, I_STRONG, I_H / 2, "max_Mf1_Nm"),
+            ((0.0, 1.0, 0.0), I_WEAK, I_B / 2, "max_Mf2_Nm"),
+        ],
+        ids=["strong axis", "weak axis"],
+    )
+    def test_stress_comes_from_the_forces_and_the_real_section(
+        self, tmp_path, axis, inertia, fibre, moment_key
+    ):
+        """The rectangle's stresses are not the section's; its resultants are."""
+        path = _cantilever_variant(tmp_path, axis=axis, i_profile=True)
+        data = _run(path, tmp_path, gravity=True)
+        envelope = _curve_member_envelope(data)
+        load = CANT_RHO * G_ACCEL * I_AREA
+        moment = load * CANT_L**2 / 2
+        assert envelope["section_forces"][moment_key] == pytest.approx(
+            moment, rel=FORCE_TOLERANCE
+        )
+        assert envelope["max_normal_stress_Pa"] == pytest.approx(
+            moment / inertia * fibre, rel=FORCE_TOLERANCE
+        )
 
 
 class TestRoundAndHollowSections:
@@ -387,6 +446,15 @@ class TestFixedFixedBeamPointLoad:
         ) + self.LOAD * self.LENGTH / (4 * shear_modulus * self.AREA * 5 / 6)
         assert _max_vertical_deflection(data) == pytest.approx(
             expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_section_forces(self, tmp_path):
+        """Shear P / 2 throughout; moment P L / 8 at the ends and at midspan."""
+        data = _run(BEAM, tmp_path)
+        forces = _curve_member_envelope(data)["section_forces"]
+        assert forces["max_Vf1_N"] == pytest.approx(self.LOAD / 2, rel=FORCE_TOLERANCE)
+        assert forces["max_Mf1_Nm"] == pytest.approx(
+            self.LOAD * self.LENGTH / 8, rel=FORCE_TOLERANCE
         )
 
     def test_reaction_equals_applied_load(self, tmp_path):

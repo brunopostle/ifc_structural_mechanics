@@ -67,6 +67,9 @@ class StructuralModel:
         # Members analysed with a rectangle of equivalent stiffness in place
         # of their own section; set by the input writer
         self.equivalent_section_members: set = set()
+        # analysis element ID → (member axis, section 1-direction) as written
+        # on its beam section card; set by the input writer
+        self.beam_section_frames: Dict[int, tuple] = {}
         # member.id → its mesh nodes; a node at a joint belongs to several
         self.member_nodes: Dict[str, set] = {}
 

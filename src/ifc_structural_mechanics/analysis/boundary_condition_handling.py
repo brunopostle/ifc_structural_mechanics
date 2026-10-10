@@ -771,50 +771,18 @@ def _write_load_reset(file: TextIO) -> None:
     file.write("*DLOAD, OP=NEW\n\n")
 
 
-def _find_beam_elset(element_sets: Optional[Dict[str, List[int]]]) -> Optional[str]:
-    """Return the name of a B31-only element set suitable for *EL FILE SF, or None.
-
-    Preference order:
-    1. ``BEAM_B31`` — registered by UnifiedCalculixWriter when the model contains
-       any U1 elements (U1 does not support SF output).  If it is non-empty there
-       are also B31 elements and we use that set; if it is empty all elements are
-       U1 and we return None (skip SF output entirely).
-    2. ``ELSET_LINE*`` — Gmsh-named sets containing all line elements.  Only
-       reached when ``BEAM_B31`` is absent, which means the writer found *no* U1
-       elements, so all line elements are B31 and the set is safe.
-
-    CalculiX ``*EL FILE, SF`` is only valid for B31/B32 beam elements; applying
-    it to a set that contains U1 or shell elements causes a fatal crash.
-    """
-    if not element_sets:
-        return None
-    # If BEAM_B31 is present (even empty) the model has U1 elements.
-    # Return the set only when it is non-empty (mixed B31+U1 model).
-    # Return None when empty (all-U1 model) to skip SF output entirely.
-    if "BEAM_B31" in element_sets:
-        return "BEAM_B31" if element_sets["BEAM_B31"] else None
-    # No U1 elements at all → fall back to Gmsh line sets (all B31, safe).
-    for key in element_sets:
-        if key.upper().startswith("ELSET_LINE") and element_sets[key]:
-            return key
-    return None
-
-
 def _write_step_output_requests(
     file: TextIO,
-    beam_elset: Optional[str] = None,
     has_u1_elements: bool = False,
 ) -> None:
     """Write standard output requests for a single analysis step.
 
+    Beam section forces are not requested: CalculiX only writes them in its
+    two-dimensional output mode, which loses shell bending stress. They are
+    integrated from the stresses requested here (``analysis/section_forces``).
+
     Args:
         file: Output file handle.
-        beam_elset: Name of an element set containing only B31 beam elements.
-            When provided, ``*EL FILE, SF`` is written for that set so that
-            beam section forces (N, T, Mf1, Mf2, Vf1, Vf2) appear in the DAT
-            file.  Omitting this skips SF output, which is required when the
-            model contains only shell elements (CalculiX rejects SF on mixed or
-            shell-only sets).
         has_u1_elements: When True, suppress ``*EL FILE S, E`` — U1 Timoshenko
             beam elements do not support stress/strain output and CalculiX will
             segfault if it is requested on them.
@@ -826,9 +794,6 @@ def _write_step_output_requests(
     if not has_u1_elements:
         file.write("*EL FILE\n")
         file.write("S, E\n")
-    if beam_elset:
-        file.write(f"*EL FILE, ELSET={beam_elset}\n")
-        file.write("SF\n")
     file.write("*END STEP\n\n")
 
 
@@ -950,9 +915,6 @@ def write_analysis_steps(
         file.write("*END STEP\n\n")
         return
 
-    # Determine beam-only element set for SF output (None if no beam elements)
-    beam_elset = _find_beam_elset(element_sets)
-
     # U1 (Timoshenko) beam elements don't support *EL FILE S, E stress output.
     # BEAM_B31 present in element_sets (even if empty) signals that U1 elements exist.
     has_u1_elements = "BEAM_B31" in (element_sets or {})
@@ -982,9 +944,7 @@ def write_analysis_steps(
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
                 )
-            _write_step_output_requests(
-                file, beam_elset=beam_elset, has_u1_elements=has_u1_elements
-            )
+            _write_step_output_requests(file, has_u1_elements=has_u1_elements)
 
         # Gravity as a separate step (self-weight applies once, not per load case)
         if gravity:
@@ -1001,9 +961,7 @@ def write_analysis_steps(
                     f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
                 )
             _write_u1_gravity_cloads(file, u1_gravity_nodal_loads or {})
-            _write_step_output_requests(
-                file, beam_elset=beam_elset, has_u1_elements=has_u1_elements
-            )
+            _write_step_output_requests(file, has_u1_elements=has_u1_elements)
     else:
         # No explicit load cases — single combined step (backward-compatible)
         file.write("*STEP\n")
@@ -1034,9 +992,7 @@ def write_analysis_steps(
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")
-        _write_step_output_requests(
-            file, beam_elset=beam_elset, has_u1_elements=has_u1_elements
-        )
+        _write_step_output_requests(file, has_u1_elements=has_u1_elements)
 
 
 def _write_loads_within_step(file: TextIO, domain_model: StructuralModel) -> None:

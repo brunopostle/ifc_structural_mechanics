@@ -21,10 +21,16 @@ Schema (summary level)
       "section_model": "equivalent_rectangle",
       "envelope": {
         "max_displacement_m": 0.001,
-        "max_von_mises_Pa": 1.5e6
+        "max_von_mises_Pa": 1.5e6,
+        "max_normal_stress_Pa": 1.4e6,
+        "utilisation_ratio": 0.006,
+        "section_forces": {"max_N_N": 0.0, "max_T_Nm": 0.0,
+                           "max_Mf1_Nm": 1.0e4, "max_Mf2_Nm": 0.0,
+                           "max_Vf1_N": 1.0e4, "max_Vf2_N": 0.0}
       },
       "by_load_case": {
-        "Dead": {"max_displacement_m": 0.001, "max_von_mises_Pa": 1.5e6}
+        "Dead": {"max_displacement_m": 0.001, "max_von_mises_Pa": 1.5e6,
+                 "max_normal_stress_Pa": 1.4e6, "section_forces": {...}}
       }
     }
   ],
@@ -39,6 +45,17 @@ Schema (summary level)
     "total": {...}
   }
 }
+
+Curve members carry ``section_forces``: the largest magnitudes over the member
+of the axial force N, the torque T, the bending moments Mf1 (stress varying
+over the section's depth; strong-axis bending of a section deeper than wide)
+and Mf2, and the shear forces Vf1 (along the depth) and Vf2. They are
+integrated from the solver's stresses over each cross-section.
+``max_normal_stress_Pa`` is the largest of |N|/A + |Mf1| y/Iy + |Mf2| z/Iz over
+those cross-sections, with the properties of the member's real section;
+``utilisation_ratio`` divides it by the material's yield strength when one is
+known. ``max_von_mises_Pa`` is the solver's own value and is absent for members
+analysed as equivalent rectangles.
 
 ``section_model`` is only present on members whose section CalculiX has no
 shape for (I, T, L, C) when they were analysed as a rectangle of the same
@@ -95,6 +112,7 @@ class ResultsExporter:
         self.element_nodes = element_nodes or {}
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
         self._mesh_nodes: Optional[Dict[str, set]] = None
+        self._section_force_records: Optional[Dict[int, List[Dict]]] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -172,7 +190,7 @@ class ResultsExporter:
         disp_by_lc = self._member_displacements(node_ids)
         stress_by_lc = {} if equivalent else self._member_stresses(node_ids)
         sf_by_lc = self._member_section_forces(elem_ids)
-        util_by_lc = self._member_utilisation(sf_by_lc, member)
+        util_by_lc = self._member_utilisation(elem_ids, member)
 
         # Merge into per-load-case dict
         all_lcs = set(disp_by_lc) | set(stress_by_lc) | set(sf_by_lc)
@@ -196,6 +214,9 @@ class ResultsExporter:
                 for lc, d in by_load_case.items()
             }
         )
+
+        if sf_by_lc:
+            envelope["section_forces"] = self._envelope(sf_by_lc)
 
         status = self._status(envelope)
 
@@ -301,78 +322,92 @@ class ResultsExporter:
             for lc, value in self._member_max("stress", node_ids).items()
         }
 
+    _FORCE_KEYS = (
+        ("N", "max_N_N"),
+        ("T", "max_T_Nm"),
+        ("Mf1", "max_Mf1_Nm"),
+        ("Mf2", "max_Mf2_Nm"),
+        ("Vf1", "max_Vf1_N"),
+        ("Vf2", "max_Vf2_N"),
+    )
+
+    def _section_force_index(self) -> Dict[int, List[Dict]]:
+        """Return ``{element_id: [section force records]}``, built once."""
+        if self._section_force_records is None:
+            index: Dict[int, List[Dict]] = defaultdict(list)
+            for rec in self.parsed_results.get("section_forces", []):
+                if isinstance(rec, dict) and "element_id" in rec:
+                    index[rec["element_id"]].append(rec)
+            self._section_force_records = index
+        return self._section_force_records
+
     def _member_section_forces(self, elem_ids: set) -> Dict[str, Dict[str, float]]:
         """Return per-load-case section force envelopes for the given element set.
 
-        Groups beam section force records by load case, filters to this member's
-        elements, and returns the worst-case N, My, Mz, T, Vy, Vz per load case.
+        The largest magnitude of N, T, Mf1, Mf2, Vf1 and Vf2 over every
+        cross-section of the member's elements, per load case. The six maxima
+        need not occur at the same cross-section.
         """
-        by_lc: Dict[str, Dict[str, List[float]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-        for rec in self.parsed_results.get("section_forces", []):
-            if not isinstance(rec, dict):
-                continue
-            if rec.get("element_id") not in elem_ids:
-                continue
-            lc = rec.get("load_case", "_combined")
-            by_lc[lc]["N"].append(abs(rec.get("N", 0.0)))
-            by_lc[lc]["T"].append(abs(rec.get("T", 0.0)))
-            by_lc[lc]["Mf1"].append(abs(rec.get("Mf1", 0.0)))
-            by_lc[lc]["Mf2"].append(abs(rec.get("Mf2", 0.0)))
-            by_lc[lc]["Vf1"].append(abs(rec.get("Vf1", 0.0)))
-            by_lc[lc]["Vf2"].append(abs(rec.get("Vf2", 0.0)))
-
-        result = {}
-        for lc, components in by_lc.items():
-            result[lc] = {
-                "max_N_N": max(components["N"]) if components["N"] else 0.0,
-                "max_T_Nm": max(components["T"]) if components["T"] else 0.0,
-                "max_Mf1_Nm": max(components["Mf1"]) if components["Mf1"] else 0.0,
-                "max_Mf2_Nm": max(components["Mf2"]) if components["Mf2"] else 0.0,
-                "max_Vf1_N": max(components["Vf1"]) if components["Vf1"] else 0.0,
-                "max_Vf2_N": max(components["Vf2"]) if components["Vf2"] else 0.0,
-            }
+        index = self._section_force_index()
+        result: Dict[str, Dict[str, float]] = {}
+        for elem_id in elem_ids:
+            for rec in index.get(elem_id, ()):
+                entry = result.setdefault(
+                    rec.get("load_case", "_combined"),
+                    {name: 0.0 for _, name in self._FORCE_KEYS},
+                )
+                for key, name in self._FORCE_KEYS:
+                    entry[name] = max(entry[name], abs(rec.get(key, 0.0)))
         return result
 
-    def _member_utilisation(
-        self, sf_by_lc: Dict[str, Dict[str, float]], member
-    ) -> Dict[str, Dict[str, float]]:
-        """Compute bending utilisation ratio per load case.
+    def _member_utilisation(self, elem_ids: set, member) -> Dict[str, Dict[str, float]]:
+        """Largest normal stress in the member's real section, per load case.
 
-        σ_max = |N|/A + |Mf1|/Iy * y_max + |Mf2|/Iz * z_max
+        At each cross-section the axial force and the two bending moments are
+        combined at the extreme fibres of the section the member really has::
 
-        Returns per-load-case dict with ``max_utilisation_ratio`` (dimensionless,
-        where 1.0 = yield stress) when section properties are available.
-        Yield stress is not known here — callers should normalise against their
-        material yield stress externally, or pass it via the ``limits`` dict as
-        ``yield_stress_Pa``.  We instead return the raw stress σ_max in Pa as
-        ``max_bending_stress_Pa`` so the caller can decide.
+            sigma = |N| / A + |Mf1| / Iy * y_max + |Mf2| / Iz * z_max
+
+        and the largest over the member is ``max_normal_stress_Pa``. This is
+        the only stress a member analysed as an equivalent rectangle has.
+        Shear and torsion are not in it. When the material has a yield
+        strength, ``utilisation_ratio`` is that stress divided by it.
         """
         section = getattr(member, "section", None)
         if section is None:
             return {}
-
         area = getattr(section, "area", None)
         iy = getattr(section, "moment_of_inertia_y", None)
         iz = getattr(section, "moment_of_inertia_z", None)
         if not area or not iy or not iz:
             return {}
-
         try:
             y_max, z_max = section.get_extreme_fibre_distances()
-        except Exception:
+        except (AttributeError, KeyError, TypeError):
             return {}
         if y_max is None or z_max is None:
             return {}
 
-        result = {}
-        for lc, sf in sf_by_lc.items():
-            n = sf.get("max_N_N", 0.0)
-            mf1 = sf.get("max_Mf1_Nm", 0.0)
-            mf2 = sf.get("max_Mf2_Nm", 0.0)
-            sigma = n / area + mf1 / iy * y_max + mf2 / iz * z_max
-            result[lc] = {"max_bending_stress_Pa": sigma}
+        index = self._section_force_index()
+        stress: Dict[str, float] = {}
+        for elem_id in elem_ids:
+            for rec in index.get(elem_id, ()):
+                sigma = (
+                    abs(rec.get("N", 0.0)) / area
+                    + abs(rec.get("Mf1", 0.0)) / iy * y_max
+                    + abs(rec.get("Mf2", 0.0)) / iz * z_max
+                )
+                case = rec.get("load_case", "_combined")
+                stress[case] = max(stress.get(case, 0.0), sigma)
+
+        yield_strength = getattr(
+            getattr(member, "material", None), "yield_strength", None
+        )
+        result: Dict[str, Dict[str, float]] = {}
+        for case, sigma in stress.items():
+            result[case] = {"max_normal_stress_Pa": sigma}
+            if yield_strength:
+                result[case]["utilisation_ratio"] = sigma / float(yield_strength)
         return result
 
     @staticmethod
@@ -389,7 +424,8 @@ class ResultsExporter:
         if not self.limits:
             return "ok"
         for key, limit in self.limits.items():
-            if envelope.get(key, 0.0) > limit:
+            value = envelope.get(key, 0.0)
+            if isinstance(value, (int, float)) and value > limit:
                 return "fail"
         return "ok"
 

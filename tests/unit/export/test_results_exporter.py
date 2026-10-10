@@ -98,8 +98,6 @@ class TestMemberSectionForces:
             _sf_record(1, "Dead", N=1000.0, Mf1=5000.0),
             _sf_record(2, "Dead", N=1500.0, Mf1=3000.0),
         ]
-        result = exporter._member_section_forces(elem_ids)
-        # No records passed to exporter — use direct call with injected data
         exporter.parsed_results["section_forces"] = records
         result = exporter._member_section_forces(elem_ids)
         assert "Dead" in result
@@ -144,38 +142,70 @@ class TestMemberSectionForces:
 
 
 class TestMemberUtilisation:
+    """Normal stress in the member's real section, cross-section by cross-section."""
+
+    def _stress(self, member, records, elem_ids=frozenset({1, 2})):
+        exporter = _make_exporter(member)
+        exporter.parsed_results["section_forces"] = records
+        return exporter._member_utilisation(set(elem_ids), member)
+
     def test_simple_axial_only(self):
         sec = _rect_section(w=0.2, h=0.3)
-        member = _curve_member(sec)
-        exporter = _make_exporter(member)
-        sf_by_lc = {"Dead": {"max_N_N": 1000.0, "max_Mf1_Nm": 0.0, "max_Mf2_Nm": 0.0}}
-        result = exporter._member_utilisation(sf_by_lc, member)
-        # σ = N/A = 1000 / (0.06) ≈ 16667 Pa
-        assert "Dead" in result
-        expected_sigma = 1000.0 / sec.area
-        assert result["Dead"]["max_bending_stress_Pa"] == pytest.approx(
-            expected_sigma, rel=1e-4
+        result = self._stress(_curve_member(sec), [_sf_record(1, "Dead", N=-1000.0)])
+        assert result["Dead"]["max_normal_stress_Pa"] == pytest.approx(
+            1000.0 / sec.area
         )
 
     def test_bending_contribution(self):
         sec = _rect_section(w=0.2, h=0.3)
-        member = _curve_member(sec)
-        exporter = _make_exporter(member)
-        Mf1 = 10000.0
-        sf_by_lc = {"Dead": {"max_N_N": 0.0, "max_Mf1_Nm": Mf1, "max_Mf2_Nm": 0.0}}
-        result = exporter._member_utilisation(sf_by_lc, member)
-        y_max = sec.dimensions["height"] / 2
-        expected_sigma = Mf1 / sec.moment_of_inertia_y * y_max
-        assert result["Dead"]["max_bending_stress_Pa"] == pytest.approx(
-            expected_sigma, rel=1e-4
+        result = self._stress(_curve_member(sec), [_sf_record(1, "Dead", Mf1=1.0e4)])
+        expected = 1.0e4 / sec.moment_of_inertia_y * sec.dimensions["height"] / 2
+        assert result["Dead"]["max_normal_stress_Pa"] == pytest.approx(expected)
+
+    def test_forces_are_combined_where_they_occur(self):
+        """The largest N and the largest M are at different cross-sections."""
+        sec = _rect_section(w=0.2, h=0.3)
+        records = [
+            _sf_record(1, "Dead", N=6000.0, Mf1=0.0),
+            _sf_record(2, "Dead", N=0.0, Mf1=300.0),
+        ]
+        result = self._stress(_curve_member(sec), records)
+        assert result["Dead"]["max_normal_stress_Pa"] == pytest.approx(
+            max(6000.0 / sec.area, 300.0 / sec.moment_of_inertia_y * 0.15)
         )
+
+    def test_real_section_is_used_for_an_i_beam(self):
+        sec = _i_section()
+        sec.moment_of_inertia_y = 2.0e-4
+        sec.moment_of_inertia_z = 2.0e-5
+        result = self._stress(_curve_member(sec), [_sf_record(1, "Dead", Mf1=1.0e4)])
+        assert result["Dead"]["max_normal_stress_Pa"] == pytest.approx(
+            1.0e4 / 2.0e-4 * 0.2
+        )
+
+    def test_utilisation_needs_a_yield_strength(self):
+        sec = _rect_section(w=0.2, h=0.3)
+        member = _curve_member(sec)
+        records = [_sf_record(1, "Dead", N=1.2e6)]
+        assert "utilisation_ratio" not in self._stress(member, records)["Dead"]
+
+        member.material.yield_strength = 250e6
+        result = self._stress(member, records)
+        assert result["Dead"]["utilisation_ratio"] == pytest.approx(
+            1.2e6 / sec.area / 250e6
+        )
+
+    def test_other_members_elements_are_ignored(self):
+        sec = _rect_section()
+        records = [_sf_record(99, "Dead", N=1.0e9), _sf_record(1, "Dead", N=600.0)]
+        result = self._stress(_curve_member(sec), records)
+        assert result["Dead"]["max_normal_stress_Pa"] == pytest.approx(600.0 / sec.area)
 
     def test_no_section_returns_empty(self):
         member = MagicMock()
         member.section = None
         exporter = _make_exporter()
-        result = exporter._member_utilisation({"Dead": {}}, member)
-        assert result == {}
+        assert exporter._member_utilisation({1}, member) == {}
 
     def test_unknown_section_type_returns_empty(self):
         """Section with unknown type → get_extreme_fibre_distances returns (None, None)."""
@@ -186,21 +216,11 @@ class TestMemberUtilisation:
             area=0.01,
             dimensions={"width": 0.1},
         )
-        member = _curve_member(sec)
-        exporter = _make_exporter(member)
-        sf = {"Dead": {"max_N_N": 1000.0, "max_Mf1_Nm": 5000.0, "max_Mf2_Nm": 0.0}}
-        result = exporter._member_utilisation(sf, member)
-        assert result == {}
+        assert self._stress(_curve_member(sec), [_sf_record(1, "Dead", N=1e3)]) == {}
 
     def test_multiple_load_cases(self):
-        sec = _rect_section()
-        member = _curve_member(sec)
-        exporter = _make_exporter(member)
-        sf_by_lc = {
-            "Dead": {"max_N_N": 500.0, "max_Mf1_Nm": 0.0, "max_Mf2_Nm": 0.0},
-            "Live": {"max_N_N": 800.0, "max_Mf1_Nm": 0.0, "max_Mf2_Nm": 0.0},
-        }
-        result = exporter._member_utilisation(sf_by_lc, member)
+        records = [_sf_record(1, "Dead", N=500.0), _sf_record(1, "Live", N=800.0)]
+        result = self._stress(_curve_member(_rect_section()), records)
         assert set(result.keys()) == {"Dead", "Live"}
 
 
