@@ -50,9 +50,10 @@ the ones a user needs to know before trusting a result.
   rectangles**, with a warning that says how many. Axial, bending and shear
   stiffness and weight are those of the real section. Torsional stiffness is
   not: it is too high for open sections (I, T, L, C) and about half the true
-  value for thin tubes and boxes. **No stress is reported for these members**
-  (their entry in `results.json` carries `"section_model":
-  "equivalent_rectangle"`); the stresses CalculiX computes are the rectangle's.
+  value for thin tubes and boxes. The stresses CalculiX computes are the
+  rectangle's, so these members have no `max_von_mises_Pa` (their entry in
+  `results.json` carries `"section_model": "equivalent_rectangle"`); their
+  stress is the normal stress from the section forces, below.
 - **`--open-sections user-element`** analyses them with CalculiX U1 elements
   instead, which have the section's own torsional stiffness. It only works
   when every member of the model is such a section: stock CalculiX crashes
@@ -63,12 +64,16 @@ the ones a user needs to know before trusting a result.
   centroid and member axis. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
   L (angle) sections are analysed about their leg-parallel axes rather than
   their rotated principal axes.
-- **No beam section forces or utilisation ratios yet.** `results.json` reports
-  the largest displacement and von Mises stress of every member in every load
-  case, and the total reactions. Per-member axial force, shear and moment are
-  not available. Displacements are read on the faces of the solid elements
-  CalculiX expands beams and shells into, so a member that rotates reports a
-  few percent more than its axis moves.
+- **Beam results are envelopes over the member.** For every beam and column
+  and every load case `results.json` gives the largest axial force, shear
+  forces, bending moments and torque, and the largest normal stress they
+  produce in the member's real section (`|N|/A + |M|/W` about both axes; no
+  shear, torsion or buckling). A `utilisation_ratio` is that stress over the
+  yield stress, for materials whose IFC definition has a `YieldStress`. Force
+  diagrams along a member and the signs of the forces are not exported.
+- **Displacements are read on the faces of the solid elements** CalculiX
+  expands beams and shells into, so a member that rotates reports a few
+  percent more than its axis moves.
 - **Distributed loads are uniform over the whole member.** A load given per
   projected length, or over part of a member, is applied as a uniform load per
   true length over all of it.

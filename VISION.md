@@ -131,8 +131,7 @@ What holds it back:
 - **Stresses and torsion of non-rectangular sections.** Every profile other
   than a solid rectangle is analysed as a rectangle of the same axial, bending
   and shear stiffness on a native beam element, so any model runs on stock
-  CalculiX. Its torsional stiffness is only approximate, and its stresses have
-  to come from section forces, which are not available yet.
+  CalculiX. Its torsional stiffness is only approximate.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
   independent Code_Aster result to 2%, point by point. `building_01` and
   `building_02` both solve with reactions that match their loads; neither has
@@ -157,10 +156,15 @@ Displacement and stress are attributed to every member, beams included, through
 the element connectivity of the solver's result file, and reactions are given
 per load case.
 
-Missing: beam section forces (N, V, M), the utilisation ratio that depends on
-them, and a CLI flag for limits. CalculiX does write
-section forces, but only in its 2D output mode, where shell stress is averaged
-through the thickness; the design has to get both.
+Every beam and column also carries the envelope of its section forces (N, two
+shears, two moments, torque), the largest normal stress they give in its real
+section, and a utilisation ratio where the material has a yield stress. The
+forces are integrated from the solver's stresses over each cross-section,
+because CalculiX only writes them itself in a mode that loses shell bending
+stress.
+
+Missing: force diagrams along a member, checks beyond normal stress (shear,
+buckling, concrete), utilisation for shells, and a CLI flag for limits.
 
 **Done when**: `ifc-analysis analyze model.ifc --output ./results` writes a
 `results.json` from which a script can find the most-utilised member by

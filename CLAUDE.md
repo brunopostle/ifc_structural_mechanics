@@ -369,11 +369,17 @@ here. This section only records the constraints that shape day-to-day work.
   (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it);
   on a patched build a U1 beam and a native beam sharing a node transfer no
   moment (`aiz.14`). U1 reactions have the wrong sign (`aiz.19`).
-- **No stress for equivalent-rectangle members** until section forces exist
-  (`aiz.13`); `results.json` marks them with `section_model`.
-- **No beam section forces or utilisation yet.** CalculiX only writes them in
-  2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
-  FORCES`), which averages shell stress through the thickness (`aiz.13`).
+- **Equivalent-rectangle members have no `max_von_mises_Pa`** (the solver's
+  stresses are the rectangle's); `results.json` marks them with
+  `section_model`. Their stress is `max_normal_stress_Pa`, from the section
+  forces and the real section.
+- **Beam section forces are integrated by us** (`analysis/section_forces.py`),
+  never requested from CalculiX: it only writes them in 2D output mode
+  (`OUTPUT=2D` + `SECTION FORCES`), which averages shell stress through the
+  thickness. At each cross-section of an expanded element that has nodes, the
+  nodal stresses are interpolated and integrated in the axes the writer
+  recorded for the element (`StructuralModel.beam_section_frames`). Only
+  envelopes of magnitudes are exported; there are no diagrams and no signs.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and
   13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
   in the file. `building_02` solves, its reactions match the applied loads and its

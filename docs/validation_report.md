@@ -198,6 +198,39 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
+Section forces and member stress from `results.json`, same models (tolerance 1%):
+
+| Case | Quantity | Statics | Pipeline | Error |
+|------|----------|---------|----------|-------|
+| Cantilever, 0.2 × 0.4 rectangle | Shear at the root | 18.364 N | 18.364 N | < 0.1% |
+| Cantilever, 0.2 × 0.4 rectangle | Moment at the root | 27.546 N·m | 27.545 N·m | < 0.1% |
+| Cantilever, 0.2 × 0.4 rectangle | Largest normal stress | 5165.0 Pa | 5164.7 Pa | < 0.1% |
+| Cantilever, weak axis | Moment (reported as `Mf2`) | 27.546 N·m | 27.545 N·m | < 0.1% |
+| Cantilever, 200 × 400 I, equivalent rectangle | Moment at the root | 3.9942 N·m | 3.994 N·m | < 0.1% |
+| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, strong axis | 2435.9 Pa | 2435.8 Pa | < 0.1% |
+| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, weak axis | 14961.6 Pa | 14960.8 Pa | < 0.1% |
+| Fixed-fixed beam, 20 kN at midspan | Shear | 10.000 kN | 9.9996 kN | < 0.1% |
+| Fixed-fixed beam, 20 kN at midspan | Moment at the ends | 10.000 kN·m | 10.042 kN·m | 0.4% |
+
+CalculiX can write beam section forces, but only in its two-dimensional output mode,
+where shell stresses are averaged through the thickness and their bending part is lost.
+So they are integrated here from the ordinary three-dimensional results: at each
+cross-section of an expanded beam element that has nodes (both ends, and the middle of a
+quadratic element) the nodal stresses are interpolated over the rectangle and integrated
+into an axial force, two shear forces, two bending moments and a torque. The fixed-fixed
+row is from a 0.5 m mesh, eight elements; at the same mesh the cantilever's root moment is
+0.5% low.
+
+For a member analysed as an equivalent rectangle the solver's stresses are those of the
+stand-in, but their resultants are the member's real forces, and the stress reported is
+`|N|/A + |Mf1| y/Iy + |Mf2| z/Iz` with the properties of the real section. That is why the
+I-section rows agree with hand values although no I-shaped stress field was ever computed.
+
+Two checks without a hand value: in `portal_01` each column carries 42.70 kN, half the
+85.41 kN reaction, and the beam's end shear is the same 42.70 kN, while the column shear
+and the beam's axial force are both 12.41 kN. In `structure_01` the pin-ended column has
+an axial force and no moment.
+
 The reaction under self-weight is low by the load on the restrained node itself (a sixth
 of an element's weight for a quadratic element): CalculiX does not report the share of a
 distributed load that lands there.
@@ -423,6 +456,11 @@ found in the result file within the member's outline.
   covered by Tier 2.
 - **Pinned and roller supports of beams** through the pipeline (Tier 1 covers them in
   CalculiX only).
+- **Torque and axial force in section forces**: checked on synthetic stress fields in
+  unit tests and by joint equilibrium in `portal_01`, not against a pipeline benchmark
+  of their own.
+- **Member stress** is the normal stress from axial force and bending only. Shear,
+  torsion, buckling and anything specific to concrete are not checked.
 - **Shell members in membrane action**: walls are only checked through `structure_01`.
 - **T, L and C sections**: section properties are unit-tested against hand calculations,
   and they go through the same equivalent rectangle as the I section, but none has a
