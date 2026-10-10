@@ -299,6 +299,48 @@ class TestRectangularCantileverSelfWeight:
         )
 
 
+class TestImplausibleResults:
+    """A model that solves with absurd displacements says so.
+
+    cantilever_01 with its elastic modulus divided by 100 000: the same
+    statics, and a tip that drops 28 m on a 3 m member.
+    """
+
+    def _soft_cantilever(self, tmp_path) -> str:
+        model = ifcopenshell.open(CANTILEVER)
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name == "YoungModulus":
+                prop.NominalValue = model.create_entity(
+                    "IfcModulusOfElasticityMeasure", CANT_E / 1e5
+                )
+        path = str(tmp_path / "soft.ifc")
+        model.write(path)
+        return path
+
+    def _warnings(self, ifc_path, tmp_path):
+        result = analyze_ifc(
+            ifc_path=ifc_path,
+            output_dir=str(tmp_path / "out"),
+            mesh_size=0.25,
+            gravity=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        return [w["message"] for w in result["warnings"]]
+
+    def test_soft_cantilever_is_reported_twice_over(self, tmp_path):
+        messages = self._warnings(self._soft_cantilever(tmp_path), tmp_path)
+        mechanism = [m for m in messages if "probably a mechanism" in m]
+        distorted = [m for m in messages if "distorts by" in m]
+        assert len(mechanism) == 1 and len(distorted) == 1
+        assert mechanism[0].startswith("Load case Gravity: the largest displacement")
+        assert "in a model 3 m across" in mechanism[0]
+        assert "over its 3 m" in distorted[0]
+
+    def test_the_real_cantilever_is_not(self, tmp_path):
+        messages = self._warnings(CANTILEVER, tmp_path)
+        assert not any("mechanism" in m or "distorts by" in m for m in messages)
+
+
 class TestISectionCantileverSelfWeight:
     """cantilever_01 with an I profile, analysed with U1 general sections.
 

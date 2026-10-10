@@ -310,7 +310,8 @@ class TestResults:
         beam = self._members()["beam"]
 
         assert beam["section_model"] == "equivalent_rectangle"
-        assert beam["by_load_case"]["Dead"] == {"max_displacement_m": 0.002}
+        assert beam["by_load_case"]["Dead"]["max_displacement_m"] == 0.002
+        assert "max_von_mises_Pa" not in beam["by_load_case"]["Dead"]
 
     def test_native_member_is_unchanged(self):
         column = self._members()["column"]

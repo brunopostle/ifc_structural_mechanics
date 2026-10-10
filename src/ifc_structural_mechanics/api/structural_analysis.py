@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 from ..analysis.calculix_runner import CalculixRunner
 from ..analysis.output_parser import OutputParser
+from ..analysis.plausibility import plausibility_warnings
 from ..analysis.results_parser import ResultsParser
 from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
@@ -239,7 +240,10 @@ def analyze_ifc(
                         parsed_results,
                         element_nodes=results_parser.element_nodes,
                     )
-                    exporter.export(json_path)
+                    exported = exporter.export(json_path)
+                    result["warnings"].extend(
+                        plausibility_warnings(exported, domain_model)
+                    )
                     result["output_files"]["results_json"] = json_path
                     logger.info(f"Wrote results JSON: {json_path}")
                 except Exception as e:

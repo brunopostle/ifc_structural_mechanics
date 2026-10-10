@@ -1,5 +1,7 @@
 """Per-member results are attributed through the result file's own elements."""
 
+import pytest
+
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
 from ifc_structural_mechanics.domain.result import DisplacementResult, StressResult
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
@@ -99,6 +101,53 @@ class TestExpandedElements:
         members = _members(_parsed([_displacement(105, 0.004)]), EXPANDED)
 
         assert "envelope" not in members["slab"]
+
+
+def _moved(node, translation, load_case="Dead"):
+    result = DisplacementResult(reference_element=node)
+    result.set_translations(list(translation))
+    result.add_metadata("load_case", load_case)
+    return result
+
+
+class TestRelativeDisplacement:
+    """How much a member distorts, apart from what it moves as a whole."""
+
+    def test_member_moving_as_a_whole_does_not_distort(self):
+        parsed = _parsed([_moved(n, (0.3, 0.0, -0.1)) for n in (101, 103, 105)])
+        beam = _members(parsed, EXPANDED)["beam"]["by_load_case"]["Dead"]
+
+        assert beam["max_displacement_m"] > 0.3
+        assert beam["max_relative_displacement_m"] == 0.0
+
+    def test_largest_difference_in_one_direction(self):
+        parsed = _parsed(
+            [
+                _moved(101, (0.30, 0.0, -0.10)),
+                _moved(103, (0.31, 0.0, -0.14)),
+                _moved(105, (0.30, 0.0, -0.10)),
+            ]
+        )
+        beam = _members(parsed, EXPANDED)["beam"]
+
+        assert beam["by_load_case"]["Dead"]["max_relative_displacement_m"] == (
+            pytest.approx(0.04)
+        )
+        assert beam["envelope"]["max_relative_displacement_m"] == pytest.approx(0.04)
+
+    def test_per_load_case(self):
+        parsed = _parsed(
+            [
+                _moved(101, (0, 0, 0.0), "Dead"),
+                _moved(105, (0, 0, -0.01), "Dead"),
+                _moved(101, (0, 0, 0.0), "Live"),
+                _moved(105, (0, 0, -0.05), "Live"),
+            ]
+        )
+        by_case = _members(parsed, EXPANDED)["beam"]["by_load_case"]
+
+        assert by_case["Dead"]["max_relative_displacement_m"] == pytest.approx(0.01)
+        assert by_case["Live"]["max_relative_displacement_m"] == pytest.approx(0.05)
 
 
 class TestElementsTheResultFileDoesNotList:

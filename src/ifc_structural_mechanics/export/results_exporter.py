@@ -21,6 +21,7 @@ Schema (summary level)
       "section_model": "equivalent_rectangle",
       "envelope": {
         "max_displacement_m": 0.001,
+        "max_relative_displacement_m": 0.0008,
         "max_von_mises_Pa": 1.5e6,
         "max_normal_stress_Pa": 1.4e6,
         "utilisation_ratio": 0.006,
@@ -45,6 +46,10 @@ Schema (summary level)
     "total": {...}
   }
 }
+
+``max_relative_displacement_m`` is how much a member distorts: the largest
+difference in displacement between two of its points in any one global
+direction, so without what the member moves as a whole.
 
 Curve members carry ``section_forces``: the largest magnitudes over the member
 of the axial force N, the torque T, the bending moments Mf1 (stress varying
@@ -123,6 +128,7 @@ class ResultsExporter:
         self.element_nodes = element_nodes or {}
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
         self._mesh_nodes: Optional[Dict[str, set]] = None
+        self._translations: Optional[Dict[int, List[Tuple[str, List[float]]]]] = None
         self._section_force_records: Optional[Dict[int, List[Dict]]] = None
 
     # ------------------------------------------------------------------
@@ -321,12 +327,51 @@ class ResultsExporter:
                     maxima[lc] = value
         return maxima
 
+    def _translation_index(self) -> Dict[int, List[Tuple[str, List[float]]]]:
+        """Return ``{node_id: [(load_case, [tx, ty, tz]), ...]}``, built once."""
+        if self._translations is None:
+            index: Dict[int, List[Tuple[str, List[float]]]] = defaultdict(list)
+            for r in self.parsed_results.get("displacement", []):
+                try:
+                    nid = int(r.reference_element)
+                except (ValueError, TypeError):
+                    continue
+                index[nid].append(
+                    (r.metadata.get("load_case", "_combined"), r.get_translations())
+                )
+            self._translations = index
+        return self._translations
+
     def _member_displacements(self, node_ids: set) -> Dict[str, Dict[str, float]]:
-        """Return per-load-case displacement stats for the given node set."""
-        return {
+        """Return per-load-case displacement stats for the given node set.
+
+        ``max_displacement_m`` is the largest displacement of any of the
+        member's points. ``max_relative_displacement_m`` is how much the
+        member distorts: the largest difference between two of its points in
+        any one global direction, which leaves out whatever the member moves
+        as a whole.
+        """
+        stats = {
             lc: {"max_displacement_m": value}
             for lc, value in self._member_max("displacement", node_ids).items()
         }
+        index = self._translation_index()
+        ranges: Dict[str, List[List[float]]] = {}
+        for nid in node_ids:
+            for lc, translation in index.get(nid, ()):
+                low_high = ranges.get(lc)
+                if low_high is None:
+                    ranges[lc] = [list(translation), list(translation)]
+                    continue
+                for i in range(3):
+                    low_high[0][i] = min(low_high[0][i], translation[i])
+                    low_high[1][i] = max(low_high[1][i], translation[i])
+        for lc, (low, high) in ranges.items():
+            if lc in stats:
+                stats[lc]["max_relative_displacement_m"] = max(
+                    high[i] - low[i] for i in range(3)
+                )
+        return stats
 
     def _member_stresses(self, node_ids: set) -> Dict[str, Dict[str, float]]:
         """Return per-load-case von Mises stats for the given node set.
