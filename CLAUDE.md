@@ -73,6 +73,9 @@ ifc-analysis analyze model.ifc --output ./results --element-order 1
 # Only the connections in the IFC file (no implied beam-to-slab ties)
 ifc-analysis analyze model.ifc --output ./results --strict-connections
 
+# CalculiX U1 elements for I/T/L/C/round/hollow sections (models of those only)
+ifc-analysis analyze model.ifc --output ./results --open-sections user-element
+
 # Enable verbose output and JSON results
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
@@ -356,17 +359,24 @@ here. This section only records the constraints that shape day-to-day work.
 - **Stock CalculiX is the target** (decision 2026-10-09). The local `ccx` may be
   a patched Copr build; CI uses the distribution package. Do not rely on the
   gen3delem patch in `patches/`.
-- **U1 beams (I/T/L/C sections) are only correct in all-U1 models.** On stock
-  CalculiX a U1 element next to any other 1D/2D element crashes in gen3delem
-  (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it).
-  On a patched build the model runs but a U1 beam and a native beam sharing a node
-  transfer no moment, so the joint is a pin (`aiz.14`). The planned replacement
-  is an equivalent-stiffness RECT on a native beam element (`31a`).
+- **Only the solid rectangle is written as a CalculiX section.** Every other
+  profile is an equivalent rectangle (see Beam Section Orientation). Do not
+  go back to CalculiX's CIRC, PIPE or BOX: a PIPE cantilever measured 83% too
+  flexible with the weight of a solid bar, and B31 rejects PIPE and BOX.
+- **U1 beams are opt-in** (`--open-sections user-element`) and only correct in
+  all-U1 models. On stock CalculiX a U1 element next to any other 1D/2D
+  element crashes in gen3delem
+  (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it);
+  on a patched build a U1 beam and a native beam sharing a node transfer no
+  moment (`aiz.14`). U1 reactions have the wrong sign (`aiz.19`).
+- **No stress for equivalent-rectangle members** until section forces exist
+  (`aiz.13`); `results.json` marks them with `section_model`.
 - **No beam section forces or utilisation yet.** CalculiX only writes them in
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
-- **`building_01` does not solve** (singular matrix; it mixes U1 and native
-  beams). `building_02` solves, its reactions match the applied loads and its
+- **`building_01` solves**; its reactions match the applied loads (282.0 and
+  13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
+  in the file. `building_02` solves, its reactions match the applied loads and its
   deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
   reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine.
@@ -402,6 +412,25 @@ IFC maps the profile's Y dimension (depth) onto the member's local z, which
 `moment_of_inertia_y` is the strong-axis value for a section deeper than wide.
 A purely geometric default is used only when a member has no `local_axis`.
 `tests/validation/test_pipeline_benchmarks.py` checks both axes.
+
+**Equivalent rectangles.** A section that is not a solid rectangle is written
+as `RECT a, b` with a material of its own (`MAT_EQ_<member>`):
+`converters/section_profiles.equivalent_rectangle()` gives
+`a = sqrt(12 Iy / A)`, `b = sqrt(12 Iz / A)` and a factor `A / (a b)` that
+scales the elastic modulus and the density, so EA, both EI and the weight per
+length are exact. The material is orthotropic (`*ELASTIC, TYPE=ENGINEERING
+CONSTANTS` with an `*ORIENTATION` along the member): `G12` and `G13` are set
+so that `G12 a b = G A_shear,y` and `G13 a b = G A_shear,z`. Note the absence
+of 5/6: CalculiX expands a beam into one quadratic solid across the section,
+which shears over its whole area. A new section type therefore only needs
+`A`, `Iy`, `Iz` and the two shear areas in `domain/property.py`, plus an
+extraction handler. In the extractors, test hollow IFC profiles before solid
+ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true.
+
+**Area loads follow the member's outline.** Where one surface member lies
+inside another (a landing on a floor slab), fragmenting gives each element to
+one of them. `_load_element_sets()` applies an area load to every shell
+element within the loaded member's outline, whoever owns it.
 
 ## Boundary Condition Handling
 
@@ -454,9 +483,9 @@ rotational degrees of freedom**. This drives everything about joints:
   and DOF 1-3 equations: a ball joint. A rotation that is *not* released is
   taken away again by `_build_release_hinges()`: two stiff arms, one on the
   member end and one on the joint, side by side along a released axis, with
-  their tips tied in the directions across the arm. U1 members are excluded
-  (no link elements next to U1 on stock CalculiX) and stay full pins, with a
-  warning.
+  their tips tied in the directions across the arm. U1 members (opt-in) are
+  excluded: no link elements next to U1 on stock CalculiX, so they stay full
+  pins, with a warning.
 - **An eccentric member end is hinged where it ends.** A rigid link carries
   the joint out to that point first, so the reaction keeps its lever arm.
 - **A joint can sit along a member's span.** Every connection position inside

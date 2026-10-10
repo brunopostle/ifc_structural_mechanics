@@ -128,15 +128,15 @@ The pipeline runs end to end and single members agree with beam theory
 
 What holds it back:
 
-- **Open sections on stock CalculiX.** I, T, L and C profiles use U1 user
-  elements with `SECTION=GENERAL`, which cannot be mixed with other element
-  types: stock CalculiX crashes, and a patched build leaves the joints pinned.
-  The decision (2026-10-09) is to stay on stock CalculiX and analyse these
-  profiles as native beam elements with a stiffness-equivalent rectangular
-  section.
+- **Stresses and torsion of non-rectangular sections.** Every profile other
+  than a solid rectangle is analysed as a rectangle of the same axial, bending
+  and shear stiffness on a native beam element, so any model runs on stock
+  CalculiX. Its torsional stiffness is only approximate, and its stresses have
+  to come from section forces, which are not available yet.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
-  independent Code_Aster result to 2%, point by point. `building_01` is still
-  singular. `building_02` now gives plausible deflections and correct
+  independent Code_Aster result to 2%, point by point. `building_01` and
+  `building_02` both solve with reactions that match their loads; neither has
+  a reference. `building_02` now gives plausible deflections and correct
   reactions, but it has no reference and is too large to refine on a small
   machine.
 - **Releases.** Skew supports are not modelled, and end releases on open

@@ -17,7 +17,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections). Elements are quadratic by default: three-node beams (B32R) and six-node triangular shells (S6)
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
-- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX beam sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor). Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
+- **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other profile (circular, hollow circular, hollow rectangular, I, T, L, C) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
@@ -30,8 +30,9 @@ the ones a user needs to know before trusting a result.
 - **Large models are only partly verified.** `structure_01` (slab, wall and two
   columns) is within 2% of an independent Code_Aster result. `building_02`
   solves, its reactions match the applied loads and its deflections are
-  plausible, but it has no reference. `building_01` does not solve (singular
-  stiffness matrix).
+  plausible, but it has no reference. `building_01` solves and its reactions
+  match the applied loads to the newton, with no reference either; its
+  `Masonry` material is 202 t/m³ in the file, which dominates its self-weight.
 - **A beam lying in a slab or wall is tied to it along its length**, whether or
   not the IFC file connects them there, and the analysis warns that it did so.
   Models that connect a slab only at its corners would otherwise leave the
@@ -42,21 +43,24 @@ the ones a user needs to know before trusting a result.
   between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
-- **End releases on I, T, L and C members are analysed as full pins** (all
-  three rotations released), with a warning. For other sections a release about
-  one or two axes is modelled as given.
 - **Skew supports are not modelled.** A support that restrains only some
   directions, in axes that are not parallel to the global ones, is analysed as
   if its axes were global, with a warning.
-- **I, T, L and C sections only work when every beam in the model has one.**
-  These profiles are analysed with CalculiX U1 (Timoshenko) elements and a
-  general section (`A`, `Iy`, `Iz`, shear factor). Stock CalculiX crashes when a
-  U1 element shares a model with any other beam or shell element. A patched
-  build runs, but transfers no moment between a U1 beam and a native beam at a
-  shared node, so the joint behaves as a pin. Rectangular, circular, pipe and box
-  sections use native beam sections and do not have this problem.
-- **Open-section approximations.** The general section has no product of inertia
-  and no offset. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
+- **Sections other than solid rectangles are analysed as equivalent
+  rectangles**, with a warning that says how many. Axial, bending and shear
+  stiffness and weight are those of the real section. Torsional stiffness is
+  not: it is too high for open sections (I, T, L, C) and about half the true
+  value for thin tubes and boxes. **No stress is reported for these members**
+  (their entry in `results.json` carries `"section_model":
+  "equivalent_rectangle"`); the stresses CalculiX computes are the rectangle's.
+- **`--open-sections user-element`** analyses them with CalculiX U1 elements
+  instead, which have the section's own torsional stiffness. It only works
+  when every member of the model is such a section: stock CalculiX crashes
+  when a U1 element shares a model with any other beam or shell element.
+  With U1, a release about one or two axes becomes a full pin (with a
+  warning) and the reactions are reported with the wrong sign.
+- **Section approximations.** No product of inertia and no offset between
+  centroid and member axis. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
   L (angle) sections are analysed about their leg-parallel axes rather than
   their rotated principal axes.
 - **No beam section forces or utilisation ratios yet.** `results.json` reports
@@ -137,6 +141,7 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
 | `--gravity` | Include self-weight gravity loads | off |
 | `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |
+| `--open-sections [equivalent\|user-element]` | How sections other than solid rectangles are analysed: as a rectangle of the same stiffness, or with CalculiX U1 elements (only for models made of nothing else) | `equivalent` |
 | `--verbose` | Enable verbose logging | off |
 | `--json-output` | Write results in JSON format | off |
 | `--enhanced/--no-enhanced` | Use enhanced boundary condition handling | on |
@@ -214,9 +219,9 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 651 N of 660 N | 0.427 mm Code_Aster | Verified, within 2% |
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
-| `portal_01` | Portal frame of I-sections, distributed load | No | 3.8 mm (4.1 mm at 0.25 m) | 85.4 kN | none | Runs; unchecked |
+| `portal_01` | Portal frame of I-sections, distributed load | No | 4.04 mm (4.11 mm at 0.25 m) | 85.4 kN | 4.12 mm with U1 elements at 0.25 m | Runs; the two section models agree to 0.2% |
 | `building_02` | Multi-storey building, two load cases | No | 25.8 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
-| `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
+| `building_01` | Small building with I-section beams and masonry walls, two load cases | No | 0.29 mm (Live), 0.10 mm (floor finishing); 0.34 and 0.11 mm at 0.5 m | 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,

@@ -175,23 +175,61 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B32R | 0.2814 mm | 0.2800 mm | 0.5% |
 | Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B32R | 1.1115 mm | 1.1059 mm | 0.5% |
 | Cantilever reaction | 0.2 × 0.4 rectangle, B32R | 18.36 N | 18.31 N | 0.3% |
-| Cantilever, strong axis | 200 × 400 I, U1 | 0.1419 mm | 0.1419 mm | < 0.1% |
+| Cantilever, strong axis | 200 × 400 I, equivalent rectangle | 0.1419 mm | 0.1417 mm | 0.2% |
+| Cantilever, weak axis | 200 × 400 I, equivalent rectangle | 1.6087 mm | 1.5972 mm | 0.7% |
+| Cantilever reaction | 200 × 400 I, equivalent rectangle | 2.663 N | 2.655 N | 0.3% |
+| Cantilever, strong axis | 200 × 400 I, U1 (`--open-sections user-element`) | 0.1419 mm | 0.1419 mm | < 0.1% |
 | Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
+| Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6589 mm | 0.2% |
+| Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3572 mm | 0.2% |
+| Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1810 mm | 0.2% |
 | Fixed-fixed beam, midspan | 0.3 m square, B32R | 0.3506 mm | 0.3489 mm | 0.5% |
 | Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
 | Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 19.92 kN | 0.4% |
+| Fixed-fixed beam, midspan, 20 kN | 200 × 400 I, equivalent rectangle | 1.0776 mm | 1.1002 mm | 2.1% |
+| Fixed-fixed beam, 5 kN/m along global −Z | 200 × 400 I, equivalent rectangle | 0.5388 mm | 0.5389 mm | < 0.1% |
 | Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.376 mm | 0.5% |
 | Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.358 mm | 0.1% |
 | Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 98.96 N | 0.5% |
 | Same, each beam's own entry in `results.json` | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.362 mm | 0.1% |
+| Slab on two cantilever beams inside it | 200 × 400 I beams (equivalent rectangle), 0.1 m slab | 4.913 mm | 4.951 mm | 0.8% |
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
 The reaction under self-weight is low by the load on the restrained node itself (a sixth
 of an element's weight for a quadratic element): CalculiX does not report the share of a
 distributed load that lands there.
+
+**Sections other than solid rectangles.** CalculiX expands every beam into solid
+elements, and only its rectangular section came out right. Its PIPE section gave a
+cantilever 83% too flexible with the weight of a solid bar, and B31 elements reject PIPE
+and BOX outright. Separately, the extraction was reading hollow IFC profiles as solid
+ones (they are subtypes, so the test for the solid type matched first) and a solid circle
+as a default 0.1 × 0.2 m rectangle. The three round and hollow cantilevers in the table
+were 68%, 83% and 54% out before 2026-10-10.
+
+Every such profile, and every I, T, L and C profile, is now analysed as a rectangle
+`a × b` with a material of its own, where `a = √(12 Iy / A)`, `b = √(12 Iz / A)` and the
+modulus and density are scaled by `A / (a b)`. That reproduces EA, both EI and the
+weight exactly. The material is orthotropic, with the two shear moduli along the member
+set so that the rectangle has the profile's shear stiffness in each direction; without
+that the stocky I cantilever was 5.5% too stiff. The I-section fixed-fixed beam is a hard
+case, with 37% of its deflection coming from shear in the web.
+
+One thing this showed: CalculiX's expanded rectangle shears over its whole area, not the
+5/6 of beam theory, because one quadratic solid across the section cannot hold a
+parabolic shear distribution. Using 5/6 left the shear deflection of the I benchmarks 12
+to 18% short. The solid-rectangle rows above are quoted against 5/6 and are a little
+stiff for that reason, by less than 1%.
+
+What the equivalent rectangle does not have is the profile's torsional stiffness (too
+high for open sections, about half for thin closed ones) or its stresses, so
+`results.json` reports no stress for these members. U1 elements with a general section
+remain available with `--open-sections user-element` for models made of such members
+only. On `portal_01` the two agree: 4.111 mm with equivalent rectangles and 4.120 mm with
+U1 at a 0.25 m mesh.
 
 The slab-on-beams model is written from scratch by the test, with a 0.25 m mesh: a
 5 m × 1 m slab, 0.1 m thick, and two beams lying in it, fully fixed at one end. The IFC
@@ -332,9 +370,9 @@ model.
 | `structure_01` | `--gravity` | 0.429 mm | 651 N | Covered by Tier 2 (Code_Aster) |
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
-| `portal_01` | — | 3.8 mm | 85.4 kN | Unchecked. All-U1 model; 4.1 mm at 0.25 m |
+| `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
 | `building_02` | — | 25.8 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.0 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
-| `building_01` | — | — | — | Fails: singular stiffness matrix |
+| `building_01` | — | 0.286 mm (Live), 0.101 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.66 mm and 48.54 MN under self-weight. At 0.5 and 0.25 m: 0.337 and 0.352 mm (Live), 7.76 and 8.51 mm (self-weight). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
@@ -387,7 +425,8 @@ found in the result file within the member's outline.
   CalculiX only).
 - **Shell members in membrane action**: walls are only checked through `structure_01`.
 - **T, L and C sections**: section properties are unit-tested against hand calculations,
-  but no pipeline benchmark exists. L sections ignore the product of inertia.
+  and they go through the same equivalent rectangle as the I section, but none has a
+  pipeline benchmark of its own. L sections ignore the product of inertia.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
 - **Beams tied to the slab or wall they lie in**: covered by Tier 2 for a slab on two
@@ -396,5 +435,10 @@ found in the result file within the member's outline.
   is compared with a reference.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but
   have only a unit test.
-- **Mixed U1 and native beams**: known to be wrong (joints act as pins).
+- **Mixed U1 and native beams**: known to be wrong (joints act as pins). U1 is no
+  longer used unless asked for.
+- **Torsion of non-rectangular sections**: approximate by construction, and not
+  measured.
+- **`building_01`**: reactions only. Its self-weight deflection is still moving 10%
+  between a 0.5 m and a 0.25 m mesh.
 - **Buckling** beyond the single Euler column.
