@@ -107,11 +107,12 @@ def _extract_equation_dofs(text: str):
 
 
 # ---------------------------------------------------------------------------
-# Rigid connection (no releases) — DOF 1-6 all coupled
+# Separate nodes are only ever pinned: CalculiX ignores *EQUATION on DOF 4-6
+# of beam and shell nodes, so no rotational equations are written.
 # ---------------------------------------------------------------------------
 
 
-class TestRigidConnection:
+class TestSeparateNodesArePinned:
     def _write(self):
         writer = _make_writer_stub()
         conn = _conn()
@@ -121,10 +122,10 @@ class TestRigidConnection:
         )
         return buf.getvalue()
 
-    def test_all_six_dofs_coupled(self):
+    def test_only_translations_coupled(self):
         text = self._write()
         dofs = _extract_equation_dofs(text)
-        assert set(dofs) == {1, 2, 3, 4, 5, 6}
+        assert set(dofs) == {1, 2, 3}
 
     def test_labelled_rigid(self):
         text = self._write()
@@ -164,11 +165,12 @@ class TestFullPinReleases:
 
 
 # ---------------------------------------------------------------------------
-# Partial pin — one member has only one rotation axis released
+# Partial release — cannot be represented, so it becomes a full pin with a
+# warning to the user.
 # ---------------------------------------------------------------------------
 
 
-class TestPartialPin:
+class TestPartialRelease:
     def _write(self, released):
         writer = _make_writer_stub()
         conn = _conn(released_dofs_by_member=released)
@@ -176,38 +178,96 @@ class TestPartialPin:
         writer._write_point_connection(
             buf, conn, _MEMBER_IDS, set(), released_dofs_by_member=released
         )
-        return buf.getvalue()
+        return writer, buf.getvalue()
 
-    def test_only_released_dof_is_absent(self):
-        """m1 releases DOF 4; m2 is rigid — DOF 4 should NOT appear, 5 and 6 should."""
-        text = self._write({"m1": [4]})
-        dofs = _extract_equation_dofs(text)
-        assert 4 not in dofs, f"DOF 4 should be free but appeared: {dofs}"
-        assert 5 in dofs and 6 in dofs
+    def test_no_rotational_equations(self):
+        _, text = self._write({"m1": [4]})
+        assert set(_extract_equation_dofs(text)) == {1, 2, 3}
 
-    def test_z_only_release(self):
-        """Only Z-rotation (DOF 6) released for m1; m2 rigid → DOF 6 absent."""
-        text = self._write({"m1": [6]})
-        dofs = _extract_equation_dofs(text)
-        assert 6 not in dofs
-        assert 4 in dofs and 5 in dofs
+    def test_user_is_warned(self):
+        writer, _ = self._write({"m1": [6]})
+        writer._warn_user.assert_called_once()
+        message = writer._warn_user.call_args[0][0]
+        assert "m1" in message and "partial" in message
 
-    def test_both_members_release_same_axis(self):
-        """Both members release DOF 5 → no DOF 5 equation."""
-        text = self._write({"m1": [5], "m2": [5]})
-        dofs = _extract_equation_dofs(text)
-        assert 5 not in dofs
-        assert 4 in dofs and 6 in dofs
+    def test_full_release_does_not_warn(self):
+        writer, _ = self._write({"m1": [4, 5, 6]})
+        writer._warn_user.assert_not_called()
 
-    def test_only_one_member_releases_dof_still_couples_the_other(self):
-        """m1 releases DOF 4; m2 does not → two nodes are not coupled on DOF 4."""
-        # With only m1 releasing DOF 4, there is only 1 node left in the
-        # coupled set for DOF 4, so no equation should appear.
-        text = self._write({"m1": [4]})
-        dofs = _extract_equation_dofs(text)
-        assert (
-            4 not in dofs
-        ), "DOF 4 equation should not appear when only one of two nodes is coupled"
+
+# ---------------------------------------------------------------------------
+# Rigid connections: coincident nodes of unreleased members are merged
+# ---------------------------------------------------------------------------
+
+
+def _merge_stub(positions, pairs, released=None, entity_type="point"):
+    """Writer stub with one node per member and a single two-member connection."""
+    writer = MagicMock(spec=UnifiedCalculixWriter)
+    writer.nodes = {n: tuple(p) for n, p in positions.items()}
+    writer.elements = {
+        10: {"type": "B31", "nodes": [1, 3]},
+        20: {"type": "S3", "nodes": [2, 4, 5]},
+    }
+    writer.node_sets = {"SET": [1, 2]}
+    writer._u1_members = set()
+    writer._COINCIDENT_TOL = UnifiedCalculixWriter._COINCIDENT_TOL
+    writer._MAX_RIGID_LINK = UnifiedCalculixWriter._MAX_RIGID_LINK
+    writer._find_connection_nodes_at_location = MagicMock(return_value=pairs)
+    conn = _conn(released_dofs_by_member=released)
+    conn.entity_type = entity_type
+    writer.domain_model = MagicMock()
+    writer.domain_model.connections = [conn]
+    writer._merge_rigid_connection_nodes = (
+        UnifiedCalculixWriter._merge_rigid_connection_nodes.__get__(writer)
+    )
+    return writer
+
+
+_POSITIONS = {
+    1: (0.0, 0.0, 0.0),
+    2: (0.0, 0.0, 0.0),
+    3: (1.0, 0.0, 0.0),
+    4: (0.0, 1.0, 0.0),
+    5: (1.0, 1.0, 0.0),
+}
+
+
+class TestMergeRigidConnectionNodes:
+    def test_coincident_nodes_are_merged(self):
+        writer = _merge_stub(_POSITIONS, [("m1", 1), ("m2", 2)])
+        writer._merge_rigid_connection_nodes()
+        assert writer.elements[20]["nodes"] == [1, 4, 5]
+        assert 2 not in writer.nodes
+        assert writer.node_sets["SET"] == [1]
+        writer._warn_user.assert_not_called()
+
+    def test_node_short_of_the_joint_gets_a_rigid_link(self):
+        """A member ending 0.3 m from the joint is bridged, not merged."""
+        positions = dict(_POSITIONS)
+        positions[2] = (0.0, 0.3, 0.0)
+        writer = _merge_stub(positions, [("m1", 1), ("m2", 2)])
+        writer._merge_rigid_connection_nodes()
+        assert writer.elements[20]["nodes"] == [2, 4, 5]
+        assert 2 in writer.nodes
+        assert [(a, b) for _, a, b in writer._rigid_links] == [(1, 2)]
+        assert writer._rigid_links[0][0] > max(writer.elements)
+        writer._warn_user.assert_not_called()
+
+    def test_node_far_from_the_joint_is_left_pinned_with_warning(self):
+        positions = dict(_POSITIONS)
+        positions[2] = (0.0, 5.0, 0.0)
+        writer = _merge_stub(positions, [("m1", 1), ("m2", 2)])
+        writer._merge_rigid_connection_nodes()
+        assert writer._rigid_links == []
+        writer._warn_user.assert_called_once()
+
+    def test_released_member_is_not_merged(self):
+        writer = _merge_stub(
+            _POSITIONS, [("m1", 1), ("m2", 2)], released={"m2": [4, 5, 6]}
+        )
+        writer._merge_rigid_connection_nodes()
+        assert writer.elements[20]["nodes"] == [2, 4, 5]
+        writer._find_connection_nodes_at_location.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

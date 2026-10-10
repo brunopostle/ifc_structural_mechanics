@@ -49,7 +49,18 @@ def get_constrained_dofs(connection) -> List[int]:
         ]
         return [dof for dof, val in dof_map if val >= _RIGID_STIFFNESS_THRESHOLD]
 
-    # Fallback: entity_type-based defaults
+    # No support condition. A connection that joins two or more members is a
+    # joint between them, not a support: IFC expresses a support through the
+    # connection's AppliedCondition, which is where the stiffness comes from.
+    real_members = [
+        m
+        for m in getattr(connection, "connected_members", [])
+        if not str(m).startswith("dummy_member_")
+    ]
+    if len(real_members) >= 2:
+        return []
+
+    # Fallback for single-member connections: entity_type-based defaults
     entity_type = getattr(connection, "entity_type", "point")
     if entity_type in ("rigid", "fixed"):
         return [1, 2, 3, 4, 5, 6]
@@ -106,11 +117,9 @@ def write_boundary_conditions(
             logger.debug(f"Skipping connection {connection_id} — no DOFs to constrain")
             continue
 
-        # Find nodes that correspond to this connection's position
+        # Find the nodes this support acts on (one node, or a whole edge)
         if hasattr(connection, "position") and connection.position:
-            bc_nodes = find_support_nodes(
-                connection.position, node_coords, tolerance=0.1
-            )
+            bc_nodes = find_connection_support_nodes(connection, node_coords)
 
             if bc_nodes:
                 # Create node set for this boundary condition
@@ -566,6 +575,18 @@ def _compute_u1_distributed_cloads(
     return cloads
 
 
+def _write_load_reset(file: TextIO) -> None:
+    """Clear loads carried over from earlier steps.
+
+    CalculiX keeps every load from previous steps active unless a card with
+    ``OP=NEW`` removes them, so without this each load case would be reported
+    as the sum of itself and all the cases before it.
+    """
+    file.write("** Each step is an independent load case\n")
+    file.write("*CLOAD, OP=NEW\n")
+    file.write("*DLOAD, OP=NEW\n\n")
+
+
 def _find_beam_elset(element_sets: Optional[Dict[str, List[int]]]) -> Optional[str]:
     """Return the name of a B31-only element set suitable for *EL FILE SF, or None.
 
@@ -761,6 +782,7 @@ def write_analysis_steps(
             file.write("*STEP\n")
             file.write("*STATIC\n")
             file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
+            _write_load_reset(file)
             file.write(f"** Load Case: {load_case.name}\n")
             loads_written = _write_validated_loads_within_step(
                 file,
@@ -786,6 +808,7 @@ def write_analysis_steps(
             file.write("*STEP\n")
             file.write("*STATIC\n")
             file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
+            _write_load_reset(file)
             file.write("** Gravity (self-weight)\n")
             if not has_u1_elements:
                 # DLOAD GRAV is rejected by e_c3d_u1; use lumped CLOAD for U1 instead
@@ -802,6 +825,7 @@ def write_analysis_steps(
         file.write("*STEP\n")
         file.write("*STATIC\n")
         file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
+        _write_load_reset(file)
         file.write("** Loads within step\n")
         loads_written = _write_validated_loads_within_step(
             file,
@@ -971,6 +995,47 @@ def find_support_nodes(
         return []
     coincident = np.linalg.norm(coords - coords[nearest], axis=1) <= coincidence
     return sorted(int(i) for i in ids[coincident])
+
+
+def find_nodes_on_segment(
+    start: List[float],
+    end: List[float],
+    node_coords: Dict[int, Tuple[float, float, float]],
+    tolerance: float = 1e-3,
+) -> List[int]:
+    """Return the nodes lying on the straight segment from *start* to *end*."""
+    if not node_coords:
+        return []
+    ids = np.fromiter(node_coords.keys(), dtype=np.int64, count=len(node_coords))
+    coords = np.array(list(node_coords.values()), dtype=float)
+    a = np.asarray(start, dtype=float)
+    ab = np.asarray(end, dtype=float) - a
+    length_sq = float(np.dot(ab, ab))
+    if length_sq < 1e-18:
+        return find_support_nodes(start, node_coords, tolerance=tolerance)
+    t = np.clip((coords - a) @ ab / length_sq, 0.0, 1.0)
+    distance = np.linalg.norm(coords - (a + np.outer(t, ab)), axis=1)
+    return sorted(int(i) for i in ids[distance <= tolerance])
+
+
+def find_connection_support_nodes(
+    connection: Any, node_coords: Dict[int, Tuple[float, float, float]]
+) -> List[int]:
+    """Return the mesh nodes a support connection restrains.
+
+    A line support (``IfcStructuralCurveConnection``) carries its two end
+    points in ``connection.edge`` and restrains every node along that edge. A
+    point support restrains the node at its position.
+    """
+    edge = getattr(connection, "edge", None)
+    if edge is not None and len(edge) == 2:
+        nodes = find_nodes_on_segment(edge[0], edge[1], node_coords)
+        if nodes:
+            return nodes
+    position = getattr(connection, "position", None)
+    if position:
+        return find_support_nodes(position, node_coords, tolerance=0.1)
+    return []
 
 
 def extract_curve_endpoints(geometry: Any) -> List[List[float]]:

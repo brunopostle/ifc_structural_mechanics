@@ -145,6 +145,7 @@ def analyze_ifc(
         )
 
         logger.info(f"Generated unified CalculiX input file: {unified_inp_file}")
+        result["warnings"].extend(getattr(domain_model, "analysis_warnings", []))
 
         # Step 5: Run the CalculiX analysis
         logger.info("Running CalculiX analysis...")

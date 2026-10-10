@@ -260,6 +260,9 @@ class UnifiedCalculixWriter:
             # Step 2c: Resolve remaining overlapping-geometry element ownership
             self._resolve_overlapping_element_sets()
 
+            # Step 2c2: Make rigid connections rigid by sharing one node
+            self._merge_rigid_connection_nodes()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -589,6 +592,7 @@ class UnifiedCalculixWriter:
             # Material and structural properties
             self._write_materials(f)
             self._write_sections(f)
+            self._write_rigid_links(f)
 
             # Connections (kinematic couplings, MPCs)
             # Pass boundary condition DOFs to avoid conflicts
@@ -1231,7 +1235,7 @@ class UnifiedCalculixWriter:
         node_coords = dict(self.nodes)
 
         from ..analysis.boundary_condition_handling import (
-            find_support_nodes,
+            find_connection_support_nodes,
             get_constrained_dofs,
         )
 
@@ -1242,7 +1246,7 @@ class UnifiedCalculixWriter:
 
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
-                bc_nodes = find_support_nodes(conn.position, node_coords, tolerance=0.1)
+                bc_nodes = find_connection_support_nodes(conn, node_coords)
 
                 if not bc_nodes:
                     continue
@@ -1257,6 +1261,158 @@ class UnifiedCalculixWriter:
             sample = sorted(list(bc_node_dofs))[:20]
             logger.debug(f"Sample boundary condition DOFs: {sample}")
         return bc_node_dofs
+
+    # Largest gap between two nodes that are treated as the same point.
+    _COINCIDENT_TOL = 1e-3
+
+    def _warn_user(self, message: str, domain_id: Optional[str] = None) -> None:
+        """Log a warning and record it on the model for ``result["warnings"]``."""
+        logger.warning(message)
+        if not hasattr(self.domain_model, "analysis_warnings"):
+            self.domain_model.analysis_warnings = []
+        self.domain_model.analysis_warnings.append(
+            {
+                "message": message,
+                "severity": "warning",
+                "entity_type": None,
+                "ccx_id": None,
+                "domain_id": domain_id,
+            }
+        )
+
+    # Longest rigid end zone that is bridged with a stiff link element.
+    _MAX_RIGID_LINK = 2.0
+    # Stiff link properties: a 0.5 m square at 100 x the modulus of steel is
+    # about a thousand times stiffer in bending than a typical member, which
+    # is rigid for practical purposes without wrecking the conditioning.
+    _RIGID_LINK_SIDE = 0.5
+    _RIGID_LINK_MODULUS = 2.1e13
+
+    def _merge_rigid_connection_nodes(self) -> None:
+        """Make every rigid connection able to transfer moment.
+
+        CalculiX expands beam and shell elements into solids, so their nodes
+        have no rotational degrees of freedom of their own. ``*EQUATION`` on
+        DOF 4-6 between two such nodes is accepted and silently does nothing,
+        and rigid bodies or beam MPCs on them are rejected. The only way to
+        pass moment between two members is a shared node, where CalculiX
+        builds a knot (a rigid body over the expanded nodes).
+
+        For each connection, the joint node is the member node nearest the
+        connection position. Every other member without an end release is
+        then joined to it:
+
+        * a coincident node is merged into the joint node (beams and shells
+          are meshed with separate nodes);
+        * a node that stops short of the joint, as analysis models with rigid
+          end zones produce (a column ending at the beam soffit, a beam ending
+          at the column face), is bridged by a stiff B31 link element recorded
+          in ``self._rigid_links``.
+
+        Members with an end release keep their own node and are tied by
+        translation equations in ``_write_point_connection``.
+        """
+        parent: Dict[int, int] = {}
+        links: List[Tuple[int, int]] = []
+
+        def find(node: int) -> int:
+            while node in parent:
+                node = parent[node]
+            return node
+
+        for conn in self.domain_model.connections:
+            real_members = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
+            if len(real_members) < 2 or conn.entity_type not in ("point", "rigid"):
+                continue
+            released = getattr(conn, "released_dofs_by_member", None) or {}
+            rigid_members = [
+                m
+                for m in real_members
+                if not released.get(m) and m not in self._u1_members
+            ]
+            if len(rigid_members) < 2:
+                continue
+
+            pairs = self._find_connection_nodes_at_location(conn, rigid_members)
+            if len(pairs) < 2:
+                continue
+            positions = {n: np.array(self.nodes[n], dtype=float) for _, n in pairs}
+            try:
+                conn_pos = np.array([float(v) for v in conn.position[:3]])
+            except (TypeError, ValueError, AttributeError):
+                conn_pos = positions[pairs[0][1]]
+            joint_node = min(
+                (n for _, n in pairs),
+                key=lambda n: float(np.linalg.norm(positions[n] - conn_pos)),
+            )
+            for member_id, node in pairs:
+                if node == joint_node:
+                    continue
+                gap = float(np.linalg.norm(positions[node] - positions[joint_node]))
+                if gap <= self._COINCIDENT_TOL:
+                    root_a, root_b = find(joint_node), find(node)
+                    if root_a != root_b:
+                        parent[max(root_a, root_b)] = min(root_a, root_b)
+                elif gap <= self._MAX_RIGID_LINK:
+                    links.append((node, joint_node))
+                else:
+                    self._warn_user(
+                        f"Connection {conn.id}: member {member_id} ends "
+                        f"{gap:.2f} m from the connection, too far for a rigid "
+                        "link; it is tied in translation only and transfers "
+                        "no moment there.",
+                        domain_id=conn.id,
+                    )
+
+        if parent:
+            for elem in self.elements.values():
+                elem["nodes"] = [find(n) for n in elem["nodes"]]
+            for name, node_ids in self.node_sets.items():
+                self.node_sets[name] = sorted({find(n) for n in node_ids})
+            for node in parent:
+                del self.nodes[node]
+            # Node lookups cached before the merge are now stale
+            self._member_node_cache = {}
+            logger.info(f"Merged {len(parent)} coincident nodes at rigid connections")
+
+        unique_links = sorted(
+            {tuple(sorted((find(a), find(b)))) for a, b in links if find(a) != find(b)}
+        )
+        next_id = max(self.elements.keys(), default=0) + 1
+        self._rigid_links = [
+            (next_id + i, a, b) for i, (a, b) in enumerate(unique_links)
+        ]
+        if self._rigid_links:
+            logger.info(f"Added {len(self._rigid_links)} rigid link elements")
+
+    def _write_rigid_links(self, file: TextIO) -> None:
+        """Write the stiff B31 elements that bridge rigid end zones.
+
+        They are kept out of ``self.elements`` and ``EALL`` so they carry no
+        self-weight and belong to no member.
+        """
+        links = getattr(self, "_rigid_links", [])
+        if not links:
+            return
+        file.write("** Rigid links bridging member ends to their joints\n")
+        file.write("*MATERIAL, NAME=MAT_RIGID_LINK\n*ELASTIC\n")
+        file.write(f"{self._RIGID_LINK_MODULUS:.6e}, 0.3\n\n")
+        side = self._RIGID_LINK_SIDE
+        for elem_id, node_a, node_b in links:
+            axis = np.array(self.nodes[node_b]) - np.array(self.nodes[node_a])
+            normal = self._orthogonal_beam_normal((0.0, 0.0, 1.0), tuple(axis))
+            elset = f"RIGID_LINK_{elem_id}"
+            file.write(f"*ELEMENT, TYPE=B31, ELSET={elset}\n")
+            file.write(f"{elem_id}, {node_a}, {node_b}\n")
+            file.write(
+                f"*BEAM SECTION, ELSET={elset}, MATERIAL=MAT_RIGID_LINK,"
+                " SECTION=RECT\n"
+            )
+            file.write(f"{side:.6e}, {side:.6e}\n")
+            file.write(f"{normal[0]:.6e}, {normal[1]:.6e}, {normal[2]:.6e}\n")
+        file.write("\n")
 
     def _write_connections(self, file: TextIO, bc_node_dofs: set) -> None:
         """
@@ -1345,10 +1501,9 @@ class UnifiedCalculixWriter:
         """
         Write a point connection using CalculiX *EQUATION constraints.
 
-        Translations (DOF 1-3) are always coupled.  Rotations (DOF 4-6) are
-        coupled for members that do NOT have that DOF released.  When all
-        members have a given rotation DOF released, that DOF is left free for
-        everyone (full pin about that axis).
+        Couples translations (DOF 1-3) only, which makes a pin. Members that
+        are rigidly connected share a single node before this is called (see
+        ``_merge_rigid_connection_nodes``) and need no equations.
 
         Args:
             file: Output file handle
@@ -1402,20 +1557,19 @@ class UnifiedCalculixWriter:
             for _, node in connection_pairs[1:]:
                 _write_eq(node, dof, ref_node)
 
-        # Rotations (DOF 4-6): couple only nodes whose members don't have this DOF released.
-        # Writing DOF 4-6 EQUATION constraints between separate nodes does NOT trigger
-        # CalculiX KNOT generation (KNOT only occurs when beam and shell share a node).
-        for dof in [4, 5, 6]:
-            coupled = [
-                (mid, nid)
-                for mid, nid in connection_pairs
-                if dof not in released.get(mid or "", [])
-            ]
-            if len(coupled) < 2:
-                continue  # All (or all but one) members released this DOF — leave free
-            dof_ref = coupled[0][1]
-            for _, node in coupled[1:]:
-                _write_eq(node, dof, dof_ref)
+        # Rotations are not coupled here. CalculiX ignores *EQUATION on DOF 4-6
+        # of beam and shell nodes, so a member reaching this point through a
+        # separate node is pinned. Members meant to be rigid already share one
+        # node (_merge_rigid_connection_nodes); what is left are members with
+        # an end release, and a partial release cannot be represented.
+        for member_id, dofs in released.items():
+            if dofs and not {4, 5, 6}.issubset(set(dofs)):
+                self._warn_user(
+                    f"Connection {conn.id}: member {member_id} has a partial "
+                    f"rotational release (DOF {sorted(dofs)}); it is analysed as "
+                    "a full pin, releasing all three rotations.",
+                    domain_id=conn.id,
+                )
 
         if equations_skipped > 0:
             logger.info(

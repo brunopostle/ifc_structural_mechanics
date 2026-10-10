@@ -50,6 +50,8 @@ class StructuralModel:
         self.description = description
         self.members = []
         self.connections = []
+        # Warnings raised while writing the analysis input, in result format
+        self.analysis_warnings = []
         self.load_groups = []
         self.load_combinations = []
         self.results = []

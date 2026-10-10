@@ -298,7 +298,9 @@ class GmshGeometryConverter:
     # ------------------------------------------------------------------
 
     def _fragment_all_entities(
-        self, support_point_tags: Optional[List[int]] = None
+        self,
+        support_point_tags: Optional[List[int]] = None,
+        surface_point_tags: Optional[List[int]] = None,
     ) -> None:
         """
         Fragment geometry entities to create shared topology.
@@ -316,6 +318,9 @@ class GmshGeometryConverter:
                 positions.  These are passed as *tools* to fragment() so that
                 curves are split exactly at those positions, guaranteeing a mesh
                 node for each intermediate support.
+            surface_point_tags: Gmsh point tags where connections land on a
+                surface member. Passed as *tools* to the surface fragment() so
+                the shell mesh has a node at each of them.
         """
         self._fragment_map = None
         curve_map = None
@@ -345,10 +350,15 @@ class GmshGeometryConverter:
             except Exception as e:
                 logger.warning(f"Curve fragment failed: {e}")
 
-        # Fragment surfaces against surfaces
-        if len(self._all_surface_dim_tags) >= 2:
+        # Fragment surfaces against surfaces (and against connection points)
+        surface_tools = [(0, pt) for pt in (surface_point_tags or [])]
+        if len(self._all_surface_dim_tags) >= 2 or (
+            self._all_surface_dim_tags and surface_tools
+        ):
             try:
-                out_s, map_s = gmsh.model.occ.fragment(self._all_surface_dim_tags, [])
+                out_s, map_s = gmsh.model.occ.fragment(
+                    self._all_surface_dim_tags, surface_tools
+                )
                 surface_map = map_s
                 logger.info(
                     f"Fragment surfaces: {len(self._all_surface_dim_tags)} -> {len(out_s)}"
@@ -552,6 +562,110 @@ class GmshGeometryConverter:
 
         return seeded
 
+    @staticmethod
+    def _point_in_planar_polygon(
+        point: np.ndarray, polygon: np.ndarray, tol: float = 1e-4
+    ) -> bool:
+        """Return True if *point* lies on the planar polygon (boundary included)."""
+        if len(polygon) < 3:
+            return False
+        # Newell normal
+        nxt = np.roll(polygon, -1, axis=0)
+        normal = np.array(
+            [
+                np.sum((polygon[:, 1] - nxt[:, 1]) * (polygon[:, 2] + nxt[:, 2])),
+                np.sum((polygon[:, 2] - nxt[:, 2]) * (polygon[:, 0] + nxt[:, 0])),
+                np.sum((polygon[:, 0] - nxt[:, 0]) * (polygon[:, 1] + nxt[:, 1])),
+            ]
+        )
+        length = np.linalg.norm(normal)
+        if length < 1e-12:
+            return False
+        normal /= length
+        if abs(np.dot(point - polygon[0], normal)) > tol:
+            return False
+        # Project onto the two axes most perpendicular to the normal
+        drop = int(np.argmax(np.abs(normal)))
+        keep = [i for i in range(3) if i != drop]
+        px, py = point[keep]
+        poly2d = polygon[:, keep]
+        inside = False
+        for (x0, y0), (x1, y1) in zip(poly2d, np.roll(poly2d, -1, axis=0)):
+            edge = np.array([x1 - x0, y1 - y0])
+            rel = np.array([px - x0, py - y0])
+            edge_len = np.linalg.norm(edge)
+            if edge_len > 1e-12:
+                t = np.dot(rel, edge) / edge_len**2
+                if -1e-9 <= t <= 1 + 1e-9:
+                    if np.linalg.norm(rel - t * edge) <= tol:
+                        return True  # on the boundary
+            if (y0 > py) != (y1 > py):
+                if px < x0 + (py - y0) * (x1 - x0) / (y1 - y0):
+                    inside = not inside
+        return inside
+
+    def _seed_surface_connection_points(
+        self, domain_model: StructuralModel
+    ) -> List[int]:
+        """Add Gmsh points where connections land on a surface member.
+
+        A column meeting a slab, or a point support under one, usually falls
+        inside the slab or along its edge, where the surface mesher would not
+        place a node. Passing a point there as a *tool* to the surface
+        fragment() makes it part of the surface topology, so the shell mesh
+        gets a node exactly at the connection and the joint can share it.
+
+        Returns:
+            List of Gmsh point tags to pass as tools to the surface fragment().
+        """
+        polygons = []
+        for member in domain_model.members:
+            if not isinstance(member, SurfaceMember):
+                continue
+            try:
+                polygon = np.array(
+                    [
+                        [float(v) for v in p]
+                        for p in self._convert_surface(member.geometry)
+                    ],
+                    dtype=float,
+                )
+            except (TypeError, ValueError, KeyError, NotImplementedError):
+                continue
+            if polygon.ndim == 2 and polygon.shape[1] == 3 and len(polygon) >= 3:
+                polygons.append((member.id, polygon))
+        if not polygons:
+            return []
+
+        seeded: List[int] = []
+        for conn in domain_model.connections:
+            if not (hasattr(conn, "position") and conn.position):
+                continue
+            surface_ids = {
+                m
+                for m in conn.connected_members
+                if isinstance(domain_model.get_member(m), SurfaceMember)
+            }
+            if not surface_ids:
+                continue
+            try:
+                pos = np.array([float(v) for v in conn.position], dtype=float)
+            except (TypeError, ValueError):
+                continue
+            if self._coord_key(pos[0], pos[1], pos[2]) in self._surface_point_registry:
+                continue  # already a corner of some surface
+            for member_id, polygon in polygons:
+                if member_id in surface_ids and self._point_in_planar_polygon(
+                    pos, polygon
+                ):
+                    seeded.append(
+                        self._get_or_create_point(pos[0], pos[1], pos[2], dim=2)
+                    )
+                    break
+        if seeded:
+            logger.info(f"Seeded {len(seeded)} connection point(s) on surfaces")
+        return seeded
+
     def _create_physical_groups(self, domain_model: StructuralModel) -> None:
         """
         Create Gmsh physical groups so mesh elements inherit member ownership.
@@ -709,9 +823,10 @@ class GmshGeometryConverter:
         # interiors so that fragment() splits the curve there and the mesher
         # places a node at the exact support location.
         support_point_tags = self._seed_support_points(domain_model)
+        surface_point_tags = self._seed_surface_connection_points(domain_model)
 
         # Phase 2: Fragment for shared topology
-        self._fragment_all_entities(support_point_tags)
+        self._fragment_all_entities(support_point_tags, surface_point_tags)
 
         # Phase 3: Single synchronize
         try:

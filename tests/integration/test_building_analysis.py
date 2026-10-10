@@ -73,10 +73,17 @@ class TestSlabAnalysis:
         assert 1e-5 < max_disp < 1e-2
 
     def test_slab_reactions_balance_self_weight(self, slab_result):
-        """slab_01 reactions push up with a force of a few hundred kN."""
+        """slab_01 reactions equal its weight: 5 x 3 x 0.2 m at 7.8 kg/m3.
+
+        The IFC material is deliberately light (7.8 kg/m3, E = 210 MPa); a
+        reaction in the hundreds of kN means the default steel was used.
+        CalculiX omits the load that lands on restrained nodes, hence the
+        loose lower bound at this mesh size.
+        """
         total = _total_reaction(slab_result)
         logger.info(f"slab_01 total reaction: {total} N")
-        assert 1e5 < total[2] < 1e6
+        weight = 5.0 * 3.0 * 0.2 * 7.8 * 9.81
+        assert 0.85 * weight < total[2] <= 1.001 * weight
         assert abs(total[0]) < 1.0 and abs(total[1]) < 1.0
 
 
@@ -91,10 +98,6 @@ class TestBuildingAnalysis:
             result["status"] == "success"
         ), f"Analysis failed: {result.get('errors', [])}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="building_02 is near-singular under self-weight (ifc_structural_mechanics-aiz.15)",
-    )
     def test_building_displacement_reasonable(self, building_02_run):
         """building_02 max displacement should be < 1.0m (not kilometres)."""
         result, _ = building_02_run

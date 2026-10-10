@@ -95,8 +95,27 @@ class TestMultiStepWriting:
         # Split on steps
         steps = text.split("*END STEP")
         gravity_step = steps[-2]  # last step before final empty fragment
-        assert "*CLOAD" not in gravity_step
+        assert "*CLOAD" not in gravity_step.replace("*CLOAD, OP=NEW", "")
         assert "GRAV" in gravity_step
+
+    def test_every_step_clears_earlier_loads(self):
+        """Each step starts by removing loads carried over from earlier steps.
+
+        CalculiX keeps loads active from step to step, so without the reset a
+        load case would be reported as the sum of itself and those before it.
+        """
+        model = _make_model_with_load_cases(2)
+        buf = io.StringIO()
+        write_analysis_steps(buf, model, gravity=True)
+        steps = buf.getvalue().split("*END STEP")[:-1]
+
+        assert len(steps) == 3
+        for step in steps:
+            body = step[step.index("*STATIC") :]
+            reset = body.index("*CLOAD, OP=NEW")
+            assert "*DLOAD, OP=NEW" in body
+            # No load data line may come before the reset
+            assert "GRAV" not in body[:reset]
 
     def test_no_load_cases_falls_back_to_single_step(self):
         """Without load cases, a single combined step is written (backward compat)."""

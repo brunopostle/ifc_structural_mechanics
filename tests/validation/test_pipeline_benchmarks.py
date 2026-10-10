@@ -192,3 +192,68 @@ class TestFixedFixedBeamPointLoad:
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
             self.LOAD, rel=1e-3
         )
+
+
+class TestCodeAsterReferences:
+    """Self-weight results against the Code_Aster runs shipped with the models.
+
+    ``examples/analysis-models/models/<name>/<name>.rmed`` holds IfcOpenShell's
+    IFC2CA results for the same IFC files (Euler beams, DKT shells, gravity
+    9.806 m/s2). The numbers below are the largest nodal translation in each
+    file, read with h5py from ``CHA/Bld_DISP`` (six components per node,
+    stored component by component).
+    """
+
+    STRUCTURE = os.path.join(IFC_DIR, "structure_01.ifc")
+
+    def test_cantilever_01(self, tmp_path):
+        """Reference 0.2766 mm; ours is slightly larger for shear deflection."""
+        data = _run(CANTILEVER, tmp_path, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(2.766e-4, rel=0.03)
+
+    def test_structure_01(self, tmp_path):
+        """Slab on a wall and two columns. Reference 0.4273 mm.
+
+        The tolerance is wide because the slab-to-wall edge hinge is not
+        modelled and linear shell elements converge slowly. Before surface
+        materials, joints and supports were read correctly this model gave
+        between 1.7 and 17 mm.
+        """
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=self.STRUCTURE, output_dir=output_dir, mesh_size=0.5, gravity=True
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            data = json.load(fh)
+        max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
+        assert max_disp == pytest.approx(4.273e-4, rel=0.25)
+
+    def test_structure_01_supports_and_joints(self, tmp_path):
+        """The wall base is a line support; the slab-to-wall joint is no support."""
+        output_dir = str(tmp_path / "out")
+        analyze_ifc(
+            ifc_path=self.STRUCTURE, output_dir=output_dir, mesh_size=0.5, gravity=True
+        )
+        with open(os.path.join(output_dir, "analysis.inp")) as fh:
+            text = fh.read()
+        support_sets = {}
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("*NSET, NSET=BC_"):
+                name = line.split("NSET=")[-1].strip()
+                nodes = []
+                for data_line in lines[i + 1 :]:
+                    if data_line.startswith("*"):
+                        break
+                    nodes += [n for n in data_line.split(",") if n.strip()]
+                support_sets[name] = len(nodes)
+        # Wall base edge plus two column bases; the slab-wall joint has no
+        # AppliedCondition and must not appear.
+        assert len(support_sets) == 3
+        assert sorted(support_sets.values())[:2] == [1, 1]
+        assert max(support_sets.values()) > 2
+        # Weight: 6 m3 of slab and 2.4 m3 of wall at 7.8 kg/m3, plus columns
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            reaction = json.load(fh)["global_reactions"]["total"]["fz_N"]
+        assert 600 < reaction < 700

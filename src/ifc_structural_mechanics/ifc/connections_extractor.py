@@ -258,6 +258,13 @@ class ConnectionsExtractor:
                         connection_type,
                         ifc_guid,
                     )
+                    # Keep the edge itself: a line support or line joint acts
+                    # along its whole length, not at its midpoint.
+                    if midpoint is not position and connection is not None:
+                        connection.edge = [
+                            [float(v) for v in geometry[0]],
+                            [float(v) for v in geometry[1]],
+                        ]
                 else:
                     connection = create_connection_from_stiffness(
                         connection_id,

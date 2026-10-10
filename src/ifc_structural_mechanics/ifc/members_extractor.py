@@ -437,12 +437,7 @@ class MembersExtractor:
                 return None
 
             # Extract material
-            material_profile = self._get_material_profile(entity)
-            material = (
-                material_profile
-                if material_profile and hasattr(material_profile, "Material")
-                else None
-            )
+            material = self._get_surface_material(entity)
 
             # Extract geometry with unit conversion
             geometry = self._extract_geometry(representation, self.length_scale)
@@ -498,6 +493,10 @@ class MembersExtractor:
                 )
             else:
                 # Create with default material (SI units)
+                self.logger.warning(
+                    f"Surface member {entity.GlobalId} has no usable material; "
+                    "analysing it as steel (E = 210 GPa, 7850 kg/m3)."
+                )
                 elastic_modulus = 210e9  # Pa
                 density = 7850.0  # kg/m³
 
@@ -633,6 +632,35 @@ class MembersExtractor:
                 return None
 
         self.logger.debug("No valid geometry found")
+        return None
+
+    def _get_surface_material(self, element):
+        """Return the IfcMaterial of a surface member, or None.
+
+        Surface members reference a plain ``IfcMaterial``, a layer set (the
+        first layer is used) or a constituent set, never a profile set.
+        """
+        for association in getattr(element, "HasAssociations", None) or []:
+            if not association.is_a("IfcRelAssociatesMaterial"):
+                continue
+            material = association.RelatingMaterial
+            if material.is_a("IfcMaterial"):
+                return material
+            if material.is_a("IfcMaterialLayerSetUsage"):
+                material = material.ForLayerSet
+            if material.is_a("IfcMaterialLayerSet") and material.MaterialLayers:
+                return material.MaterialLayers[0].Material
+            if material.is_a("IfcMaterialLayer"):
+                return material.Material
+            if (
+                material.is_a("IfcMaterialConstituentSet")
+                and material.MaterialConstituents
+            ):
+                return material.MaterialConstituents[0].Material
+            if material.is_a("IfcMaterialProfileSetUsage"):
+                material = material.ForProfileSet
+            if material.is_a("IfcMaterialProfileSet") and material.MaterialProfiles:
+                return material.MaterialProfiles[0].Material
         return None
 
     def _get_material_profile(self, element):

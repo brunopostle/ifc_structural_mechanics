@@ -250,10 +250,6 @@ class TestBuilding02ResultsJson:
         logger.info(f"building_02 member count: {len(data['members'])}")
         assert len(data["members"]) >= 10
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="building_02 is near-singular under self-weight (ifc_structural_mechanics-aiz.15)",
-    )
     def test_displacement_plausible(self, building_02_run):
         """building_02 max displacement should be in (0, 1] m."""
         _, output_dir = building_02_run
