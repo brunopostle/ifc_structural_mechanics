@@ -275,6 +275,91 @@ class TestFixedFixedBeamPointLoad:
         )
 
 
+def _beam_with_line_load(tmp_path, force_per_metre) -> str:
+    """Write beam_01.ifc with its point load replaced by a uniform line load.
+
+    ``force_per_metre`` is the load in global axes, in N/m. beam_01 is in
+    millimetres and newtons, so it is written in N/mm.
+    """
+    model = ifcopenshell.open(BEAM)
+    member = model.by_type("IfcStructuralCurveMember")[0]
+    point_action = model.by_type("IfcStructuralPointAction")[0]
+    action = model.create_entity(
+        "IfcStructuralLinearAction",
+        ifcopenshell.guid.new(),
+        point_action.OwnerHistory,
+        "benchmark line load",
+        None,
+        None,
+        member.ObjectPlacement,
+        member.Representation,
+        model.create_entity(
+            "IfcStructuralLoadLinearForce",
+            None,
+            *[float(component) / 1000.0 for component in force_per_metre],
+        ),
+        "GLOBAL_COORDS",
+        None,
+        "TRUE_LENGTH",
+    )
+    for relation in model.by_type("IfcRelConnectsStructuralActivity"):
+        if relation.RelatedStructuralActivity == point_action:
+            relation.RelatedStructuralActivity = action
+    for relation in model.by_type("IfcRelAssignsToGroup"):
+        if point_action in relation.RelatedObjects:
+            relation.RelatedObjects = [
+                action if obj == point_action else obj
+                for obj in relation.RelatedObjects
+            ]
+    model.remove(point_action)
+    path = str(tmp_path / "line_load.ifc")
+    model.write(path)
+    return path
+
+
+class TestFixedFixedBeamLineLoad:
+    """beam_01 under a uniform line load given in global axes.
+
+    A distributed load used to be written by magnitude alone, as a pressure
+    along the element's own axes, so its direction and sign were lost: every
+    line load pushed along the beam's local 2 axis, sideways for a floor beam.
+    """
+
+    LOAD = 5000.0  # N/m
+    B = TestFixedFixedBeamPointLoad
+
+    def _expected(self) -> float:
+        shear_modulus = self.B.E / (2 * (1 + self.B.NU))
+        return self.LOAD * self.B.LENGTH**4 / (
+            384 * self.B.E * self.B.INERTIA
+        ) + self.LOAD * self.B.LENGTH**2 / (8 * shear_modulus * self.B.AREA * 5 / 6)
+
+    def test_vertical_load_deflects_downwards(self, tmp_path):
+        path = _beam_with_line_load(tmp_path, (0.0, 0.0, -self.LOAD))
+        data = _run(path, tmp_path)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(
+            self._expected(), rel=DEFLECTION_TOLERANCE
+        )
+        assert envelope.get("max_ty_m", 0.0) < 0.01 * envelope["max_tz_m"]
+        # The supports push up with the whole load, less the sliver that
+        # lands on the restrained end nodes themselves (0.4% at this mesh)
+        reaction = data["global_reactions"]["total"]
+        assert reaction["fz_N"] == pytest.approx(self.LOAD * self.B.LENGTH, rel=0.01)
+
+    def test_horizontal_load_deflects_sideways(self, tmp_path):
+        """Same magnitude along global Y: the square section answers alike."""
+        path = _beam_with_line_load(tmp_path, (0.0, self.LOAD, 0.0))
+        data = _run(path, tmp_path)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_ty_m"] == pytest.approx(
+            self._expected(), rel=DEFLECTION_TOLERANCE
+        )
+        assert envelope.get("max_tz_m", 0.0) < 0.01 * envelope["max_ty_m"]
+        reaction = data["global_reactions"]["total"]
+        assert reaction["fy_N"] == pytest.approx(-self.LOAD * self.B.LENGTH, rel=0.01)
+
+
 class TestSimplySupportedPlateSelfWeight:
     """slab_01 supported in translation along all four edges, under gravity.
 

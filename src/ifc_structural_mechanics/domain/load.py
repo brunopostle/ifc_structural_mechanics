@@ -32,6 +32,8 @@ class Load(DomainEntity):
         # Set instance attributes
         self.magnitude = None
         self.direction = None
+        # "global", or "local" for a load given in the axes of its member
+        self.coordinate_system = "global"
 
         # Initialize base entity with ID and load type
         super().__init__(

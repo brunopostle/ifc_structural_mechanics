@@ -571,6 +571,7 @@ class LoadsExtractor:
                 member_ref = self._get_member_reference(ifc_load)
                 if member_ref:
                     line_load.member_reference = member_ref
+                line_load.coordinate_system = self._coordinate_system(ifc_load)
 
                 return line_load
 
@@ -618,18 +619,26 @@ class LoadsExtractor:
                     direction = np.array([0.0, 0.0, -1.0], dtype=float)
 
                 # Create the area load
-                return AreaLoad(
+                area_load = AreaLoad(
                     id=load_id,
                     magnitude=magnitude,
                     direction=direction,
                     surface_reference=surface_ref,
                 )
+                area_load.coordinate_system = self._coordinate_system(ifc_load)
+                return area_load
 
             return None
 
         except Exception as e:
             self.logger.error(f"Error creating domain load: {e}")
             return None
+
+    @staticmethod
+    def _coordinate_system(ifc_load) -> str:
+        """Return "local" for an action given in its member's axes, else "global"."""
+        value = getattr(ifc_load, "GlobalOrLocal", None)
+        return "local" if value == "LOCAL_COORDS" else "global"
 
     def _get_member_reference(self, ifc_load) -> Optional[str]:
         """

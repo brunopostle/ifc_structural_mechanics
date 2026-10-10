@@ -613,7 +613,8 @@ class ResultsParser(BaseParser):
             lines (List[str]): The lines of the DAT file.
 
         Returns:
-            List[ReactionForceResult]: List with a single result for total reactions.
+            List[ReactionForceResult]: One total per step, in step order, each
+            tagged with its load case name in ``metadata["load_case"]``.
         """
         reactions = []
 
@@ -646,6 +647,16 @@ class ResultsParser(BaseParser):
                             result.set_moments(
                                 [0.0, 0.0, 0.0]
                             )  # Totals don't include moments typically
+                            step = len(reactions)
+                            names = self.load_case_names or []
+                            result.add_metadata(
+                                "load_case",
+                                (
+                                    names[step]
+                                    if step < len(names)
+                                    else f"step_{step + 1}"
+                                ),
+                            )
 
                             reactions.append(result)
                             logger.info(f"Parsed total reaction forces: {forces}")
@@ -654,9 +665,6 @@ class ResultsParser(BaseParser):
                         logger.warning(
                             f"Error parsing total force values: {value_line}, error: {e}"
                         )
-
-                # We found the total force section, no need to continue
-                break
 
         return reactions
 

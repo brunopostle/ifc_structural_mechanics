@@ -629,60 +629,134 @@ def _write_u1_gravity_cloads(
     file.write("\n")
 
 
-def _compute_u1_distributed_cloads(
+# Share of a uniform load carried by each node of an element, as fractions of
+# the element's length or area, in CalculiX node order. These are the
+# work-equivalent ("consistent") loads: a quadratic triangle carries nothing
+# at its corners, and a quadratic quadrilateral pulls back at them.
+_LINE_NODE_SHARES = {2: (1 / 2, 1 / 2), 3: (1 / 6, 2 / 3, 1 / 6)}
+_SURFACE_NODE_SHARES = {
+    3: (1 / 3,) * 3,
+    6: (0.0,) * 3 + (1 / 3,) * 3,
+    4: (1 / 4,) * 4,
+    8: (-1 / 12,) * 4 + (1 / 3,) * 4,
+}
+
+
+def _element_measure_and_shares(
+    elem: Dict, node_coords: Dict
+) -> Optional[Tuple[float, Tuple[float, ...]]]:
+    """Return an element's length or area and each node's share of a uniform load."""
+    nodes = elem.get("nodes", [])
+    try:
+        coords = [np.array(node_coords[n], dtype=float) for n in nodes]
+    except KeyError:
+        return None
+    is_surface = str(elem.get("type", "")).startswith("S")
+    if is_surface and len(nodes) in _SURFACE_NODE_SHARES:
+        corners = coords[: 3 if len(nodes) in (3, 6) else 4]
+        area = 0.5 * float(
+            np.linalg.norm(np.cross(corners[1] - corners[0], corners[2] - corners[0]))
+        )
+        if len(corners) == 4:
+            area += 0.5 * float(
+                np.linalg.norm(
+                    np.cross(corners[2] - corners[0], corners[3] - corners[0])
+                )
+            )
+        return area, _SURFACE_NODE_SHARES[len(nodes)]
+    if not is_surface and len(nodes) in _LINE_NODE_SHARES:
+        # Ends are first and last; a quadratic beam has its middle node second
+        return (
+            float(np.linalg.norm(coords[-1] - coords[0])),
+            _LINE_NODE_SHARES[len(nodes)],
+        )
+    return None
+
+
+def _distributed_load_to_nodal_forces(
     element_set_name: str,
-    load,
+    force_vector,
     element_sets: Dict[str, List[int]],
     elements_data: Dict[int, Dict],
     node_coords: Dict,
 ) -> Dict[int, List[float]]:
-    """Convert a distributed load on a U1 element set to equivalent nodal CLOADs.
+    """Turn a uniform distributed load on an element set into nodal forces.
 
-    U1 elements don't support *DLOAD.  For a load of q N/m in the global direction
-    given by ``load.get_force_vector()``, each element of length L contributes
-    q*L/2 at each end node.
+    ``force_vector`` is the load per unit length (beams) or per unit area
+    (shells) in global axes. CalculiX's own ``*DLOAD`` types act along the
+    element's local axes (``P2`` on a beam, ``P`` normal to a shell), which
+    cannot express a load given in global directions, so the work-equivalent
+    nodal forces are computed here and written as ``*CLOAD``.
 
     Returns:
         Dict mapping node_id → [fx, fy, fz] accumulated nodal forces.
     """
-    import math
-
     cloads: Dict[int, List[float]] = {}
-    if not hasattr(load, "get_force_vector"):
-        return cloads
-
     try:
-        fvec = load.get_force_vector()
-        fx, fy, fz = float(fvec[0]), float(fvec[1]), float(fvec[2])
-    except Exception:
+        vector = np.array([float(force_vector[i]) for i in range(3)])
+    except (TypeError, ValueError, IndexError):
         return cloads
-
-    magnitude = math.sqrt(fx * fx + fy * fy + fz * fz)
-    if magnitude < 1e-30:
+    if float(np.linalg.norm(vector)) < 1e-30:
         return cloads
 
     for elem_id in element_sets.get(element_set_name, []):
         elem = elements_data.get(elem_id)
-        if not elem or len(elem.get("nodes", [])) < 2:
+        if not elem:
             continue
-        n1, n2 = elem["nodes"][0], elem["nodes"][1]
-        c1 = node_coords.get(n1)
-        c2 = node_coords.get(n2)
-        if c1 is None or c2 is None:
+        measured = _element_measure_and_shares(elem, node_coords)
+        if measured is None:
             continue
-        L = math.sqrt(
-            (c2[0] - c1[0]) ** 2 + (c2[1] - c1[1]) ** 2 + (c2[2] - c1[2]) ** 2
-        )
-        if L < 1e-12:
+        measure, shares = measured
+        if measure < 1e-12:
             continue
-        f_half = L / 2.0
-        for nid in (n1, n2):
+        for nid, share in zip(elem["nodes"], shares):
+            if share == 0.0:
+                continue
             entry = cloads.setdefault(nid, [0.0, 0.0, 0.0])
-            entry[0] += fx * f_half
-            entry[1] += fy * f_half
-            entry[2] += fz * f_half
+            for i in range(3):
+                entry[i] += vector[i] * measure * share
 
     return cloads
+
+
+def _global_force_vector(load, domain_model: StructuralModel) -> Optional[np.ndarray]:
+    """Return a distributed load's force vector in global axes.
+
+    A load given in the member's own axes (``coordinate_system == "local"``,
+    from IFC ``GlobalOrLocal``) is rotated with the member's ``local_axis``.
+    Returns None when that is needed and the member has no axes.
+    """
+    vector = np.array(_get_validated_force_vector(load), dtype=float)
+    if getattr(load, "coordinate_system", "global") != "local":
+        return vector
+    member_id = getattr(load, "member_reference", None) or getattr(
+        load, "surface_reference", None
+    )
+    member = domain_model.get_member(member_id) if member_id else None
+    axes = getattr(member, "local_axis", None)
+    try:
+        axes = np.array(axes, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if axes.shape != (3, 3):
+        return None
+    return axes.T.dot(vector)
+
+
+def _warn_model(domain_model: StructuralModel, message: str) -> None:
+    """Log a warning and record it on the model for ``result["warnings"]``."""
+    logger.warning(message)
+    if not hasattr(domain_model, "analysis_warnings"):
+        domain_model.analysis_warnings = []
+    domain_model.analysis_warnings.append(
+        {
+            "message": message,
+            "severity": "warning",
+            "entity_type": None,
+            "ccx_id": None,
+            "domain_id": None,
+        }
+    )
 
 
 def _write_load_reset(file: TextIO) -> None:
@@ -1380,33 +1454,34 @@ def _write_validated_loads_within_step(
                         logger.debug(
                             f"Skipping DLOAD for {element_set_name} — element set not defined"
                         )
+                    elif elements_data and node_coords:
+                        # Global-direction nodal forces, written after this block
+                        vector = _global_force_vector(load, domain_model)
+                        if vector is None:
+                            _warn_model(
+                                domain_model,
+                                f"Load {getattr(load, 'id', '?')} is given in the "
+                                "local axes of a member that has none; it is "
+                                "applied in global axes.",
+                            )
+                            vector = _get_validated_force_vector(load)
+                        partial = _distributed_load_to_nodal_forces(
+                            element_set_name,
+                            vector,
+                            element_sets or {},
+                            elements_data,
+                            node_coords,
+                        )
+                        for nid, fvec in partial.items():
+                            entry = u1_extra_cloads.setdefault(nid, [0.0, 0.0, 0.0])
+                            entry[0] += fvec[0]
+                            entry[1] += fvec[1]
+                            entry[2] += fvec[2]
                     elif u1_element_sets and element_set_name in u1_element_sets:
-                        # U1 (Timoshenko) elements don't support *DLOAD P-type loads.
-                        # Convert to work-equivalent *CLOAD nodal forces when element
-                        # connectivity is available; otherwise skip.
-                        if elements_data and element_sets and node_coords:
-                            partial = _compute_u1_distributed_cloads(
-                                element_set_name,
-                                load,
-                                element_sets,
-                                elements_data,
-                                node_coords,
-                            )
-                            for nid, fvec in partial.items():
-                                entry = u1_extra_cloads.setdefault(nid, [0.0, 0.0, 0.0])
-                                entry[0] += fvec[0]
-                                entry[1] += fvec[1]
-                                entry[2] += fvec[2]
-                            if partial:
-                                logger.info(
-                                    f"Converted DLOAD on {element_set_name} to "
-                                    f"equivalent CLOAD at {len(partial)} nodes"
-                                )
-                        else:
-                            logger.warning(
-                                f"Skipping DLOAD for {element_set_name} — U1 elements "
-                                "do not support *DLOAD; distributed load is not applied"
-                            )
+                        logger.warning(
+                            f"Skipping DLOAD for {element_set_name} — U1 elements "
+                            "do not support *DLOAD; distributed load is not applied"
+                        )
                     elif isinstance(load, LineLoad):
                         file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
                         loads_written = True
@@ -1424,11 +1499,9 @@ def _write_validated_loads_within_step(
 
             file.write("\n")
 
-            # Write equivalent CLOADs for U1 distributed loads
+            # Write the distributed loads as equivalent nodal forces
             if u1_extra_cloads:
-                file.write(
-                    "** Distributed loads on U1 elements (equivalent nodal CLOADs)\n"
-                )
+                file.write("** Distributed loads (equivalent nodal forces)\n")
                 file.write("*CLOAD\n")
                 for node_id, forces in sorted(u1_extra_cloads.items()):
                     for dof_idx, val in enumerate(forces):
@@ -1482,6 +1555,32 @@ def _write_validated_loads_within_step(
                     f"Skipping member DLOAD for {member.id} — element set not defined"
                 )
             else:
+                if elements_data and node_coords:
+                    member_cloads: Dict[int, List[float]] = {}
+                    for load in distributed_loads:
+                        vector = _global_force_vector(load, domain_model)
+                        if vector is None:
+                            vector = _get_validated_force_vector(load)
+                        partial = _distributed_load_to_nodal_forces(
+                            element_set_name,
+                            vector,
+                            element_sets or {},
+                            elements_data,
+                            node_coords,
+                        )
+                        for nid, fvec in partial.items():
+                            entry = member_cloads.setdefault(nid, [0.0, 0.0, 0.0])
+                            for i in range(3):
+                                entry[i] += fvec[i]
+                    if member_cloads:
+                        file.write("*CLOAD\n")
+                        for node_id, forces in sorted(member_cloads.items()):
+                            for dof_idx, val in enumerate(forces):
+                                if abs(val) > 1e-30:
+                                    file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
+                        file.write("\n")
+                        loads_written = True
+                    continue
                 file.write("*DLOAD\n")
                 for load in distributed_loads:
                     # Get magnitude

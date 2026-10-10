@@ -32,10 +32,15 @@ Schema (summary level)
     "by_load_case": {"Dead": {...}}
   },
   "global_reactions": {
-    "total": {"fx_N": 0.0, "fy_N": 0.0, "fz_N": 5000.0,
-              "mx_Nm": 0.0, "my_Nm": 0.0, "mz_Nm": 0.0}
+    "by_load_case": {"Dead": {"fx_N": 0.0, "fy_N": 0.0, "fz_N": 5000.0,
+                              "mx_Nm": 0.0, "my_Nm": 0.0, "mz_Nm": 0.0,
+                              "resultant_N": 5000.0}},
+    "total": {...}
   }
 }
+
+``global_reactions.total`` is only present when there is a single load case;
+each case is analysed on its own, so several cases have no common total.
 
 Per-member displacement is mapped via ``StructuralModel.node_to_member`` which is
 populated by the meshing pipeline.  Per-member stress follows the same mapping;
@@ -394,16 +399,14 @@ class ResultsExporter:
         if not reaction_results:
             return {}
 
-        total = next(
-            (r for r in reaction_results if r.reference_element == "TOTAL"), None
-        )
-        if not total:
+        totals = [r for r in reaction_results if r.reference_element == "TOTAL"]
+        if not totals:
             return {}
 
-        forces = total.get_forces()
-        moments = total.get_moments()
-        return {
-            "total": {
+        def _entry(result) -> Dict[str, float]:
+            forces = result.get_forces()
+            moments = result.get_moments()
+            return {
                 "fx_N": forces[0],
                 "fy_N": forces[1],
                 "fz_N": forces[2],
@@ -412,4 +415,14 @@ class ResultsExporter:
                 "mz_Nm": moments[2],
                 "resultant_N": math.sqrt(sum(f * f for f in forces)),
             }
+
+        by_load_case = {
+            r.metadata.get("load_case", f"step_{i + 1}"): _entry(r)
+            for i, r in enumerate(totals)
         }
+        reactions: Dict[str, Any] = {"by_load_case": by_load_case}
+        # One load case: its total is the total. With several there is no
+        # single figure, since each case is analysed on its own.
+        if len(totals) == 1:
+            reactions["total"] = _entry(totals[0])
+        return reactions
