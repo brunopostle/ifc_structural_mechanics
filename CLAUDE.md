@@ -363,8 +363,9 @@ here. This section only records the constraints that shape day-to-day work.
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
 - **`building_01` does not solve** (singular matrix; it mixes U1 and native
-  beams). `building_02` solves but is not validated: 462 mm under Live at a 2 m
-  mesh, 395 mm at 4 m, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
+  beams). `building_02` solves and its reactions match the applied loads, but two
+  slabs move 462 and 258 mm under Live at a 2 m mesh, which is not credible
+  (`aiz.40`), and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine.
 - **Skew supports are not modelled** (`aiz.35`): a support that restrains only
   some directions in axes not parallel to the global ones is written in global
@@ -468,6 +469,15 @@ rotational degrees of freedom**. This drives everything about joints:
   (`find_connection_support_nodes()`).
 - Writer warnings go through `_warn_user()` to `domain_model.analysis_warnings`
   and from there into `result["warnings"]`.
+
+**Distributed loads** are never written as `*DLOAD`. `P2` on a beam and `P` on a
+shell act along the element's own axes, which cannot express a load given in
+global directions (they once sent every vertical line load sideways).
+`_distributed_load_to_nodal_forces()` turns a line or area load into
+work-equivalent nodal forces and they are written as `*CLOAD`. A load with
+`coordinate_system == "local"` (IFC `GlobalOrLocal`) is rotated with the
+member's `local_axis` first. Check any change to loads by summing the applied
+load by hand and comparing it with `global_reactions.by_load_case`.
 
 **Load steps**: CalculiX keeps loads active from step to step. Every static step
 starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise

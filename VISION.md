@@ -140,8 +140,8 @@ What holds it back:
   too large to refine on a small machine.
 - **Releases.** Skew supports are not modelled, and end releases on open
   sections are full pins.
-- **Validation coverage.** Distributed loads, pinned beam supports and frames
-  have no benchmark yet.
+- **Validation coverage.** Pinned beam supports and frames have no benchmark
+  yet.
 
 **Done when**: every example model either agrees with an independent reference
 or fails with a message that names the cause.

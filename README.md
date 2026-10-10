@@ -33,7 +33,8 @@ the ones a user needs to know before trusting a result.
   stiffness matrix).
 - **Large models are slow and still mesh-sensitive.** `building_02` takes about
   200 s and 1.8 GB at a 2 m mesh, and needs more than 5 GB at 1 m. Its
-  deflections still move 15-35% between a 4 m and a 2 m mesh. `--element-order 1`
+  deflections still move about 17% between a 4 m and a 2 m mesh, and two of
+  its slabs move 462 and 258 mm under the Live case, which is not credible. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
 - **End releases on I, T, L and C members are analysed as full pins** (all
@@ -56,7 +57,9 @@ the ones a user needs to know before trusting a result.
 - **No beam section forces or utilisation ratios yet.** `results.json` reports
   displacements, von Mises stress and total reactions. Per-member axial force,
   shear and moment are not available.
-- **Reactions are a single total**, not one per load case.
+- **Distributed loads are uniform over the whole member.** A load given per
+  projected length, or over part of a member, is applied as a uniform load per
+  true length over all of it.
 - **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
   (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
   otherwise and return zero displacement.
@@ -203,7 +206,7 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 3.8 mm (4.1 mm at 0.25 m) | 85.4 kN | none | Runs; unchecked |
-| `building_02` | Multi-storey building, two load cases | No | 462 mm (Live), 457 mm (Extra_dead) at a 2 m mesh | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
+| `building_02` | Multi-storey building, two load cases | No | 462 mm (Live), 42 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 | `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not

@@ -179,6 +179,9 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
 | Fixed-fixed beam, midspan | 0.3 m square, B32R | 0.3506 mm | 0.3489 mm | 0.5% |
 | Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
+| Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
+| Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
+| Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 19.92 kN | 0.4% |
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
@@ -304,20 +307,34 @@ model.
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 3.8 mm | 85.4 kN | Unchecked. All-U1 model; 4.1 mm at 0.25 m |
-| `building_02` | — | 462 mm (Live), 457 mm (Extra_dead) | 29.4 MN | Unchecked, at a 2 m mesh. 120 mm under self-weight. At 4 m: 395 / 344 / 103 mm |
+| `building_02` | — | 462 mm (Live), 42 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 120 mm and 66.9 MN under self-weight. At 4 m: 395 / 36 / 103 mm. Reactions match the applied loads; deflections unchecked |
 | `building_01` | — | — | — | Fails: singular stiffness matrix |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
-plate benchmark above shows why those were several times too small. Of the 457 mm under
-Extra_dead, 333 mm is horizontal, which has not been explained.
+plate benchmark above shows why those were several times too small.
+
+Until 2026-10-10 a distributed load was written by its magnitude alone, as a CalculiX
+pressure along the element's own axes: `P2` on a beam, `P` normal to a shell. Its
+direction and sign were lost. The 480 line loads of the Extra_dead case, all vertical,
+pushed the floor beams sideways (333 mm of horizontal movement), and the total reaction
+came out with the wrong sign. Distributed loads are now turned into work-equivalent nodal
+forces in their global direction. Summing load × area and load × length over the IFC
+file gives 30.017 MN for Live and 60.286 MN for Extra_dead; the reactions in the two
+steps are 30.017 and 60.283 MN.
+
+The Live deflection is still not credible. Two small slabs (5.9 m × 2.5 m at z = 34.8 m
+and 6.6 m × 5.9 m at z = 31.6 m) move 462 and 258 mm under 1.5 kPa, and 42 and 24 mm
+under Extra_dead, a ratio of 10.9 for both although their loads differ by 1.25 and 0.44.
+They are being carried along by something else that is barely restrained.
 
 ---
 
 ## What is not yet validated
 
-- **Distributed loads** (`IfcStructuralCurveAction`): exercised by `portal_01` but not
-  compared with a reference.
+- **Distributed loads on shells** (`IfcStructuralPlanarAction`): the totals are checked
+  on `building_02`, but no deflection is compared with a reference. Loads on beams are
+  covered by Tier 2.
 - **Pinned and roller supports of beams** through the pipeline (Tier 1 covers them in
   CalculiX only).
 - **Shell members in membrane action**: walls are only checked through `structure_01`.
