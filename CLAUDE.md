@@ -70,6 +70,9 @@ ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static 
 # Linear elements (B31, S3) instead of the default quadratic ones (B32R, S6)
 ifc-analysis analyze model.ifc --output ./results --element-order 1
 
+# Only the connections in the IFC file (no implied beam-to-slab ties)
+ifc-analysis analyze model.ifc --output ./results --strict-connections
+
 # Enable verbose output and JSON results
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
@@ -162,7 +165,7 @@ without saying so in the results. Two things follow from the middle nodes:
 #### 5. Analysis (`src/ifc_structural_mechanics/analysis/`)
 Runs CalculiX and processes results:
 - `calculix_runner.py`: Executes CalculiX solver
-- `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
+- `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). `parse_element_nodes()` reads the FRD element block: CalculiX reports on the nodes of the solids it expands beams and shells into, numbered by the solver, and each solid keeps the number of the input element it came from. `ResultsExporter` attributes results to a member through those (member → `analysis_element_ids` → FRD nodes), never through mesh node numbers, except for elements the FRD does not list (U1). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
 - `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
 - `file_writers.py`: Utilities for writing various analysis files
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
@@ -367,9 +370,9 @@ here. This section only records the constraints that shape day-to-day work.
   deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
   reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine.
-- **Per-member displacements in `results.json` are wrong on `building_02`** and
-  missing for curve members (`aiz.31`). Node membership is guessed from node
-  numbers; read the FRD when you need to know where something moves.
+- **Member results are read on the faces of expanded elements.** A member's
+  largest displacement in `results.json` includes what its rotation adds at
+  the faces: a few percent on a slender member, more on a deep one.
 - **Skew supports are not modelled** (`aiz.35`): a support that restrains only
   some directions in axes not parallel to the global ones is written in global
   axes, with a warning. The same goes for a partial release in skew axes.
@@ -475,8 +478,9 @@ rotational degrees of freedom**. This drives everything about joints:
   on a rigid link, nodes in any earlier equation, and ties that would lean
   on a restrained shell node (CalculiX reports that force at the tied node,
   so it goes missing from the reactions). A member needs two nodes in the
-  surface, so a column passing through a slab is left alone. There is no
-  switch to turn it off yet (`aiz.42`).
+  surface, so a column passing through a slab is left alone.
+  `--strict-connections` (`AnalysisConfig.get_strict_connections()`) leaves
+  the ties out and the warning then says what was left unconnected.
 - **`*EQUATION` data lines take at most four terms.** Use `_write_equation()`.
 - **A connection is a support only if it has an `AppliedCondition`.** One that
   joins two or more members without one restrains nothing.

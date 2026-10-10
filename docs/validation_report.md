@@ -185,6 +185,7 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.376 mm | 0.5% |
 | Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.358 mm | 0.1% |
 | Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 98.96 N | 0.5% |
+| Same, each beam's own entry in `results.json` | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.362 mm | 0.1% |
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
@@ -252,6 +253,20 @@ reference value is the largest nodal translation in
 | `structure_01` | 0.4273 mm | 0.4285 / 0.4333 / 0.4343 mm | 1.0 / 0.5 / 0.25 m | +0.3% / +1.4% / +1.6% | yes, 5% at 0.5 m, and convergence |
 | `slab_01`, supports as in the reference run | 0.3761 mm | 0.3686 / 0.3773 / 0.3796 mm | 1.0 / 0.5 / 0.25 m | −2.0% / +0.3% / +0.9% | yes, 3% at 0.5 m |
 | `grid_of_beams` | 0.3963 mm; 0.367 mm without the weight of its rigid arms | 0.3719 / 0.3727 / 0.3727 mm | 1.0 / 0.5 / 0.25 m | +1.5% against 0.367 | yes, 3% at 0.5 m, and 1% between meshes |
+
+`structure_01` is also compared member by member, on the largest displacement of each
+member in `results.json` at a 0.5 m mesh (tested to 10%):
+
+| Member | Code_Aster | This library, on the element faces | At the member axis |
+|--------|-----------|--------------|------|
+| Slab_01 | 0.4273 mm | 0.4333 mm | — |
+| Wall_01 | 0.0764 mm | 0.0810 mm | — |
+| Column_01 (pin-ended) | 0.0770 mm | 0.0832 mm | 0.0790 mm |
+| Column_02 | 0.0898 mm | 0.0919 mm | 0.0917 mm |
+
+`results.json` takes its values from the nodes of the solid elements CalculiX expands
+beams and shells into, which lie on the faces of the member. Where a member rotates they
+move a little more than its axis does.
 
 `portal_01` also has a reference file, but it was run in inch and pound units with
 metric gravity, so it is not comparable.
@@ -350,8 +365,16 @@ would give 29 mm and a clamped one 9 mm. The reactions are unchanged, and the di
 beam, and beam and slab axes are at the level the IFC gives them, so there is no
 composite action.
 
-Per-member displacements in `results.json` do not agree with the result file on this
-model, so only the global maxima are quoted here.
+With `--strict-connections` the ties are left out and the analysis is of the connections
+in the file alone: 462, 42 and 120 mm for the three cases, as before.
+
+Per-member values in `results.json` were wrong on this model until 2026-10-10: the nodes
+of the solids CalculiX expands each element into were guessed from the mesh node numbers.
+They are now taken from the element connectivity in the result file, where each solid
+keeps the number of the element it came from. All 1304 members have a displacement and a
+stress for each of the three load cases; the largest member value equals the global
+maximum in each case, and for all 664 slabs and walls it equals the largest displacement
+found in the result file within the member's outline.
 
 ---
 
@@ -369,8 +392,8 @@ model, so only the global maxima are quoted here.
   `building_02` has none.
 - **Beams tied to the slab or wall they lie in**: covered by Tier 2 for a slab on two
   beams. Beams in walls and columns in walls use the same code but have no benchmark.
-- **Per-member displacements in `results.json`**: wrong on `building_02`, and missing
-  for curve members.
+- **Per-member stress in `results.json`**: attributed to the right member, but no value
+  is compared with a reference.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but
   have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins).

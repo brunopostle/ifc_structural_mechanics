@@ -36,9 +36,7 @@ the ones a user needs to know before trusting a result.
   not the IFC file connects them there, and the analysis warns that it did so.
   Models that connect a slab only at its corners would otherwise leave the
   beams under its edges carrying nothing. The tie passes forces, not moments.
-- **Per-member displacements in `results.json` are wrong on `building_02`**,
-  the largest example, and curve members have none. The global maxima are
-  right.
+  `--strict-connections` analyses only the connections in the file.
 - **Large models are slow.** `building_02` takes about 200 s and 1.8 GB at a
   2 m mesh, and needs more than 5 GB at 1 m. Its deflections move about 7%
   between a 4 m and a 2 m mesh. `--element-order 1`
@@ -62,8 +60,11 @@ the ones a user needs to know before trusting a result.
   L (angle) sections are analysed about their leg-parallel axes rather than
   their rotated principal axes.
 - **No beam section forces or utilisation ratios yet.** `results.json` reports
-  displacements, von Mises stress and total reactions. Per-member axial force,
-  shear and moment are not available.
+  the largest displacement and von Mises stress of every member in every load
+  case, and the total reactions. Per-member axial force, shear and moment are
+  not available. Displacements are read on the faces of the solid elements
+  CalculiX expands beams and shells into, so a member that rotates reports a
+  few percent more than its axis moves.
 - **Distributed loads are uniform over the whole member.** A load given per
   projected length, or over part of a member, is applied as a uniform load per
   true length over all of it.
@@ -135,6 +136,7 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
 | `--gravity` | Include self-weight gravity loads | off |
+| `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |
 | `--verbose` | Enable verbose logging | off |
 | `--json-output` | Write results in JSON format | off |
 | `--enhanced/--no-enhanced` | Use enhanced boundary condition handling | on |

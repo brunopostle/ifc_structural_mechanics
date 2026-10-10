@@ -153,8 +153,12 @@ or fails with a message that names the cause.
 displacement and stress envelopes, and has a `status` field driven by optional
 limits. The schema is documented in `export/results_exporter.py`.
 
+Displacement and stress are attributed to every member, beams included, through
+the element connectivity of the solver's result file, and reactions are given
+per load case.
+
 Missing: beam section forces (N, V, M), the utilisation ratio that depends on
-them, per-load-case reactions, and a CLI flag for limits. CalculiX does write
+them, and a CLI flag for limits. CalculiX does write
 section forces, but only in its 2D output mode, where shell stress is averaged
 through the thickness; the design has to get both.
 
