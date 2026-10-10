@@ -27,11 +27,18 @@ Open bugs and planned work are tracked in the project's `bd` (beads) issue
 database; `bd list --status=open` shows the current list. The points below are
 the ones a user needs to know before trusting a result.
 
-- **Multi-member building models are unverified.** `building_01` does not solve
-  (singular stiffness matrix) and `building_02` solves but is near-singular: its
-  displacements change several-fold with mesh size and reach kilometres under
-  self-weight. Single members and small frames agree with hand calculations (see
-  the validation report).
+- **Multi-member models are only partly verified.** `structure_01` (slab, wall
+  and two columns) is within 12% of an independent Code_Aster result.
+  `building_02` solves with plausible magnitudes but has no reference, and
+  `building_01` does not solve (singular stiffness matrix).
+- **Slab results depend on mesh size.** Shells are linear triangles, which
+  converge slowly: `structure_01` moves from 0.38 to 0.56 mm between a 1.0 m and
+  a 0.25 m mesh. Check convergence before relying on a slab deflection.
+- **Hinged slab edges are not modelled.** A slab sharing an edge with a wall is
+  rigidly joined to it, and a line support ignores a release on the member
+  side. `slab_01` is 2-3 times too stiff for this reason.
+- **A single-axis end release is analysed as a full pin** (all three rotations
+  released), with a warning.
 - **I, T, L and C sections only work when every beam in the model has one.**
   These profiles are analysed with CalculiX U1 (Timoshenko) elements and a
   general section (`A`, `Iy`, `Iz`, shear factor). Stock CalculiX crashes when a
@@ -184,20 +191,21 @@ The script expects:
 
 The repository includes example IFC structural models (as a git submodule in `examples/analysis-models/`):
 
-| Model | Description | `--gravity` | Max displacement | Vertical reaction | Status |
-|-------|-------------|-------------|------------------|-------------------|--------|
-| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.26 mm (0.35 mm at a 0.05 m mesh; hand value 0.35 mm) | 20.0 kN | Verified |
-| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm (hand value 0.28 mm) | 15 N at this mesh (weight 18.4 N; converges with refinement) | Verified |
-| `portal_01` | Portal frame of I-sections, distributed load | No | 3.1 mm | 85.4 kN | Runs; not independently checked |
-| `slab_01` | Flat slab, self-weight | **Yes** | 0.39 mm | 198 kN | Runs; not independently checked |
-| `structure_01` | Beams and slab, self-weight | **Yes** | 2.9 mm | 630 kN | Runs; not independently checked |
-| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.49 mm | 0.24 kN | Runs; corner supports sit 0.1 m inside the beam ends |
-| `building_02` | Larger multi-storey building, two load cases | No | 14 mm / 365 mm | 29.4 MN | Near-singular; do not trust |
-| `building_01` | Multi-storey building, lateral loads | No | — | — | Fails: singular stiffness matrix |
+| Model | Description | `--gravity` | Max displacement | Vertical reaction | Reference | Status |
+|-------|-------------|-------------|------------------|-------------------|-----------|--------|
+| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.26 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
+| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 15 N of 18.4 N at this mesh | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
+| `structure_01` | Slab on a wall and two columns, self-weight | **Yes** | 0.38 mm (0.47 mm at 0.5 m) | 632 N | 0.427 mm Code_Aster | Within 12% |
+| `slab_01` | Slab on two line supports, self-weight | **Yes** | 0.06 mm (0.14 mm at 0.25 m) | 198 N | 0.376 mm Code_Aster | Too stiff: edge releases not modelled |
+| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.49 mm | 244 N | 0.396 mm Code_Aster | Does not converge with refinement |
+| `portal_01` | Portal frame of I-sections, distributed load | No | 3.1 mm | 85.4 kN | none | Runs; unchecked |
+| `building_02` | Multi-storey building, two load cases | No | 99 mm (Live), 252 mm (Extra_dead) | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
+| `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
 
 Values are from the default 1.0 m mesh with CalculiX 2.23, measured on
-2026-10-09. A coarse mesh under-predicts beam deflection, as the `beam_01` row
-shows; use `--mesh-size` to refine.
+2026-10-10. The Code_Aster references are the IfcOpenShell IFC2CA results
+shipped in `examples/analysis-models/models/`. A coarse mesh under-predicts
+deflection; use `--mesh-size` to refine.
 
 To run an example:
 

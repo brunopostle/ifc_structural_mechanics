@@ -133,7 +133,7 @@ Generates finite element meshes:
 
 **Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
 1. Create all geometry with shared points (no per-member synchronize)
-2. Call `fragment()` separately for curves and surfaces (separate point registries so beam and shell elements never share a node — this avoids CalculiX KNOT generation, which occurs only for shared nodes, not for EQUATION constraints)
+2. Call `fragment()` separately for curves and surfaces, so beams share nodes with beams and shells with shells. Support points on beam interiors and connection points landing on a slab are passed as fragment tools so the mesh has a node there. Beam and shell nodes are joined later, in the writer (see Connections)
 3. Single `synchronize()` call
 4. Remap entity tags after fragmentation
 5. Apply mesh sizes (minimum size for shared points)
@@ -349,9 +349,13 @@ here. This section only records the constraints that shape day-to-day work.
 - **No beam section forces or utilisation yet.** CalculiX only writes them in
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
-- **`building_01` does not solve** (singular matrix) and **`building_02` is
-  near-singular** (results swing with mesh size and under self-weight, `aiz.15`).
-  Treat multi-member building results as unverified.
+- **`building_01` does not solve** (singular matrix; it mixes U1 and B31
+  beams). `building_02` solves with plausible magnitudes but is not validated,
+  and slab results still change about 2x between a 1 m and a 2 m mesh because
+  linear S3 shells converge slowly (`aiz.26`).
+- **Edge releases between surfaces are not modelled** (`aiz.27`): slabs sharing
+  an edge with a wall are rigidly joined, and line supports ignore the
+  member-side release.
 - **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
   (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
   otherwise.
@@ -390,7 +394,39 @@ shell meshes keep separate nodes at one point). It never returns a neighbouring
 node; doing so fixed two adjacent nodes on fine meshes. Point loads go to the
 single nearest node.
 
-Connection EQUATION constraints: rigid connections always write DOF 1-6 equations (translations + rotations). CalculiX KNOT generation is triggered only by *shared nodes* between beam and shell elements, not by EQUATION constraints between separate nodes — so DOF 4-6 equations between beam nodes and shell nodes are safe.
+## Connections
+
+CalculiX expands beam and shell elements into solids, so their nodes have **no
+rotational degrees of freedom**. This drives everything about joints:
+
+- `*EQUATION` on DOF 4-6 between two beam/shell nodes is accepted and does
+  nothing. `*RIGID BODY` and `*MPC BEAM` on such nodes are rejected. Never use
+  them to make a joint rigid.
+- **The only rigid joint is a shared node**, where CalculiX builds a knot.
+  `UnifiedCalculixWriter._merge_rigid_connection_nodes()` merges the coincident
+  nodes of every unreleased member at a connection.
+- **Members that stop short of the joint** (rigid end zones: a column ending at
+  the beam soffit) are bridged with a stiff B31 link, written by
+  `_write_rigid_links()`. Links are not in `self.elements` or `EALL`.
+- **Released members** keep their own node and get DOF 1-3 equations: a ball
+  joint. A single-axis release cannot be represented and is analysed as a full
+  pin, with a warning.
+- **A connection is a support only if it has an `AppliedCondition`.** One that
+  joins two or more members without one restrains nothing.
+- **Line supports** (`IfcStructuralCurveConnection`) keep their end points in
+  `connection.edge` and restrain every node on the segment
+  (`find_connection_support_nodes()`).
+- Writer warnings go through `_warn_user()` to `domain_model.analysis_warnings`
+  and from there into `result["warnings"]`.
+
+**Load steps**: CalculiX keeps loads active from step to step. Every static step
+starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise
+each load case would include all the earlier ones.
+
+**Reference results**: `examples/analysis-models/models/<name>/<name>.rmed` are
+Code_Aster results for the same IFC files under self-weight (HDF5; read
+`CHA/Bld_DISP` with h5py, six components per node stored component by
+component). Use them to check any change to joints, supports or shells.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->

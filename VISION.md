@@ -133,9 +133,11 @@ What holds it back:
   types: stock CalculiX crashes, and a patched build leaves the joints pinned.
   The decision (2026-10-09) is to stay on stock CalculiX and analyse these
   profiles as B31 with a stiffness-equivalent rectangular section.
-- **Multi-member models.** `building_01` is singular and `building_02` is
-  near-singular. Until those are understood, connectivity between members
-  cannot be trusted.
+- **Multi-member models.** One mixed model (`structure_01`) now agrees with an
+  independent Code_Aster result to about 12%. `building_01` is still singular,
+  `building_02` has no reference, and slab results are mesh-sensitive.
+- **Releases.** Hinged slab edges and single-axis end releases are not
+  modelled.
 - **Validation coverage.** Distributed loads, pinned supports, plates and
   frames have no benchmark yet.
 
