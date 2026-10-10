@@ -14,6 +14,9 @@ Reference values use Timoshenko beam theory (bending plus shear deflection):
   ``w L^4 / (8 E I) + w L^2 / (2 G A_s)``
 * Fixed-fixed beam with central point load:
   ``P L^3 / (192 E I) + P L / (4 G A_s)``
+* Slab carried by two cantilever beams lying in it: the cantilever formula
+  with each beam taking its own weight and half the slab's, and half the
+  slab's bending stiffness
 * Simply supported rectangular plate under uniform load: Navier's double
   sine series, plus the Mindlin shear term ``M / (kappa G t)`` where ``M`` is
   the moment sum
@@ -53,6 +56,10 @@ CANT_E = 2.1e8
 CANT_NU = 0.2
 CANT_RHO = 7.8
 CANT_G = CANT_E / (2 * (1 + CANT_NU))
+
+# Slab carried by two beams lying in it (built from scratch, same material)
+SOB_L, SOB_B, SOB_T = 5.0, 1.0, 0.1
+SOB_BEAM_B, SOB_BEAM_H = 0.2, 0.4
 
 # I-profile used for the open-section cases
 I_B, I_H, I_TW, I_TF = 0.2, 0.4, 0.01, 0.02
@@ -358,6 +365,295 @@ class TestFixedFixedBeamLineLoad:
         assert envelope.get("max_tz_m", 0.0) < 0.01 * envelope["max_ty_m"]
         reaction = data["global_reactions"]["total"]
         assert reaction["fy_N"] == pytest.approx(-self.LOAD * self.B.LENGTH, rel=0.01)
+
+
+def _slab_on_two_cantilevers(tmp_path, inset: float) -> str:
+    """Write a slab that only two cantilever beams lying in it hold up.
+
+    The slab is 5 m x 1 m and 0.1 m thick, at z = 0. The beams (0.2 x 0.4,
+    depth vertical) run along its length at ``inset`` from each long edge,
+    fully fixed at x = 0. The only connections between slab and beams are the
+    two points at the beam tips, as in models that connect a slab at its
+    corners and nowhere else.
+    """
+    model = ifcopenshell.file(schema="IFC4")
+    create = model.create_entity
+    guid = ifcopenshell.guid.new
+    length, width = SOB_L, SOB_B
+
+    up = create("IfcDirection", (0.0, 0.0, 1.0))
+    axes = create(
+        "IfcAxis2Placement3D",
+        create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+        up,
+        create("IfcDirection", (1.0, 0.0, 0.0)),
+    )
+    placement = create("IfcLocalPlacement", None, axes)
+    units = create(
+        "IfcUnitAssignment",
+        [create("IfcSIUnit", None, "LENGTHUNIT", None, "METRE")],
+    )
+    context = create(
+        "IfcGeometricRepresentationContext", None, "Model", 3, 1e-5, axes, None
+    )
+    project = create(
+        "IfcProject",
+        guid(),
+        None,
+        "Benchmark",
+        None,
+        None,
+        None,
+        None,
+        [context],
+        units,
+    )
+    analysis = create(
+        "IfcStructuralAnalysisModel",
+        guid(),
+        None,
+        "Slab on beams",
+        None,
+        None,
+        "NOTDEFINED",
+        axes,
+        None,
+        None,
+        placement,
+    )
+    create("IfcRelDeclares", guid(), None, None, None, project, [analysis])
+
+    material = create("IfcMaterial", "Material", None, None)
+    create(
+        "IfcMaterialProperties",
+        "Pset_MaterialMechanical",
+        None,
+        [
+            create(
+                "IfcPropertySingleValue",
+                "YoungModulus",
+                None,
+                create("IfcModulusOfElasticityMeasure", CANT_E),
+                None,
+            ),
+            create(
+                "IfcPropertySingleValue",
+                "PoissonRatio",
+                None,
+                create("IfcPositiveRatioMeasure", CANT_NU),
+                None,
+            ),
+        ],
+        material,
+    )
+    create(
+        "IfcMaterialProperties",
+        "Pset_MaterialCommon",
+        None,
+        [
+            create(
+                "IfcPropertySingleValue",
+                "MassDensity",
+                None,
+                create("IfcMassDensityMeasure", CANT_RHO),
+                None,
+            )
+        ],
+        material,
+    )
+    profile = create(
+        "IfcRectangleProfileDef", "AREA", "Beam", None, SOB_BEAM_B, SOB_BEAM_H
+    )
+    profile_set = create(
+        "IfcMaterialProfileSet",
+        None,
+        None,
+        [create("IfcMaterialProfile", "Beam", None, material, profile, None, None)],
+        None,
+    )
+
+    def vertex(x, y):
+        point = create("IfcCartesianPoint", (float(x), float(y), 0.0))
+        return create("IfcVertexPoint", point)
+
+    def shape(kind, item):
+        topology = create(
+            "IfcTopologyRepresentation", context, "Reference", kind, [item]
+        )
+        return create("IfcProductDefinitionShape", None, None, [topology])
+
+    def connect(member, connection):
+        create(
+            "IfcRelConnectsStructuralMember",
+            guid(),
+            None,
+            None,
+            None,
+            member,
+            connection,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    corners = [
+        vertex(x, y) for x, y in ((0, 0), (length, 0), (length, width), (0, width))
+    ]
+    loop = create(
+        "IfcEdgeLoop",
+        [
+            create(
+                "IfcOrientedEdge",
+                None,
+                None,
+                create("IfcEdge", corners[i], corners[(i + 1) % 4]),
+                True,
+            )
+            for i in range(4)
+        ],
+    )
+    face = create(
+        "IfcFaceSurface",
+        [create("IfcFaceBound", loop, True)],
+        create("IfcPlane", axes),
+        True,
+    )
+    slab = create(
+        "IfcStructuralSurfaceMember",
+        guid(),
+        None,
+        "Slab",
+        None,
+        None,
+        placement,
+        shape("Face", face),
+        "SHELL",
+        SOB_T,
+    )
+    create("IfcRelAssociatesMaterial", guid(), None, None, None, [slab], material)
+
+    products, beams = [slab], []
+    for y in (inset, width - inset):
+        beam = create(
+            "IfcStructuralCurveMember",
+            guid(),
+            None,
+            "Beam",
+            None,
+            None,
+            placement,
+            shape("Edge", create("IfcEdge", vertex(0, y), vertex(length, y))),
+            "RIGID_JOINED_MEMBER",
+            up,
+        )
+        fixed = create(
+            "IfcBoundaryNodeCondition",
+            None,
+            *[create("IfcBoolean", True) for _ in range(6)],
+        )
+        support = create(
+            "IfcStructuralPointConnection",
+            guid(),
+            None,
+            "Support",
+            None,
+            None,
+            placement,
+            shape("Vertex", vertex(0, y)),
+            fixed,
+            None,
+        )
+        tip = create(
+            "IfcStructuralPointConnection",
+            guid(),
+            None,
+            "Tip",
+            None,
+            None,
+            placement,
+            shape("Vertex", vertex(length, y)),
+            None,
+            None,
+        )
+        connect(beam, support)
+        connect(beam, tip)
+        connect(slab, tip)
+        beams.append(beam)
+        products += [beam, support, tip]
+    create("IfcRelAssociatesMaterial", guid(), None, None, None, beams, profile_set)
+    create("IfcRelAssignsToGroup", guid(), None, None, None, products, None, analysis)
+
+    path = str(tmp_path / "slab_on_beams.ifc")
+    model.write(path)
+    return path
+
+
+class TestSlabBearingOnBeams:
+    """A slab connected to its beams at two points only still bears on them.
+
+    Read literally the slab would hang from the two beam tips, which is a
+    mechanism. Tied along the beams, the three act as one cantilever whose
+    stiffness is the sum of the parts (the ties carry no moment and the axes
+    are at one level, so there is no composite action).
+    """
+
+    MESH = 0.25
+
+    def _expected(self) -> float:
+        area = SOB_BEAM_B * SOB_BEAM_H
+        inertia = SOB_BEAM_B * SOB_BEAM_H**3 / 12 + SOB_B * SOB_T**3 / 12 / 2
+        load = CANT_RHO * G_ACCEL * (area + SOB_T * SOB_B / 2)
+        return load * SOB_L**4 / (8 * CANT_E * inertia) + load * SOB_L**2 / (
+            2 * CANT_G * 5 / 6 * area
+        )
+
+    def test_beams_under_the_slab_edges(self, tmp_path):
+        data = _run(
+            _slab_on_two_cantilevers(tmp_path, inset=0.0),
+            tmp_path,
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._expected(), rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_beams_inside_the_slab(self, tmp_path):
+        """Beam nodes fall inside shell elements, not on their nodes."""
+        data = _run(
+            _slab_on_two_cantilevers(tmp_path, inset=0.25),
+            tmp_path,
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._expected(), rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_supports_carry_the_whole_weight(self, tmp_path):
+        data = _run(
+            _slab_on_two_cantilevers(tmp_path, inset=0.25),
+            tmp_path,
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        weight = (
+            CANT_RHO * G_ACCEL * SOB_L * (2 * SOB_BEAM_B * SOB_BEAM_H + SOB_T * SOB_B)
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            weight, rel=0.01
+        )
+
+    def test_the_assumption_is_reported(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=_slab_on_two_cantilevers(tmp_path, inset=0.0),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        messages = [w["message"] for w in result["warnings"]]
+        assert any("2 curve member(s) lie in a surface member" in m for m in messages)
 
 
 class TestSimplySupportedPlateSelfWeight:

@@ -104,6 +104,7 @@ class UnifiedCalculixWriter:
         # Used by boundary_condition_handling to skip *DLOAD for these sets
         # (U1 elements don't support *DLOAD; facial-load processing crashes).
         self._u1_element_sets: set = set()
+        self._equation_nodes: set = set()
         # Pre-computed lumped gravity nodal loads for U1 elements (node_id -> [Fx,Fy,Fz])
         self._u1_gravity_nodal_loads: Dict[int, List[float]] = {}
 
@@ -270,6 +271,9 @@ class UnifiedCalculixWriter:
 
             # Step 2c4: Hinge released member ends about the released axes only
             self._build_release_hinges()
+
+            # Step 2c5: Tie beams lying in a slab or wall to it along their length
+            self._build_line_bearings()
 
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
@@ -1530,6 +1534,7 @@ class UnifiedCalculixWriter:
                 file.write("*EQUATION\n2\n")
                 file.write(f"{copy},{dof},1.0,{original},{dof},-1.0\n")
                 constrained_node_dofs.add((copy, dof))
+                self._note_equation_nodes((copy, original))
         file.write("**\n")
 
     # Length of the stiff arms that carry a partial end release.
@@ -1693,6 +1698,231 @@ class UnifiedCalculixWriter:
                 f"Built release hinges at {len(self._release_hinges)} connections"
             )
 
+    @staticmethod
+    def _shell_shape_values(n_nodes: int, bary: np.ndarray) -> Optional[List[float]]:
+        """Shape function values of a 3- or 6-node triangle at barycentric ``bary``."""
+        l1, l2, l3 = (float(v) for v in bary)
+        if n_nodes == 3:
+            return [l1, l2, l3]
+        if n_nodes == 6:
+            return [
+                l1 * (2.0 * l1 - 1.0),
+                l2 * (2.0 * l2 - 1.0),
+                l3 * (2.0 * l3 - 1.0),
+                4.0 * l1 * l2,
+                4.0 * l2 * l3,
+                4.0 * l3 * l1,
+            ]
+        return None
+
+    def _build_line_bearings(self) -> None:
+        """Tie curve members that lie in a surface member to it along their length.
+
+        Beam and shell meshes have separate nodes and are joined only at
+        connections. Analysis models commonly connect a slab at its corners
+        alone and leave the beams under its edges, or a column cast into a
+        wall, unconnected in between; read literally the slab then spans from
+        corner to corner and the beams carry nothing.
+
+        A curve member with two or more nodes in the mesh of one surface
+        member is taken to lie in it. Each of its nodes that the shell mesh
+        does not already share is made to follow the shell there: its
+        translations are interpolated from the nodes of the triangle it falls
+        in, with that element's shape functions. Rotations are not tied, so
+        the line is a hinge line: the surface bears on the member and neither
+        twists the other.
+
+        Nodes on a rigid link are left alone, for the reason given in
+        ``_write_point_connection``. The result is stored in
+        ``self._line_bearings`` as ``(node, [(shell_node, weight), ...])``.
+        """
+        self._line_bearings: List[Tuple[int, List[Tuple[int, float]]]] = []
+        tol = self._COINCIDENT_TOL
+
+        surfaces = []
+        for member in self.domain_model.members:
+            if not isinstance(member, SurfaceMember):
+                continue
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            triangles = [
+                self.elements[e]["nodes"]
+                for e in self.element_sets.get(member_set, [])
+                if e in self.elements
+                and self.elements[e].get("type") in SHELL_ELEMENT_TYPES
+                and len(self.elements[e]["nodes"]) in (3, 6)
+            ]
+            if not triangles:
+                continue
+            corners = np.array(
+                [[self.nodes[n] for n in tri[:3]] for tri in triangles], dtype=float
+            )
+            flat = corners.reshape(-1, 3)
+            surfaces.append(
+                (
+                    triangles,
+                    corners,
+                    flat.min(axis=0) - tol,
+                    flat.max(axis=0) + tol,
+                    {n for tri in triangles for n in tri},
+                )
+            )
+        if not surfaces:
+            return
+
+        def locate(point: np.ndarray, corners: np.ndarray):
+            """Index and barycentric coordinates of the triangle holding ``point``."""
+            a = corners[:, 0]
+            v0 = corners[:, 1] - a
+            v1 = corners[:, 2] - a
+            v2 = point - a
+            normal = np.cross(v0, v1)
+            area2 = np.linalg.norm(normal, axis=1)
+            ok = area2 > 1e-18
+            safe = np.where(ok, area2, 1.0)
+            distance = np.abs(np.einsum("ij,ij->i", v2, normal)) / safe
+            d00 = np.einsum("ij,ij->i", v0, v0)
+            d01 = np.einsum("ij,ij->i", v0, v1)
+            d11 = np.einsum("ij,ij->i", v1, v1)
+            d20 = np.einsum("ij,ij->i", v2, v0)
+            d21 = np.einsum("ij,ij->i", v2, v1)
+            denom = np.where(ok, d00 * d11 - d01 * d01, 1.0)
+            l2 = (d11 * d20 - d01 * d21) / denom
+            l3 = (d00 * d21 - d01 * d20) / denom
+            l1 = 1.0 - l2 - l3
+            # Slack of tol along the shortest side, as a barycentric fraction
+            slack = tol / np.sqrt(np.minimum(d00, d11).clip(min=1e-18))
+            worst = np.minimum(np.minimum(l1, l2), l3)
+            inside = ok & (distance <= tol) & (worst >= -slack)
+            if not inside.any():
+                return None
+            best = int(np.argmax(np.where(inside, worst, -np.inf)))
+            return best, np.array([l1[best], l2[best], l3[best]])
+
+        linked_nodes = set()
+        for _, node_a, node_b in getattr(self, "_rigid_links", []):
+            linked_nodes.update((node_a, node_b))
+        all_shell_nodes = set()
+        for surface in surfaces:
+            all_shell_nodes |= surface[4]
+
+        bearing_members = 0
+        for member in self.domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            node_ids = sorted(
+                {
+                    n
+                    for e in self.element_sets.get(member_set, [])
+                    if e in self.elements
+                    for n in self.elements[e]["nodes"]
+                }
+            )
+            if len(node_ids) < 2:
+                continue
+            points = {n: np.array(self.nodes[n], dtype=float) for n in node_ids}
+            lo = np.min(list(points.values()), axis=0)
+            hi = np.max(list(points.values()), axis=0)
+
+            member_ties: List[Tuple[int, List[Tuple[int, float]]]] = []
+            for triangles, corners, s_lo, s_hi, shell_nodes in surfaces:
+                if (hi < s_lo).any() or (lo > s_hi).any():
+                    continue
+                found = 0
+                ties = []
+                for node, point in points.items():
+                    if node in shell_nodes:
+                        found += 1
+                        continue
+                    if (point < s_lo).any() or (point > s_hi).any():
+                        continue
+                    hit = locate(point, corners)
+                    if hit is None:
+                        continue
+                    found += 1
+                    weights = self._shell_shape_values(len(triangles[hit[0]]), hit[1])
+                    terms = [
+                        (shell_node, weight)
+                        for shell_node, weight in zip(triangles[hit[0]], weights)
+                        if abs(weight) > 1e-9
+                    ]
+                    ties.append((node, terms))
+                if found >= 2:
+                    member_ties.extend(ties)
+
+            seen = set()
+            wrote = False
+            for node, terms in member_ties:
+                if node in seen or node in linked_nodes or node in all_shell_nodes:
+                    continue
+                seen.add(node)
+                self._line_bearings.append((node, terms))
+                wrote = True
+            bearing_members += wrote
+
+        # A node shared by two members is tied once
+        unique = {}
+        for node, terms in self._line_bearings:
+            unique.setdefault(node, terms)
+        self._line_bearings = sorted(unique.items())
+
+        if self._line_bearings:
+            self._warn_user(
+                f"{bearing_members} curve member(s) lie in a surface member that "
+                "the model does not connect to them along their length. They are "
+                "tied to it in translation along the line (a hinge line), as a "
+                "slab bearing on its beams."
+            )
+
+    @staticmethod
+    def _write_equation(file: TextIO, terms: List[Tuple[int, int, float]]) -> None:
+        """Write one ``*EQUATION``; CalculiX takes at most four terms per line."""
+        file.write(f"*EQUATION\n{len(terms)}\n")
+        for start in range(0, len(terms), 4):
+            file.write(
+                ",".join(
+                    f"{n},{d},{coef:.9g}" for n, d, coef in terms[start : start + 4]
+                )
+                + "\n"
+            )
+
+    def _note_equation_nodes(self, nodes) -> None:
+        """Remember the nodes of an equation just written (see line bearings)."""
+        self._equation_nodes.update(nodes)
+
+    def _write_line_bearings(
+        self, file: TextIO, constrained_node_dofs: set, bc_node_dofs: set
+    ) -> None:
+        """Write the ties prepared by ``_build_line_bearings``.
+
+        Written after every other equation, and only for nodes that none of
+        them mentions, so a tied node never ends up depending on itself.
+
+        A tie that would lean on a restrained shell node is left out. CalculiX
+        reports the force such a tie carries at the tied node, not at the
+        support, so it would go missing from the reactions; and next to a
+        support the member needs no help.
+        """
+        bearings = getattr(self, "_line_bearings", [])
+        if not bearings:
+            return
+        used = getattr(self, "_equation_nodes", set())
+        file.write("** Curve members bearing on the surface member they lie in\n")
+        for node, terms in bearings:
+            if node in used:
+                continue
+            for dof in (1, 2, 3):
+                if (node, dof) in constrained_node_dofs:
+                    continue
+                if any((n, dof) in bc_node_dofs for n, _ in terms):
+                    continue
+                self._write_equation(
+                    file,
+                    [(node, dof, 1.0)] + [(n, dof, -weight) for n, weight in terms],
+                )
+                constrained_node_dofs.add((node, dof))
+        file.write("**\n")
+
     def _rigid_link_groups(self) -> Dict[int, int]:
         """Map each node on a rigid link to a label shared by all nodes linked to it."""
         groups: Dict[int, int] = {}
@@ -1747,8 +1977,10 @@ class UnifiedCalculixWriter:
             file: Output file handle
             bc_node_dofs: Set of (node_id, dof) tuples that have boundary conditions
         """
+        self._equation_nodes: set = set()
         if not self.domain_model.connections:
             logger.debug("No connections to write")
+            self._write_line_bearings(file, set(bc_node_dofs), bc_node_dofs)
             return
 
         file.write("**\n")
@@ -1807,6 +2039,8 @@ class UnifiedCalculixWriter:
                     f"Unknown connection type '{conn.entity_type}' for {conn.id}"
                 )
 
+        self._write_line_bearings(file, constrained_node_dofs, bc_node_dofs)
+
         logger.info(f"Wrote {connections_written} structural connections")
 
     def _write_point_connection(
@@ -1861,11 +2095,9 @@ class UnifiedCalculixWriter:
                 node, dof, _ = terms[0]
                 if (node, dof) in constrained_node_dofs:
                     continue
-                file.write(f"*EQUATION\n{len(terms)}\n")
-                file.write(
-                    ",".join(f"{n},{d},{coef:.9g}" for n, d, coef in terms) + "\n"
-                )
+                self._write_equation(file, terms)
                 constrained_node_dofs.add((node, dof))
+                self._note_equation_nodes(n for n, _, _ in terms)
         connection_pairs = [
             (m, n)
             for m, n in self._find_connection_nodes_at_location(
@@ -1892,6 +2124,7 @@ class UnifiedCalculixWriter:
             file.write("*EQUATION\n2\n")
             file.write(f"{node},{dof},1.0,{ref},{dof},-1.0\n")
             constrained_node_dofs.add((node, dof))
+            self._note_equation_nodes((node, ref))
             equations_written += 1
 
         # Translations (DOF 1-3): couple all nodes to ref_node, except a node
