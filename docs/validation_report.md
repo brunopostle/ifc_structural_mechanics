@@ -235,9 +235,9 @@ reference value is the largest nodal translation in
 | Model | Code_Aster | This library | Mesh | Error | Tested |
 |-------|-----------|--------------|------|-------|--------|
 | `cantilever_01` | 0.2766 mm | 0.2800 mm | 0.05 m | +1.2% (shear deflection) | yes, 3% |
-| `structure_01` | 0.4273 mm | 0.4288 / 0.4340 / 0.4359 mm | 1.0 / 0.5 / 0.25 m | +0.4% / +1.6% / +2.0% | yes, 5% at 0.5 m, and convergence |
+| `structure_01` | 0.4273 mm | 0.4285 / 0.4333 / 0.4343 mm | 1.0 / 0.5 / 0.25 m | +0.3% / +1.4% / +1.6% | yes, 5% at 0.5 m, and convergence |
 | `slab_01`, supports as in the reference run | 0.3761 mm | 0.3686 / 0.3773 / 0.3796 mm | 1.0 / 0.5 / 0.25 m | −2.0% / +0.3% / +0.9% | yes, 3% at 0.5 m |
-| `grid_of_beams` | 0.3963 mm | 0.519 / 0.653 / 0.577 mm | 1.0 / 0.5 / 0.25 m | does not converge | no |
+| `grid_of_beams` | 0.3963 mm; 0.367 mm without the weight of its rigid arms | 0.3719 / 0.3727 / 0.3727 mm | 1.0 / 0.5 / 0.25 m | +1.5% against 0.367 | yes, 3% at 0.5 m, and 1% between meshes |
 
 `portal_01` also has a reference file, but it was run in inch and pound units with
 metric gravity, so it is not comparable.
@@ -246,7 +246,7 @@ What the comparison shows:
 
 - `structure_01` agrees over the whole field, not only at the maximum. At the point of
   largest deflection the reference has (0.066, −0.017, −0.422) mm and this library
-  (0.066, −0.020, −0.430) mm at a 0.25 m mesh. The remaining 2% is shear deflection, which
+  (0.066, −0.020, −0.429) mm at a 0.25 m mesh. The remaining 2% is shear deflection, which
   DKT shells and Euler beams do not have.
 - `slab_01`'s reference was computed from an earlier version of the IFC file, with the
   slab clamped about its edge at x = 0 and hinged at x = 5. The file shipped today fixes
@@ -254,8 +254,19 @@ What the comparison shows:
   ends are clamped and the deflection is half as much. The test restores the reference's
   supports in memory. As authored the file gives 0.1810 mm at a 0.5 m mesh against
   0.1812 mm by hand (w L⁴ / 384 E I plus shear), which is tested too.
-- `grid_of_beams` has single-axis end releases between members, which are analysed as
-  full pins.
+- `grid_of_beams` has five secondary beams, each ending 0.15 m to the side of and above
+  a main beam's axis and released there in bending only. Until 2026-10-10 it gave 0.49,
+  0.33 and 1.38 mm at the three mesh sizes, for two reasons. The release was a ball
+  joint, so every secondary beam was free to spin about its own axis; and a joint along
+  a main beam's span was attached to that beam's nearest end, by the support. Both are
+  fixed: a release about one or two axes is now built from translation ties on a pair of
+  stiff arms, and joints are attached where they are.
+- The `grid_of_beams` reference is itself 0.029 mm too high. IFC2CA gives its rigid
+  eccentricity arms a 1 m square section and the model's density, so each of the ten
+  weighs 16 N, more than the 11 N a secondary beam delivers. The main beams deflect
+  0.084 mm at midspan in the reference and 0.055 mm by hand without that load. The
+  secondary beams themselves agree: midspan relative to the ends is 0.3084 mm in the
+  reference and 0.3102 mm here. The test takes the spurious load off by hand.
 
 `structure_01` has now been wrong in three different ways. Before 2026-10-10 it gave
 between 1.7 and 17 mm (rigid joints that were really pins, joints written as fixed
@@ -291,15 +302,15 @@ model.
 | `cantilever_01` | `--gravity` | 0.28 mm | 17.3 N | Covered by Tier 2 |
 | `structure_01` | `--gravity` | 0.429 mm | 651 N | Covered by Tier 2 (Code_Aster) |
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
-| `grid_of_beams` | `--gravity` | 0.52 mm | 263 N | Known not to converge |
+| `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 3.8 mm | 85.4 kN | Unchecked. All-U1 model; 4.1 mm at 0.25 m |
-| `building_02` | — | 455 mm (Live), 434 mm (Extra_dead) | 29.4 MN | Unchecked, at a 2 m mesh. 118 mm under self-weight. At 4 m: 385 / 319 / 101 mm |
+| `building_02` | — | 462 mm (Live), 457 mm (Extra_dead) | 29.4 MN | Unchecked, at a 2 m mesh. 120 mm under self-weight. At 4 m: 395 / 344 / 103 mm |
 | `building_01` | — | — | — | Fails: singular stiffness matrix |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
-plate benchmark above shows why those were several times too small. Of the 434 mm under
-Extra_dead, 317 mm is horizontal, which has not been explained.
+plate benchmark above shows why those were several times too small. Of the 457 mm under
+Extra_dead, 333 mm is horizontal, which has not been explained.
 
 ---
 
@@ -314,6 +325,7 @@ Extra_dead, 317 mm is horizontal, which has not been explained.
   but no pipeline benchmark exists. L sections ignore the product of inertia.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
-- **Single-axis end releases between members, and skew supports**: not modelled.
+- **Skew supports**: not modelled. Releases in skew axes between members are, but
+  have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins).
 - **Buckling** beyond the single Euler column.

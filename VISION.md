@@ -138,8 +138,8 @@ What holds it back:
   independent Code_Aster result to 2%, point by point. `building_01` is still
   singular, and `building_02` has no reference, is still mesh-sensitive and is
   too large to refine on a small machine.
-- **Releases.** Single-axis end releases between members and skew supports are
-  not modelled.
+- **Releases.** Skew supports are not modelled, and end releases on open
+  sections are full pins.
 - **Validation coverage.** Distributed loads, pinned beam supports and frames
   have no benchmark yet.
 

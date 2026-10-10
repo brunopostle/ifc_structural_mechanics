@@ -363,14 +363,16 @@ here. This section only records the constraints that shape day-to-day work.
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
 - **`building_01` does not solve** (singular matrix; it mixes U1 and native
-  beams). `building_02` solves but is not validated: 455 mm under Live at a 2 m
-  mesh, 385 mm at 4 m, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
+  beams). `building_02` solves but is not validated: 462 mm under Live at a 2 m
+  mesh, 395 mm at 4 m, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine.
 - **Skew supports are not modelled** (`aiz.35`): a support that restrains only
   some directions in axes not parallel to the global ones is written in global
   axes, with a warning. The same goes for a partial release in skew axes.
 - **`slab_01.rmed` is not a reference for `slab_01.ifc`** (`aiz.36`): it was
-  computed with one edge hinged; the IFC file as shipped clamps both.
+  computed with one edge hinged; the IFC file as shipped clamps both. The
+  Code_Aster runs also give their rigid eccentricity arms weight (16 N each in
+  `grid_of_beams`, whose reference maximum is 0.029 mm too high for it).
 - **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
   (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
   otherwise.
@@ -441,9 +443,19 @@ rotational degrees of freedom**. This drives everything about joints:
   apart, so equal translations plus a rigid link means no rotation, which clamps
   the joint. `_write_point_connection()` skips nodes in the same
   `_rigid_link_groups()` group.
-- **Released members** keep their own node and get DOF 1-3 equations: a ball
-  joint. A single-axis release between members cannot be represented and is
-  analysed as a full pin, with a warning.
+- **Released members** get their own node (split off if the mesh shared it)
+  and DOF 1-3 equations: a ball joint. A rotation that is *not* released is
+  taken away again by `_build_release_hinges()`: two stiff arms, one on the
+  member end and one on the joint, side by side along a released axis, with
+  their tips tied in the directions across the arm. U1 members are excluded
+  (no link elements next to U1 on stock CalculiX) and stay full pins, with a
+  warning.
+- **An eccentric member end is hinged where it ends.** A rigid link carries
+  the joint out to that point first, so the reaction keeps its lever arm.
+- **A joint can sit along a member's span.** Every connection position inside
+  a curve member is seeded with a mesh node (`_seed_support_points()`), and
+  `_find_connection_nodes_at_location()` targets the point of the member
+  nearest the connection, not its nearest end.
 - **Hinged edges between surfaces**: surfaces sharing an edge share its nodes
   after `fragment()`, which is a rigid joint. A surface member released about
   that edge gets copies of the edge nodes (`_release_hinged_edges()`), tied to

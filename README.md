@@ -18,7 +18,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX beam sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor). Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
-- **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, or a support that leaves the released rotations free
+- **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
 ### Known Limitations
@@ -36,9 +36,9 @@ the ones a user needs to know before trusting a result.
   deflections still move 15-35% between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
-- **A single-axis end release between members is analysed as a full pin** (all
-  three rotations released), with a warning. At a support it is modelled
-  exactly.
+- **End releases on I, T, L and C members are analysed as full pins** (all
+  three rotations released), with a warning. For other sections a release about
+  one or two axes is modelled as given.
 - **Skew supports are not modelled.** A support that restrains only some
   directions, in axes that are not parallel to the global ones, is analysed as
   if its axes were global, with a warning.
@@ -199,11 +199,11 @@ The repository includes example IFC structural models (as a git submodule in `ex
 |-------|-------------|-------------|------------------|-------------------|-----------|--------|
 | `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.34 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
 | `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 17.3 N of 18.4 N at this mesh | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
-| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.434 mm at 0.5 m) | 651 N of 660 N | 0.427 mm Code_Aster | Verified, within 2% |
+| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 651 N of 660 N | 0.427 mm Code_Aster | Verified, within 2% |
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
-| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.52 mm (0.65 mm at 0.5 m) | 263 N | 0.396 mm Code_Aster | Does not converge with refinement |
+| `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 3.8 mm (4.1 mm at 0.25 m) | 85.4 kN | none | Runs; unchecked |
-| `building_02` | Multi-storey building, two load cases | No | 455 mm (Live), 434 mm (Extra_dead) at a 2 m mesh | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
+| `building_02` | Multi-storey building, two load cases | No | 462 mm (Live), 457 mm (Extra_dead) at a 2 m mesh | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
 | `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
