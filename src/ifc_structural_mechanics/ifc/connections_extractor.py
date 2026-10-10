@@ -320,10 +320,16 @@ class ConnectionsExtractor:
                 f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
             )
 
+            connection.local_axes = self._extract_local_axes(
+                ifc_connection, getattr(connection, "edge", None)
+            )
+
             # Extract per-member rotational end-releases from AppliedCondition
-            end_releases = self._extract_end_releases(ifc_connection)
+            release_axes: dict = {}
+            end_releases = self._extract_end_releases(ifc_connection, release_axes)
             if end_releases:
                 connection.released_dofs_by_member = end_releases
+                connection.release_axes_by_member = release_axes
                 self.logger.debug(
                     f"Connection {connection_id} has end-releases: {end_releases}"
                 )
@@ -355,16 +361,145 @@ class ConnectionsExtractor:
             )
             return None
 
-    def _extract_end_releases(self, ifc_connection) -> dict:
+    def _extract_local_axes(
+        self, ifc_connection, edge: Optional[List[List[float]]] = None
+    ) -> Optional[List[List[float]]]:
+        """Return the axes a connection's AppliedCondition is expressed in.
+
+        * ``IfcStructuralPointConnection``: its ``ConditionCoordinateSystem``;
+          the global axes when it has none.
+        * ``IfcStructuralCurveConnection``: local x runs along the edge and
+          ``Axis`` gives the side local z is on, so local y = z cross x.
+
+        Returns:
+            Three unit vectors (local x, y, z) in global coordinates, or None
+            for the global axes.
+        """
+        try:
+            rotation = None
+            placement = getattr(ifc_connection, "ObjectPlacement", None)
+            if placement:
+                transformation = get_transformation(placement)
+                if transformation:
+                    rotation = np.array(transformation["rotationMatrix"], dtype=float)
+
+            if ifc_connection.is_a("IfcStructuralPointConnection"):
+                axes = getattr(ifc_connection, "ConditionCoordinateSystem", None)
+                if not axes:
+                    return None
+                z_axis = np.array(
+                    axes.Axis.DirectionRatios if axes.Axis else (0.0, 0.0, 1.0),
+                    dtype=float,
+                )
+                x_axis = np.array(
+                    (
+                        axes.RefDirection.DirectionRatios
+                        if axes.RefDirection
+                        else (1.0, 0.0, 0.0)
+                    ),
+                    dtype=float,
+                )
+                if rotation is not None:
+                    z_axis, x_axis = rotation.dot(z_axis), rotation.dot(x_axis)
+            elif ifc_connection.is_a("IfcStructuralCurveConnection"):
+                axis = getattr(ifc_connection, "Axis", None)
+                if not axis or not edge or len(edge) != 2:
+                    return None
+                x_axis = np.array(edge[1], dtype=float) - np.array(edge[0], dtype=float)
+                z_axis = np.array(axis.DirectionRatios, dtype=float)
+                if rotation is not None:
+                    z_axis = rotation.dot(z_axis)
+            else:
+                return None
+
+            return self._orthonormal_axes(x_axis, z_axis)
+        except Exception as e:
+            self.logger.warning(
+                f"Could not read the local axes of connection "
+                f"{getattr(ifc_connection, 'GlobalId', '?')}: {e}"
+            )
+            return None
+
+    @staticmethod
+    def _orthonormal_axes(x_axis, z_axis) -> Optional[List[List[float]]]:
+        """Return unit x, y, z axes from an x direction and an approximate z.
+
+        z is made perpendicular to x and y = z cross x, the IFC convention for
+        both placements and member axes. None if the directions are degenerate.
+        """
+        x_axis = np.array(x_axis, dtype=float)
+        z_axis = np.array(z_axis, dtype=float)
+        x_len = np.linalg.norm(x_axis)
+        if x_len < 1e-12:
+            return None
+        x_axis = x_axis / x_len
+        z_axis = z_axis - np.dot(z_axis, x_axis) * x_axis
+        z_len = np.linalg.norm(z_axis)
+        if z_len < 1e-9:
+            return None
+        z_axis = z_axis / z_len
+        y_axis = np.cross(z_axis, x_axis)
+        return [[float(v) for v in a] for a in (x_axis, y_axis, z_axis)]
+
+    def _extract_release_axes(self, relation) -> Optional[List[List[float]]]:
+        """Return the axes a member-side AppliedCondition is expressed in.
+
+        That is the relation's ``ConditionCoordinateSystem``. Without one, IFC
+        implies the member's own axes; they are worked out here for curve
+        members (x along the member, ``Axis`` giving the side z is on).
+
+        Returns:
+            Three unit vectors (local x, y, z) in global coordinates, or None
+            when they are the global axes or cannot be determined.
+        """
+        try:
+            axes = getattr(relation, "ConditionCoordinateSystem", None)
+            if axes:
+                z_axis = axes.Axis.DirectionRatios if axes.Axis else (0.0, 0.0, 1.0)
+                x_axis = (
+                    axes.RefDirection.DirectionRatios
+                    if axes.RefDirection
+                    else (1.0, 0.0, 0.0)
+                )
+                return self._orthonormal_axes(x_axis, z_axis)
+            member = getattr(relation, "RelatingStructuralMember", None)
+            if member is None or not member.is_a("IfcStructuralCurveMember"):
+                return None
+            representation = get_representation(member, "Edge")
+            axis = getattr(member, "Axis", None)
+            if not representation or not axis:
+                return None
+            geometry = self._extract_geometry(representation)
+            if not isinstance(geometry, list) or len(geometry) < 2:
+                return None
+            x_axis = np.array(geometry[-1], dtype=float) - np.array(
+                geometry[0], dtype=float
+            )
+            return self._orthonormal_axes(x_axis, axis.DirectionRatios)
+        except Exception as e:
+            self.logger.warning(
+                f"Could not read the axes of relation "
+                f"{getattr(relation, 'GlobalId', '?')}: {e}"
+            )
+            return None
+
+    def _extract_end_releases(
+        self, ifc_connection, axes_by_member: Optional[dict] = None
+    ) -> dict:
         """Return per-member released rotation DOFs from AppliedCondition.
 
         Reads ``IfcRelConnectsStructuralMember.AppliedCondition`` for each
         relationship. A rotational DOF is released when its stiffness value is
         ``False`` (explicitly free) or ``0.0`` (zero-stiffness spring).
 
+        Args:
+            ifc_connection: IFC connection entity.
+            axes_by_member: If given, filled with the axes each member's
+                release is expressed in (see ``_extract_release_axes``).
+
         Returns:
-            Dict mapping member IFC GlobalId → list of released CalculiX DOF
-            numbers (4 = Rx, 5 = Ry, 6 = Rz). Empty dict when no releases.
+            Dict mapping member IFC GlobalId → list of released DOF numbers
+            (4 = Rx, 5 = Ry, 6 = Rz) in those axes. Empty dict when no releases.
         """
         result: dict = {}
         if not hasattr(ifc_connection, "ConnectsStructuralMembers"):
@@ -381,12 +516,14 @@ class ConnectionsExtractor:
             if member_id is None:
                 continue
             released = []
-            for attr_name, dof in (
-                ("RotationalStiffnessX", 4),
-                ("RotationalStiffnessY", 5),
-                ("RotationalStiffnessZ", 6),
-            ):
-                attr = getattr(condition, attr_name, None)
+            for axis_name, dof in (("X", 4), ("Y", 5), ("Z", 6)):
+                # IfcBoundaryNodeCondition and IfcBoundaryEdgeCondition name
+                # the same thing differently.
+                attr = getattr(condition, f"RotationalStiffness{axis_name}", None)
+                if attr is None:
+                    attr = getattr(
+                        condition, f"RotationalStiffnessByLength{axis_name}", None
+                    )
                 if attr is None:
                     continue
                 wrapped = getattr(attr, "wrappedValue", attr)
@@ -394,6 +531,8 @@ class ConnectionsExtractor:
                     released.append(dof)
             if released:
                 result[member_id] = released
+                if axes_by_member is not None:
+                    axes_by_member[member_id] = self._extract_release_axes(rel)
         return result
 
     def _determine_geometry_type(self, ifc_connection) -> str:

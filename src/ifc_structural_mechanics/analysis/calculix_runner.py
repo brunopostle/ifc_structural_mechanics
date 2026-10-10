@@ -315,9 +315,9 @@ class CalculixRunner:
         element_types = set(
             re.findall(r"(?im)^\*ELEMENT\s*,.*?TYPE\s*=\s*(\w+)", inp_text)
         )
-        if "U1" in element_types and "B31" in element_types:
+        if "U1" in element_types and element_types & {"B31", "B32", "B32R"}:
             message += (
-                " This model mixes U1 beams (I/T/L/C sections) with native B31 "
+                " This model mixes U1 beams (I/T/L/C sections) with native "
                 "beams; CalculiX transfers no moment between the two at a "
                 "shared node, so those joints act as pins and can turn a "
                 "frame into a mechanism."

@@ -677,6 +677,7 @@ class TestMigrationAndCompatibility:
         valid_calculix_types = {
             "B31",
             "B32",
+            "B32R",
             "S3",
             "S4",
             "S6",

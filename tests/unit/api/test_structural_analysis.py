@@ -136,6 +136,10 @@ def test_create_meshing_config():
     for member_type in config._config["member_types"]:
         assert config._config["member_types"][member_type]["element_size"] == 0.05
 
+    # Quadratic elements unless linear ones are asked for
+    assert config.get_element_order() == 2
+    assert create_meshing_config(0.05, element_order=1).get_element_order() == 1
+
 
 # Main analyze_ifc function tests with unified workflow
 
@@ -540,6 +544,7 @@ def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
         verbose=True,
         gravity=False,
         calculix_timeout=600,
+        element_order=2,
     )
 
 

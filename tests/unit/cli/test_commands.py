@@ -107,6 +107,7 @@ class TestEnhancedCLICommands:
                 verbose=False,
                 gravity=False,
                 calculix_timeout=600,
+                element_order=2,
             )
 
     def test_analyze_custom_params(
@@ -139,6 +140,7 @@ class TestEnhancedCLICommands:
                 verbose=True,
                 gravity=False,
                 calculix_timeout=600,
+                element_order=2,
             )
 
     def test_analyze_with_warnings(

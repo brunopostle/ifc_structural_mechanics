@@ -39,12 +39,12 @@ class MeshingConfig(BaseConfig):
             },
             "member_types": {
                 "curve_members": {
-                    "element_type": "1D_linear",
+                    "element_type": "1D_quadratic",
                     "element_size": 0.1,
                     "refinement_level": 0,
                 },
                 "surface_members": {
-                    "element_type": "2D_linear_triangle",
+                    "element_type": "2D_quadratic_triangle",
                     "element_size": 0.1,
                     "refinement_level": 0,
                 },
@@ -152,12 +152,12 @@ class MeshingConfig(BaseConfig):
         member_types = self._config.get("member_types", {})
         default_member_config = {
             "curve_members": {
-                "element_type": "1D_linear",
+                "element_type": "1D_quadratic",
                 "element_size": default_size,
                 "refinement_level": 0,
             },
             "surface_members": {
-                "element_type": "2D_linear_triangle",
+                "element_type": "2D_quadratic_triangle",
                 "element_size": default_size,
                 "refinement_level": 0,
             },
@@ -327,6 +327,39 @@ class MeshingConfig(BaseConfig):
             raise ValueError(f"No configuration found for member type: {member_type}")
 
         return self._config["member_types"][member_type]["element_type"]
+
+    def get_element_order(self) -> int:
+        """
+        Get the polynomial order Gmsh should mesh with.
+
+        Gmsh has one element order for the whole mesh, so the mesh is second
+        order as soon as either member type asks for a quadratic element.
+        Linear shells (S3) are far too stiff in bending on a practical mesh,
+        which is why quadratic is the default.
+
+        Returns:
+            int: 2 if any member type uses a quadratic element, otherwise 1.
+        """
+        for member_config in self._config["member_types"].values():
+            if "quadratic" in str(member_config.get("element_type", "")):
+                return 2
+        return 1
+
+    def set_element_order(self, order: int) -> None:
+        """
+        Use linear (1) or quadratic (2) elements for every member type.
+
+        Args:
+            order (int): 1 for B31 beams and S3 shells, 2 for B32R and S6.
+
+        Raises:
+            ValueError: If order is neither 1 nor 2.
+        """
+        if order not in (1, 2):
+            raise ValueError(f"element order must be 1 or 2, got {order}")
+        kind = "quadratic" if order == 2 else "linear"
+        self.set_element_type("curve_members", f"1D_{kind}")
+        self.set_element_type("surface_members", f"2D_{kind}_triangle")
 
     def get_mesh_quality_settings(self) -> Dict[str, float]:
         """

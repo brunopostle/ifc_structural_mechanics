@@ -40,6 +40,7 @@ def analyze_ifc(
     verbose: bool = False,
     gravity: bool = False,
     calculix_timeout: Optional[int] = 600,
+    element_order: int = 2,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -58,6 +59,10 @@ def analyze_ifc(
             Defaults to 0.1.
         verbose (bool, optional): Whether to enable verbose logging.
             Defaults to False.
+        element_order (int, optional): 2 for quadratic beam and shell elements
+            (B32R, S6), 1 for linear ones (B31, S3). Linear shells need a much
+            finer mesh for the same accuracy; they are only worth using when a
+            model is too large to solve otherwise. Defaults to 2.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -125,7 +130,7 @@ def analyze_ifc(
 
         # Step 2: Create configurations
         analysis_config = create_analysis_config(analysis_type, gravity=gravity)
-        meshing_config = create_meshing_config(mesh_size)
+        meshing_config = create_meshing_config(mesh_size, element_order)
         system_config = SystemConfig()
 
         # Step 3: Define output file paths
@@ -381,18 +386,23 @@ def create_analysis_config(analysis_type: str, gravity: bool = False) -> Analysi
     return config
 
 
-def create_meshing_config(mesh_size: float) -> MeshingConfig:
+def create_meshing_config(mesh_size: float, element_order: int = 2) -> MeshingConfig:
     """
     Create a meshing configuration with the specified mesh size.
 
     Args:
         mesh_size (float): Default mesh size.
+        element_order (int): 2 for quadratic elements, 1 for linear ones.
 
     Returns:
         MeshingConfig: The meshing configuration.
+
+    Raises:
+        ValueError: If element_order is neither 1 nor 2.
     """
     config = MeshingConfig()
     config.set_default_mesh_size(mesh_size)
+    config.set_element_order(element_order)
     config.validate()
     return config
 
@@ -548,6 +558,7 @@ def run_enhanced_analysis(
     verbose: bool = False,
     gravity: bool = False,
     calculix_timeout: Optional[int] = 600,
+    element_order: int = 2,
 ) -> Dict[str, Any]:
     """
     Enhanced analysis function - now just calls the unified analyze_ifc.
@@ -562,6 +573,7 @@ def run_enhanced_analysis(
         mesh_size (float): Size of the mesh elements.
         verbose (bool): Whether to print verbose output.
         gravity (bool): Whether to include self-weight gravity loads.
+        element_order (int): 2 for quadratic elements, 1 for linear ones.
 
     Returns:
         Dict[str, Any]: Dictionary containing the analysis results and output file paths.
@@ -576,4 +588,5 @@ def run_enhanced_analysis(
         verbose=verbose,
         gravity=gravity,
         calculix_timeout=calculix_timeout,
+        element_order=element_order,
     )

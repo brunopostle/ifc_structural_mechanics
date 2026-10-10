@@ -100,6 +100,14 @@ def cli():
     show_default=True,
     help="CalculiX solver timeout in seconds (0 = no limit)",
 )
+@click.option(
+    "--element-order",
+    type=click.Choice(["1", "2"]),
+    default="2",
+    show_default=True,
+    help="2 = quadratic elements (B32R, S6); 1 = linear (B31, S3), which is "
+    "faster but needs a much finer mesh for shells",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -111,6 +119,7 @@ def analyze(
     enhanced: bool = True,
     gravity: bool = False,
     timeout: int = 600,
+    element_order: str = "2",
 ):
     """
     Run structural analysis on an IFC file with enhanced boundary condition handling.
@@ -128,6 +137,7 @@ def analyze(
         enhanced,
         gravity,
         timeout,
+        int(element_order),
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -144,6 +154,7 @@ def run_enhanced_analyze(
     enhanced: bool = True,
     gravity: bool = False,
     timeout: int = 600,
+    element_order: int = 2,
 ) -> int:
     """
     Run the analysis with enhanced boundary condition handling and return the appropriate exit code.
@@ -157,6 +168,9 @@ def run_enhanced_analyze(
         json_output (bool): Output results in JSON format.
         map_entities (bool): Map errors back to original IFC entities.
         enhanced (bool): Use enhanced boundary condition and load handling.
+        gravity (bool): Include self-weight gravity loads.
+        timeout (int): CalculiX solver timeout in seconds (0 = no limit).
+        element_order (int): 2 for quadratic elements, 1 for linear ones.
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -210,6 +224,7 @@ def run_enhanced_analyze(
                 verbose=verbose,
                 gravity=gravity,
                 calculix_timeout=timeout or None,
+                element_order=element_order,
             )
         else:
             # Use the original analysis function
@@ -220,6 +235,7 @@ def run_enhanced_analyze(
                 mesh_size=mesh_size,
                 verbose=verbose,
                 gravity=gravity,
+                element_order=element_order,
             )
 
         # Format and display results

@@ -35,9 +35,19 @@ class StructuralConnection(DomainEntity):
 
         # Per-member rotational end-releases read from
         # IfcRelConnectsStructuralMember.AppliedCondition.
-        # Maps member IFC GlobalId → list of released CalculiX DOF numbers (4, 5, or 6).
+        # Maps member IFC GlobalId → list of released DOF numbers (4, 5, or 6),
+        # numbered in the axes held in release_axes_by_member.
         # Empty dict means no releases (fully rigid connection).
         self.released_dofs_by_member: Dict[str, List[int]] = {}
+        # Axes each member's release is expressed in: member IFC GlobalId →
+        # three unit vectors (local x, y, z), or None for the global axes.
+        self.release_axes_by_member: Dict[str, Optional[List[List[float]]]] = {}
+
+        # Axes the support condition (stiffness_properties) is expressed in:
+        # three unit vectors, local x, y and z, in global coordinates. None
+        # means the global axes. IFC gives a line support in the axes of its
+        # edge (x along it), so "drx" there is rotation about the edge.
+        self.local_axes: Optional[List[List[float]]] = None
 
         # Then call parent constructor - bypass validation until members are connected
         super().__init__(

@@ -64,6 +64,10 @@ def _parse_node_line(line: str) -> tuple[int | None, tuple[float, float, float]]
         if not stripped.startswith("-1"):
             return None, (0.0, 0.0, 0.0)
 
+        fixed = _split_fixed_width(line)
+        if fixed is not None and len(fixed[1]) >= 3:
+            return fixed[0], (fixed[1][0], fixed[1][1], fixed[1][2])
+
         # Remove the -1 prefix
         rest = stripped[2:].strip()
 
@@ -159,12 +163,27 @@ def _parse_result_data(
         if line.startswith("-3"):
             return data, i + 1
         if line.startswith("-1"):
-            nid, values = _parse_result_line(line)
+            nid, values = _parse_result_line(lines[i])
             if nid is not None:
                 data[nid] = values
         i += 1
 
     return data, i
+
+
+def _split_fixed_width(line: str) -> tuple[int, list[float]] | None:
+    """Read a ``-1`` data line by its fixed columns, or None if it does not fit."""
+    record = line.rstrip("\r\n")
+    if not record.startswith(" -1") or len(record) < 25:
+        return None
+    try:
+        nid = int(record[3:13])
+    except ValueError:
+        return None
+    raw_values = VALUE_RE.findall(record[13:])
+    if not raw_values:
+        return None
+    return nid, [float(v.replace("D", "E").replace("d", "e")) for v in raw_values]
 
 
 def _parse_result_line(line: str) -> tuple[int | None, list[float]]:
@@ -176,6 +195,13 @@ def _parse_result_line(line: str) -> tuple[int | None, list[float]]:
         stripped = line.strip()
         if not stripped.startswith("-1"):
             return None, []
+
+        # FRD is fixed width: " -1", a 10-character node ID, 12-character
+        # values. A negative first value leaves no space after the ID, so
+        # splitting on whitespace merges the two and the line would be lost.
+        fixed = _split_fixed_width(line)
+        if fixed is not None:
+            return fixed
 
         rest = stripped[2:].strip()
         parts = rest.split()

@@ -22,6 +22,10 @@ from ..domain.structural_model import StructuralModel
 
 logger = logging.getLogger(__name__)
 
+# CalculiX element types written for curve members and for surface members
+BEAM_ELEMENT_TYPES = frozenset({"B31", "B32", "B32R"})
+SHELL_ELEMENT_TYPES = frozenset({"S3", "S4", "S6", "S8", "S9"})
+
 
 class MeshMapper:
     """Assigns mesh elements to structural members using three strategies."""
@@ -164,9 +168,7 @@ class MeshMapper:
                 continue
 
             is_surface = member.entity_type == "surface"
-            target_types = (
-                {"S3", "S4", "S6", "S8", "S9"} if is_surface else {"B31", "B32"}
-            )
+            target_types = SHELL_ELEMENT_TYPES if is_surface else BEAM_ELEMENT_TYPES
 
             best_elems = []
             for elem_id, elem_data in self._elements.items():
@@ -232,10 +234,12 @@ class MeshMapper:
         surface_elements = [
             eid
             for eid, ed in self._elements.items()
-            if ed["type"] in {"S3", "S4", "S6", "S8", "S9"}
+            if ed["type"] in SHELL_ELEMENT_TYPES
         ]
         curve_elements = [
-            eid for eid, ed in self._elements.items() if ed["type"] in {"B31", "B32"}
+            eid
+            for eid, ed in self._elements.items()
+            if ed["type"] in BEAM_ELEMENT_TYPES
         ]
         surface_members = [
             m for m in self._domain_model.members if m.entity_type == "surface"

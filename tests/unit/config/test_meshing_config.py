@@ -301,9 +301,27 @@ def test_meshing_config_default_element_type():
     """
     config = MeshingConfig()
 
-    # Check default element types for curve and surface members
+    # Quadratic by default: linear shells are far too stiff in bending
+    assert config.get_element_type("curve_members") == "1D_quadratic"
+    assert config.get_element_type("surface_members") == "2D_quadratic_triangle"
+    assert config.get_element_order() == 2
+
+
+def test_meshing_config_element_order():
+    """The mesh order follows the element types, and can be set in one call."""
+    config = MeshingConfig()
+
+    config.set_element_order(1)
     assert config.get_element_type("curve_members") == "1D_linear"
     assert config.get_element_type("surface_members") == "2D_linear_triangle"
+    assert config.get_element_order() == 1
+
+    # Gmsh has one order for the whole mesh: one quadratic type is enough
+    config.set_element_type("surface_members", "2D_quadratic_triangle")
+    assert config.get_element_order() == 2
+
+    with pytest.raises(ValueError):
+        config.set_element_order(3)
 
 
 def test_meshing_config_element_type_validation():

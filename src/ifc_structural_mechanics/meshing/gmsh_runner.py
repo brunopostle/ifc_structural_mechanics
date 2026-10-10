@@ -157,6 +157,10 @@ class GmshRunner:
                 self.meshing_config.get_max_element_size(),
             )
 
+            gmsh.option.setNumber(
+                "Mesh.ElementOrder", self.meshing_config.get_element_order()
+            )
+
             # Set additional meshing options from config
             for option, value in self.meshing_config.get_additional_options().items():
                 if isinstance(value, bool):
@@ -343,6 +347,8 @@ class GmshRunner:
                     "-clmax",
                     str(self.meshing_config.get_max_element_size()),
                     f"-{self.meshing_config.get_mesh_dimension()}",  # Dimension
+                    "-order",
+                    str(self.meshing_config.get_element_order()),
                 ]
             )
 

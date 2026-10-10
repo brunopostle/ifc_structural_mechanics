@@ -14,9 +14,13 @@ Reference values use Timoshenko beam theory (bending plus shear deflection):
   ``w L^4 / (8 E I) + w L^2 / (2 G A_s)``
 * Fixed-fixed beam with central point load:
   ``P L^3 / (192 E I) + P L / (4 G A_s)``
+* Simply supported rectangular plate under uniform load: Navier's double
+  sine series, plus the Mindlin shear term ``M / (kappa G t)`` where ``M`` is
+  the moment sum
 """
 
 import json
+import math
 import os
 import shutil
 
@@ -29,6 +33,7 @@ from ifc_structural_mechanics.api.structural_analysis import analyze_ifc  # noqa
 IFC_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 CANTILEVER = os.path.join(IFC_DIR, "cantilever_01.ifc")
 BEAM = os.path.join(IFC_DIR, "beam_01.ifc")
+SLAB = os.path.join(IFC_DIR, "slab_01.ifc")
 
 pytestmark = [
     pytest.mark.skipif(shutil.which("ccx") is None, reason="CalculiX not installed"),
@@ -86,11 +91,87 @@ def _cantilever_variant(tmp_path, axis=None, i_profile=False) -> str:
     return path
 
 
-def _run(ifc_path: str, tmp_path, **kwargs) -> dict:
+def _edge_condition(model, fixed):
+    """An IfcBoundaryEdgeCondition from six booleans (dx, dy, dz, drx, dry, drz)."""
+    return model.create_entity(
+        "IfcBoundaryEdgeCondition",
+        None,
+        *[model.create_entity("IfcBoolean", bool(value)) for value in fixed],
+    )
+
+
+def _slab_variant(tmp_path, edge_conditions, extra_edges=()) -> str:
+    """Write a copy of slab_01.ifc with new line supports.
+
+    slab_01 is a 5 m x 3 m slab, 0.2 m thick, with line supports along x = 0
+    and x = 5. ``edge_conditions`` gives the support condition of those two, in
+    that order. ``extra_edges`` adds line supports, each as (start, end, fixed).
+    The conditions on the member side of each connection are removed, so the
+    support condition alone decides how the edge behaves.
+    """
+    model = ifcopenshell.open(SLAB)
+    slab = model.by_type("IfcStructuralSurfaceMember")[0]
+    existing = sorted(
+        model.by_type("IfcStructuralCurveConnection"), key=lambda c: c.id()
+    )
+    for connection, fixed in zip(existing, edge_conditions):
+        connection.AppliedCondition = _edge_condition(model, fixed)
+    for relation in model.by_type("IfcRelConnectsStructuralMember"):
+        relation.AppliedCondition = None
+
+    template = existing[0]
+    context = template.Representation.Representations[0].ContextOfItems
+    group = model.by_type("IfcRelAssignsToGroup")[0]
+    for start, end, fixed in extra_edges:
+        vertices = [
+            model.create_entity(
+                "IfcVertexPoint", model.create_entity("IfcCartesianPoint", point)
+            )
+            for point in (start, end)
+        ]
+        edge = model.create_entity("IfcEdge", vertices[0], vertices[1])
+        shape = model.create_entity(
+            "IfcProductDefinitionShape",
+            None,
+            None,
+            [
+                model.create_entity(
+                    "IfcTopologyRepresentation", context, "Reference", "Edge", [edge]
+                )
+            ],
+        )
+        connection = model.create_entity(
+            "IfcStructuralCurveConnection",
+            ifcopenshell.guid.new(),
+            template.OwnerHistory,
+            "benchmark edge",
+            None,
+            None,
+            template.ObjectPlacement,
+            shape,
+            _edge_condition(model, fixed),
+            model.create_entity("IfcDirection", (0.0, 0.0, 1.0)),
+        )
+        model.create_entity(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            template.OwnerHistory,
+            None,
+            None,
+            slab,
+            connection,
+        )
+        group.RelatedObjects = list(group.RelatedObjects) + [connection]
+    path = str(tmp_path / "variant.ifc")
+    model.write(path)
+    return path
+
+
+def _run(ifc_path: str, tmp_path, mesh_size: float = MESH_SIZE, **kwargs) -> dict:
     """Run the pipeline and return the parsed results.json."""
-    output_dir = str(tmp_path / "out")
+    output_dir = str(tmp_path / f"out_{mesh_size}")
     result = analyze_ifc(
-        ifc_path=ifc_path, output_dir=output_dir, mesh_size=MESH_SIZE, **kwargs
+        ifc_path=ifc_path, output_dir=output_dir, mesh_size=mesh_size, **kwargs
     )
     assert result["status"] == "success", result.get("errors")
     with open(os.path.join(output_dir, "results.json")) as fh:
@@ -102,7 +183,7 @@ def _max_vertical_deflection(data: dict) -> float:
 
 
 class TestRectangularCantileverSelfWeight:
-    """cantilever_01 under gravity, native B31 rectangular section."""
+    """cantilever_01 under gravity, native rectangular section (B32R)."""
 
     AREA = 0.2 * 0.4
     SHEAR_AREA = AREA * 5 / 6
@@ -194,6 +275,61 @@ class TestFixedFixedBeamPointLoad:
         )
 
 
+class TestSimplySupportedPlateSelfWeight:
+    """slab_01 supported in translation along all four edges, under gravity.
+
+    This is the check on shell bending. Linear S3 shells gave about half the
+    deflection at a 0.5 m mesh and were still 20 % short at 0.25 m.
+    """
+
+    A, B, T = 5.0, 3.0, 0.2
+    E, NU, RHO = 2.1e8, 0.2, 7.8
+    PINNED = (True, True, True, False, False, False)
+
+    def _plate(self, tmp_path) -> str:
+        return _slab_variant(
+            tmp_path,
+            edge_conditions=(self.PINNED, self.PINNED),
+            extra_edges=(
+                ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0), self.PINNED),
+                ((0.0, 3.0, 0.0), (5.0, 3.0, 0.0), self.PINNED),
+            ),
+        )
+
+    def _centre_deflection(self) -> float:
+        """Navier series for the centre, with the Mindlin shear deflection."""
+        q = self.RHO * G_ACCEL * self.T
+        rigidity = self.E * self.T**3 / (12 * (1 - self.NU**2))
+        shear_stiffness = 5 / 6 * self.E / (2 * (1 + self.NU)) * self.T
+        bending = moment_sum = 0.0
+        for m in range(1, 60, 2):
+            for n in range(1, 60, 2):
+                sign = (-1) ** ((m + n) // 2 - 1)
+                k = (m / self.A) ** 2 + (n / self.B) ** 2
+                bending += sign / (m * n * k**2)
+                moment_sum += sign / (m * n * k)
+        return 16 * q / math.pi**6 / rigidity * bending + (
+            16 * q / math.pi**4 / shear_stiffness * moment_sum
+        )
+
+    def test_centre_deflection(self, tmp_path):
+        data = _run(self._plate(tmp_path), tmp_path, mesh_size=0.5, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._centre_deflection(), rel=0.05
+        )
+
+    def test_converges_from_below(self, tmp_path):
+        """Halving the mesh size moves the answer by little, and upwards."""
+        path = self._plate(tmp_path)
+        coarse, medium, fine = (
+            _max_vertical_deflection(_run(path, tmp_path, mesh_size=h, gravity=True))
+            for h in (1.0, 0.5, 0.25)
+        )
+        assert coarse < medium < fine
+        assert fine - medium < medium - coarse
+        assert fine == pytest.approx(medium, rel=0.02)
+
+
 class TestCodeAsterReferences:
     """Self-weight results against the Code_Aster runs shipped with the models.
 
@@ -212,22 +348,65 @@ class TestCodeAsterReferences:
         assert _max_vertical_deflection(data) == pytest.approx(2.766e-4, rel=0.03)
 
     def test_structure_01(self, tmp_path):
-        """Slab on a wall and two columns. Reference 0.4273 mm.
+        """Slab hinged on a wall and carried by two columns. Reference 0.4273 mm.
 
-        The tolerance is wide because the slab-to-wall edge hinge is not
-        modelled and linear shell elements converge slowly. Before surface
-        materials, joints and supports were read correctly this model gave
-        between 1.7 and 17 mm.
+        This one model exercises a line support given in the axes of its edge,
+        a slab released along the edge it shares with a wall, a pin-ended
+        column (released on the member side of a fixed support) and a column
+        joined to the slab by a rigid link. Getting any of them wrong moves
+        the answer by 10 % or more; with linear shells and all of them wrong
+        it ranged from 0.37 to 0.56 mm depending on the mesh.
         """
-        output_dir = str(tmp_path / "out")
-        result = analyze_ifc(
-            ifc_path=self.STRUCTURE, output_dir=output_dir, mesh_size=0.5, gravity=True
+        data = _run(self.STRUCTURE, tmp_path, mesh_size=0.5, gravity=True)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_displacement_m"] == pytest.approx(4.273e-4, rel=0.05)
+        assert envelope["max_tz_m"] == pytest.approx(4.219e-4, rel=0.05)
+        # Sway is the sensitive part. The reference has 0.07 mm at mid-surface
+        # (ours adds the slab faces, half a thickness off it); it was 0.34 mm
+        # while the wall base was free to rotate about its edge.
+        assert envelope["max_tx_m"] < 1.5e-4
+
+    def test_structure_01_converges(self, tmp_path):
+        """Refining the mesh changes the answer by little, and less each time."""
+        coarse, medium, fine = (
+            _run(self.STRUCTURE, tmp_path, mesh_size=h, gravity=True)[
+                "global_displacements"
+            ]["envelope"]["max_displacement_m"]
+            for h in (1.0, 0.5, 0.25)
         )
-        assert result["status"] == "success", result.get("errors")
-        with open(os.path.join(output_dir, "results.json")) as fh:
-            data = json.load(fh)
-        max_disp = data["global_displacements"]["envelope"]["max_displacement_m"]
-        assert max_disp == pytest.approx(4.273e-4, rel=0.25)
+        assert coarse < medium < fine
+        assert fine - medium < medium - coarse
+        assert fine == pytest.approx(medium, rel=0.02)
+
+    def test_slab_01_with_the_supports_of_the_reference(self, tmp_path):
+        """One-way slab clamped at x = 0 and hinged at x = 5. Reference 0.3761 mm.
+
+        The Code_Aster run was made from an earlier slab_01.ifc. Today's file
+        fixes both supports and releases the slab about the two axes that do
+        not matter, which clamps both ends and gives half the deflection
+        (0.18 mm, ``w L^4 / 384 E I``). The conditions of the reference run are
+        restored here.
+        """
+        path = _slab_variant(
+            tmp_path,
+            edge_conditions=(
+                (True, True, True, True, False, False),
+                (True, True, True, False, False, False),
+            ),
+        )
+        data = _run(path, tmp_path, mesh_size=0.5, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(3.761e-4, rel=0.03)
+
+    def test_slab_01_as_authored_is_clamped_at_both_ends(self, tmp_path):
+        """Beam theory for a 5 m span clamped at both ends, per metre width."""
+        data = _run(SLAB, tmp_path, mesh_size=0.5, gravity=True)
+        thickness, span, modulus, poisson = 0.2, 5.0, 2.1e8, 0.2
+        load = CANT_RHO * G_ACCEL * thickness
+        shear_modulus = modulus / (2 * (1 + poisson))
+        expected = load * span**4 / (384 * modulus * thickness**3 / 12) + (
+            load * span**2 / (8 * shear_modulus * thickness * 5 / 6)
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.03)
 
     def test_structure_01_supports_and_joints(self, tmp_path):
         """The wall base is a line support; the slab-to-wall joint is no support."""
@@ -238,6 +417,7 @@ class TestCodeAsterReferences:
         with open(os.path.join(output_dir, "analysis.inp")) as fh:
             text = fh.read()
         support_sets = {}
+        support_dofs = {}
         lines = text.splitlines()
         for i, line in enumerate(lines):
             if line.startswith("*NSET, NSET=BC_"):
@@ -248,6 +428,20 @@ class TestCodeAsterReferences:
                         break
                     nodes += [n for n in data_line.split(",") if n.strip()]
                 support_sets[name] = len(nodes)
+            elif line.startswith("BC_"):
+                name, first, last = (part.strip() for part in line.split(","))
+                support_dofs.setdefault(name, []).extend(
+                    range(int(first), int(last) + 1)
+                )
+        by_size = sorted(support_dofs, key=lambda name: support_sets[name])
+        # Wall base: translations and rotation about the edge, which runs
+        # along global Y. Column_01: fixed support, member released in both
+        # bending rotations, so only torsion (about Z) is held. Column_02: fixed.
+        assert support_dofs[by_size[-1]] == [1, 2, 3, 5]
+        assert sorted(support_dofs[name] for name in by_size[:2]) == [
+            [1, 2, 3, 4, 5, 6],
+            [1, 2, 3, 6],
+        ]
         # Wall base edge plus two column bases; the slab-wall joint has no
         # AppliedCondition and must not appear.
         assert len(support_sets) == 3

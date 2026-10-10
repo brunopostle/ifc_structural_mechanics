@@ -152,3 +152,30 @@ class TestConcatenatedValues:
         assert disp[2][0] == pytest.approx(2.8e-4)
         assert disp[2][1] == pytest.approx(-1.2e-3)
         assert disp[2][2] == pytest.approx(5e-5)
+
+    def test_negative_first_value_runs_into_the_node_id(self, tmp_path):
+        """'-1       302-4.94140E-06...' is node 302, not a line to skip."""
+        frd = tmp_path / "concat_id.frd"
+        frd.write_text(
+            """\
+    1C
+    2C                             2                                     1
+ -1       302-1.00000E+00 0.00000E+00 0.00000E+00
+ -1       303 1.00000E+00 0.00000E+00 0.00000E+00
+ -3
+ -4  DISP        4    1
+ -5  D1          1    2    1    0
+ -5  D2          1    2    2    0
+ -5  D3          1    2    3    0
+ -5  ALL         1    2    0    0    1ALL
+ -1       302-4.94140E-06-3.15202E-05-4.36021E-06
+ -1       303 5.13983E-06 3.15202E-05 2.36060E-06
+ -3
+ 9999
+"""
+        )
+        data = parse_frd(str(frd))
+        assert get_node_coords(data)[302] == (-1.0, 0.0, 0.0)
+        disp = get_displacements(data)
+        assert sorted(disp) == [302, 303]
+        assert disp[302][:3] == pytest.approx([-4.9414e-06, -3.15202e-05, -4.36021e-06])

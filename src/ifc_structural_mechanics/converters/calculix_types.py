@@ -16,7 +16,7 @@ GMSH_TO_CALCULIX_ELEMENTS: Dict[str, str] = {
     # Line elements (beams, trusses)
     "line": "B31",
     "line2": "B31",
-    "line3": "B32",
+    "line3": "B32R",
     # Triangle elements (shells)
     "triangle": "S3",
     "triangle3": "S3",
@@ -68,7 +68,7 @@ def get_calculix_element_type(
         >>> get_calculix_element_type(member)
         'B32'
         >>> get_calculix_element_type(member, gmsh_element_type='line3')
-        'B32'
+        'B32R'
     """
     # If Gmsh element type is provided, use direct mapping
     if gmsh_element_type and gmsh_element_type in GMSH_TO_CALCULIX_ELEMENTS:

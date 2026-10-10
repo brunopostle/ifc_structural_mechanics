@@ -29,7 +29,7 @@ from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError, MeshingError
 from ..utils.temp_dir import create_temp_subdir, get_temp_dir
-from .mesh_mapper import MeshMapper
+from .mesh_mapper import BEAM_ELEMENT_TYPES, SHELL_ELEMENT_TYPES, MeshMapper
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -50,7 +50,9 @@ class UnifiedCalculixWriter:
         # Line elements (beams, trusses)
         "line": "B31",
         "line2": "B31",
-        "line3": "B32",
+        # Reduced integration (expanded to C3D20R) is the beam element the
+        # CalculiX manual recommends; B32 gives the same answers within 1 %.
+        "line3": "B32R",
         # Triangle elements (shells)
         "triangle": "S3",
         "triangle3": "S3",
@@ -260,7 +262,10 @@ class UnifiedCalculixWriter:
             # Step 2c: Resolve remaining overlapping-geometry element ownership
             self._resolve_overlapping_element_sets()
 
-            # Step 2c2: Make rigid connections rigid by sharing one node
+            # Step 2c2: Give members hinged along an edge their own edge nodes
+            self._release_hinged_edges()
+
+            # Step 2c3: Make rigid connections rigid by sharing one node
             self._merge_rigid_connection_nodes()
 
             # Step 2d: Register node→member memberships for result export
@@ -350,7 +355,11 @@ class UnifiedCalculixWriter:
             # Process each element in the block
             for cell_idx, cell in enumerate(block_cells):
                 # Convert to 1-based indexing for CalculiX
-                node_indices = [idx + 1 for idx in cell]
+                node_indices = [int(idx) + 1 for idx in cell]
+                if block_name == "line3":
+                    # Gmsh lists the two end nodes and then the middle one;
+                    # CalculiX wants them in order along the element.
+                    node_indices = [node_indices[0], node_indices[2], node_indices[1]]
 
                 # Store element data
                 self.elements[element_id] = {
@@ -458,6 +467,8 @@ class UnifiedCalculixWriter:
             for elem_id in elem_ids:
                 if elem_id in self.elements:
                     self.elements[elem_id]["type"] = "U1"
+            self._split_quadratic_u1_elements(member, member_set)
+            elem_ids = self.element_sets[member_set]
             logger.info(
                 f"Member {member.id}: {len(elem_ids)} elements retyped to U1 "
                 f"(section_type={getattr(member.section, 'section_type', 'unknown')})"
@@ -483,6 +494,35 @@ class UnifiedCalculixWriter:
                     f"removed from native element set"
                 )
                 self.element_sets[member_set] = filtered
+
+    def _split_quadratic_u1_elements(self, member, member_set: str) -> None:
+        """Turn each three-node U1 element of a member into two two-node ones.
+
+        U1 is a two-node element, but a second-order mesh gives every line
+        element a middle node. Splitting at that node keeps every mesh node in
+        use, so a support or point load that lands on a middle node still acts
+        on the member. The first half keeps the element ID; the second half
+        gets a new one, placed right after it in the member's set.
+        """
+        next_id = max(self.elements.keys(), default=0) + 1
+        split_set: List[int] = []
+        new_ids: List[int] = []
+        for elem_id in self.element_sets[member_set]:
+            split_set.append(elem_id)
+            elem = self.elements.get(elem_id)
+            if elem is None or elem["type"] != "U1" or len(elem["nodes"]) != 3:
+                continue
+            start, middle, end = elem["nodes"]
+            elem["nodes"] = [start, middle]
+            self.elements[next_id] = {**elem, "nodes": [middle, end]}
+            split_set.append(next_id)
+            new_ids.append(next_id)
+            next_id += 1
+        if new_ids:
+            self.element_sets[member_set] = split_set
+            self.domain_model.register_analysis_elements(
+                member.id, new_ids, entity_type="member"
+            )
 
     def _resolve_overlapping_element_sets(self) -> None:
         """Ensure every mesh element belongs to exactly one member's set.
@@ -535,7 +575,7 @@ class UnifiedCalculixWriter:
         per-member displacement attribution works after analysis.
         """
         max_node_id = max(self.nodes.keys()) if self.nodes else 0
-        shell_types = {"S3", "S4", "S6", "S8"}
+        shell_types = SHELL_ELEMENT_TYPES
 
         for member in self.domain_model.members:
             short_id = self._get_short_id(member.id)
@@ -750,10 +790,11 @@ class UnifiedCalculixWriter:
                 file.write("\n")
                 written_sets.add(set_name)
 
-        # Write EALL set (all elements) and BEAM_B31 set (B31 only, for SF output)
+        # Write EALL set (all elements) and BEAM_B31 set (native beam elements
+        # of either order, for SF output; the name predates B32R)
         all_element_ids = sorted(self.elements.keys())
         b31_element_ids = sorted(
-            eid for eid, ed in self.elements.items() if ed["type"] == "B31"
+            eid for eid, ed in self.elements.items() if ed["type"] in BEAM_ELEMENT_TYPES
         )
         if all_element_ids:
             file.write("*ELSET, ELSET=EALL\n")
@@ -1387,6 +1428,118 @@ class UnifiedCalculixWriter:
         if self._rigid_links:
             logger.info(f"Added {len(self._rigid_links)} rigid link elements")
 
+    def _release_hinged_edges(self) -> None:
+        """Hinge surface members that are released along a shared edge.
+
+        Surfaces that meet along an edge are meshed with shared nodes, which
+        makes the joint rigid. A member whose connection to the edge releases
+        the rotation about it (a slab simply resting on a wall) gets its own
+        copy of the edge nodes instead. ``_write_edge_hinges`` then ties each
+        copy to the original in translation only, and a row of such ties along
+        a line is a hinge about that line.
+
+        At least one member keeps the original nodes; if every member is
+        released, the first one does.
+        """
+        from ..analysis.boundary_condition_handling import (
+            find_nodes_on_segment,
+            get_released_rotations,
+        )
+
+        self._edge_hinge_pairs: List[Tuple[int, int]] = []
+        copies: Dict[Tuple[str, int], int] = {}
+        next_node = max(self.nodes.keys(), default=0) + 1
+
+        for conn in self.domain_model.connections:
+            edge = getattr(conn, "edge", None)
+            members = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
+            if edge is None or len(edge) != 2 or len(members) < 2:
+                continue
+
+            direction = np.abs(np.array(edge[1], dtype=float) - np.array(edge[0]))
+            length = float(np.linalg.norm(direction))
+            if length < 1e-9:
+                continue
+            direction = direction / length
+            along = int(np.argmax(direction))
+            edge_dof = along + 4 if direction[along] > 1.0 - 1e-6 else None
+
+            hinged = []
+            for member_id in members:
+                if not isinstance(
+                    self.domain_model.get_member(member_id), SurfaceMember
+                ):
+                    continue
+                released = get_released_rotations(conn, member_id)
+                if released is None or (released and edge_dof is None):
+                    if released != [4, 5, 6]:
+                        self._warn_user(
+                            f"Connection {conn.id}: member {member_id} has a "
+                            "partial rotational release along an edge that is "
+                            "not parallel to a global axis; the release is "
+                            "ignored and the joint is analysed as rigid.",
+                            domain_id=conn.id,
+                        )
+                        continue
+                if released == [4, 5, 6] or (
+                    edge_dof is not None and edge_dof in released
+                ):
+                    hinged.append(member_id)
+            if len(hinged) == len(members):
+                hinged = hinged[1:]
+            if not hinged:
+                continue
+
+            edge_nodes = set(find_nodes_on_segment(edge[0], edge[1], dict(self.nodes)))
+            for member_id in hinged:
+                member_set = f"MEMBER_{self._get_short_id(member_id)}"
+                for elem_id in self.element_sets.get(member_set, []):
+                    elem = self.elements.get(elem_id)
+                    if elem is None:
+                        continue
+                    for i, node in enumerate(elem["nodes"]):
+                        if node not in edge_nodes:
+                            continue
+                        key = (member_id, node)
+                        if key not in copies:
+                            copies[key] = next_node
+                            self.nodes[next_node] = self.nodes[node]
+                            self._edge_hinge_pairs.append((next_node, node))
+                            next_node += 1
+                        elem["nodes"][i] = copies[key]
+
+        if copies:
+            self._member_node_cache = {}
+            logger.info(f"Hinged {len(copies)} edge nodes of released surface members")
+
+    def _write_edge_hinges(self, file: TextIO, constrained_node_dofs: set) -> None:
+        """Tie the edge nodes of hinged surface members to the edge in translation."""
+        pairs = getattr(self, "_edge_hinge_pairs", [])
+        if not pairs:
+            return
+        file.write("** Hinged edges between surface members\n")
+        for copy, original in pairs:
+            for dof in (1, 2, 3):
+                if (copy, dof) in constrained_node_dofs:
+                    continue
+                file.write("*EQUATION\n2\n")
+                file.write(f"{copy},{dof},1.0,{original},{dof},-1.0\n")
+                constrained_node_dofs.add((copy, dof))
+        file.write("**\n")
+
+    def _rigid_link_groups(self) -> Dict[int, int]:
+        """Map each node on a rigid link to a label shared by all nodes linked to it."""
+        groups: Dict[int, int] = {}
+        for _, node_a, node_b in getattr(self, "_rigid_links", []):
+            label = min(groups.get(node_a, node_a), groups.get(node_b, node_b))
+            for node, old_label in list(groups.items()):
+                if old_label in (groups.get(node_a), groups.get(node_b)):
+                    groups[node] = label
+            groups[node_a] = groups[node_b] = label
+        return groups
+
     def _write_rigid_links(self, file: TextIO) -> None:
         """Write the stiff B31 elements that bridge rigid end zones.
 
@@ -1447,6 +1600,8 @@ class UnifiedCalculixWriter:
         # - "DOF detected on dependent side of two different MPC's"
         # - "DOF detected on dependent side of a MPC and a SPC"
         constrained_node_dofs = set(bc_node_dofs)  # Start with boundary condition DOFs
+
+        self._write_edge_hinges(file, constrained_node_dofs)
 
         for conn in self.domain_model.connections:
             # Skip connections with dummy members (boundary conditions)
@@ -1552,9 +1707,15 @@ class UnifiedCalculixWriter:
             constrained_node_dofs.add((node, dof))
             equations_written += 1
 
-        # Translations (DOF 1-3): always couple all nodes to ref_node
+        # Translations (DOF 1-3): couple all nodes to ref_node, except a node
+        # that a rigid link already joins to it. The two ends of a link are
+        # apart, so tying their translations as well would stop the joint
+        # rotating and clamp whatever is attached to it.
+        linked = self._rigid_link_groups()
         for dof in [1, 2, 3]:
             for _, node in connection_pairs[1:]:
+                if node in linked and linked[node] == linked.get(ref_node):
+                    continue
                 _write_eq(node, dof, ref_node)
 
         # Rotations are not coupled here. CalculiX ignores *EQUATION on DOF 4-6

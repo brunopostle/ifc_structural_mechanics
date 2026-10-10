@@ -20,6 +20,92 @@ logger = logging.getLogger(__name__)
 _RIGID_STIFFNESS_THRESHOLD = 1e12
 
 
+_STIFFNESS_KEYS = ("dx", "dy", "dz", "drx", "dry", "drz")
+
+
+def _local_fixity(connection) -> Optional[List[bool]]:
+    """Return which of dx..drz a connection's support condition restrains.
+
+    The six flags are in the connection's own axes. None when the connection
+    carries no support condition.
+    """
+    has_stiffness = (
+        hasattr(connection, "has_stiffness_properties")
+        and connection.has_stiffness_properties()
+    )
+    if not has_stiffness:
+        return None
+    stiff = connection.get_stiffness_properties() or {}
+    return [
+        stiff.get(key, 0.0) >= _RIGID_STIFFNESS_THRESHOLD for key in _STIFFNESS_KEYS
+    ]
+
+
+def _global_axis_of_each_local_axis(local_axes) -> Optional[List[int]]:
+    """Return the global axis (0, 1, 2) each of three local axes lies on.
+
+    None when the local axes are not a permutation of the global ones, that
+    is, when they are skew. ``local_axes`` of None means the global axes.
+    """
+    if local_axes is None:
+        return [0, 1, 2]
+    axes = np.abs(np.array(local_axes, dtype=float))
+    nearest = [int(np.argmax(row)) for row in axes]
+    aligned = all(axes[i, j] > 1.0 - 1e-6 for i, j in enumerate(nearest))
+    if not aligned or sorted(nearest) != [0, 1, 2]:
+        return None
+    return nearest
+
+
+def support_is_skew(connection) -> bool:
+    """True when a support condition cannot be written in global axes.
+
+    That is the case when the connection's axes are rotated away from the
+    global ones and the condition treats its three translations, or its three
+    rotations, differently. A condition that fixes or frees all three alike is
+    the same in any axes.
+    """
+    fixed = _local_fixity(connection)
+    local_axes = getattr(connection, "local_axes", None)
+    if fixed is None or _global_axis_of_each_local_axis(local_axes) is not None:
+        return False
+    return len(set(fixed[:3])) > 1 or len(set(fixed[3:])) > 1
+
+
+def get_released_rotations(connection, member_id: str) -> Optional[List[int]]:
+    """Return the global rotation DOFs (4-6) a member is released in at a connection.
+
+    The release comes from the member side of the connection
+    (``IfcRelConnectsStructuralMember.AppliedCondition``) and is stored in the
+    axes of that relation; this turns it into global DOF numbers.
+
+    Returns:
+        The released DOFs, empty when the member has no release, or None when
+        a partial release is given in skew axes and has no global equivalent.
+    """
+    released = (getattr(connection, "released_dofs_by_member", None) or {}).get(
+        member_id
+    )
+    if not released:
+        return []
+    if {4, 5, 6}.issubset(released):
+        return [4, 5, 6]
+    axes = (getattr(connection, "release_axes_by_member", None) or {}).get(member_id)
+    global_axis = _global_axis_of_each_local_axis(axes)
+    if global_axis is None:
+        return None
+    return sorted(global_axis[dof - 4] + 4 for dof in released if dof in (4, 5, 6))
+
+
+def _real_members(connection) -> List[str]:
+    """Return the members a connection joins, without extractor placeholders."""
+    return [
+        m
+        for m in getattr(connection, "connected_members", [])
+        if not str(m).startswith("dummy_member_")
+    ]
+
+
 def get_constrained_dofs(connection) -> List[int]:
     """
     Return the CalculiX DOF numbers that should be constrained for a connection.
@@ -29,35 +115,40 @@ def get_constrained_dofs(connection) -> List[int]:
     stiffness >= _RIGID_STIFFNESS_THRESHOLD.  Falls back to entity_type when
     no stiffness properties are present.
 
-    DOF mapping:  1=UX(dx)  2=UY(dy)  3=UZ(dz)
-                  4=ROTX(drx)  5=ROTY(dry)  6=ROTZ(drz)
-    """
-    has_stiffness = (
-        hasattr(connection, "has_stiffness_properties")
-        and connection.has_stiffness_properties()
-    )
+    The stiffness keys are in the connection's own axes (``local_axes``); the
+    DOF numbers returned are global:
 
-    if has_stiffness:
-        stiff = connection.get_stiffness_properties() or {}
-        dof_map = [
-            (1, stiff.get("dx", 0.0)),
-            (2, stiff.get("dy", 0.0)),
-            (3, stiff.get("dz", 0.0)),
-            (4, stiff.get("drx", 0.0)),
-            (5, stiff.get("dry", 0.0)),
-            (6, stiff.get("drz", 0.0)),
-        ]
-        return [dof for dof, val in dof_map if val >= _RIGID_STIFFNESS_THRESHOLD]
+        1=UX  2=UY  3=UZ  4=ROTX  5=ROTY  6=ROTZ
+
+    A line support along global Y with ``drx`` fixed therefore restrains DOF 5,
+    rotation about the edge. Axes that are a permutation of the global ones are
+    mapped exactly. A skew support (see ``support_is_skew``) is written as if
+    its axes were global, and ``write_boundary_conditions`` warns about it.
+
+    A support that holds a single member cannot restrain a rotation that the
+    member is released in (``get_released_rotations``), so those DOFs are left
+    out: a fully fixed support under a column with both bending rotations
+    released is a pin that still resists torsion.
+    """
+    fixed = _local_fixity(connection)
+
+    if fixed is not None:
+        global_axis = _global_axis_of_each_local_axis(
+            getattr(connection, "local_axes", None)
+        ) or [0, 1, 2]
+        dofs = set()
+        for local, is_fixed in enumerate(fixed):
+            if is_fixed:
+                dofs.add(3 * (local // 3) + global_axis[local % 3] + 1)
+        members = _real_members(connection)
+        if len(members) == 1:
+            dofs -= set(get_released_rotations(connection, members[0]) or [])
+        return sorted(dofs)
 
     # No support condition. A connection that joins two or more members is a
     # joint between them, not a support: IFC expresses a support through the
     # connection's AppliedCondition, which is where the stiffness comes from.
-    real_members = [
-        m
-        for m in getattr(connection, "connected_members", [])
-        if not str(m).startswith("dummy_member_")
-    ]
-    if len(real_members) >= 2:
+    if len(_real_members(connection)) >= 2:
         return []
 
     # Fallback for single-member connections: entity_type-based defaults
@@ -116,6 +207,25 @@ def write_boundary_conditions(
         if not dofs_to_fix:
             logger.debug(f"Skipping connection {connection_id} — no DOFs to constrain")
             continue
+
+        if support_is_skew(connection):
+            message = (
+                f"Support {connection_id} restrains only some directions, in "
+                "axes that are not parallel to the global ones. Skew supports "
+                "are not modelled: it is analysed as if its axes were global."
+            )
+            logger.warning(message)
+            if not hasattr(domain_model, "analysis_warnings"):
+                domain_model.analysis_warnings = []
+            domain_model.analysis_warnings.append(
+                {
+                    "message": message,
+                    "severity": "warning",
+                    "entity_type": None,
+                    "ccx_id": None,
+                    "domain_id": connection_id,
+                }
+            )
 
         # Find the nodes this support acts on (one node, or a whole edge)
         if hasattr(connection, "position") and connection.position:
