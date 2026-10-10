@@ -182,12 +182,23 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 19.92 kN | 0.4% |
+| Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.376 mm | 0.5% |
+| Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.358 mm | 0.1% |
+| Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 98.96 N | 0.5% |
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
 The reaction under self-weight is low by the load on the restrained node itself (a sixth
 of an element's weight for a quadratic element): CalculiX does not report the share of a
 distributed load that lands there.
+
+The slab-on-beams model is written from scratch by the test, with a 0.25 m mesh: a
+5 m × 1 m slab, 0.1 m thick, and two beams lying in it, fully fixed at one end. The IFC
+connects the slab to the beams at the two beam tips only. Read literally the slab would
+hang from those two points, which is a mechanism; the pipeline ties each beam to the slab
+along its length (see `building_02` below), and the three then deflect as one cantilever
+whose stiffness is the sum of the parts. In the second case the beams are 0.25 m in from
+the edges, so their nodes fall inside shell elements.
 
 The cantilever's strong-axis orientation was confirmed independently against
 IfcOpenShell's Code_Aster reference for the same file
@@ -307,7 +318,7 @@ model.
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 3.8 mm | 85.4 kN | Unchecked. All-U1 model; 4.1 mm at 0.25 m |
-| `building_02` | — | 462 mm (Live), 42 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 120 mm and 66.9 MN under self-weight. At 4 m: 395 / 36 / 103 mm. Reactions match the applied loads; deflections unchecked |
+| `building_02` | — | 25.8 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.0 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
 | `building_01` | — | — | — | Fails: singular stiffness matrix |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
@@ -323,10 +334,24 @@ forces in their global direction. Summing load × area and load × length over t
 file gives 30.017 MN for Live and 60.286 MN for Extra_dead; the reactions in the two
 steps are 30.017 and 60.283 MN.
 
-The Live deflection is still not credible. Two small slabs (5.9 m × 2.5 m at z = 34.8 m
-and 6.6 m × 5.9 m at z = 31.6 m) move 462 and 258 mm under 1.5 kPa, and 42 and 24 mm
-under Extra_dead, a ratio of 10.9 for both although their loads differ by 1.25 and 0.44.
-They are being carried along by something else that is barely restrained.
+With the loads right, the Live case still gave 462 mm, on the 8.5 m × 21.4 m ground-floor
+slab that carries 16 kPa. The IFC file connects every slab at its four corners and
+nowhere else: 576 beams and columns lie along slab edges or in walls with no connection
+between the corners, and this slab also passes two columns on each long side that it is
+not connected to. Beam and shell meshes have separate nodes, so the slab spanned 21 m
+from corner to corner and the beams under its edges carried nothing (0.1 mm of
+deflection in the edge beam, 408 mm in the slab edge beside it).
+
+A curve member lying in a surface member is now tied to it in translation along its
+length, and the analysis says so in a warning. The Live maximum is 25.8 mm, and this
+slab moves 25.3 mm at the middle of its 8.5 m bay; a simply supported plate of that size
+would give 29 mm and a clamped one 9 mm. The reactions are unchanged, and the difference between a 4 m and a
+2 m mesh fell from 17% to 7%. The tie is a hinge line: it carries no moment about the
+beam, and beam and slab axes are at the level the IFC gives them, so there is no
+composite action.
+
+Per-member displacements in `results.json` do not agree with the result file on this
+model, so only the global maxima are quoted here.
 
 ---
 
@@ -342,6 +367,10 @@ They are being carried along by something else that is barely restrained.
   but no pipeline benchmark exists. L sections ignore the product of inertia.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
+- **Beams tied to the slab or wall they lie in**: covered by Tier 2 for a slab on two
+  beams. Beams in walls and columns in walls use the same code but have no benchmark.
+- **Per-member displacements in `results.json`**: wrong on `building_02`, and missing
+  for curve members.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but
   have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins).

@@ -29,12 +29,19 @@ the ones a user needs to know before trusting a result.
 
 - **Large models are only partly verified.** `structure_01` (slab, wall and two
   columns) is within 2% of an independent Code_Aster result. `building_02`
-  solves but has no reference, and `building_01` does not solve (singular
+  solves, its reactions match the applied loads and its deflections are
+  plausible, but it has no reference. `building_01` does not solve (singular
   stiffness matrix).
-- **Large models are slow and still mesh-sensitive.** `building_02` takes about
-  200 s and 1.8 GB at a 2 m mesh, and needs more than 5 GB at 1 m. Its
-  deflections still move about 17% between a 4 m and a 2 m mesh, and two of
-  its slabs move 462 and 258 mm under the Live case, which is not credible. `--element-order 1`
+- **A beam lying in a slab or wall is tied to it along its length**, whether or
+  not the IFC file connects them there, and the analysis warns that it did so.
+  Models that connect a slab only at its corners would otherwise leave the
+  beams under its edges carrying nothing. The tie passes forces, not moments.
+- **Per-member displacements in `results.json` are wrong on `building_02`**,
+  the largest example, and curve members have none. The global maxima are
+  right.
+- **Large models are slow.** `building_02` takes about 200 s and 1.8 GB at a
+  2 m mesh, and needs more than 5 GB at 1 m. Its deflections move about 7%
+  between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
 - **End releases on I, T, L and C members are analysed as full pins** (all
@@ -206,7 +213,7 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 3.8 mm (4.1 mm at 0.25 m) | 85.4 kN | none | Runs; unchecked |
-| `building_02` | Multi-storey building, two load cases | No | 462 mm (Live), 42 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections not |
+| `building_02` | Multi-storey building, two load cases | No | 25.8 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
 | `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not

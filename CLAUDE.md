@@ -363,10 +363,13 @@ here. This section only records the constraints that shape day-to-day work.
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
 - **`building_01` does not solve** (singular matrix; it mixes U1 and native
-  beams). `building_02` solves and its reactions match the applied loads, but two
-  slabs move 462 and 258 mm under Live at a 2 m mesh, which is not credible
-  (`aiz.40`), and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
+  beams). `building_02` solves, its reactions match the applied loads and its
+  deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
+  reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine.
+- **Per-member displacements in `results.json` are wrong on `building_02`** and
+  missing for curve members (`aiz.31`). Node membership is guessed from node
+  numbers; read the FRD when you need to know where something moves.
 - **Skew supports are not modelled** (`aiz.35`): a support that restrains only
   some directions in axes not parallel to the global ones is written in global
   axes, with a warning. The same goes for a partial release in skew axes.
@@ -462,6 +465,19 @@ rotational degrees of freedom**. This drives everything about joints:
   that edge gets copies of the edge nodes (`_release_hinged_edges()`), tied to
   the originals in DOF 1-3 (`_write_edge_hinges()`); a row of ball joints along
   a line is a hinge about it.
+- **A curve member lying in a surface member bears on it along its length**,
+  connected in the IFC or not (`_build_line_bearings()`). Example models
+  connect a slab at its corners only; without this the edge beams carry
+  nothing and the slab spans corner to corner (`building_02` gave 462 mm).
+  Each beam node the shell mesh does not share is tied in DOF 1-3 to the
+  triangle it falls in, with that element's shape functions. It is a hinge
+  line, and one warning reports how many members were tied. Not tied: nodes
+  on a rigid link, nodes in any earlier equation, and ties that would lean
+  on a restrained shell node (CalculiX reports that force at the tied node,
+  so it goes missing from the reactions). A member needs two nodes in the
+  surface, so a column passing through a slab is left alone. There is no
+  switch to turn it off yet (`aiz.42`).
+- **`*EQUATION` data lines take at most four terms.** Use `_write_equation()`.
 - **A connection is a support only if it has an `AppliedCondition`.** One that
   joins two or more members without one restrains nothing.
 - **Line supports** (`IfcStructuralCurveConnection`) keep their end points in

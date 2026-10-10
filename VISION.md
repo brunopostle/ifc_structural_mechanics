@@ -136,8 +136,9 @@ What holds it back:
   section.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
   independent Code_Aster result to 2%, point by point. `building_01` is still
-  singular, and `building_02` has no reference, is still mesh-sensitive and is
-  too large to refine on a small machine.
+  singular. `building_02` now gives plausible deflections and correct
+  reactions, but it has no reference and is too large to refine on a small
+  machine.
 - **Releases.** Skew supports are not modelled, and end releases on open
   sections are full pins.
 - **Validation coverage.** Pinned beam supports and frames have no benchmark
