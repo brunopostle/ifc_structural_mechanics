@@ -553,6 +553,7 @@ class TestSectionApproximations:
             "IfcIShapeProfileDef",
             "IfcAsymmetricIShapeProfileDef",
             "IfcCircleHollowProfileDef",
+            "IfcCircleProfileDef",
             "IfcLShapeProfileDef",
             "IfcTShapeProfileDef",
             "IfcChannelProfileDef",

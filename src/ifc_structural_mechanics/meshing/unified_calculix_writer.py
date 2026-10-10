@@ -24,7 +24,11 @@ from ..analysis.boundary_condition_handling import (
     write_boundary_conditions,
 )
 from ..config.analysis_config import AnalysisConfig
-from ..converters.section_profiles import get_native_section, uses_user_element
+from ..converters.section_profiles import (
+    equivalent_rectangle,
+    get_native_section,
+    uses_user_element,
+)
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError, MeshingError
@@ -100,6 +104,9 @@ class UnifiedCalculixWriter:
         # U1 user-element tracking: members whose elements use TYPE=U1
         # (non-standard cross-sections: I, T, L, C, arbitrary)
         self._u1_members: set = set()  # member IDs that need U1 elements
+        # Members analysed with an equivalent rectangle instead:
+        # member ID -> (a, b, factor), see equivalent_rectangle()
+        self._equivalent_sections: Dict[str, Tuple[float, float, float]] = {}
         # Element set names (MEMBER_*) that contain only U1 elements.
         # Used by boundary_condition_handling to skip *DLOAD for these sets
         # (U1 elements don't support *DLOAD; facial-load processing crashes).
@@ -444,6 +451,55 @@ class UnifiedCalculixWriter:
         stype = getattr(section, "section_type", None)
         return uses_user_element(stype)
 
+    def _use_user_elements(self) -> bool:
+        """Whether sections other than solid rectangles take U1 elements.
+
+        Only when asked for. Stock CalculiX crashes when a U1 element shares
+        a model with any other beam or shell element, and on a build where it
+        does not, a U1 beam passes no moment to a native beam at a shared
+        node. The default is the equivalent rectangle.
+        """
+        return self.analysis_config.get_open_sections() == "user_element"
+
+    def _assign_equivalent_sections(self) -> None:
+        """Give every open-section member a rectangle of the same stiffness.
+
+        The member keeps its native beam elements. Its section is written as a
+        rectangle with a material of its own (``_write_materials``), scaled so
+        that EA, both EI and the weight per length are those of the real
+        section, and orthotropic so that its shear stiffness in each
+        direction is too. The stresses CalculiX computes in that rectangle mean
+        nothing, so the model records which members they are and the results
+        export leaves their stress out.
+        """
+        for member in self.domain_model.members:
+            if not self._needs_user_element(member):
+                continue
+            if not self.element_sets.get(f"MEMBER_{self._get_short_id(member.id)}"):
+                continue
+            section = member.section
+            try:
+                self._equivalent_sections[member.id] = equivalent_rectangle(
+                    float(getattr(section, "area", None) or 0.0),
+                    float(getattr(section, "moment_of_inertia_y", None) or 0.0),
+                    float(getattr(section, "moment_of_inertia_z", None) or 0.0),
+                )
+            except ValueError as error:
+                raise MeshingError(
+                    f"Member {member.id}: section "
+                    f"{getattr(section, 'name', None)!r} cannot be analysed, {error}"
+                )
+        if not self._equivalent_sections:
+            return
+        self.domain_model.equivalent_section_members = set(self._equivalent_sections)
+        self._warn_user(
+            f"{len(self._equivalent_sections)} member(s) whose section is not a "
+            "solid rectangle are analysed as rectangles of the same axial, "
+            "bending and shear stiffness and weight. Their torsional stiffness "
+            "is approximate (too high for open sections, too low for hollow "
+            "ones), and no stress is reported for them."
+        )
+
     def _identify_and_retype_u1_members(self) -> None:
         """Mark non-standard-section beam members and retype their elements to U1.
 
@@ -461,6 +517,10 @@ class UnifiedCalculixWriter:
         file. Strip retyped elements from every non-U1 member's set once all
         retyping is complete.
         """
+        if not self._use_user_elements():
+            self._assign_equivalent_sections()
+            return
+
         for member in self.domain_model.members:
             if not self._needs_user_element(member):
                 continue
@@ -648,7 +708,7 @@ class UnifiedCalculixWriter:
                 self.domain_model,
                 self.analysis_config.get_analysis_type(),
                 self.short_id_map,
-                self.element_sets,
+                self._load_element_sets(),
                 dict(self.nodes),
                 gravity=self.analysis_config.get_gravity(),
                 gravity_direction=self.analysis_config.get_gravity_direction(),
@@ -656,6 +716,99 @@ class UnifiedCalculixWriter:
                 u1_element_sets=self._u1_element_sets,
                 elements_data=dict(self.elements),
             )
+
+    def _load_element_sets(self) -> Dict[str, List[int]]:
+        """Element sets for applying loads, by outline where members overlap.
+
+        A surface member lying inside another one (a landing drawn on top of
+        the floor slab it is part of) shares its geometry with it once the
+        surfaces are fragmented, and each element can belong to one member
+        only. One of the two ends up with fewer elements than its outline
+        covers, or none. Stiffness and weight are right like that, counted
+        once, but an area load belongs to the whole outline of its member.
+
+        Returns:
+            ``self.element_sets``, with the entry of every surface member
+            whose elements do not cover its outline replaced by the shell
+            elements lying within the outline, whoever they belong to.
+        """
+        sets = dict(self.element_sets)
+        shells = None
+        for member in self.domain_model.members:
+            if not isinstance(member, SurfaceMember):
+                continue
+            geometry = member.geometry
+            if isinstance(geometry, dict):
+                geometry = (geometry.get("boundaries") or [None])[0]
+            try:
+                outline = np.array(geometry, dtype=float).reshape(-1, 3)
+            except (TypeError, ValueError):
+                continue
+            if len(outline) < 3:
+                continue
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            own = [e for e in sets.get(member_set, []) if e in self.elements]
+            outline_area = self._polygon_area(outline)
+            meshed_area = sum(
+                self._polygon_area(
+                    np.array([self.nodes[n] for n in self.elements[e]["nodes"][:3]])
+                )
+                for e in own
+            )
+            if abs(meshed_area - outline_area) <= 1e-6 * outline_area:
+                continue
+            if shells is None:
+                shells = [
+                    (
+                        elem_id,
+                        np.mean([self.nodes[n] for n in elem["nodes"][:3]], axis=0),
+                    )
+                    for elem_id, elem in self.elements.items()
+                    if elem.get("type") in SHELL_ELEMENT_TYPES
+                ]
+            inside = [
+                elem_id
+                for elem_id, centroid in shells
+                if self._point_in_outline(centroid, outline)
+            ]
+            if inside:
+                sets[member_set] = inside
+                logger.info(
+                    f"Member {member.id}: {len(own)} elements of its own cover "
+                    f"{meshed_area:.3g} of {outline_area:.3g}; its loads go to "
+                    f"the {len(inside)} shell elements within its outline"
+                )
+        return sets
+
+    @staticmethod
+    def _polygon_area(corners: np.ndarray) -> float:
+        """Area of a planar polygon given by its corners in order."""
+        normal = np.zeros(3)
+        for i in range(len(corners)):
+            normal += np.cross(corners[i], corners[(i + 1) % len(corners)])
+        return float(np.linalg.norm(normal)) / 2.0
+
+    def _point_in_outline(self, point: np.ndarray, outline: np.ndarray) -> bool:
+        """Whether ``point`` lies in the plane and inside a planar polygon."""
+        normal = np.zeros(3)
+        for i in range(len(outline)):
+            normal += np.cross(outline[i], outline[(i + 1) % len(outline)])
+        length = float(np.linalg.norm(normal))
+        if length < 1e-12:
+            return False
+        normal /= length
+        if abs(float(np.dot(point - outline[0], normal))) > self._COINCIDENT_TOL:
+            return False
+        # Ray casting in the two axes that best span the plane
+        keep = [i for i in range(3) if i != int(np.argmax(np.abs(normal)))]
+        px, py = point[keep]
+        corners = outline[:, keep]
+        inside = False
+        for i in range(len(corners)):
+            (x0, y0), (x1, y1) = corners[i], corners[(i + 1) % len(corners)]
+            if (y0 > py) != (y1 > py) and px < x0 + (py - y0) * (x1 - x0) / (y1 - y0):
+                inside = not inside
+        return inside
 
     def _write_header(self, file: TextIO) -> None:
         """Write header section."""
@@ -830,6 +983,54 @@ class UnifiedCalculixWriter:
                 file.write(f"{material.density:.6e}\n")
             file.write("\n")
 
+        # One material per equivalent rectangle, scaled to the real section
+        for member in self.domain_model.members:
+            if member.id not in self._equivalent_sections or not member.material:
+                continue
+            depth, width, factor = self._equivalent_sections[member.id]
+            material = member.material
+            modulus = material.elastic_modulus * factor
+            poisson = material.poisson_ratio
+            # Shear moduli of the planes holding the member axis (1) and the
+            # section's depth (2) or width (3), set so that the rectangle has
+            # the section's shear stiffness in each direction. They also bring
+            # its torsional stiffness down, towards that of the open section.
+            # The rectangle's shear area is its whole area, not 5/6 of it:
+            # CalculiX expands a beam into one quadratic solid across the
+            # section, which cannot hold the parabolic shear distribution the
+            # 5/6 comes from (measured: 5/6 left the shear deflection of the
+            # I-section benchmarks 12 to 18 % short).
+            shear = material.elastic_modulus / (2.0 * (1.0 + poisson))
+            rectangle_shear_area = depth * width
+            isotropic = modulus / (2.0 * (1.0 + poisson))
+            moduli = [
+                (
+                    shear * float(area) / rectangle_shear_area
+                    if area and float(area) > 0
+                    else isotropic
+                )
+                for area in (
+                    getattr(member.section, "shear_area_y", None),
+                    getattr(member.section, "shear_area_z", None),
+                )
+            ]
+            file.write(f"*MATERIAL, NAME={self._equivalent_material_name(member)}\n")
+            file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
+            file.write(
+                f"{modulus:.6e}, {modulus:.6e}, {modulus:.6e},"
+                f" {poisson:.6e}, {poisson:.6e}, {poisson:.6e},"
+                f" {moduli[0]:.6e}, {moduli[1]:.6e},\n"
+            )
+            file.write(f"{isotropic:.6e}\n")
+            if getattr(material, "density", None):
+                file.write("*DENSITY\n")
+                file.write(f"{material.density * factor:.6e}\n")
+            file.write("\n")
+
+    def _equivalent_material_name(self, member) -> str:
+        """Name of the scaled material of a member's equivalent rectangle."""
+        return f"MAT_EQ_{self._get_short_id(member.id)}"
+
     def _write_list_in_chunks(
         self, file: TextIO, items: List[int], chunk_size: int = 16
     ) -> None:
@@ -927,10 +1128,9 @@ class UnifiedCalculixWriter:
         """Write a *BEAM SECTION definition for a B31 element set.
 
         Looks up the section type in the section_profiles registry.  Native
-        B31 types (RECT, CIRC, PIPE, BOX) are written with their exact CCX
-        keyword and dimension data line.  Any other type that somehow reaches
-        this path (which should not happen — they are retyped to U1 earlier)
-        falls back to an equivalent RECT so CalculiX doesn't error out.
+        types (RECT, CIRC, PIPE, BOX) are written with their exact CCX keyword
+        and dimension data line. Any other type reaching this path is one
+        that ``_assign_equivalent_sections`` gave an equivalent rectangle.
 
         ``beam_normal`` is orthogonalised against the beam axis before being
         written (safety net — mirrors the U1/GENERAL path) so a normal that
@@ -955,26 +1155,25 @@ class UnifiedCalculixWriter:
                 f" {beam_normal[2]:.6e}\n\n"
             )
         else:
-            # Should not be reached: non-native sections are retyped to U1 before
-            # this method is called.  Fall back to equivalent RECT as a safety net.
-            area = getattr(member.section, "area", None) or 0.01
-            i_yy = getattr(member.section, "moment_of_inertia_y", None) or area * 0.01
-            if area > 0 and i_yy > 0:
-                height = (12.0 * i_yy / area) ** 0.5
-                width = area / height
-            else:
-                height = area**0.5 if area > 0 else 0.1
-                width = height
-            logger.warning(
-                f"Member {member.id}: section_type={stype!r} reached B31 writer "
-                f"unexpectedly — using equivalent RECT {width:.4f}×{height:.4f}"
-            )
+            # A section CalculiX has no shape for: the rectangle of the same
+            # stiffness, depth first as for RECT, with its own scaled material.
+            if member.id not in self._equivalent_sections:
+                raise MeshingError(
+                    f"Member {member.id}: section_type={stype!r} has neither a "
+                    "CalculiX shape nor an equivalent rectangle"
+                )
+            depth, width, _ = self._equivalent_sections[member.id]
+            # The scaled material is orthotropic: its 1 axis runs along the
+            # member and its 2 axis along the section's depth.
+            orientation = f"OR_{elset_name}"
+            file.write(f"*ORIENTATION, NAME={orientation}, SYSTEM=RECTANGULAR\n")
+            file.write(", ".join(f"{v:.6e}" for v in (*beam_axis, *beam_normal)) + "\n")
             file.write(
-                f"*BEAM SECTION, ELSET={elset_name}, MATERIAL=MAT_{material_id},"
-                f" SECTION=RECT\n"
+                f"*BEAM SECTION, ELSET={elset_name},"
+                f" MATERIAL={self._equivalent_material_name(member)},"
+                f" SECTION=RECT, ORIENTATION={orientation}\n"
             )
-            # Depth first: it lies along the section 1 direction.
-            file.write(f"{height:.6e}, {width:.6e}\n")
+            file.write(f"{depth:.6e}, {width:.6e}\n")
             file.write(
                 f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e},"
                 f" {beam_normal[2]:.6e}\n\n"

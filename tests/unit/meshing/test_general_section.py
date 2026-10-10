@@ -85,52 +85,6 @@ def _i_member():
 
 
 # ---------------------------------------------------------------------------
-# SECTION=GENERAL output
-# ---------------------------------------------------------------------------
-
-
-class TestNonStandardSectionFallback:
-    """_write_beam_section_for_set() falls back to RECT for non-standard profiles.
-
-    Non-standard sections are now handled by U1 elements via
-    _write_beam_section_general().  If an I/T/L/C section somehow reaches
-    _write_beam_section_for_set() (B31 path), it must not silently produce
-    wrong output — it uses an equivalent RECT so the analysis at least runs.
-    """
-
-    def test_i_section_falls_back_to_rect(self):
-        """Non-standard section in B31 path uses SECTION=RECT fallback."""
-        member = _i_member()
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        assert "SECTION=RECT" in buf.getvalue()
-
-    def test_i_section_fallback_rect_preserves_area(self):
-        """Equivalent RECT area ≈ original section area."""
-        sec = _i_section(b=0.2, h=0.4, tw=0.01, tf=0.015)
-        member = CurveMember(
-            id="m1",
-            geometry=[[0, 0, 0], [5, 0, 0]],
-            material=_make_mat(),
-            section=sec,
-        )
-        writer = _make_writer(member)
-        buf = io.StringIO()
-        writer._write_beam_section_for_set(
-            buf, member, "MEMBER_m1", "mat1", BEAM_NORMAL
-        )
-        # Data line after *BEAM SECTION … SECTION=RECT is "width, height"
-        lines = [ln.strip() for ln in buf.getvalue().splitlines() if ln.strip()]
-        idx = next(i for i, ln in enumerate(lines) if "SECTION=RECT" in ln)
-        w, h = (float(v) for v in lines[idx + 1].split(","))
-        rect_area = w * h
-        assert abs(rect_area - sec.area) / sec.area < 1e-4
-
-
-# ---------------------------------------------------------------------------
 # _find_beam_elset
 # ---------------------------------------------------------------------------
 

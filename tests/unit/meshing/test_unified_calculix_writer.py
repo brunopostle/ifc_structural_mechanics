@@ -403,6 +403,8 @@ class TestUnifiedCalculixWriter:
         # Process mesh and map elements
         self.writer._process_mesh(test_mesh)
         self.writer._map_elements_to_members()
+        # The round column gets its equivalent rectangle here
+        self.writer._identify_and_retype_u1_members()
 
         # Mock file handle
         written_content = []

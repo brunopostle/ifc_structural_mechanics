@@ -42,6 +42,7 @@ def analyze_ifc(
     calculix_timeout: Optional[int] = 600,
     element_order: int = 2,
     strict_connections: bool = False,
+    open_sections: str = "equivalent",
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -67,6 +68,11 @@ def analyze_ifc(
         strict_connections (bool, optional): Analyse only the connections in
             the IFC file. By default a beam or column lying in a slab or wall
             is also tied to it along its length. Defaults to False.
+        open_sections (str, optional): How sections other than solid
+            rectangles are analysed. "equivalent" (default): a native beam
+            element with a rectangle of the same axial, bending and shear
+            stiffness. "user_element": CalculiX's U1 element, which stock
+            CalculiX cannot mix with other beam or shell elements.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -134,7 +140,10 @@ def analyze_ifc(
 
         # Step 2: Create configurations
         analysis_config = create_analysis_config(
-            analysis_type, gravity=gravity, strict_connections=strict_connections
+            analysis_type,
+            gravity=gravity,
+            strict_connections=strict_connections,
+            open_sections=open_sections,
         )
         meshing_config = create_meshing_config(mesh_size, element_order)
         system_config = SystemConfig()
@@ -369,7 +378,10 @@ def extract_model(ifc_path: str) -> StructuralModel:
 
 
 def create_analysis_config(
-    analysis_type: str, gravity: bool = False, strict_connections: bool = False
+    analysis_type: str,
+    gravity: bool = False,
+    strict_connections: bool = False,
+    open_sections: str = "equivalent",
 ) -> AnalysisConfig:
     """
     Create an analysis configuration for the specified analysis type.
@@ -378,6 +390,7 @@ def create_analysis_config(
         analysis_type (str): Type of analysis to perform.
         gravity (bool): Whether to include self-weight gravity loads.
         strict_connections (bool): Analyse only the connections in the file.
+        open_sections (str): "equivalent" or "user_element".
 
     Returns:
         AnalysisConfig: The analysis configuration.
@@ -396,6 +409,7 @@ def create_analysis_config(
     config.set_analysis_type(analysis_type)
     config.set_gravity(gravity)
     config.set_strict_connections(strict_connections)
+    config.set_open_sections(open_sections)
     config.validate()
     return config
 
@@ -574,6 +588,7 @@ def run_enhanced_analysis(
     calculix_timeout: Optional[int] = 600,
     element_order: int = 2,
     strict_connections: bool = False,
+    open_sections: str = "equivalent",
 ) -> Dict[str, Any]:
     """
     Enhanced analysis function - now just calls the unified analyze_ifc.
@@ -590,6 +605,7 @@ def run_enhanced_analysis(
         gravity (bool): Whether to include self-weight gravity loads.
         element_order (int): 2 for quadratic elements, 1 for linear ones.
         strict_connections (bool): Analyse only the connections in the file.
+        open_sections (str): "equivalent" or "user_element".
 
     Returns:
         Dict[str, Any]: Dictionary containing the analysis results and output file paths.
@@ -606,4 +622,5 @@ def run_enhanced_analysis(
         calculix_timeout=calculix_timeout,
         element_order=element_order,
         strict_connections=strict_connections,
+        open_sections=open_sections,
     )

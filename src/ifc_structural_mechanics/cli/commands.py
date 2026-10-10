@@ -115,6 +115,16 @@ def cli():
     help="Analyse only the connections in the IFC file. By default a beam or "
     "column lying in a slab or wall is also tied to it along its length",
 )
+@click.option(
+    "--open-sections",
+    type=click.Choice(["equivalent", "user-element"]),
+    default="equivalent",
+    show_default=True,
+    help="How sections other than solid rectangles are analysed: as a "
+    "rectangle of the same axial, bending and shear stiffness, or with "
+    "CalculiX U1 elements, which stock CalculiX cannot mix with other beams "
+    "or shells",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -128,6 +138,7 @@ def analyze(
     timeout: int = 600,
     element_order: str = "2",
     strict_connections: bool = False,
+    open_sections: str = "equivalent",
 ):
     """
     Run structural analysis on an IFC file with enhanced boundary condition handling.
@@ -147,6 +158,7 @@ def analyze(
         timeout,
         int(element_order),
         strict_connections,
+        open_sections.replace("-", "_"),
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -165,6 +177,7 @@ def run_enhanced_analyze(
     timeout: int = 600,
     element_order: int = 2,
     strict_connections: bool = False,
+    open_sections: str = "equivalent",
 ) -> int:
     """
     Run the analysis with enhanced boundary condition handling and return the appropriate exit code.
@@ -182,6 +195,7 @@ def run_enhanced_analyze(
         timeout (int): CalculiX solver timeout in seconds (0 = no limit).
         element_order (int): 2 for quadratic elements, 1 for linear ones.
         strict_connections (bool): Analyse only the connections in the file.
+        open_sections (str): "equivalent" or "user_element".
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -237,6 +251,7 @@ def run_enhanced_analyze(
                 calculix_timeout=timeout or None,
                 element_order=element_order,
                 strict_connections=strict_connections,
+                open_sections=open_sections,
             )
         else:
             # Use the original analysis function
@@ -249,6 +264,7 @@ def run_enhanced_analyze(
                 gravity=gravity,
                 element_order=element_order,
                 strict_connections=strict_connections,
+                open_sections=open_sections,
             )
 
         # Format and display results

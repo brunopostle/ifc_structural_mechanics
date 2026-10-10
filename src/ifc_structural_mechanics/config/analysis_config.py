@@ -46,6 +46,7 @@ class AnalysisConfig(BaseConfig):
             "gravity": False,
             "gravity_direction": [0.0, 0.0, -1.0],
             "strict_connections": False,
+            "open_sections": "equivalent",
         }
 
     def validate(self) -> None:
@@ -209,6 +210,34 @@ class AnalysisConfig(BaseConfig):
         along its length even when the file does not connect them there.
         """
         self._config["strict_connections"] = bool(strict)
+
+    OPEN_SECTION_MODELS = ("equivalent", "user_element")
+
+    def get_open_sections(self) -> str:
+        """Get how sections other than solid rectangles are analysed."""
+        return self._config.get("open_sections", "equivalent")
+
+    def set_open_sections(self, model: str) -> None:
+        """Choose how sections other than solid rectangles are analysed.
+
+        Args:
+            model (str): ``"equivalent"`` (the default) for a native beam
+                element with a rectangle of the same axial, bending and shear
+                stiffness; ``"user_element"`` for CalculiX's U1 element with
+                the section's own properties. U1 has the section's own
+                torsional stiffness, but stock CalculiX cannot mix it with any
+                other beam or shell element, its partial end releases become
+                full pins, and its reactions come out with the wrong sign.
+
+        Raises:
+            ValueError: If ``model`` is neither.
+        """
+        if model not in self.OPEN_SECTION_MODELS:
+            raise ValueError(
+                f"Invalid open section model: {model}. "
+                f"Supported: {list(self.OPEN_SECTION_MODELS)}"
+            )
+        self._config["open_sections"] = model
 
     def set_gravity(self, gravity: bool) -> None:
         """Enable or disable gravity loading."""

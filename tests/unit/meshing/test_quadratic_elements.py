@@ -105,6 +105,7 @@ class TestQuadraticUserElements:
     def _retyped_writer(self):
         member = _beam(section_type="i")
         writer = _writer(member)
+        writer.analysis_config.set_open_sections("user_element")
         writer._process_mesh(_two_quadratic_lines())
         writer.element_sets = {"MEMBER_M1": [1, 2]}
         writer.short_id_map = {"beam": "M1"}
@@ -131,6 +132,7 @@ class TestQuadraticUserElements:
     def test_linear_elements_are_left_alone(self):
         member = _beam(section_type="i")
         writer = _writer(member)
+        writer.analysis_config.set_open_sections("user_element")
         points = np.array([[0.0, 0, 0], [1.0, 0, 0], [2.0, 0, 0]])
         writer._process_mesh(
             meshio.Mesh(points, [("line", np.array([[0, 1], [1, 2]]))])

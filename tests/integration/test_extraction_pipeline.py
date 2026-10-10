@@ -147,7 +147,9 @@ def create_mock_ifc_file():
     mock_profile.ProfileName = "IPE200"
     mock_profile.ProfileType = "AREA"
     mock_profile.id.return_value = "4"
-    mock_profile.is_a.return_value = "IfcRectangleProfileDef"
+    mock_profile.is_a.side_effect = lambda *args: (
+        args[0] == "IfcRectangleProfileDef" if args else "IfcRectangleProfileDef"
+    )
     mock_profile.XDim = 0.2
     mock_profile.YDim = 0.3
 

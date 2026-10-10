@@ -535,9 +535,12 @@ class Section:
         # Warping constant (zero for circular sections)
         self.warping_constant = 0
 
-        # Shear areas - approximate
-        self.shear_area_y = 0.9 * self.area  # Approximation for hollow circular
-        self.shear_area_z = 0.9 * self.area  # Approximation for hollow circular
+        # Shear areas: Cowper's coefficient for a hollow circle at nu = 0.3,
+        # which runs from 0.89 for a solid bar to 0.53 for a thin tube
+        m2 = (ri / ro) ** 2
+        coefficient = 7.8 * (1 + m2) ** 2 / (8.8 * (1 + m2) ** 2 + 23.6 * m2)
+        self.shear_area_y = coefficient * self.area
+        self.shear_area_z = coefficient * self.area
 
     def get_radius_of_gyration(self) -> Tuple[float, float]:
         """Calculate radii of gyration about principal axes.

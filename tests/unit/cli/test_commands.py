@@ -109,6 +109,7 @@ class TestEnhancedCLICommands:
                 calculix_timeout=600,
                 element_order=2,
                 strict_connections=False,
+                open_sections="equivalent",
             )
 
     def test_analyze_custom_params(
@@ -143,6 +144,7 @@ class TestEnhancedCLICommands:
                 calculix_timeout=600,
                 element_order=2,
                 strict_connections=False,
+                open_sections="equivalent",
             )
 
     def test_analyze_strict_connections(
@@ -160,6 +162,22 @@ class TestEnhancedCLICommands:
             )
             assert exit_code == 0
             assert mock_analyze_ifc.call_args.kwargs["strict_connections"] is True
+
+    def test_analyze_open_sections(
+        self, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        """The choice of model for open sections reaches the analysis."""
+        with patch(
+            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            mock_analyze_ifc,
+        ):
+            exit_code = run_enhanced_analyze(
+                ifc_file=temp_ifc_file,
+                output_dir=temp_output_dir,
+                open_sections="user_element",
+            )
+            assert exit_code == 0
+            assert mock_analyze_ifc.call_args.kwargs["open_sections"] == "user_element"
 
     def test_analyze_with_warnings(
         self, mock_analyze_ifc, temp_ifc_file, temp_output_dir

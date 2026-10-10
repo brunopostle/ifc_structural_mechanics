@@ -131,6 +131,16 @@ def test_create_analysis_config_strict_connections():
     assert config.get_strict_connections() is True
 
 
+def test_create_analysis_config_open_sections():
+    """Equivalent rectangles unless user elements are asked for."""
+    config = create_analysis_config("linear_static")
+    assert config.get_open_sections() == "equivalent"
+    config = create_analysis_config("linear_static", open_sections="user_element")
+    assert config.get_open_sections() == "user_element"
+    with pytest.raises(ValueError):
+        create_analysis_config("linear_static", open_sections="solid")
+
+
 # Test the create_meshing_config function
 def test_create_meshing_config():
     """Test meshing configuration creation."""
@@ -553,6 +563,7 @@ def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
         calculix_timeout=600,
         element_order=2,
         strict_connections=False,
+        open_sections="equivalent",
     )
 
 

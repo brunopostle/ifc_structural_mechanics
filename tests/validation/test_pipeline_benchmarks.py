@@ -230,12 +230,18 @@ class TestRectangularCantileverSelfWeight:
 
 
 class TestISectionCantileverSelfWeight:
-    """cantilever_01 with an I profile, analysed with U1 general sections."""
+    """cantilever_01 with an I profile, analysed with U1 general sections.
+
+    U1 is no longer the default; it is kept for comparison and for models
+    where torsion of an open section matters.
+    """
+
+    U1 = {"gravity": True, "open_sections": "user_element"}
 
     def test_strong_axis(self, tmp_path):
         """Web vertical: bending about the strong axis, shear carried by the web."""
         path = _cantilever_variant(tmp_path, i_profile=True)
-        data = _run(path, tmp_path, gravity=True)
+        data = _run(path, tmp_path, **self.U1)
         expected = _cantilever_self_weight(I_AREA, I_STRONG, I_H * I_TW)
         assert _max_vertical_deflection(data) == pytest.approx(
             expected, rel=DEFLECTION_TOLERANCE
@@ -248,10 +254,118 @@ class TestISectionCantileverSelfWeight:
         term uses the same web shear area the writer supplies.
         """
         path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0), i_profile=True)
-        data = _run(path, tmp_path, gravity=True)
+        data = _run(path, tmp_path, **self.U1)
         expected = _cantilever_self_weight(I_AREA, I_WEAK, I_H * I_TW)
         assert _max_vertical_deflection(data) == pytest.approx(
             expected, rel=DEFLECTION_TOLERANCE
+        )
+
+
+class TestISectionAsEquivalentRectangle:
+    """The same I-section cantilever on a native beam element.
+
+    This is what every section other than a solid rectangle gets by default:
+    a rectangle with the section's EA, EI about both axes, shear stiffness
+    and weight, on an element stock CalculiX can mix with any other.
+    """
+
+    def test_strong_axis(self, tmp_path):
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        data = _run(path, tmp_path, gravity=True)
+        expected = _cantilever_self_weight(I_AREA, I_STRONG, I_H * I_TW)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_weak_axis(self, tmp_path):
+        path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0), i_profile=True)
+        data = _run(path, tmp_path, gravity=True)
+        expected = _cantilever_self_weight(I_AREA, I_WEAK, 2 * I_B * I_TF)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_reaction_is_the_weight_of_the_real_section(self, tmp_path):
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        data = _run(path, tmp_path, gravity=True)
+        weight = CANT_RHO * G_ACCEL * I_AREA * CANT_L
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            weight, rel=0.02
+        )
+
+    def test_no_stress_is_reported(self, tmp_path):
+        """The stresses in the result file are the rectangle's, not the section's."""
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        data = _run(path, tmp_path, gravity=True)
+        (member,) = data["members"]
+        assert member["section_model"] == "equivalent_rectangle"
+        assert "max_von_mises_Pa" not in member["envelope"]
+        assert member["envelope"]["max_displacement_m"] > 0
+
+
+class TestRoundAndHollowSections:
+    """cantilever_01 with a bar, a tube and a box, as equivalent rectangles.
+
+    CalculiX has CIRC, PIPE and BOX sections of its own. They are not used:
+    a PIPE cantilever came out 83 % too flexible and as heavy as a solid bar,
+    and B31 rejects PIPE altogether. Before that could be seen, hollow
+    profiles were being read as solid ones and a solid circle as a default
+    0.1 x 0.2 rectangle. The reaction shows which section was analysed.
+    """
+
+    RADIUS, WALL = 0.15, 0.01
+    WIDTH, DEPTH = 0.2, 0.4
+
+    def _check(self, tmp_path, ifc_class, attributes, area, inertia, shear_area):
+        model = ifcopenshell.open(CANTILEVER)
+        model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+            ifc_class, ProfileType="AREA", ProfileName="benchmark", **attributes
+        )
+        path = str(tmp_path / "variant.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            _cantilever_self_weight(area, inertia, shear_area),
+            rel=DEFLECTION_TOLERANCE,
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            CANT_RHO * G_ACCEL * area * CANT_L, rel=0.02
+        )
+
+    def test_solid_circle(self, tmp_path):
+        area = math.pi * self.RADIUS**2
+        self._check(
+            tmp_path,
+            "IfcCircleProfileDef",
+            {"Radius": self.RADIUS},
+            area,
+            math.pi / 4 * self.RADIUS**4,
+            0.9 * area,
+        )
+
+    def test_tube(self, tmp_path):
+        inner = self.RADIUS - self.WALL
+        area = math.pi * (self.RADIUS**2 - inner**2)
+        ratio = (inner / self.RADIUS) ** 2
+        cowper = 7.8 * (1 + ratio) ** 2 / (8.8 * (1 + ratio) ** 2 + 23.6 * ratio)
+        self._check(
+            tmp_path,
+            "IfcCircleHollowProfileDef",
+            {"Radius": self.RADIUS, "WallThickness": self.WALL},
+            area,
+            math.pi / 4 * (self.RADIUS**4 - inner**4),
+            cowper * area,
+        )
+
+    def test_box(self, tmp_path):
+        inner_w, inner_d = self.WIDTH - 2 * self.WALL, self.DEPTH - 2 * self.WALL
+        self._check(
+            tmp_path,
+            "IfcRectangleHollowProfileDef",
+            {"XDim": self.WIDTH, "YDim": self.DEPTH, "WallThickness": self.WALL},
+            self.WIDTH * self.DEPTH - inner_w * inner_d,
+            (self.WIDTH * self.DEPTH**3 - inner_w * inner_d**3) / 12,
+            2 * self.DEPTH * self.WALL,
         )
 
 
@@ -282,13 +396,34 @@ class TestFixedFixedBeamPointLoad:
         )
 
 
-def _beam_with_line_load(tmp_path, force_per_metre) -> str:
+def _give_beam_01_an_i_profile(model) -> None:
+    """Swap beam_01's 300 mm square for the 200 x 400 I section, in millimetres."""
+    old = model.by_type("IfcRectangleProfileDef")[0]
+    new = model.create_entity(
+        "IfcIShapeProfileDef",
+        ProfileType="AREA",
+        ProfileName="benchmark I",
+        OverallWidth=I_B * 1000,
+        OverallDepth=I_H * 1000,
+        WebThickness=I_TW * 1000,
+        FlangeThickness=I_TF * 1000,
+    )
+    for user in model.get_inverse(old):
+        for name, value in user.get_info(recursive=False).items():
+            if value == old:
+                setattr(user, name, new)
+
+
+def _beam_with_line_load(tmp_path, force_per_metre, i_profile=False) -> str:
     """Write beam_01.ifc with its point load replaced by a uniform line load.
 
     ``force_per_metre`` is the load in global axes, in N/m. beam_01 is in
-    millimetres and newtons, so it is written in N/mm.
+    millimetres and newtons, so it is written in N/mm. With ``i_profile`` the
+    section becomes the 200 x 400 I.
     """
     model = ifcopenshell.open(BEAM)
+    if i_profile:
+        _give_beam_01_an_i_profile(model)
     member = model.by_type("IfcStructuralCurveMember")[0]
     point_action = model.by_type("IfcStructuralPointAction")[0]
     action = model.create_entity(
@@ -367,14 +502,59 @@ class TestFixedFixedBeamLineLoad:
         assert reaction["fy_N"] == pytest.approx(-self.LOAD * self.B.LENGTH, rel=0.01)
 
 
-def _slab_on_two_cantilevers(tmp_path, inset: float) -> str:
+class TestFixedFixedISectionBeam:
+    """beam_01 with the I section as an equivalent rectangle, under applied loads."""
+
+    B = TestFixedFixedBeamPointLoad
+    LINE_LOAD = 5000.0  # N/m
+
+    def _stiffness(self):
+        shear_modulus = self.B.E / (2 * (1 + self.B.NU))
+        return self.B.E * I_STRONG, shear_modulus * I_H * I_TW
+
+    def test_point_load(self, tmp_path):
+        model = ifcopenshell.open(BEAM)
+        _give_beam_01_an_i_profile(model)
+        path = str(tmp_path / "i_beam.ifc")
+        model.write(path)
+        data = _run(path, tmp_path)
+        bending, shear = self._stiffness()
+        expected = self.B.LOAD * self.B.LENGTH**3 / (
+            192 * bending
+        ) + self.B.LOAD * self.B.LENGTH / (4 * shear)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            self.B.LOAD, rel=1e-3
+        )
+
+    def test_line_load(self, tmp_path):
+        path = _beam_with_line_load(
+            tmp_path, (0.0, 0.0, -self.LINE_LOAD), i_profile=True
+        )
+        data = _run(path, tmp_path)
+        bending, shear = self._stiffness()
+        expected = self.LINE_LOAD * self.B.LENGTH**4 / (
+            384 * bending
+        ) + self.LINE_LOAD * self.B.LENGTH**2 / (8 * shear)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            self.LINE_LOAD * self.B.LENGTH, rel=0.01
+        )
+
+
+def _slab_on_two_cantilevers(tmp_path, inset: float, i_profile: bool = False) -> str:
     """Write a slab that only two cantilever beams lying in it hold up.
 
     The slab is 5 m x 1 m and 0.1 m thick, at z = 0. The beams (0.2 x 0.4,
     depth vertical) run along its length at ``inset`` from each long edge,
     fully fixed at x = 0. The only connections between slab and beams are the
     two points at the beam tips, as in models that connect a slab at its
-    corners and nowhere else.
+    corners and nowhere else. With ``i_profile`` the beams are the 200 x 400
+    I section instead.
     """
     model = ifcopenshell.file(schema="IFC4")
     create = model.create_entity
@@ -461,9 +641,20 @@ def _slab_on_two_cantilevers(tmp_path, inset: float) -> str:
         ],
         material,
     )
-    profile = create(
-        "IfcRectangleProfileDef", "AREA", "Beam", None, SOB_BEAM_B, SOB_BEAM_H
-    )
+    if i_profile:
+        profile = create(
+            "IfcIShapeProfileDef",
+            ProfileType="AREA",
+            ProfileName="Beam",
+            OverallWidth=I_B,
+            OverallDepth=I_H,
+            WebThickness=I_TW,
+            FlangeThickness=I_TF,
+        )
+    else:
+        profile = create(
+            "IfcRectangleProfileDef", "AREA", "Beam", None, SOB_BEAM_B, SOB_BEAM_H
+        )
     profile_set = create(
         "IfcMaterialProfileSet",
         None,
@@ -660,6 +851,40 @@ class TestSlabBearingOnBeams:
                 "max_displacement_m"
             ] == pytest.approx(self._expected(), rel=DEFLECTION_TOLERANCE)
             assert beam["by_load_case"]["Gravity"]["max_von_mises_Pa"] > 0
+
+    def test_i_section_beams_mixed_with_a_slab(self, tmp_path):
+        """A model stock CalculiX could not run with U1 elements at all.
+
+        The I sections are equivalent rectangles. Each beam takes its own weight and half
+        the slab's, with its strong-axis stiffness and its web in shear.
+        """
+        result = analyze_ifc(
+            ifc_path=_slab_on_two_cantilevers(tmp_path, inset=0.25, i_profile=True),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(str(tmp_path / "out"), "analysis.inp")) as fh:
+            assert "TYPE=U1" not in fh.read()
+        with open(os.path.join(str(tmp_path / "out"), "results.json")) as fh:
+            data = json.load(fh)
+        inertia = I_STRONG + SOB_B * SOB_T**3 / 12 / 2
+        load = CANT_RHO * G_ACCEL * (I_AREA + SOB_T * SOB_B / 2)
+        expected = load * SOB_L**4 / (8 * CANT_E * inertia) + load * SOB_L**2 / (
+            2 * CANT_G * I_H * I_TW
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        weight = CANT_RHO * G_ACCEL * SOB_L * (2 * I_AREA + SOB_T * SOB_B)
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            weight, rel=0.01
+        )
+        messages = [w["message"] for w in result["warnings"]]
+        assert any(
+            "2 member(s) whose section is not a solid rectangle" in m for m in messages
+        )
 
     def test_strict_connections_tie_nothing(self, tmp_path):
         """Only the two tip connections of the file join slab and beams."""

@@ -18,6 +18,7 @@ Schema (summary level)
       "id": "...",
       "type": "curve" | "surface",
       "status": "ok" | "warning" | "fail",
+      "section_model": "equivalent_rectangle",
       "envelope": {
         "max_displacement_m": 0.001,
         "max_von_mises_Pa": 1.5e6
@@ -38,6 +39,11 @@ Schema (summary level)
     "total": {...}
   }
 }
+
+``section_model`` is only present on members whose section CalculiX has no
+shape for (I, T, L, C) when they were analysed as a rectangle of the same
+stiffness. Those members have no ``max_von_mises_Pa``: the stresses in the
+result file are the rectangle's.
 
 ``global_reactions.total`` is only present when there is a single load case;
 each case is analysed on its own, so several cases have no common total.
@@ -158,8 +164,13 @@ class ResultsExporter:
         elem_ids: set = set(getattr(member, "analysis_element_ids", []))
         node_ids = self._member_result_nodes(member_id, elem_ids)
 
+        # A member analysed as an equivalent rectangle has that rectangle's
+        # stresses in the result file, not its own.
+        equivalent = member_id in (
+            getattr(self.model, "equivalent_section_members", None) or ()
+        )
         disp_by_lc = self._member_displacements(node_ids)
-        stress_by_lc = self._member_stresses(node_ids)
+        stress_by_lc = {} if equivalent else self._member_stresses(node_ids)
         sf_by_lc = self._member_section_forces(elem_ids)
         util_by_lc = self._member_utilisation(sf_by_lc, member)
 
@@ -194,6 +205,8 @@ class ResultsExporter:
             "type": getattr(member, "entity_type", "unknown"),
             "status": status,
         }
+        if equivalent:
+            result["section_model"] = "equivalent_rectangle"
         if envelope:
             result["envelope"] = envelope
         if by_load_case:

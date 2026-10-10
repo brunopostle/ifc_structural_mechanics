@@ -1,138 +1,112 @@
-"""Tests for PIPE and BOX section extraction from hollow IFC profile types."""
+"""Circular and hollow IFC profiles become sections with their own properties.
+
+Real IFC entities are used, not mocks: ``IfcCircleHollowProfileDef`` and
+``IfcRectangleHollowProfileDef`` are subtypes of the solid profiles, so
+``is_a()`` on the solid type is true for them. Testing the solid type first
+once turned every hollow section into a solid one.
+"""
 
 import math
 from unittest.mock import MagicMock
 
+import pytest
 
-def _make_hollow_circle_profile(radius, wall_thickness, name="HSS 60.3x3.2"):
-    """Create a mock IfcCircleHollowProfileDef."""
-    p = MagicMock()
-    p.is_a.side_effect = lambda t: t == "IfcCircleHollowProfileDef"
-    p.Radius = radius
-    p.WallThickness = wall_thickness
-    p.ProfileName = name
-    p.id.return_value = "profile-pipe-1"
-    return p
+ifcopenshell = pytest.importorskip("ifcopenshell")
 
-
-def _make_hollow_rect_profile(x_dim, y_dim, wall_thickness, name="RHS 100x50x5"):
-    """Create a mock IfcRectangleHollowProfileDef."""
-    p = MagicMock()
-    p.is_a.side_effect = lambda t: t == "IfcRectangleHollowProfileDef"
-    p.XDim = x_dim
-    p.YDim = y_dim
-    p.WallThickness = wall_thickness
-    p.ProfileName = name
-    p.id.return_value = "profile-box-1"
-    return p
+from ifc_structural_mechanics.ifc.members_extractor import (  # noqa: E402
+    MembersExtractor,
+)
+from ifc_structural_mechanics.ifc.properties_extractor import (  # noqa: E402
+    PropertiesExtractor,
+)
 
 
-class TestHollowSectionExtractionFromMembersExtractor:
-    """Verify _create_section() in MembersExtractor handles hollow profiles."""
-
-    def _make_extractor(self, length_scale=1.0):
-        from ifc_structural_mechanics.ifc.members_extractor import MembersExtractor
-
-        extractor = MagicMock(spec=MembersExtractor)
-        extractor.length_scale = length_scale
-        extractor._create_section = MembersExtractor._create_section.__get__(extractor)
-        return extractor
-
-    def test_pipe_section_type(self):
-        profile = _make_hollow_circle_profile(radius=0.03, wall_thickness=0.003)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert section is not None
-        assert section.section_type == "pipe"
-
-    def test_pipe_outer_radius(self):
-        profile = _make_hollow_circle_profile(radius=0.03, wall_thickness=0.003)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert abs(section.dimensions["outer_radius"] - 0.03) < 1e-9
-
-    def test_pipe_inner_radius(self):
-        profile = _make_hollow_circle_profile(radius=0.03, wall_thickness=0.003)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert abs(section.dimensions["inner_radius"] - 0.027) < 1e-9
-
-    def test_pipe_area(self):
-        outer_r, wall_t = 0.03, 0.003
-        inner_r = outer_r - wall_t
-        expected_area = math.pi * (outer_r**2 - inner_r**2)
-        profile = _make_hollow_circle_profile(radius=outer_r, wall_thickness=wall_t)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert abs(section.area - expected_area) < 1e-9
-
-    def test_box_section_type(self):
-        profile = _make_hollow_rect_profile(x_dim=0.1, y_dim=0.2, wall_thickness=0.005)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert section is not None
-        assert section.section_type == "box"
-
-    def test_box_dimensions(self):
-        profile = _make_hollow_rect_profile(x_dim=0.1, y_dim=0.2, wall_thickness=0.005)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert abs(section.dimensions["width"] - 0.1) < 1e-9
-        assert abs(section.dimensions["height"] - 0.2) < 1e-9
-        assert abs(section.dimensions["wall_thickness"] - 0.005) < 1e-9
-
-    def test_box_area(self):
-        w, h, t = 0.1, 0.2, 0.005
-        expected_area = w * h - (w - 2 * t) * (h - 2 * t)
-        profile = _make_hollow_rect_profile(x_dim=w, y_dim=h, wall_thickness=t)
-        extractor = self._make_extractor()
-        section = extractor._create_section(profile)
-        assert abs(section.area - expected_area) < 1e-9
-
-    def test_pipe_with_mm_units(self):
-        """length_scale=0.001 (mm IFC): dimensions are converted to metres."""
-        profile = _make_hollow_circle_profile(radius=30.0, wall_thickness=3.0)  # mm
-        extractor = self._make_extractor(length_scale=0.001)
-        section = extractor._create_section(profile)
-        assert abs(section.dimensions["outer_radius"] - 0.03) < 1e-9
-        assert abs(section.dimensions["inner_radius"] - 0.027) < 1e-9
+def _profile(ifc_class, **attributes):
+    model = ifcopenshell.file(schema="IFC4")
+    return model.create_entity(
+        ifc_class, ProfileType="AREA", ProfileName="benchmark", **attributes
+    )
 
 
-class TestHollowSectionExtractionFromPropertiesExtractor:
-    """Verify section extraction in PropertiesExtractor handles hollow profiles."""
+def _from_members_extractor(profile, length_scale=1.0):
+    extractor = MagicMock(spec=MembersExtractor)
+    extractor.length_scale = length_scale
+    return MembersExtractor._create_section(extractor, profile)
 
-    def _extractor_section_from_profile(self, profile, length_scale=1.0):
-        from ifc_structural_mechanics.ifc.properties_extractor import (
-            PropertiesExtractor,
+
+def _from_properties_extractor(profile, length_scale=1.0):
+    extractor = MagicMock(spec=PropertiesExtractor)
+    extractor.length_scale = length_scale
+    extractor.logger = MagicMock()
+    extractor._safe_get_attribute = lambda obj, attr, default=None: getattr(
+        obj, attr, default
+    )
+    extractor._find_related_profile = MagicMock(return_value=profile)
+    return PropertiesExtractor.extract_section(extractor, MagicMock())
+
+
+EXTRACTORS = pytest.mark.parametrize(
+    "extract", [_from_members_extractor, _from_properties_extractor]
+)
+
+
+@EXTRACTORS
+class TestProfiles:
+    def test_pipe(self, extract):
+        section = extract(
+            _profile("IfcCircleHollowProfileDef", Radius=0.15, WallThickness=0.01)
         )
 
-        extractor = MagicMock(spec=PropertiesExtractor)
-        extractor.length_scale = length_scale
-        extractor.logger = MagicMock()
-        extractor._safe_get_attribute = lambda obj, attr, default=None: getattr(
-            obj, attr, default
+        assert section.section_type == "hollow_circular"
+        assert section.area == pytest.approx(math.pi * (0.15**2 - 0.14**2))
+        assert section.moment_of_inertia_y == pytest.approx(
+            math.pi / 4 * (0.15**4 - 0.14**4)
         )
-        extractor._create_default_section = lambda: None
-        extractor._find_related_profile = MagicMock(return_value=profile)
-        extractor._create_i_section = MagicMock(return_value=None)
-        extractor.extract_section = PropertiesExtractor.extract_section.__get__(
-            extractor
+        assert section.moment_of_inertia_z == pytest.approx(section.moment_of_inertia_y)
+
+    def test_box(self, extract):
+        section = extract(
+            _profile(
+                "IfcRectangleHollowProfileDef", XDim=0.2, YDim=0.4, WallThickness=0.01
+            )
         )
 
-        entity = MagicMock()
-        return extractor.extract_section(entity)
+        assert section.section_type == "hollow_rectangular"
+        assert section.area == pytest.approx(0.2 * 0.4 - 0.18 * 0.38)
+        # The depth (YDim) goes with the strong axis, as for a solid rectangle
+        assert section.moment_of_inertia_y == pytest.approx(
+            (0.2 * 0.4**3 - 0.18 * 0.38**3) / 12
+        )
+        assert section.moment_of_inertia_z == pytest.approx(
+            (0.4 * 0.2**3 - 0.38 * 0.18**3) / 12
+        )
 
-    def test_pipe_type_from_properties_extractor(self):
-        profile = _make_hollow_circle_profile(radius=0.03, wall_thickness=0.003)
-        section = self._extractor_section_from_profile(profile)
-        assert section is not None
-        assert section.section_type == "pipe"
-        assert abs(section.dimensions["outer_radius"] - 0.03) < 1e-9
-        assert abs(section.dimensions["inner_radius"] - 0.027) < 1e-9
+    def test_solid_circle(self, extract):
+        section = extract(_profile("IfcCircleProfileDef", Radius=0.15))
 
-    def test_box_type_from_properties_extractor(self):
-        profile = _make_hollow_rect_profile(x_dim=0.1, y_dim=0.2, wall_thickness=0.005)
-        section = self._extractor_section_from_profile(profile)
-        assert section is not None
-        assert section.section_type == "box"
-        assert abs(section.dimensions["width"] - 0.1) < 1e-9
+        assert section.section_type == "circular"
+        assert section.area == pytest.approx(math.pi * 0.15**2)
+        assert section.moment_of_inertia_y == pytest.approx(math.pi / 4 * 0.15**4)
+
+    def test_solid_rectangle_is_still_a_rectangle(self, extract):
+        section = extract(_profile("IfcRectangleProfileDef", XDim=0.2, YDim=0.4))
+
+        assert section.section_type == "rectangular"
+        assert section.area == pytest.approx(0.08)
+
+    def test_millimetres(self, extract):
+        section = extract(
+            _profile("IfcCircleHollowProfileDef", Radius=150.0, WallThickness=10.0),
+            length_scale=0.001,
+        )
+
+        assert section.dimensions["outer_radius"] == pytest.approx(0.15)
+        assert section.dimensions["thickness"] == pytest.approx(0.01)
+
+
+def test_thin_tube_shears_over_about_half_its_area():
+    section = _from_members_extractor(
+        _profile("IfcCircleHollowProfileDef", Radius=0.15, WallThickness=0.001)
+    )
+
+    assert section.shear_area_y / section.area == pytest.approx(0.53, abs=0.01)

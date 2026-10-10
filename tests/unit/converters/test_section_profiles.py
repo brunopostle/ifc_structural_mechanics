@@ -30,10 +30,14 @@ class TestRegistry:
                 assert val.ccx_keyword is None, f"{key}: should have no ccx_keyword"
                 assert val.format_data_line is None, f"{key}: should have no formatter"
 
-    def test_known_native_types_present(self):
-        for t in ("rectangular", "circular", "pipe", "box"):
-            assert t in SECTION_REGISTRY, f"Missing native type: {t}"
-            assert not SECTION_REGISTRY[t].use_general
+    def test_only_the_solid_rectangle_is_native(self):
+        """CalculiX's CIRC, PIPE and BOX are not used; see the module docstring."""
+        native = [k for k, v in SECTION_REGISTRY.items() if not v.use_general]
+        assert native == ["rectangular"]
+
+    def test_round_and_hollow_sections_are_general(self):
+        for t in ("circular", "hollow_circular", "hollow_rectangular"):
+            assert SECTION_REGISTRY[t].use_general
 
     def test_known_general_types_present(self):
         for t in ("i", "l", "t", "c"):
@@ -109,27 +113,6 @@ class TestFormatDataLines:
         line = self._fmt("rectangular", {"width": 0.2, "height": 0.3})
         assert "2.000000e-01" in line
         assert "3.000000e-01" in line
-
-    def test_circ_format(self):
-        line = self._fmt("circular", {"radius": 0.05})
-        assert "5.000000e-02" in line
-
-    def test_pipe_format(self):
-        line = self._fmt("pipe", {"outer_radius": 0.06, "inner_radius": 0.05})
-        assert "6.000000e-02" in line
-        assert "5.000000e-02" in line
-
-    def test_box_format_has_four_thickness_values(self):
-        line = self._fmt("box", {"height": 0.3, "width": 0.2, "wall_thickness": 0.01})
-        parts = [p.strip() for p in line.split(",")]
-        assert len(parts) == 6
-
-    def test_hollow_circ_inner_radius_computed(self):
-        p = get_native_section("hollow_circular")
-        assert p is not None
-        line = p.format_data_line({"outer_radius": 0.1, "thickness": 0.01})
-        # inner = 0.1 - 0.01 = 0.09
-        assert "9.000000e-02" in line
 
 
 # ---------------------------------------------------------------------------

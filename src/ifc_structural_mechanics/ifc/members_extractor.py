@@ -6,7 +6,6 @@ members from IFC files and converts them to domain model objects.
 """
 
 import logging
-import math
 import uuid
 from typing import Dict, List, Optional, Union
 
@@ -802,69 +801,43 @@ class MembersExtractor:
         if not profile:
             return None
 
-        # Handle rectangular profile
-        if profile.is_a("IfcRectangleProfileDef"):
-            # Convert dimensions to SI units
-            width = convert_length(profile.XDim, self.length_scale)
-            height = convert_length(profile.YDim, self.length_scale)
+        def profile_id():
+            if hasattr(profile, "id") and callable(profile.id):
+                return profile.id()
+            return str(uuid.uuid4())
 
-            return Section.create_rectangular_section(
-                id=(
-                    profile.id()
-                    if hasattr(profile, "id") and callable(profile.id)
-                    else str(uuid.uuid4())
-                ),
-                name=(
-                    profile.ProfileName
-                    if hasattr(profile, "ProfileName")
-                    else "Rectangular Section"
-                ),
-                width=width,
-                height=height,
+        # The hollow profiles are subtypes of the solid ones in IFC, so
+        # is_a() on the solid type matches them too: test them first.
+        if profile.is_a("IfcCircleHollowProfileDef"):
+            return Section.create_hollow_circular_section(
+                id=profile_id(),
+                name=getattr(profile, "ProfileName", None) or "Pipe Section",
+                outer_radius=convert_length(profile.Radius, self.length_scale),
+                thickness=convert_length(profile.WallThickness, self.length_scale),
             )
 
-        # Handle hollow circular profile (pipe/tube)
-        elif profile.is_a("IfcCircleHollowProfileDef"):
-            outer_r = convert_length(profile.Radius, self.length_scale)
-            wall_t = convert_length(profile.WallThickness, self.length_scale)
-            inner_r = outer_r - wall_t
-            area = math.pi * (outer_r**2 - inner_r**2)
-            return Section(
-                id=(
-                    profile.id()
-                    if hasattr(profile, "id") and callable(profile.id)
-                    else str(uuid.uuid4())
-                ),
-                name=(
-                    profile.ProfileName
-                    if hasattr(profile, "ProfileName")
-                    else "Pipe Section"
-                ),
-                section_type="pipe",
-                area=area,
-                dimensions={"outer_radius": outer_r, "inner_radius": inner_r},
-            )
-
-        # Handle hollow rectangular profile (RHS/box)
         elif profile.is_a("IfcRectangleHollowProfileDef"):
-            w = convert_length(profile.XDim, self.length_scale)
-            h = convert_length(profile.YDim, self.length_scale)
-            t = convert_length(profile.WallThickness, self.length_scale)
-            area = w * h - (w - 2 * t) * (h - 2 * t)
-            return Section(
-                id=(
-                    profile.id()
-                    if hasattr(profile, "id") and callable(profile.id)
-                    else str(uuid.uuid4())
-                ),
-                name=(
-                    profile.ProfileName
-                    if hasattr(profile, "ProfileName")
-                    else "Box Section"
-                ),
-                section_type="box",
-                area=area,
-                dimensions={"width": w, "height": h, "wall_thickness": t},
+            return Section.create_hollow_rectangular_section(
+                id=profile_id(),
+                name=getattr(profile, "ProfileName", None) or "Box Section",
+                outer_width=convert_length(profile.XDim, self.length_scale),
+                outer_height=convert_length(profile.YDim, self.length_scale),
+                thickness=convert_length(profile.WallThickness, self.length_scale),
+            )
+
+        elif profile.is_a("IfcCircleProfileDef"):
+            return Section.create_circular_section(
+                id=profile_id(),
+                name=getattr(profile, "ProfileName", None) or "Circular Section",
+                radius=convert_length(profile.Radius, self.length_scale),
+            )
+
+        elif profile.is_a("IfcRectangleProfileDef"):
+            return Section.create_rectangular_section(
+                id=profile_id(),
+                name=getattr(profile, "ProfileName", None) or "Rectangular Section",
+                width=convert_length(profile.XDim, self.length_scale),
+                height=convert_length(profile.YDim, self.length_scale),
             )
 
         # Handle I-shape profile (symmetric)

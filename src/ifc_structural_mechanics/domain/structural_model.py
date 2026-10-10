@@ -64,6 +64,9 @@ class StructuralModel:
         self.mesh_entity_to_member: Dict[str, str] = {}  # gmsh_id → member.id
         self.mesh_entity_to_connection: Dict[str, str] = {}  # gmsh_id → connection.id
         self.node_to_member: Dict[int, str] = {}  # node_id → member.id
+        # Members analysed with a rectangle of equivalent stiffness in place
+        # of their own section; set by the input writer
+        self.equivalent_section_members: set = set()
         # member.id → its mesh nodes; a node at a joint belongs to several
         self.member_nodes: Dict[str, set] = {}
 

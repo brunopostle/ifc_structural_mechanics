@@ -1451,8 +1451,12 @@ def _write_validated_loads_within_step(
                     # corresponding *ELSET card in the file, so referencing it
                     # by name in *DLOAD is a fatal CalculiX error.
                     if element_sets and not element_sets.get(element_set_name):
-                        logger.debug(
-                            f"Skipping DLOAD for {element_set_name} — element set not defined"
+                        _warn_model(
+                            domain_model,
+                            f"Load {getattr(load, 'id', 'unknown')} is not "
+                            f"applied: its member ({element_set_name}) has no "
+                            "elements, having lost its geometry to a member "
+                            "it overlaps.",
                         )
                     elif elements_data and node_coords:
                         # Global-direction nodal forces, written after this block
@@ -1551,8 +1555,11 @@ def _write_validated_loads_within_step(
             # Skip if element set doesn't exist or is empty (member merged
             # during fragment, or lost all elements during overlap resolution)
             if element_sets and not element_sets.get(element_set_name):
-                logger.debug(
-                    f"Skipping member DLOAD for {member.id} — element set not defined"
+                _warn_model(
+                    domain_model,
+                    f"The distributed loads on member {member.id} are not "
+                    "applied: it has no elements, having lost its geometry to "
+                    "a member it overlaps.",
                 )
             else:
                 if elements_data and node_coords:
