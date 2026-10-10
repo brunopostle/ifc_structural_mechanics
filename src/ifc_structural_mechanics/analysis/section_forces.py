@@ -13,18 +13,24 @@ For a member analysed as an equivalent rectangle the stresses are those of
 the stand-in rectangle and mean nothing by themselves, but their resultants
 are the member's real section forces.
 
-Conventions, in the section's own axes (``t`` along the member, ``1`` along
-the section's first direction, the depth, and ``2`` across it):
+Conventions, in the section's own axes: ``x`` along the member in the
+direction given, ``1`` along the section's first direction (the depth) and
+``2 = x cross 1`` across it. Each force is the resultant of what the part of
+the member beyond the cross-section (further along ``x``) exerts on the part
+before it:
 
 * ``N``: axial force, tension positive
 * ``Vf1``, ``Vf2``: shear forces along 1 and along 2
 * ``Mf1``: bending moment from stress varying along 1 (strong-axis bending
-  of a section deeper than wide; pairs with ``moment_of_inertia_y``)
-* ``Mf2``: bending moment from stress varying along 2
-* ``T``: torque
+  of a section deeper than wide; pairs with ``moment_of_inertia_y``),
+  positive when the fibres on the +1 side are in tension
+* ``Mf2``: bending moment from stress varying along 2, positive when the
+  fibres on the +2 side are in tension
+* ``T``: torque about ``x``, right-handed
 
-Signs follow the element's own direction, which is arbitrary; the results
-export reports magnitudes.
+``N``, ``Mf1`` and ``Mf2`` do not depend on which way ``x`` points; the shear
+forces and the torque change sign with it. The caller passes the member's
+direction, so that signs are the same all along a member.
 """
 
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -108,8 +114,9 @@ def element_section_forces(
 
     Returns:
         One dict per cross-section with ``position`` (-1 start, 0 middle,
-        1 end) and ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1``, ``Mf2``. Empty if
-        a node or its stress is missing.
+        1 end, along ``axis``), ``centre`` (the cross-section's centre) and
+        ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1``, ``Mf2``. Empty if a node or
+        its stress is missing.
     """
     try:
         points = np.array([coordinates[n] for n in node_ids], dtype=float)
@@ -143,6 +150,7 @@ def element_section_forces(
         forces.append(
             {
                 "position": position,
+                "centre": [float(v) for v in centre],
                 "N": float(integral[0]),
                 "Vf1": float(integral[1]),
                 "Vf2": float(integral[2]),

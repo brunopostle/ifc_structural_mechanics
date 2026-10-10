@@ -192,6 +192,30 @@ class TestParser:
         parser.node_coordinates = {n: list(p) for n, (p, _) in nodes.items()}
         return parser, nodes, frame
 
+    @staticmethod
+    def _own(parser, start, end):
+        """Give element 7 to a member running from ``start`` to ``end``."""
+        from ifc_structural_mechanics.domain.property import Material, Section
+        from ifc_structural_mechanics.domain.structural_member import CurveMember
+
+        parser.domain_model.add_member(
+            CurveMember(
+                id="beam",
+                geometry=[list(start), list(end)],
+                material=Material(
+                    id="m",
+                    name="m",
+                    density=7850.0,
+                    elastic_modulus=210e9,
+                    poisson_ratio=0.3,
+                ),
+                section=Section.create_rectangular_section(
+                    "s", "s", width=WIDTH, height=DEPTH
+                ),
+            )
+        )
+        parser.domain_model.set_analysis_elements("beam", [7])
+
     def _results(self, nodes, frame, case, axial):
         results = []
         for node, tensor in _stresses(
@@ -218,6 +242,49 @@ class TestParser:
             "Dead": 1000,
             "Live": 4000,
         }
+
+    def test_distance_is_measured_along_the_member(self):
+        parser, nodes, frame = self._parser()
+        self._own(parser, start=(2.5, -2, 5), end=(9.5, -2, 5))
+
+        records = parser.compute_beam_section_forces(
+            self._results(nodes, frame, "Dead", 1e3)
+        )
+
+        # The element is centred at x = 3 and one metre long
+        assert [r["distance"] for r in records] == pytest.approx([0.0, 0.5, 1.0])
+        assert [r["position"] for r in records] == [-1.0, 0.0, 1.0]
+
+    def test_element_running_against_its_member_is_turned_round(self):
+        """Shear changes sign with the direction; axial force does not."""
+        parser, nodes, frame = self._parser()
+        self._own(parser, start=(9.5, -2, 5), end=(2.5, -2, 5))
+        shear = 800.0
+        stresses = []
+        for node, tensor in _stresses(
+            nodes, frame, lambda x, y, z: (1e3 / AREA, shear / AREA, 0)
+        ).items():
+            result = StressResult(reference_element=node)
+            for name, value in zip(("sxx", "syy", "szz", "sxy", "syz", "sxz"), tensor):
+                result.add_value(name, float(value))
+            result.add_metadata("load_case", "Dead")
+            stresses.append(result)
+
+        records = parser.compute_beam_section_forces(stresses)
+
+        assert [r["distance"] for r in records] == pytest.approx([6.0, 6.5, 7.0])
+        for record in records:
+            assert record["N"] == pytest.approx(1e3)
+            assert record["Vf1"] == pytest.approx(-shear)
+
+    def test_element_of_no_member_has_no_distance(self):
+        parser, nodes, frame = self._parser()
+
+        records = parser.compute_beam_section_forces(
+            self._results(nodes, frame, "Dead", 1e3)
+        )
+
+        assert records and all("distance" not in r for r in records)
 
     def test_nothing_without_frames(self):
         parser, nodes, frame = self._parser()

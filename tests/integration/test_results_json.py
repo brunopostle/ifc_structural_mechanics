@@ -292,8 +292,28 @@ class TestBuilding02ResultsJson:
                     "max_Mf2_Nm",
                     "max_Vf1_N",
                     "max_Vf2_N",
+                    "max_tension_N",
+                    "max_compression_N",
                 }
                 assert entry["max_normal_stress_Pa"] >= 0
+
+    def test_every_beam_and_column_has_force_diagrams(self, building_02_run):
+        """Signed forces along the member for each load case, and their axes."""
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        for member in (m for m in data["members"] if m["type"] == "curve"):
+            assert set(member["section_axes"]) == {"x", "1", "2"}
+            assert set(member["section_force_diagrams"]) == set(data["load_cases"])
+            for diagram in member["section_force_diagrams"].values():
+                distances = diagram["distance_m"]
+                assert len(distances) >= 3
+                assert distances == sorted(distances)
+                assert len({len(values) for values in diagram.values()}) == 1
+
+    def test_results_file_stays_a_reasonable_size(self, building_02_run):
+        _, output_dir = building_02_run
+        size = os.path.getsize(os.path.join(output_dir, "results.json"))
+        assert size < 20e6, f"results.json is {size / 1e6:.1f} MB"
 
     def test_surface_members_have_no_section_forces(self, building_02_run):
         _, output_dir = building_02_run

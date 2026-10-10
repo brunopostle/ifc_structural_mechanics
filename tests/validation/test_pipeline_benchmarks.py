@@ -198,6 +198,13 @@ def _curve_member_envelope(data: dict) -> dict:
     return member["envelope"]
 
 
+def _curve_member_diagram(data: dict) -> dict:
+    """The section force diagram of the model's only curve member and load case."""
+    (member,) = [m for m in data["members"] if m["type"] == "curve"]
+    (diagram,) = member["section_force_diagrams"].values()
+    return diagram
+
+
 class TestRectangularCantileverSelfWeight:
     """cantilever_01 under gravity, native rectangular section (B32R)."""
 
@@ -239,6 +246,34 @@ class TestRectangularCantileverSelfWeight:
         assert envelope["max_normal_stress_Pa"] == pytest.approx(
             moment / (0.2 * 0.4**3 / 12) * 0.2, rel=FORCE_TOLERANCE
         )
+
+    def test_force_diagrams_along_the_member(self, tmp_path):
+        """V = -w (L - x) and M = w (L - x)^2 / 2, with their signs.
+
+        The member runs from the support along +X and its section's 1
+        direction is up. The part beyond a cross-section pulls the part before
+        it down (negative shear along 1) and puts the top in tension
+        (positive moment).
+        """
+        data = _run(CANTILEVER, tmp_path, gravity=True)
+        (member,) = data["members"]
+        assert member["section_axes"]["x"] == pytest.approx([1.0, 0.0, 0.0])
+        assert member["section_axes"]["1"] == pytest.approx([0.0, 0.0, 1.0])
+        diagram = _curve_member_diagram(data)
+        load = CANT_RHO * G_ACCEL * 0.2 * 0.4
+        root_shear, root_moment = load * CANT_L, load * CANT_L**2 / 2
+        assert diagram["distance_m"][0] == pytest.approx(0.0, abs=1e-9)
+        assert diagram["distance_m"][-1] == pytest.approx(CANT_L)
+        assert len(diagram["distance_m"]) == 121  # 60 quadratic elements
+        for x, shear, moment in zip(
+            diagram["distance_m"], diagram["Vf1_N"], diagram["Mf1_Nm"]
+        ):
+            assert shear == pytest.approx(
+                -load * (CANT_L - x), abs=FORCE_TOLERANCE * root_shear
+            )
+            assert moment == pytest.approx(
+                load * (CANT_L - x) ** 2 / 2, abs=FORCE_TOLERANCE * root_moment
+            )
 
     def test_weak_axis_forces_are_reported_about_the_other_axis(self, tmp_path):
         path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0))
@@ -456,6 +491,35 @@ class TestFixedFixedBeamPointLoad:
         assert forces["max_Mf1_Nm"] == pytest.approx(
             self.LOAD * self.LENGTH / 8, rel=FORCE_TOLERANCE
         )
+
+    def test_shear_steps_under_the_load(self, tmp_path):
+        """-P/2 before midspan and +P/2 after it, both listed at midspan.
+
+        The solver's stress at the loaded cross-section is the average of the
+        two sides, which would make the shear zero there.
+        """
+        data = _run(BEAM, tmp_path, mesh_size=0.25)
+        diagram = _curve_member_diagram(data)
+        half = self.LOAD / 2
+        at_load = [
+            i
+            for i, x in enumerate(diagram["distance_m"])
+            if x == pytest.approx(self.LENGTH / 2)
+        ]
+        assert [diagram["Vf1_N"][i] for i in at_load] == pytest.approx(
+            [-half, half], rel=FORCE_TOLERANCE
+        )
+        for x, shear in zip(diagram["distance_m"], diagram["Vf1_N"]):
+            sign = -1 if x < self.LENGTH / 2 else 1
+            if x != pytest.approx(self.LENGTH / 2):
+                assert shear == pytest.approx(sign * half, rel=FORCE_TOLERANCE)
+        # Hogging at the supports, sagging under the load
+        moment = self.LOAD * self.LENGTH / 8
+        assert diagram["Mf1_Nm"][0] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        assert diagram["Mf1_Nm"][at_load[0]] == pytest.approx(
+            -moment, rel=FORCE_TOLERANCE
+        )
+        assert diagram["Mf1_Nm"][-1] == pytest.approx(moment, rel=FORCE_TOLERANCE)
 
     def test_reaction_equals_applied_load(self, tmp_path):
         data = _run(BEAM, tmp_path)

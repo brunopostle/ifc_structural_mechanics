@@ -11,6 +11,8 @@ import re
 import traceback
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 from ..domain.result import (
     DisplacementResult,
     ReactionForceResult,
@@ -1048,11 +1050,17 @@ class ResultsParser(BaseParser):
         Args:
             stresses (List[StressResult]): Nodal stresses, tagged by load case.
 
+        Each element's axis is turned to point the way its member does,
+        from the first point of the member's geometry to the last, so that
+        the signs of shear and torque are the same all along a member.
+
         Returns:
             List[Dict]: One record per element, cross-section and load case,
-            with ``element_id``, ``load_case``, ``position``, ``N``, ``Vf1``,
-            ``Vf2``, ``T``, ``Mf1`` and ``Mf2``. Empty when the model has no
-            beam frames or the file no connectivity.
+            with ``element_id``, ``load_case``, ``position``, ``distance``
+            (along the member from its start; absent if the element belongs to
+            no member), ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1`` and ``Mf2``.
+            Empty when the model has no beam frames or the file no
+            connectivity.
         """
         frames = getattr(self.domain_model, "beam_section_frames", None) or {}
         if not isinstance(frames, dict) or not frames or not self.element_nodes:
@@ -1072,15 +1080,39 @@ class ResultsParser(BaseParser):
                 result.values.get(name, 0.0) for name in components
             ]
 
+        # Member direction and start point of each element, where known
+        directed: Dict[int, tuple] = {}
+        owners = getattr(self.domain_model, "analysis_element_to_member", None) or {}
+        for elem, (axis, direction_1) in frames.items():
+            start = along = None
+            member = self.domain_model.get_member(owners.get(elem, ""))
+            geometry = getattr(member, "geometry", None)
+            if isinstance(geometry, (list, tuple)) and len(geometry) >= 2:
+                try:
+                    start = np.array(geometry[0], dtype=float)
+                    along = np.array(geometry[-1], dtype=float) - start
+                except (TypeError, ValueError):
+                    start = along = None
+            if along is not None and np.linalg.norm(along) > 1e-12:
+                along = along / np.linalg.norm(along)
+                if float(np.dot(along, axis)) < 0:
+                    axis = tuple(-float(v) for v in axis)
+            else:
+                start = along = None
+            directed[elem] = (axis, direction_1, start, along)
+
         records: List[Dict] = []
         for case, nodal in by_case.items():
-            for elem, (axis, direction_1) in frames.items():
+            for elem, (axis, direction_1, start, along) in directed.items():
                 nodes = self.element_nodes.get(elem)
                 if not nodes:
                     continue
                 for forces in element_section_forces(
                     nodes, self.node_coordinates, nodal, axis, direction_1
                 ):
+                    centre = forces.pop("centre")
+                    if start is not None:
+                        forces["distance"] = float(np.dot(centre - start, along))
                     records.append({"element_id": elem, "load_case": case, **forces})
         return records
 
