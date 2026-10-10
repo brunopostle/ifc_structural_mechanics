@@ -645,6 +645,38 @@ class TestSlabBearingOnBeams:
             weight, rel=0.01
         )
 
+    def test_each_beam_reports_the_deflection(self, tmp_path):
+        """results.json gives it per member, for beams as for the slab."""
+        data = _run(
+            _slab_on_two_cantilevers(tmp_path, inset=0.25),
+            tmp_path,
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        beams = [m for m in data["members"] if m["type"] == "curve"]
+        assert len(beams) == 2
+        for beam in beams:
+            assert beam["by_load_case"]["Gravity"][
+                "max_displacement_m"
+            ] == pytest.approx(self._expected(), rel=DEFLECTION_TOLERANCE)
+            assert beam["by_load_case"]["Gravity"]["max_von_mises_Pa"] > 0
+
+    def test_strict_connections_tie_nothing(self, tmp_path):
+        """Only the two tip connections of the file join slab and beams."""
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=_slab_on_two_cantilevers(tmp_path, inset=0.25),
+            output_dir=output_dir,
+            mesh_size=self.MESH,
+            gravity=True,
+            strict_connections=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        messages = [w["message"] for w in result["warnings"]]
+        assert any("left unconnected" in m for m in messages)
+        with open(os.path.join(output_dir, "analysis.inp")) as fh:
+            assert "bearing on the surface member" not in fh.read()
+
     def test_the_assumption_is_reported(self, tmp_path):
         result = analyze_ifc(
             ifc_path=_slab_on_two_cantilevers(tmp_path, inset=0.0),
@@ -747,6 +779,34 @@ class TestCodeAsterReferences:
         # (ours adds the slab faces, half a thickness off it); it was 0.34 mm
         # while the wall base was free to rotate about its edge.
         assert envelope["max_tx_m"] < 1.5e-4
+
+    def test_structure_01_member_by_member(self, tmp_path):
+        """Each member's largest displacement in results.json, reference in mm.
+
+        The reference values are the largest over the nodes of each member in
+        the Code_Aster result. Ours are read on the faces of the expanded
+        elements, which adds to it where a member rotates: the pin-ended
+        Column_01 is 3 % above the reference at its axis and 8 % on its faces.
+        """
+        data = _run(self.STRUCTURE, tmp_path, mesh_size=0.5, gravity=True)
+        reference_mm = {
+            "Slab_01": 0.4273,
+            "Wall_01": 0.0764,
+            "Column_01": 0.0770,
+            "Column_02": 0.0898,
+        }
+        names = {
+            entity.GlobalId: entity.Name
+            for entity in ifcopenshell.open(self.STRUCTURE).by_type(
+                "IfcStructuralMember"
+            )
+        }
+        assert len(data["members"]) == 4
+        for member in data["members"]:
+            expected = reference_mm[names[member["ifc_guid"]]] * 1e-3
+            assert member["envelope"]["max_displacement_m"] == pytest.approx(
+                expected, rel=0.10
+            ), names[member["ifc_guid"]]
 
     def test_structure_01_converges(self, tmp_path):
         """Refining the mesh changes the answer by little, and less each time."""

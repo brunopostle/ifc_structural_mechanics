@@ -45,6 +45,7 @@ class AnalysisConfig(BaseConfig):
             },
             "gravity": False,
             "gravity_direction": [0.0, 0.0, -1.0],
+            "strict_connections": False,
         }
 
     def validate(self) -> None:
@@ -196,6 +197,18 @@ class AnalysisConfig(BaseConfig):
         self._config["solver_params"] = self.ANALYSIS_TYPES[analysis_type][
             "default_solver_params"
         ]
+
+    def get_strict_connections(self) -> bool:
+        """Get whether only the connections in the IFC file are analysed."""
+        return self._config.get("strict_connections", False)
+
+    def set_strict_connections(self, strict: bool) -> None:
+        """Analyse only the connections in the IFC file, or also implied ones.
+
+        By default a curve member lying in a surface member is tied to it
+        along its length even when the file does not connect them there.
+        """
+        self._config["strict_connections"] = bool(strict)
 
     def set_gravity(self, gravity: bool) -> None:
         """Enable or disable gravity loading."""

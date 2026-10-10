@@ -108,6 +108,13 @@ def cli():
     help="2 = quadratic elements (B32R, S6); 1 = linear (B31, S3), which is "
     "faster but needs a much finer mesh for shells",
 )
+@click.option(
+    "--strict-connections",
+    is_flag=True,
+    default=False,
+    help="Analyse only the connections in the IFC file. By default a beam or "
+    "column lying in a slab or wall is also tied to it along its length",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -120,6 +127,7 @@ def analyze(
     gravity: bool = False,
     timeout: int = 600,
     element_order: str = "2",
+    strict_connections: bool = False,
 ):
     """
     Run structural analysis on an IFC file with enhanced boundary condition handling.
@@ -138,6 +146,7 @@ def analyze(
         gravity,
         timeout,
         int(element_order),
+        strict_connections,
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -155,6 +164,7 @@ def run_enhanced_analyze(
     gravity: bool = False,
     timeout: int = 600,
     element_order: int = 2,
+    strict_connections: bool = False,
 ) -> int:
     """
     Run the analysis with enhanced boundary condition handling and return the appropriate exit code.
@@ -171,6 +181,7 @@ def run_enhanced_analyze(
         gravity (bool): Include self-weight gravity loads.
         timeout (int): CalculiX solver timeout in seconds (0 = no limit).
         element_order (int): 2 for quadratic elements, 1 for linear ones.
+        strict_connections (bool): Analyse only the connections in the file.
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -225,6 +236,7 @@ def run_enhanced_analyze(
                 gravity=gravity,
                 calculix_timeout=timeout or None,
                 element_order=element_order,
+                strict_connections=strict_connections,
             )
         else:
             # Use the original analysis function
@@ -236,6 +248,7 @@ def run_enhanced_analyze(
                 verbose=verbose,
                 gravity=gravity,
                 element_order=element_order,
+                strict_connections=strict_connections,
             )
 
         # Format and display results

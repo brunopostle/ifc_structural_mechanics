@@ -150,6 +150,25 @@ class TestBeamOnSlabEdge:
         assert "1 curve member(s) lie in a surface member" in messages[0]
 
 
+class TestStrictConnections:
+    def test_nothing_is_tied(self):
+        writer = _edge_beam()
+        writer.analysis_config.set_strict_connections(True)
+        writer._build_line_bearings()
+
+        assert writer._line_bearings == []
+
+    def test_user_is_told_what_was_left_unconnected(self):
+        writer = _edge_beam()
+        writer.analysis_config.set_strict_connections(True)
+        writer._build_line_bearings()
+
+        messages = [w["message"] for w in writer.domain_model.analysis_warnings]
+        assert len(messages) == 1
+        assert "1 curve member(s) lie in a surface member" in messages[0]
+        assert "left unconnected" in messages[0]
+
+
 class TestBeamInsideSlab:
     def test_node_inside_a_triangle_uses_all_three_corners(self):
         writer = _slab_with_beam({20: (1.0, 0.5, 0.0), 21: (3.0, 0.5, 0.0)}, [(20, 21)])

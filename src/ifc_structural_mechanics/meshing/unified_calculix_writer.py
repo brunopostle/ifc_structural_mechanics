@@ -569,40 +569,28 @@ class UnifiedCalculixWriter:
             already_claimed.update(remaining)
 
     def _register_node_memberships(self) -> None:
-        """Register mesh node IDs to member IDs in the domain model.
+        """Record the final elements and mesh nodes of every member in the model.
 
-        Iterates over all member element sets, collects the node IDs from each
-        element's connectivity, and records them in ``StructuralModel.node_to_member``
-        so that node-based FRD results (displacements, stresses) can be traced back
-        to IFC entities without re-parsing the INP file.
-
-        For shell members, CalculiX internally expands S3/S4 elements and writes
-        FRD displacement results at expansion nodes (original_id + N, + 2N, + 3N
-        where N = max original node ID).  Register these expansion candidates so
-        per-member displacement attribution works after analysis.
+        Results are attributed to members through these. CalculiX expands beam
+        and shell elements into solids and reports on the solids' nodes, which
+        are numbered by the solver; the expanded element keeps the number of
+        the element it came from, so the exporter goes from a member to its
+        elements and from those to the nodes in the result file. The mesh nodes
+        registered here serve elements the result file does not list (U1).
         """
-        max_node_id = max(self.nodes.keys()) if self.nodes else 0
-        shell_types = SHELL_ELEMENT_TYPES
-
         for member in self.domain_model.members:
             short_id = self._get_short_id(member.id)
             member_set = f"MEMBER_{short_id}"
-            elem_ids = self.element_sets.get(member_set, [])
+            elem_ids = [
+                e for e in self.element_sets.get(member_set, []) if e in self.elements
+            ]
             node_ids = []
             for elem_id in elem_ids:
-                elem = self.elements.get(elem_id)
-                if elem:
-                    node_ids.extend(elem["nodes"])
+                node_ids.extend(self.elements[elem_id]["nodes"])
+            if elem_ids:
+                self.domain_model.set_analysis_elements(member.id, elem_ids)
             if node_ids:
                 self.domain_model.register_node_memberships(node_ids, member.id)
-                has_shell = any(
-                    self.elements.get(eid, {}).get("type", "") in shell_types
-                    for eid in elem_ids
-                )
-                if has_shell and max_node_id > 0:
-                    for mult in range(1, 4):
-                        expanded = [int(nid) + max_node_id * mult for nid in node_ids]
-                        self.domain_model.register_node_memberships(expanded, member.id)
 
     def _write_calculix_input_file(self, output_file: str) -> None:
         """
@@ -1733,7 +1721,9 @@ class UnifiedCalculixWriter:
         twists the other.
 
         Nodes on a rigid link are left alone, for the reason given in
-        ``_write_point_connection``. The result is stored in
+        ``_write_point_connection``. With ``strict_connections`` set in the
+        analysis configuration nothing is tied, and the warning says how many
+        members were left unconnected. The result is stored in
         ``self._line_bearings`` as ``(node, [(shell_node, weight), ...])``.
         """
         self._line_bearings: List[Tuple[int, List[Tuple[int, float]]]] = []
@@ -1866,12 +1856,24 @@ class UnifiedCalculixWriter:
             unique.setdefault(node, terms)
         self._line_bearings = sorted(unique.items())
 
-        if self._line_bearings:
+        if not self._line_bearings:
+            return
+        found = (
+            f"{bearing_members} curve member(s) lie in a surface member that "
+            "the model does not connect to them along their length. "
+        )
+        if self.analysis_config.get_strict_connections():
+            self._line_bearings = []
             self._warn_user(
-                f"{bearing_members} curve member(s) lie in a surface member that "
-                "the model does not connect to them along their length. They are "
-                "tied to it in translation along the line (a hinge line), as a "
-                "slab bearing on its beams."
+                found + "Strict connections were requested, so they are left "
+                "unconnected there; a slab connected only at its corners spans "
+                "between them."
+            )
+        else:
+            self._warn_user(
+                found + "They are tied to it in translation along the line (a "
+                "hinge line), as a slab bearing on its beams. Use strict "
+                "connections to analyse only the connections in the file."
             )
 
     @staticmethod

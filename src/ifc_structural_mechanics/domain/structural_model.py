@@ -64,6 +64,8 @@ class StructuralModel:
         self.mesh_entity_to_member: Dict[str, str] = {}  # gmsh_id → member.id
         self.mesh_entity_to_connection: Dict[str, str] = {}  # gmsh_id → connection.id
         self.node_to_member: Dict[int, str] = {}  # node_id → member.id
+        # member.id → its mesh nodes; a node at a joint belongs to several
+        self.member_nodes: Dict[str, set] = {}
 
     def add_member(self, member) -> None:
         """
@@ -392,6 +394,29 @@ class StructuralModel:
         """
         for node_id in node_ids:
             self.node_to_member[node_id] = member_id
+        if node_ids:
+            self.member_nodes.setdefault(member_id, set()).update(node_ids)
+
+    def set_analysis_elements(self, member_id: str, element_ids: List[int]) -> None:
+        """Replace the analysis element IDs of a member with its final list.
+
+        Elements are registered as they are mapped, but later steps split,
+        retype and reassign them. The input writer calls this once the element
+        sets are final, so that results can be attributed element by element.
+
+        Args:
+            member_id: ID of the domain member.
+            element_ids: The elements that make up the member in the input file.
+        """
+        member = self.get_member(member_id)
+        if not member:
+            raise ValueError(f"Member with ID '{member_id}' not found in model")
+        for elem_id in member.analysis_element_ids:
+            if self.analysis_element_to_member.get(elem_id) == member_id:
+                del self.analysis_element_to_member[elem_id]
+        member.analysis_element_ids = list(element_ids)
+        for elem_id in element_ids:
+            self.analysis_element_to_member[elem_id] = member_id
 
     def trace_error_to_ifc(self, analysis_element_id: int) -> Optional[str]:
         """

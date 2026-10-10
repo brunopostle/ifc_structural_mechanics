@@ -71,6 +71,8 @@ class ResultsParser(BaseParser):
         super().__init__(mapper=None)
         self.domain_model = domain_model
         self.load_case_names: Optional[List[str]] = load_case_names
+        # Node IDs of each element in the last FRD file parsed
+        self.element_nodes: Dict[int, List[int]] = {}
 
         # Define mappings from CalculiX result codes to domain result properties
         self.result_type_mappings = {
@@ -226,6 +228,43 @@ class ResultsParser(BaseParser):
                 f"Failed to parse displacement results: {str(e)}"
             ) from e
 
+    def parse_element_nodes(self, frd_file: str) -> Dict[int, List[int]]:
+        """Read the element connectivity block of an FRD file.
+
+        CalculiX reports beam and shell results on the solid elements it
+        expands them into. Those keep the number of the element they came
+        from, so this is the link from an input element to the result nodes.
+
+        Args:
+            frd_file (str): Path to the FRD file.
+
+        Returns:
+            Dict[int, List[int]]: Node IDs of each element; empty if the file
+            is missing or has no element block.
+        """
+        element_nodes: Dict[int, List[int]] = {}
+        if not os.path.exists(frd_file):
+            return element_nodes
+        in_block = False
+        current: Optional[List[int]] = None
+        with open(frd_file, "r") as fh:
+            for line in fh:
+                if not in_block:
+                    in_block = line.startswith("    3C")
+                    continue
+                if line.startswith(" -1"):
+                    current = element_nodes.setdefault(int(line[3:13]), [])
+                elif line.startswith(" -2") and current is not None:
+                    body = line[3:].rstrip("\n")
+                    current.extend(
+                        int(body[i : i + 10])
+                        for i in range(0, len(body), 10)
+                        if body[i : i + 10].strip()
+                    )
+                elif line.startswith(" -3"):
+                    break
+        return element_nodes
+
     def _parse_displacements_from_dat(self, dat_file: str) -> List[DisplacementResult]:
         """
         Parse displacement results from a DAT file.
@@ -326,6 +365,7 @@ class ResultsParser(BaseParser):
             stresses = []
             i = 0
             in_stress_block = False
+            step_index = 0  # one stress block per *STEP, as for displacements
 
             while i < len(lines):
                 raw_line = lines[i]
@@ -347,6 +387,7 @@ class ResultsParser(BaseParser):
                     if line.startswith("-3"):
                         logger.debug(f"End of stress block at line {i}")
                         in_stress_block = False
+                        step_index += 1
                         i += 1
                         continue
 
@@ -363,6 +404,15 @@ class ResultsParser(BaseParser):
                                 result.add_value("sxy", values[3])
                                 result.add_value("syz", values[4])
                                 result.add_value("sxz", values[5])
+                                names = self.load_case_names or []
+                                result.add_metadata(
+                                    "load_case",
+                                    (
+                                        names[step_index]
+                                        if step_index < len(names)
+                                        else f"step_{step_index + 1}"
+                                    ),
+                                )
 
                                 stresses.append(result)
                                 logger.debug(f"Added stress for element {element_id}")
@@ -886,6 +936,7 @@ class ResultsParser(BaseParser):
         Raises:
             ResultProcessingError: If result files cannot be parsed.
         """
+        self.element_nodes = {}
         parsed_results = {
             "displacement": [],
             "stress": [],
@@ -912,6 +963,9 @@ class ResultsParser(BaseParser):
                 # Parse strain results
                 strains = self.parse_strains(frd_file)
                 parsed_results["strain"].extend(strains)
+
+                # Element connectivity, for attributing results to members
+                self.element_nodes = self.parse_element_nodes(frd_file)
 
             # Parse DAT file for reaction forces and buckling eigenvalues
             if "data" in result_files:

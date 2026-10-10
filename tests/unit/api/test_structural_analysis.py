@@ -124,6 +124,13 @@ def test_create_analysis_config():
     assert "Unsupported analysis type" in str(excinfo.value)
 
 
+def test_create_analysis_config_strict_connections():
+    """Implied connections are analysed unless strict connections are asked for."""
+    assert create_analysis_config("linear_static").get_strict_connections() is False
+    config = create_analysis_config("linear_static", strict_connections=True)
+    assert config.get_strict_connections() is True
+
+
 # Test the create_meshing_config function
 def test_create_meshing_config():
     """Test meshing configuration creation."""
@@ -545,6 +552,7 @@ def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
         gravity=False,
         calculix_timeout=600,
         element_order=2,
+        strict_connections=False,
     )
 
 

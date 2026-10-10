@@ -41,6 +41,7 @@ def analyze_ifc(
     gravity: bool = False,
     calculix_timeout: Optional[int] = 600,
     element_order: int = 2,
+    strict_connections: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -63,6 +64,9 @@ def analyze_ifc(
             (B32R, S6), 1 for linear ones (B31, S3). Linear shells need a much
             finer mesh for the same accuracy; they are only worth using when a
             model is too large to solve otherwise. Defaults to 2.
+        strict_connections (bool, optional): Analyse only the connections in
+            the IFC file. By default a beam or column lying in a slab or wall
+            is also tied to it along its length. Defaults to False.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -129,7 +133,9 @@ def analyze_ifc(
         result["warnings"].extend(validation_warnings)
 
         # Step 2: Create configurations
-        analysis_config = create_analysis_config(analysis_type, gravity=gravity)
+        analysis_config = create_analysis_config(
+            analysis_type, gravity=gravity, strict_connections=strict_connections
+        )
         meshing_config = create_meshing_config(mesh_size, element_order)
         system_config = SystemConfig()
 
@@ -219,7 +225,11 @@ def analyze_ifc(
                 # Export GlobalId-keyed JSON results
                 try:
                     json_path = os.path.join(output_dir, "results.json")
-                    exporter = ResultsExporter(domain_model, parsed_results)
+                    exporter = ResultsExporter(
+                        domain_model,
+                        parsed_results,
+                        element_nodes=results_parser.element_nodes,
+                    )
                     exporter.export(json_path)
                     result["output_files"]["results_json"] = json_path
                     logger.info(f"Wrote results JSON: {json_path}")
@@ -358,13 +368,16 @@ def extract_model(ifc_path: str) -> StructuralModel:
         raise ModelExtractionError(f"Failed to extract model from IFC file: {str(e)}")
 
 
-def create_analysis_config(analysis_type: str, gravity: bool = False) -> AnalysisConfig:
+def create_analysis_config(
+    analysis_type: str, gravity: bool = False, strict_connections: bool = False
+) -> AnalysisConfig:
     """
     Create an analysis configuration for the specified analysis type.
 
     Args:
         analysis_type (str): Type of analysis to perform.
         gravity (bool): Whether to include self-weight gravity loads.
+        strict_connections (bool): Analyse only the connections in the file.
 
     Returns:
         AnalysisConfig: The analysis configuration.
@@ -382,6 +395,7 @@ def create_analysis_config(analysis_type: str, gravity: bool = False) -> Analysi
     config = AnalysisConfig()
     config.set_analysis_type(analysis_type)
     config.set_gravity(gravity)
+    config.set_strict_connections(strict_connections)
     config.validate()
     return config
 
@@ -559,6 +573,7 @@ def run_enhanced_analysis(
     gravity: bool = False,
     calculix_timeout: Optional[int] = 600,
     element_order: int = 2,
+    strict_connections: bool = False,
 ) -> Dict[str, Any]:
     """
     Enhanced analysis function - now just calls the unified analyze_ifc.
@@ -574,6 +589,7 @@ def run_enhanced_analysis(
         verbose (bool): Whether to print verbose output.
         gravity (bool): Whether to include self-weight gravity loads.
         element_order (int): 2 for quadratic elements, 1 for linear ones.
+        strict_connections (bool): Analyse only the connections in the file.
 
     Returns:
         Dict[str, Any]: Dictionary containing the analysis results and output file paths.
@@ -589,4 +605,5 @@ def run_enhanced_analysis(
         gravity=gravity,
         calculix_timeout=calculix_timeout,
         element_order=element_order,
+        strict_connections=strict_connections,
     )

@@ -42,11 +42,12 @@ Schema (summary level)
 ``global_reactions.total`` is only present when there is a single load case;
 each case is analysed on its own, so several cases have no common total.
 
-Per-member displacement is mapped via ``StructuralModel.node_to_member`` which is
-populated by the meshing pipeline.  Per-member stress follows the same mapping;
-for B31 beam elements CalculiX internally expands to C3D8I bricks whose nodes
-are not in the original mesh, so beam stress results often contain only global
-values — this is a known limitation noted in the output.
+Per-member displacement and stress are attributed element by element. CalculiX
+expands beam and shell elements into solids and reports on the solids' nodes,
+which it numbers itself; each solid keeps the number of the element it came
+from. So a member's result nodes are the nodes of its elements in the result
+file's own connectivity (``element_nodes``). Elements the result file does not
+list (U1 user elements) fall back to the member's mesh nodes.
 """
 
 import json
@@ -68,6 +69,9 @@ class ResultsExporter:
             Expected keys: ``"displacement"``, ``"stress"``, ``"reaction"``.
         limits: Optional dict of pass/fail thresholds, e.g.
             ``{"max_von_mises_Pa": 250e6, "max_displacement_m": 0.02}``.
+        element_nodes: Node IDs of each element in the result file, from
+            ``ResultsParser.element_nodes``. Without it results are attributed
+            through the mesh nodes alone, which misses expanded elements.
     """
 
     SCHEMA_VERSION = "1.0"
@@ -77,11 +81,14 @@ class ResultsExporter:
         domain_model,
         parsed_results: Dict[str, List],
         limits: Optional[Dict[str, float]] = None,
+        element_nodes: Optional[Dict[int, List[int]]] = None,
     ):
         self.model = domain_model
         self.parsed_results = parsed_results
         self.limits = limits or {}
+        self.element_nodes = element_nodes or {}
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
+        self._mesh_nodes: Optional[Dict[str, set]] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -148,12 +155,8 @@ class ResultsExporter:
 
     def _member_entry(self, member) -> Dict[str, Any]:
         member_id = member.id
-        node_ids: set = {
-            int(nid)
-            for nid, mid in self.model.node_to_member.items()
-            if mid == member_id
-        }
         elem_ids: set = set(getattr(member, "analysis_element_ids", []))
+        node_ids = self._member_result_nodes(member_id, elem_ids)
 
         disp_by_lc = self._member_displacements(node_ids)
         stress_by_lc = self._member_stresses(node_ids)
@@ -196,6 +199,39 @@ class ResultsExporter:
         if by_load_case:
             result["by_load_case"] = by_load_case
         return result
+
+    def _member_result_nodes(self, member_id: str, elem_ids: set) -> set:
+        """Return the result-file nodes that carry this member's results.
+
+        The nodes of the member's elements as the result file lists them. If
+        any of its elements is not listed there, the member's mesh nodes are
+        added, since such an element is reported on the nodes it was given.
+        """
+        node_ids: set = set()
+        listed = True
+        for elem_id in elem_ids:
+            nodes = self.element_nodes.get(elem_id)
+            if nodes is None:
+                listed = False
+            else:
+                node_ids.update(nodes)
+        if not listed or not elem_ids:
+            node_ids.update(self._mesh_nodes_by_member().get(member_id, ()))
+        return node_ids
+
+    def _mesh_nodes_by_member(self) -> Dict[str, set]:
+        """Return ``{member_id: mesh node IDs}``, built once."""
+        if self._mesh_nodes is None:
+            by_member = getattr(self.model, "member_nodes", None)
+            if isinstance(by_member, dict) and by_member:
+                self._mesh_nodes = {
+                    mid: {int(n) for n in nodes} for mid, nodes in by_member.items()
+                }
+            else:
+                self._mesh_nodes = defaultdict(set)
+                for nid, mid in self.model.node_to_member.items():
+                    self._mesh_nodes[mid].add(int(nid))
+        return self._mesh_nodes
 
     def _node_index(self, kind: str) -> Dict[int, List[Tuple[str, float]]]:
         """Return ``{node_id: [(load_case, value), ...]}`` for one result kind.

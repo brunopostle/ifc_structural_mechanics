@@ -108,6 +108,7 @@ class TestEnhancedCLICommands:
                 gravity=False,
                 calculix_timeout=600,
                 element_order=2,
+                strict_connections=False,
             )
 
     def test_analyze_custom_params(
@@ -141,7 +142,24 @@ class TestEnhancedCLICommands:
                 gravity=False,
                 calculix_timeout=600,
                 element_order=2,
+                strict_connections=False,
             )
+
+    def test_analyze_strict_connections(
+        self, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        """The strict-connections choice reaches the analysis."""
+        with patch(
+            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            mock_analyze_ifc,
+        ):
+            exit_code = run_enhanced_analyze(
+                ifc_file=temp_ifc_file,
+                output_dir=temp_output_dir,
+                strict_connections=True,
+            )
+            assert exit_code == 0
+            assert mock_analyze_ifc.call_args.kwargs["strict_connections"] is True
 
     def test_analyze_with_warnings(
         self, mock_analyze_ifc, temp_ifc_file, temp_output_dir

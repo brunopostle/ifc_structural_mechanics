@@ -260,6 +260,50 @@ class TestBuilding02ResultsJson:
             0 < max_disp < 1.0
         ), f"Displacement {max_disp:.3f} m — possible mesh disconnectivity regression"
 
+    def test_every_member_has_results_for_every_load_case(self, building_02_run):
+        """Beams and columns as well as slabs and walls."""
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        cases = set(data["load_cases"])
+        assert cases == {"Live", "Extra_dead", "Gravity"}
+        incomplete = [
+            m["id"]
+            for m in data["members"]
+            if not all(
+                "max_displacement_m" in m.get("by_load_case", {}).get(case, {})
+                for case in cases
+            )
+        ]
+        assert incomplete == []
+
+    def test_largest_member_displacement_is_the_global_one(self, building_02_run):
+        """Each load case's maximum is found on some member, and on no more."""
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        for case, summary in data["global_displacements"]["by_load_case"].items():
+            largest = max(
+                m["by_load_case"][case]["max_displacement_m"] for m in data["members"]
+            )
+            assert largest == pytest.approx(summary["max_displacement_m"], rel=1e-6)
+
+    def test_live_maximum_is_on_a_heavily_loaded_ground_slab(self, building_02_run):
+        """The 16 kPa slabs at z = 3 m move most under Live, about 26 mm.
+
+        Per-member values used to be attributed through guessed node numbers
+        and put this maximum on a slab thirty metres higher up.
+        """
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        worst = max(
+            data["members"],
+            key=lambda m: m["by_load_case"]["Live"]["max_displacement_m"],
+        )
+        assert worst["type"] == "surface"
+        assert worst["id"] in ("3Pv5xW9inFXwJXWOhUEqxn", "2v2zbtMavCUv4$UquJwvIb")
+        assert worst["by_load_case"]["Live"]["max_displacement_m"] == pytest.approx(
+            0.0258, rel=0.1
+        )
+
     def test_all_members_have_guid(self, building_02_run):
         """Every member in building_02 should trace back to an IFC GlobalId."""
         _, output_dir = building_02_run

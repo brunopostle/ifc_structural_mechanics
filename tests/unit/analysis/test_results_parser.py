@@ -254,3 +254,75 @@ class TestParseBeamSectionForces:
         # Step indices should differ
         step_indices = {r.get("step_index", r.get("load_case")) for r in results}
         assert len(step_indices) == 2
+
+
+FRD_WITH_ELEMENTS = """    1C
+    2C                             4                                     1
+ -1         1 0.00000E+00 0.00000E+00 0.00000E+00
+ -3
+    3C                             2                                     1
+ -1         7    4    0    1
+ -2     37344     81618     81619     37345     37347     81621     81620     37346     81626     81622
+ -2     81627     37348
+ -1        12    5    0    1
+ -2         1         2         3
+ -3
+    1PSTEP                         1           1           1
+  100CL  101 1.000000000           4                     0    1           1
+ -4  STRESS      6    1
+ -5  SXX         1    4    1    1
+ -1         1 1.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00
+ -3
+    1PSTEP                         2           1           2
+  100CL  102 2.000000000           4                     0    2           1
+ -4  STRESS      6    1
+ -5  SXX         1    4    1    1
+ -1         1 2.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00 0.00000E+00
+ -3
+ 9999
+"""
+
+
+class TestElementNodes:
+    def test_elements_keep_their_numbers_and_all_their_nodes(self, tmp_path):
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_ELEMENTS)
+
+        element_nodes = ResultsParser().parse_element_nodes(str(frd))
+
+        assert sorted(element_nodes) == [7, 12]
+        assert len(element_nodes[7]) == 12
+        assert element_nodes[7][0] == 37344 and element_nodes[7][-1] == 37348
+        assert element_nodes[12] == [1, 2, 3]
+
+    def test_missing_file_gives_nothing(self, tmp_path):
+        assert ResultsParser().parse_element_nodes(str(tmp_path / "none.frd")) == {}
+
+    def test_parse_results_keeps_the_connectivity(self, tmp_path):
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_ELEMENTS)
+        parser = ResultsParser()
+
+        parser.parse_results({"results": str(frd)})
+
+        assert sorted(parser.element_nodes) == [7, 12]
+
+
+class TestStressLoadCases:
+    def test_each_step_is_tagged_with_its_load_case(self, tmp_path):
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_ELEMENTS)
+
+        stresses = ResultsParser(load_case_names=["Dead", "Live"]).parse_stresses(
+            str(frd)
+        )
+
+        assert [s.metadata["load_case"] for s in stresses] == ["Dead", "Live"]
+
+    def test_steps_without_a_name_are_numbered(self, tmp_path):
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_ELEMENTS)
+
+        stresses = ResultsParser().parse_stresses(str(frd))
+
+        assert [s.metadata["load_case"] for s in stresses] == ["step_1", "step_2"]
