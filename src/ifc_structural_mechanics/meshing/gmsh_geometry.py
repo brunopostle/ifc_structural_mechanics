@@ -490,23 +490,20 @@ class GmshGeometryConverter:
 
     def _seed_support_points(self, domain_model: StructuralModel) -> List[int]:
         """
-        Add Gmsh points at support positions that lie strictly inside member curves.
+        Add Gmsh points at connection positions that lie strictly inside member curves.
 
-        When a support connection is at an intermediate position on a beam (not
-        at an endpoint), Gmsh normally places no mesh node there.  By seeding a
-        point and including it as a *tool* in the subsequent fragment() call, the
-        curve is split at that position and the mesher places a node exactly there.
+        When a support, or a joint that another member frames into, is at an
+        intermediate position on a beam (not at an endpoint), Gmsh normally
+        places no mesh node there.  By seeding a point and including it as a
+        *tool* in the subsequent fragment() call, the curve is split at that
+        position and the mesher places a node exactly there.
 
         Returns:
             List of Gmsh point tags to pass as tools to fragment().
         """
-        from ..analysis.boundary_condition_handling import get_constrained_dofs
-
         seeded: List[int] = []
 
         for conn in domain_model.connections:
-            if not get_constrained_dofs(conn):
-                continue
             if not (hasattr(conn, "position") and conn.position):
                 continue
 

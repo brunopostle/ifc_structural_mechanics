@@ -320,3 +320,44 @@ class TestGetMemberEndpoints:
     def test_returns_none_for_unknown_member(self):
         writer = self._writer_with_member("m1", [[0, 0, 0], [1, 0, 0]])
         assert writer._get_member_endpoints("nonexistent") is None
+
+
+class TestJointAlongASpan:
+    """A member framing into another one's span is attached there, not at its end."""
+
+    def test_node_at_the_connection_along_the_span_is_found(self):
+        m = _curve_member("m1", [-3, 0, 0], [3, 0, 0])
+        writer = _make_writer(
+            members=[m],
+            nodes={
+                1: np.array([-3.0, 0.0, 0.0]),
+                2: np.array([3.0, 0.0, 0.0]),
+                3: np.array([0.0, 0.0, 0.0]),  # seeded at the joint
+            },
+            elements={
+                10: {"type": "B31", "nodes": [1, 3]},
+                11: {"type": "B31", "nodes": [3, 2]},
+            },
+            element_sets={"MEMBER_M1": [10, 11]},
+        )
+
+        pairs = writer._find_connection_nodes_at_location(_conn([0, 0, 0]), ["m1"])
+
+        assert pairs == [("m1", 3)]
+
+    def test_eccentric_member_end_is_still_found(self):
+        """The member stops 0.15 m short of the joint, sideways and upwards."""
+        m = _curve_member("m1", [0, 0.15, 0.15], [0, 4.85, 0.15])
+        writer = _make_writer(
+            members=[m],
+            nodes={
+                1: np.array([0.0, 0.15, 0.15]),
+                2: np.array([0.0, 4.85, 0.15]),
+            },
+            elements={10: {"type": "B31", "nodes": [1, 2]}},
+            element_sets={"MEMBER_M1": [10]},
+        )
+
+        pairs = writer._find_connection_nodes_at_location(_conn([0, 0, 0]), ["m1"])
+
+        assert pairs == [("m1", 1)]

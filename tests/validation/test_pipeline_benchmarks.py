@@ -341,6 +341,7 @@ class TestCodeAsterReferences:
     """
 
     STRUCTURE = os.path.join(IFC_DIR, "structure_01.ifc")
+    GRID = os.path.join(IFC_DIR, "grid_of_beams.ifc")
 
     def test_cantilever_01(self, tmp_path):
         """Reference 0.2766 mm; ours is slightly larger for shear deflection."""
@@ -377,6 +378,36 @@ class TestCodeAsterReferences:
         assert coarse < medium < fine
         assert fine - medium < medium - coarse
         assert fine == pytest.approx(medium, rel=0.02)
+
+    def test_grid_of_beams(self, tmp_path):
+        """Five secondary beams hinged onto two clamped main beams. Reference 0.3963 mm.
+
+        Each secondary beam ends 0.15 m to the side of and above the main
+        beam's axis and is released there in bending only: a single-axis hinge
+        on a rigid lever arm, framing into the main beam's span.
+
+        The reference is 0.029 mm too high. Its rigid arms were given a 1 m
+        square section and the model's density, so each weighs 16 N, more
+        than the 11 N a secondary beam delivers. That extra load is worked out
+        here for the clamped main beam (three interior joints) and taken off.
+        """
+        arm_weight = 1.0 * math.hypot(0.15, 0.15) * CANT_RHO * 9.806
+        span, quarter = 5.8, 1.45
+        stiffness = CANT_E * 0.3 * 0.6**3 / 12
+        spurious = arm_weight * span**3 / (192 * stiffness) + (
+            2 * arm_weight * quarter**2 * (3 * span - 4 * quarter) / (48 * stiffness)
+        )
+        assert spurious == pytest.approx(0.29e-4, rel=0.02)
+
+        results = [
+            _run(self.GRID, tmp_path, mesh_size=h, gravity=True)[
+                "global_displacements"
+            ]["envelope"]["max_displacement_m"]
+            for h in (1.0, 0.5, 0.25)
+        ]
+        assert results[1] == pytest.approx(3.963e-4 - spurious, rel=0.03)
+        # Used to be 0.49, 0.33 and 1.38 mm: the pinned beams could spin
+        assert max(results) == pytest.approx(min(results), rel=0.01)
 
     def test_slab_01_with_the_supports_of_the_reference(self, tmp_path):
         """One-way slab clamped at x = 0 and hinged at x = 5. Reference 0.3761 mm.

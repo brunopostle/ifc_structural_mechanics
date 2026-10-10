@@ -268,6 +268,9 @@ class UnifiedCalculixWriter:
             # Step 2c3: Make rigid connections rigid by sharing one node
             self._merge_rigid_connection_nodes()
 
+            # Step 2c4: Hinge released member ends about the released axes only
+            self._build_release_hinges()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -1529,6 +1532,167 @@ class UnifiedCalculixWriter:
                 constrained_node_dofs.add((copy, dof))
         file.write("**\n")
 
+    # Length of the stiff arms that carry a partial end release.
+    _HINGE_ARM = 0.25
+
+    def _build_release_hinges(self) -> None:
+        """Prepare the hinge of every member end that has a rotational release.
+
+        CalculiX beam nodes have no rotational degrees of freedom to tie or
+        leave free, so a hinge is built from translations alone:
+
+        * The released member end gets its own node, tied to the joint in
+          DOF 1-3. That is a ball joint: all three rotations free.
+        * A rotation that is *not* released is then taken away again with a
+          pair of stiff arms, one fixed to the member end and one to the
+          joint, running side by side along a released axis. Tying the arm
+          tips together in the directions across the arm stops the two sides
+          rotating relative to each other about those directions, while
+          rotation about the arm itself stays free.
+
+        A member end that stops short of the joint (an eccentric connection)
+        is hinged where it ends: a rigid link carries the joint out to that
+        point first, so the reaction acts on the joint with its lever arm.
+
+        The equations are stored in ``self._release_hinges`` and written by
+        ``_write_point_connection``. U1 members are left to the old ball
+        joint, since link elements cannot be mixed with them on stock CalculiX.
+        """
+        self._release_hinges: Dict[str, Dict[str, List[List[tuple]]]] = {}
+        links = list(getattr(self, "_rigid_links", []))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [elem_id for elem_id, _, _ in links]
+            )
+            + 1
+        )
+
+        def add_node(position) -> int:
+            nonlocal next_node
+            self.nodes[next_node] = tuple(float(v) for v in position)
+            next_node += 1
+            return next_node - 1
+
+        def add_link(node_a: int, node_b: int) -> None:
+            nonlocal next_elem
+            links.append((next_elem, node_a, node_b))
+            next_elem += 1
+
+        def end_node(conn, member_id: str) -> Optional[int]:
+            pairs = self._find_connection_nodes_at_location(conn, [member_id])
+            return pairs[0][1] if pairs else None
+
+        for conn in self.domain_model.connections:
+            members = [
+                m for m in conn.connected_members if not m.startswith("dummy_member_")
+            ]
+            if len(members) < 2 or getattr(conn, "edge", None) is not None:
+                continue
+            if conn.entity_type == "hinge":
+                released = {m: [4, 5, 6] for m in members}
+            elif conn.entity_type in ("point", "rigid"):
+                released = getattr(conn, "released_dofs_by_member", None) or {}
+            else:
+                continue
+            if not any(released.values()):
+                continue
+            if any(m in self._u1_members for m in members):
+                continue
+
+            nodes = {m: end_node(conn, m) for m in members}
+            held = [m for m in members if not released.get(m) and nodes[m] is not None]
+            anchor_member = (
+                held[0]
+                if held
+                else next((m for m in members if nodes[m] is not None), None)
+            )
+            if anchor_member is None:
+                continue
+            joint = nodes[anchor_member]
+            joint_pos = np.array(self.nodes[joint], dtype=float)
+
+            for member_id in members:
+                dofs = released.get(member_id)
+                node = nodes[member_id]
+                if not dofs or member_id == anchor_member or node is None:
+                    continue
+
+                if node == joint:
+                    # Meshed with a node shared with the joint: split it off
+                    node = add_node(joint_pos)
+                    member_set = f"MEMBER_{self._get_short_id(member_id)}"
+                    for elem_id in self.element_sets.get(member_set, []):
+                        elem = self.elements.get(elem_id)
+                        if elem is not None:
+                            elem["nodes"] = [
+                                node if n == joint else n for n in elem["nodes"]
+                            ]
+                position = np.array(self.nodes[node], dtype=float)
+                gap = float(np.linalg.norm(position - joint_pos))
+                anchor = joint
+                if self._COINCIDENT_TOL < gap <= self._MAX_RIGID_LINK:
+                    anchor = add_node(position)
+                    add_link(joint, anchor)
+                elif gap > self._MAX_RIGID_LINK:
+                    self._warn_user(
+                        f"Connection {conn.id}: member {member_id} ends "
+                        f"{gap:.2f} m from the connection, too far for a rigid "
+                        "link; its end is tied to the connection in translation "
+                        "with no lever arm.",
+                        domain_id=conn.id,
+                    )
+
+                equations = [
+                    [(node, dof, 1.0), (anchor, dof, -1.0)] for dof in (1, 2, 3)
+                ]
+
+                free = sorted({d - 4 for d in dofs if d in (4, 5, 6)})
+                if 0 < len(free) < 3:
+                    axes = (getattr(conn, "release_axes_by_member", None) or {}).get(
+                        member_id
+                    )
+                    axes = np.array(
+                        axes if axes is not None else np.eye(3), dtype=float
+                    )
+                    fixed = [i for i in range(3) if i not in free]
+                    # One released axis: arm along it, tips tied in both
+                    # directions across it. Two released axes: arm along one,
+                    # tips tied along the other, which stops rotation about
+                    # the third (fixed) axis only.
+                    arm = axes[free[0]]
+                    across = (
+                        [axes[i] for i in fixed] if len(free) == 1 else [axes[free[1]]]
+                    )
+                    tip = position + self._HINGE_ARM * arm
+                    member_tip, joint_tip = add_node(tip), add_node(tip)
+                    add_link(node, member_tip)
+                    add_link(anchor, joint_tip)
+                    used: set = set()
+                    for direction in across:
+                        order = sorted(
+                            range(3),
+                            key=lambda i: (i in used, -abs(direction[i])),
+                        )
+                        used.add(order[0])
+                        terms = [
+                            (tip_node, i + 1, sign * float(direction[i]))
+                            for tip_node, sign in ((member_tip, 1.0), (joint_tip, -1.0))
+                            for i in order
+                            if abs(direction[i]) > 1e-9
+                        ]
+                        equations.append(terms)
+
+                self._release_hinges.setdefault(conn.id, {})[member_id] = equations
+
+        if self._release_hinges:
+            self._rigid_links = links
+            self._member_node_cache = {}
+            logger.info(
+                f"Built release hinges at {len(self._release_hinges)} connections"
+            )
+
     def _rigid_link_groups(self) -> Dict[int, int]:
         """Map each node on a rigid link to a label shared by all nodes linked to it."""
         groups: Dict[int, int] = {}
@@ -1689,6 +1853,29 @@ class UnifiedCalculixWriter:
             f"** Connects {len(member_ids)} members at {len(connection_pairs)} nodes\n"
         )
 
+        # Members whose release hinge was prepared by _build_release_hinges
+        hinges = getattr(self, "_release_hinges", None)
+        hinges = hinges.get(conn.id, {}) if isinstance(hinges, dict) else {}
+        for equations in hinges.values():
+            for terms in equations:
+                node, dof, _ = terms[0]
+                if (node, dof) in constrained_node_dofs:
+                    continue
+                file.write(f"*EQUATION\n{len(terms)}\n")
+                file.write(
+                    ",".join(f"{n},{d},{coef:.9g}" for n, d, coef in terms) + "\n"
+                )
+                constrained_node_dofs.add((node, dof))
+        connection_pairs = [
+            (m, n)
+            for m, n in self._find_connection_nodes_at_location(
+                conn, [m for m in member_ids if m not in hinges]
+            )
+        ]
+        if not connection_pairs:
+            file.write("**\n")
+            return
+
         _, ref_node = connection_pairs[0]
 
         equations_written = 0
@@ -1724,6 +1911,8 @@ class UnifiedCalculixWriter:
         # node (_merge_rigid_connection_nodes); what is left are members with
         # an end release, and a partial release cannot be represented.
         for member_id, dofs in released.items():
+            if member_id in hinges:
+                continue
             if dofs and not {4, 5, 6}.issubset(set(dofs)):
                 self._warn_user(
                     f"Connection {conn.id}: member {member_id} has a partial "
@@ -1783,11 +1972,11 @@ class UnifiedCalculixWriter:
         """
         Find the nearest mesh node to the connection position for each member.
 
-        Uses member geometry endpoints (from the domain model) to pinpoint the
-        exact end of each member closest to the connection.  Mesh nodes are
-        expected to sit at member endpoints, so a tight 10 mm tolerance is used
-        when endpoint geometry is available.  Falls back to a loose 0.5 m
-        proximity search when geometry is unavailable (e.g. surface members).
+        Uses member geometry (from the domain model) to pinpoint the point of
+        each curve member closest to the connection: an end, or a point along
+        its span.  A mesh node is expected there, so a tight 10 mm tolerance
+        is used.  Falls back to a loose 0.5 m proximity search when geometry
+        is unavailable (e.g. surface members).
 
         Args:
             conn: Connection with .position attribute [x,y,z]
@@ -1840,29 +2029,47 @@ class UnifiedCalculixWriter:
             # This avoids false matches for closely-spaced but unconnected members.
             endpoints = self._get_member_endpoints(member_id)
             if endpoints is not None:
-                dists = [float(np.linalg.norm(ep - conn_pos)) for ep in endpoints]
-                target_pos = endpoints[int(np.argmin(dists))]
+                # The point of the member nearest the connection: one of its
+                # ends, or a point along it when another member frames into
+                # its span (the mesh is seeded with a node there).
+                start, end = endpoints
+                axis = end - start
+                length_sq = float(np.dot(axis, axis))
+                t = (
+                    float(np.dot(conn_pos - start, axis)) / length_sq
+                    if length_sq > 1e-18
+                    else 0.0
+                )
+                # With no node along the span (the connection was not on the
+                # member, only near its end), fall back to the nearest end.
+                targets = [
+                    start + min(max(t, 0.0), 1.0) * axis,
+                    min(endpoints, key=lambda ep: float(np.linalg.norm(ep - conn_pos))),
+                ]
                 tolerance = _TIGHT_TOL
             else:
-                target_pos = conn_pos
+                targets = [conn_pos]
                 tolerance = _LOOSE_TOL
 
-            # Find nearest node to target_pos within tolerance
+            # Find nearest node to the target within tolerance
             best_node = None
-            best_dist = tolerance
-            for node_id in node_set:
-                if node_id in self.nodes:
-                    npos = self.nodes[node_id]
-                    dist = float(
-                        np.sqrt(
-                            (npos[0] - target_pos[0]) ** 2
-                            + (npos[1] - target_pos[1]) ** 2
-                            + (npos[2] - target_pos[2]) ** 2
+            for target_pos in targets:
+                best_dist = tolerance
+                for node_id in node_set:
+                    if node_id in self.nodes:
+                        npos = self.nodes[node_id]
+                        dist = float(
+                            np.sqrt(
+                                (npos[0] - target_pos[0]) ** 2
+                                + (npos[1] - target_pos[1]) ** 2
+                                + (npos[2] - target_pos[2]) ** 2
+                            )
                         )
-                    )
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_node = node_id
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_node = node_id
+                if best_node is not None:
+                    break
 
             if best_node is not None and best_node not in seen_nodes:
                 seen_nodes.add(best_node)

@@ -239,8 +239,13 @@ class TestSeedSupportPoints:
         tags = conv._seed_support_points(model)
         assert tags == []
 
-    def test_no_constrained_dofs_not_seeded(self):
-        """Connection without constrained DOFs (pure geometric) → not seeded."""
+    def test_joint_along_a_span_is_seeded(self):
+        """A joint that is no support still needs a node where it meets the beam.
+
+        A secondary beam framing into the span of a main beam is attached
+        there; without a node at that point it was attached to the main
+        beam's end instead.
+        """
         conv = self._make_converter()
         model = StructuralModel(id="t")
         model.add_member(_member("m1", [0, 0, 0], [6, 0, 0]))
@@ -252,7 +257,7 @@ class TestSeedSupportPoints:
         model.connections.append(conn)
 
         tags = conv._seed_support_points(model)
-        assert tags == []
+        assert len(tags) == 1
 
     def test_support_off_beam_not_seeded(self):
         """Support position not on any member curve → nothing seeded."""
