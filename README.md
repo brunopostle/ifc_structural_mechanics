@@ -14,11 +14,11 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 ### Capabilities
 
 - **IFC Model Extraction**: Extract structural members (beams, columns, slabs, walls), connections, loads, and material/section properties from IFC files using `IfcStructuralAnalysisModel`
-- **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections)
+- **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections). Elements are quadratic by default: three-node beams (B32R) and six-node triangular shells (S6)
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
-- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX B31 sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor). Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
-- **Connection End-Releases**: Rotational releases read from `IfcRelConnectsStructuralMember.AppliedCondition` and modelled as pinned connections
+- **Beam Sections**: Rectangular, circular, hollow circular (PIPE), and hollow rectangular (BOX/RHS) cross-sections map to native CalculiX beam sections; I, T, L (angle), and C (channel) profiles are analysed via CalculiX U1 (Timoshenko) elements using a computed general section (`A`, `Iy`, `Iz`, shear factor). Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
+- **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, or a support that leaves the released rotations free
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
 ### Known Limitations
@@ -27,25 +27,28 @@ Open bugs and planned work are tracked in the project's `bd` (beads) issue
 database; `bd list --status=open` shows the current list. The points below are
 the ones a user needs to know before trusting a result.
 
-- **Multi-member models are only partly verified.** `structure_01` (slab, wall
-  and two columns) is within 12% of an independent Code_Aster result.
-  `building_02` solves with plausible magnitudes but has no reference, and
-  `building_01` does not solve (singular stiffness matrix).
-- **Slab results depend on mesh size.** Shells are linear triangles, which
-  converge slowly: `structure_01` moves from 0.38 to 0.56 mm between a 1.0 m and
-  a 0.25 m mesh. Check convergence before relying on a slab deflection.
-- **Hinged slab edges are not modelled.** A slab sharing an edge with a wall is
-  rigidly joined to it, and a line support ignores a release on the member
-  side. `slab_01` is 2-3 times too stiff for this reason.
-- **A single-axis end release is analysed as a full pin** (all three rotations
-  released), with a warning.
+- **Large models are only partly verified.** `structure_01` (slab, wall and two
+  columns) is within 2% of an independent Code_Aster result. `building_02`
+  solves but has no reference, and `building_01` does not solve (singular
+  stiffness matrix).
+- **Large models are slow and still mesh-sensitive.** `building_02` takes about
+  200 s and 1.8 GB at a 2 m mesh, and needs more than 5 GB at 1 m. Its
+  deflections still move 15-35% between a 4 m and a 2 m mesh. `--element-order 1`
+  switches to linear elements, which are faster but several times too stiff in
+  slab bending at these mesh sizes.
+- **A single-axis end release between members is analysed as a full pin** (all
+  three rotations released), with a warning. At a support it is modelled
+  exactly.
+- **Skew supports are not modelled.** A support that restrains only some
+  directions, in axes that are not parallel to the global ones, is analysed as
+  if its axes were global, with a warning.
 - **I, T, L and C sections only work when every beam in the model has one.**
   These profiles are analysed with CalculiX U1 (Timoshenko) elements and a
   general section (`A`, `Iy`, `Iz`, shear factor). Stock CalculiX crashes when a
   U1 element shares a model with any other beam or shell element. A patched
   build runs, but transfers no moment between a U1 beam and a native beam at a
   shared node, so the joint behaves as a pin. Rectangular, circular, pipe and box
-  sections use native B31 sections and do not have this problem.
+  sections use native beam sections and do not have this problem.
 - **Open-section approximations.** The general section has no product of inertia
   and no offset. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
   L (angle) sections are analysed about their leg-parallel axes rather than
@@ -120,6 +123,7 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--output DIR` | Output directory for analysis results (required) | — |
 | `--analysis-type TYPE` | `linear_static` or `linear_buckling` | `linear_static` |
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
+| `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
 | `--gravity` | Include self-weight gravity loads | off |
 | `--verbose` | Enable verbose logging | off |
 | `--json-output` | Write results in JSON format | off |
@@ -193,19 +197,21 @@ The repository includes example IFC structural models (as a git submodule in `ex
 
 | Model | Description | `--gravity` | Max displacement | Vertical reaction | Reference | Status |
 |-------|-------------|-------------|------------------|-------------------|-----------|--------|
-| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.26 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
-| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 15 N of 18.4 N at this mesh | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
-| `structure_01` | Slab on a wall and two columns, self-weight | **Yes** | 0.38 mm (0.47 mm at 0.5 m) | 632 N | 0.427 mm Code_Aster | Within 12% |
-| `slab_01` | Slab on two line supports, self-weight | **Yes** | 0.06 mm (0.14 mm at 0.25 m) | 198 N | 0.376 mm Code_Aster | Too stiff: edge releases not modelled |
-| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.49 mm | 244 N | 0.396 mm Code_Aster | Does not converge with refinement |
-| `portal_01` | Portal frame of I-sections, distributed load | No | 3.1 mm | 85.4 kN | none | Runs; unchecked |
-| `building_02` | Multi-storey building, two load cases | No | 99 mm (Live), 252 mm (Extra_dead) | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
+| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.34 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
+| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 17.3 N of 18.4 N at this mesh | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
+| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.434 mm at 0.5 m) | 651 N of 660 N | 0.427 mm Code_Aster | Verified, within 2% |
+| `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
+| `grid_of_beams` | Grid of beams, self-weight | **Yes** | 0.52 mm (0.65 mm at 0.5 m) | 263 N | 0.396 mm Code_Aster | Does not converge with refinement |
+| `portal_01` | Portal frame of I-sections, distributed load | No | 3.8 mm (4.1 mm at 0.25 m) | 85.4 kN | none | Runs; unchecked |
+| `building_02` | Multi-storey building, two load cases | No | 455 mm (Live), 434 mm (Extra_dead) at a 2 m mesh | 29.4 MN | none | Runs; unchecked, mesh-sensitive |
 | `building_01` | Multi-storey building, lateral loads | No | — | — | none | Fails: singular stiffness matrix |
 
-Values are from the default 1.0 m mesh with CalculiX 2.23, measured on
-2026-10-10. The Code_Aster references are the IfcOpenShell IFC2CA results
-shipped in `examples/analysis-models/models/`. A coarse mesh under-predicts
-deflection; use `--mesh-size` to refine.
+Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
+fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,
+measured on 2026-10-10. The Code_Aster references are the IfcOpenShell IFC2CA
+results shipped in `examples/analysis-models/models/`. The reported reaction
+leaves out the share of a distributed load that lands on the restrained nodes
+themselves, so it approaches the true weight as the mesh is refined.
 
 To run an example:
 

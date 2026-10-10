@@ -67,6 +67,9 @@ python -m ifc_structural_mechanics.cli analyze model.ifc --output ./results
 # Specify analysis type and mesh size
 ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static --mesh-size 0.2
 
+# Linear elements (B31, S3) instead of the default quadratic ones (B32R, S6)
+ifc-analysis analyze model.ifc --output ./results --element-order 1
+
 # Enable verbose output and JSON results
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
@@ -138,6 +141,16 @@ Generates finite element meshes:
 4. Remap entity tags after fragmentation
 5. Apply mesh sizes (minimum size for shared points)
 6. Create Gmsh physical groups — each member's geometry entities get a numbered physical group named by member ID, so mesh elements inherit their parent member identity
+
+**Element order**: the mesh is second order by default (`MeshingConfig.get_element_order()`,
+`--element-order`), giving `B32R` beams and `S6` shells. Linear `S3` shells are several
+times too stiff in bending at practical mesh sizes; do not go back to them to save time
+without saying so in the results. Two things follow from the middle nodes:
+
+- Gmsh lists a three-node line as (start, end, middle); CalculiX wants (start, middle,
+  end). `_process_mesh()` reorders them. Six-node triangles need no change.
+- U1 is a two-node element, so `_split_quadratic_u1_elements()` turns each three-node
+  line of a U1 member into two elements.
 
 **Element-to-Member Mapping** (`unified_calculix_writer.py`):
 - Uses `cell_data['gmsh:physical']` from meshio to correctly assign mesh elements to their parent structural members via `_map_elements_via_physical_groups()`
@@ -220,10 +233,10 @@ Command-line interface:
   - `test_building_analysis.py`, `test_physical_group_mapping.py`, etc.: Regression tests for mesh connectivity fixes
 - **Validation tests** (`tests/validation/`): Numerical accuracy tests against analytical solutions
   - Tier 1: Direct CalculiX input/output tests (hand-written `.inp`)
-  - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam theory. Add a case here whenever a change touches sections, orientation, supports or loads
+  - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 90 s in total). Skip with `-m "not slow"`.
+- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 3.5 minutes in total, and 1.8 GB of memory). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -343,19 +356,21 @@ here. This section only records the constraints that shape day-to-day work.
 - **U1 beams (I/T/L/C sections) are only correct in all-U1 models.** On stock
   CalculiX a U1 element next to any other 1D/2D element crashes in gen3delem
   (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it).
-  On a patched build the model runs but a U1 beam and a B31 beam sharing a node
+  On a patched build the model runs but a U1 beam and a native beam sharing a node
   transfer no moment, so the joint is a pin (`aiz.14`). The planned replacement
-  is an equivalent-stiffness RECT on B31 (`31a`).
+  is an equivalent-stiffness RECT on a native beam element (`31a`).
 - **No beam section forces or utilisation yet.** CalculiX only writes them in
   2D output mode (`*NODE FILE, OUTPUT=2D` + `*EL FILE, OUTPUT=2D, SECTION
   FORCES`), which averages shell stress through the thickness (`aiz.13`).
-- **`building_01` does not solve** (singular matrix; it mixes U1 and B31
-  beams). `building_02` solves with plausible magnitudes but is not validated,
-  and slab results still change about 2x between a 1 m and a 2 m mesh because
-  linear S3 shells converge slowly (`aiz.26`).
-- **Edge releases between surfaces are not modelled** (`aiz.27`): slabs sharing
-  an edge with a wall are rigidly joined, and line supports ignore the
-  member-side release.
+- **`building_01` does not solve** (singular matrix; it mixes U1 and native
+  beams). `building_02` solves but is not validated: 455 mm under Live at a 2 m
+  mesh, 385 mm at 4 m, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
+  Never run it finer than 2 m on the development machine.
+- **Skew supports are not modelled** (`aiz.35`): a support that restrains only
+  some directions in axes not parallel to the global ones is written in global
+  axes, with a warning. The same goes for a partial release in skew axes.
+- **`slab_01.rmed` is not a reference for `slab_01.ifc`** (`aiz.36`): it was
+  computed with one edge hinged; the IFC file as shipped clamps both.
 - **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
   (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
   otherwise.
@@ -388,6 +403,20 @@ A purely geometric default is used only when a member has no `local_axis`.
 
 The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this. After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
 
+**The six values are in the connection's own axes, not the global ones.** A point
+connection uses its `ConditionCoordinateSystem`; a curve connection has x along its
+edge, with `Axis` giving local z. The extractor stores them as
+`connection.local_axes` and `get_constrained_dofs()` permutes the flags into global
+DOF numbers, so `drx` of a line support along global Y is DOF 5, rotation about the
+edge. Only axes parallel to the global ones are handled (see Known Limitations).
+
+**Member-side releases** (`IfcRelConnectsStructuralMember.AppliedCondition`) are in
+the axes of that relation (`connection.release_axes_by_member`; the member's own axes
+when the relation has no `ConditionCoordinateSystem`). `get_released_rotations()`
+returns them as global DOFs. A support holding a single member leaves the released
+rotations free: a fully fixed support under a column released in both bending
+rotations is written as DOF 1-3 plus torsion.
+
 Support nodes: `find_support_nodes()` returns the single mesh node nearest the
 connection position (within 0.1 m) plus any node coincident with it (beam and
 shell meshes keep separate nodes at one point). It never returns a neighbouring
@@ -408,9 +437,18 @@ rotational degrees of freedom**. This drives everything about joints:
 - **Members that stop short of the joint** (rigid end zones: a column ending at
   the beam soffit) are bridged with a stiff B31 link, written by
   `_write_rigid_links()`. Links are not in `self.elements` or `EALL`.
+- **Never tie the two ends of a rigid link in translation as well.** They are
+  apart, so equal translations plus a rigid link means no rotation, which clamps
+  the joint. `_write_point_connection()` skips nodes in the same
+  `_rigid_link_groups()` group.
 - **Released members** keep their own node and get DOF 1-3 equations: a ball
-  joint. A single-axis release cannot be represented and is analysed as a full
-  pin, with a warning.
+  joint. A single-axis release between members cannot be represented and is
+  analysed as a full pin, with a warning.
+- **Hinged edges between surfaces**: surfaces sharing an edge share its nodes
+  after `fragment()`, which is a rigid joint. A surface member released about
+  that edge gets copies of the edge nodes (`_release_hinged_edges()`), tied to
+  the originals in DOF 1-3 (`_write_edge_hinges()`); a row of ball joints along
+  a line is a hinge about it.
 - **A connection is a support only if it has an `AppliedCondition`.** One that
   joins two or more members without one restrains nothing.
 - **Line supports** (`IfcStructuralCurveConnection`) keep their end points in
@@ -427,6 +465,9 @@ each load case would include all the earlier ones.
 Code_Aster results for the same IFC files under self-weight (HDF5; read
 `CHA/Bld_DISP` with h5py, six components per node stored component by
 component). Use them to check any change to joints, supports or shells.
+Compare the displacement field at several points and the reactions, not only
+the largest displacement: `structure_01` once matched its reference maximum to
+11% with a slab that was too stiff and a wall that was leaning over.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->

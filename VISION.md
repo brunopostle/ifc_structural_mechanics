@@ -132,14 +132,16 @@ What holds it back:
   elements with `SECTION=GENERAL`, which cannot be mixed with other element
   types: stock CalculiX crashes, and a patched build leaves the joints pinned.
   The decision (2026-10-09) is to stay on stock CalculiX and analyse these
-  profiles as B31 with a stiffness-equivalent rectangular section.
+  profiles as native beam elements with a stiffness-equivalent rectangular
+  section.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
-  independent Code_Aster result to about 12%. `building_01` is still singular,
-  `building_02` has no reference, and slab results are mesh-sensitive.
-- **Releases.** Hinged slab edges and single-axis end releases are not
-  modelled.
-- **Validation coverage.** Distributed loads, pinned supports, plates and
-  frames have no benchmark yet.
+  independent Code_Aster result to 2%, point by point. `building_01` is still
+  singular, and `building_02` has no reference, is still mesh-sensitive and is
+  too large to refine on a small machine.
+- **Releases.** Single-axis end releases between members and skew supports are
+  not modelled.
+- **Validation coverage.** Distributed loads, pinned beam supports and frames
+  have no benchmark yet.
 
 **Done when**: every example model either agrees with an independent reference
 or fails with a message that names the cause.

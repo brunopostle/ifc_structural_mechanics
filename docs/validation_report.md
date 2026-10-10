@@ -6,8 +6,9 @@ pipeline. Tests are grouped into two tiers:
 - **Tier 1** — hand-crafted CalculiX input files run directly against the solver. These
   isolate the solver and result parser from IFC extraction, meshing and input writing.
 - **Tier 2** — the full IFC → Gmsh → CalculiX → `results.json` pipeline, compared with
-  closed-form beam theory. These are the tests that catch errors in section orientation,
-  section properties, supports and loads.
+  closed-form beam and plate theory and with independent Code_Aster results. These are
+  the tests that catch errors in section orientation, section properties, supports,
+  joints and loads.
 
 All of them live in `tests/validation/`, run under `pytest`, and are skipped when `ccx`
 is not on the PATH. Figures below were measured on 2026-10-10 with CalculiX 2.23.
@@ -162,7 +163,8 @@ meaningless factors.
 Each case starts from an IFC file, runs `analyze_ifc()` with a 0.05 m mesh, and reads the
 answer from `results.json`. Variants of `cantilever_01.ifc` are made in memory by rotating
 the member's `Axis` or replacing its profile. Reference values are Timoshenko beam theory
-(bending plus shear deflection).
+(bending plus shear deflection). Native sections are meshed with three-node B32R beams;
+U1 is a two-node element, so each B32R is replaced by two of them.
 
 `cantilever_01`: L = 3 m, fully fixed at one end, E = 210 MPa, ν = 0.2, ρ = 7.8 kg/m³,
 loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midspan,
@@ -170,18 +172,19 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 
 | Case | Section and element | Reference | Pipeline | Error |
 |------|---------------------|-----------|----------|-------|
-| Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B31 | 0.2814 mm | 0.2806 mm | 0.3% |
-| Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B31 | 1.1115 mm | 1.1106 mm | 0.1% |
-| Cantilever reaction | 0.2 × 0.4 rectangle, B31 | 18.36 N | 18.21 N | 0.8% |
+| Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B32R | 0.2814 mm | 0.2800 mm | 0.5% |
+| Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B32R | 1.1115 mm | 1.1059 mm | 0.5% |
+| Cantilever reaction | 0.2 × 0.4 rectangle, B32R | 18.36 N | 18.31 N | 0.3% |
 | Cantilever, strong axis | 200 × 400 I, U1 | 0.1419 mm | 0.1419 mm | < 0.1% |
-| Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6140 mm | < 0.1% |
-| Fixed-fixed beam, midspan | 0.3 m square, B31 | 0.3505 mm | 0.3467 mm | 1.1% |
-| Fixed-fixed beam, reaction | 0.3 m square, B31 | 20.00 kN | 20.00 kN | 0.0% |
+| Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
+| Fixed-fixed beam, midspan | 0.3 m square, B32R | 0.3506 mm | 0.3489 mm | 0.5% |
+| Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
 
 **Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
 
-The reaction under self-weight is low by half an element's weight: CalculiX does not
-report the share of a distributed load that lands on the restrained node.
+The reaction under self-weight is low by the load on the restrained node itself (a sixth
+of an element's weight for a quadratic element): CalculiX does not report the share of a
+distributed load that lands there.
 
 The cantilever's strong-axis orientation was confirmed independently against
 IfcOpenShell's Code_Aster reference for the same file
@@ -191,6 +194,32 @@ IfcOpenShell's Code_Aster reference for the same file
 These tests exist because of what they found when first written: beam sections rotated
 90° (strong and weak axes swapped), point supports restraining neighbouring mesh nodes,
 and wrong inertia formulas for I, L and C sections.
+
+---
+
+## Tier 2: Plate Bending
+
+**Source**: `tests/validation/test_pipeline_benchmarks.py`
+(`TestSimplySupportedPlateSelfWeight`)
+
+`slab_01.ifc` (5 m × 3 m, 0.2 m thick, E = 210 MPa, ν = 0.2) with line supports added in
+memory along all four edges, each restraining translation only, under self-weight. The
+reference is Navier's double sine series for the centre deflection plus the Mindlin shear
+term (moment sum over κGt): 0.0747 mm.
+
+| Mesh | S6 (default) | Error | S3 (`--element-order 1`) | Error |
+|------|--------------|-------|--------------------------|-------|
+| 1.0 m | 0.0749 mm | +0.4% | 0.0337 mm | −55% |
+| 0.5 m | 0.0766 mm | +2.6% | 0.0434 mm | −42% |
+| 0.25 m | 0.0771 mm | +3.3% | 0.0604 mm | −19% |
+
+**Tolerance**: 5% at 0.5 m; the 0.25 m result must be within 2% of the 0.5 m one and each
+refinement must change the answer less than the one before. **Status**: PASS
+
+CalculiX expands a shell into solid elements. S3 becomes a six-node wedge, which is far
+too stiff in bending; S6 becomes a fifteen-node wedge. The S6 result settles about 3%
+above thin-plate theory, as expected of a solid model whose supported edges are held at
+mid-surface only.
 
 ---
 
@@ -205,44 +234,72 @@ reference value is the largest nodal translation in
 
 | Model | Code_Aster | This library | Mesh | Error | Tested |
 |-------|-----------|--------------|------|-------|--------|
-| `cantilever_01` | 0.2766 mm | 0.2806 mm | 0.05 m | +1.4% (shear deflection) | yes, 3% |
-| `structure_01` | 0.4273 mm | 0.3752 / 0.4724 / 0.5609 mm | 1.0 / 0.5 / 0.25 m | −12% / +11% / +31% | yes, 25% at 0.5 m |
-| `slab_01` | 0.3761 mm | 0.056 / 0.108 / 0.143 mm | 1.0 / 0.5 / 0.25 m | −62% at best | no |
-| `grid_of_beams` | 0.3963 mm | 0.489 / 0.326 / 1.380 mm | 1.0 / 0.5 / 0.25 m | does not converge | no |
+| `cantilever_01` | 0.2766 mm | 0.2800 mm | 0.05 m | +1.2% (shear deflection) | yes, 3% |
+| `structure_01` | 0.4273 mm | 0.4288 / 0.4340 / 0.4359 mm | 1.0 / 0.5 / 0.25 m | +0.4% / +1.6% / +2.0% | yes, 5% at 0.5 m, and convergence |
+| `slab_01`, supports as in the reference run | 0.3761 mm | 0.3686 / 0.3773 / 0.3796 mm | 1.0 / 0.5 / 0.25 m | −2.0% / +0.3% / +0.9% | yes, 3% at 0.5 m |
+| `grid_of_beams` | 0.3963 mm | 0.519 / 0.653 / 0.577 mm | 1.0 / 0.5 / 0.25 m | does not converge | no |
 
 `portal_01` also has a reference file, but it was run in inch and pound units with
 metric gravity, so it is not comparable.
 
 What the comparison shows:
 
-- `structure_01` is in the right range but not converged. Linear S3 shells converge
-  slowly, and the slab-to-wall edge hinge is not modelled.
-- `slab_01` is too stiff because the rotational release along its supported edges is
-  ignored. By hand the clamped value is 0.171 mm and the simply supported value 0.854 mm.
-- `grid_of_beams` has single-axis end releases, which are analysed as full pins.
+- `structure_01` agrees over the whole field, not only at the maximum. At the point of
+  largest deflection the reference has (0.066, −0.017, −0.422) mm and this library
+  (0.066, −0.020, −0.430) mm at a 0.25 m mesh. The remaining 2% is shear deflection, which
+  DKT shells and Euler beams do not have.
+- `slab_01`'s reference was computed from an earlier version of the IFC file, with the
+  slab clamped about its edge at x = 0 and hinged at x = 5. The file shipped today fixes
+  both supports and releases the slab only about the two axes that do not matter, so both
+  ends are clamped and the deflection is half as much. The test restores the reference's
+  supports in memory. As authored the file gives 0.1810 mm at a 0.5 m mesh against
+  0.1812 mm by hand (w L⁴ / 384 E I plus shear), which is tested too.
+- `grid_of_beams` has single-axis end releases between members, which are analysed as
+  full pins.
 
-Before 2026-10-10 `structure_01` gave between 1.7 and 17 mm. Getting it to 0.4 mm took
-five fixes: rigid joints that were really pins, joints written as fixed supports, a line
-support reduced to one node, slabs given a default steel material, and load cases that
-accumulated from step to step.
+`structure_01` has now been wrong in three different ways. Before 2026-10-10 it gave
+between 1.7 and 17 mm (rigid joints that were really pins, joints written as fixed
+supports, a line support reduced to one node, slabs given a default steel material, load
+cases that accumulated from step to step). After those fixes it gave 0.38 to 0.56 mm
+depending on the mesh, and the 0.47 mm at 0.5 m looked like agreement. It was not: the
+slab was too stiff and the wall was leaning over by 0.3 mm, and the two errors happened to
+offset each other in the largest displacement. Five more causes had to be removed:
+
+1. Linear S3 shells, too stiff in bending.
+2. Three-node beam elements written with their nodes in Gmsh's order rather than
+   CalculiX's.
+3. The wall's line support held about global X instead of about its own edge. IFC gives a
+   support condition in the connection's axes.
+4. The slab rigidly joined to the wall, where the IFC file releases it along that edge.
+5. A column that stops at the slab soffit tied to the slab in translation as well as by
+   its rigid link, which stopped the joint rotating.
+
+The lesson for this project is to compare displacement fields and reactions, never a
+single maximum.
 
 ---
 
 ## Example Model Baselines
 
-Full pipeline, default 1.0 m mesh. These are **regression baselines, not validated
-results**, except where a Tier 2 test covers the model.
+Full pipeline, default 1.0 m mesh (2 m for `building_02`), quadratic elements. These are
+**regression baselines, not validated results**, except where a Tier 2 test covers the
+model.
 
 | Model | Load flag | Max displacement | Vertical reaction | Standing |
 |-------|-----------|------------------|-------------------|----------|
-| `beam_01` | — | 0.26 mm | 20.0 kN | Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 25% stiff |
-| `cantilever_01` | `--gravity` | 0.28 mm | 15 N | Covered by Tier 2 |
-| `structure_01` | `--gravity` | 0.38 mm | 632 N | Covered by Tier 2 (Code_Aster) |
-| `slab_01` | `--gravity` | 0.06 mm | 198 N | Known too stiff |
-| `grid_of_beams` | `--gravity` | 0.49 mm | 244 N | Known not to converge |
-| `portal_01` | — | 3.1 mm | 85.4 kN | Unchecked. All-U1 model |
-| `building_02` | — | 99 mm (Live), 252 mm (Extra_dead) | 29.4 MN | Unchecked. 25.5 mm under self-weight; about half these values at a 2 m mesh |
+| `beam_01` | — | 0.34 mm | 20.0 kN | Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 3% stiff |
+| `cantilever_01` | `--gravity` | 0.28 mm | 17.3 N | Covered by Tier 2 |
+| `structure_01` | `--gravity` | 0.429 mm | 651 N | Covered by Tier 2 (Code_Aster) |
+| `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
+| `grid_of_beams` | `--gravity` | 0.52 mm | 263 N | Known not to converge |
+| `portal_01` | — | 3.8 mm | 85.4 kN | Unchecked. All-U1 model; 4.1 mm at 0.25 m |
+| `building_02` | — | 455 mm (Live), 434 mm (Extra_dead) | 29.4 MN | Unchecked, at a 2 m mesh. 118 mm under self-weight. At 4 m: 385 / 319 / 101 mm |
 | `building_01` | — | — | — | Fails: singular stiffness matrix |
+
+`building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
+of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
+plate benchmark above shows why those were several times too small. Of the 434 mm under
+Extra_dead, 317 mm is horizontal, which has not been explained.
 
 ---
 
@@ -250,12 +307,13 @@ results**, except where a Tier 2 test covers the model.
 
 - **Distributed loads** (`IfcStructuralCurveAction`): exercised by `portal_01` but not
   compared with a reference.
-- **Pinned and roller supports** through the pipeline (Tier 1 covers them in CalculiX only).
-- **Shell members**: no plate-theory benchmark for `IfcStructuralSurfaceMember`.
+- **Pinned and roller supports of beams** through the pipeline (Tier 1 covers them in
+  CalculiX only).
+- **Shell members in membrane action**: walls are only checked through `structure_01`.
 - **T, L and C sections**: section properties are unit-tested against hand calculations,
   but no pipeline benchmark exists. L sections ignore the product of inertia.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
-- **Edge releases and single-axis end releases**: not modelled (see above).
-- **Mixed U1 and B31 beams**: known to be wrong (joints act as pins).
+- **Single-axis end releases between members, and skew supports**: not modelled.
+- **Mixed U1 and native beams**: known to be wrong (joints act as pins).
 - **Buckling** beyond the single Euler column.
