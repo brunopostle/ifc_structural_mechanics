@@ -1903,24 +1903,35 @@ class TestTorsion:
         assert arm["max_T_Nm"] < 1e-3 * TORSION_P * TORSION_LB
 
     @pytest.mark.parametrize(
-        "width, depth, saint_venant, excess",
-        [(0.3, 0.3, 0.1406 * 0.3**4, 1.185), (0.2, 0.4, 0.229 * 0.4 * 0.2**3, 1.164)],
-        ids=["square", "one by two"],
+        "width, depth, saint_venant",
+        [
+            (0.3, 0.3, 0.1406 * 0.3**4),
+            (0.2, 0.4, 0.229 * 0.4 * 0.2**3),
+            (0.4, 0.2, 0.229 * 0.4 * 0.2**3),
+        ],
+        ids=["square", "deep", "flat"],
     )
-    def test_solid_rectangle_is_too_stiff_in_torsion_by_a_known_factor(
-        self, tmp_path, width, depth, saint_venant, excess
+    @pytest.mark.parametrize("element_order", [2, 1])
+    def test_solid_rectangle_twists_as_saint_venant_says(
+        self, tmp_path, width, depth, saint_venant, element_order
     ):
-        """Not a pass mark: CalculiX's own error, which the README owns up to.
+        """CalculiX's own rectangle is 16 to 18.5 % too stiff (`aiz.53`).
 
         One solid element across the section can only warp as x2 * x3, which
-        gives J = a^3 b^3 / 3 (a^2 + b^2) instead of Saint-Venant's value.
+        gives J = a^3 b^3 / 3 (a^2 + b^2). The writer lowers the shear modulus
+        across the width to bring that down to Saint-Venant's value.
         """
-        self._run(tmp_path, "IfcRectangleProfileDef", {"XDim": width, "YDim": depth})
-        used = self._torsion_constant_used(tmp_path)
-        assert used == pytest.approx(
-            expanded_rectangle_torsion_stiffness(depth, width, 1.0, 1.0), rel=0.01
+        path = _balcony_frame(
+            tmp_path, "IfcRectangleProfileDef", {"XDim": width, "YDim": depth}
         )
-        assert used / saint_venant == pytest.approx(excess, rel=0.01)
+        _run(path, tmp_path, mesh_size=self.MESH, element_order=element_order)
+        assert self._torsion_constant_used(tmp_path) == pytest.approx(
+            saint_venant, rel=0.01
+        )
+        assert (
+            expanded_rectangle_torsion_stiffness(depth, width, 1.0, 1.0)
+            > 1.1 * saint_venant
+        )
 
     @pytest.mark.parametrize(
         "profile_class, attributes, torsion_constant",

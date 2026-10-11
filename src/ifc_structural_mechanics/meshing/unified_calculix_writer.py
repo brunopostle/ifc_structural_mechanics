@@ -29,6 +29,7 @@ from ..converters.section_profiles import (
     equivalent_rectangle,
     equivalent_shear_moduli,
     get_native_section,
+    rectangle_shear_moduli,
     uses_user_element,
 )
 from ..domain.structural_member import CurveMember, SurfaceMember
@@ -527,6 +528,60 @@ class UnifiedCalculixWriter:
             )
         self._warn_user(message)
 
+    def _rectangle_moduli(self, member) -> Optional[Tuple[float, float]]:
+        """Shear moduli of a solid rectangular member's own material, if any.
+
+        CalculiX's rectangle is up to 18.5 % too stiff in torsion, so the
+        member gets an orthotropic material with the shear modulus across its
+        width lowered (``rectangle_shear_moduli``). None for any other member.
+        """
+        section = getattr(member, "section", None)
+        if not isinstance(member, CurveMember) or section is None:
+            return None
+        if get_native_section(getattr(section, "section_type", None)) is None:
+            return None
+        material = member.material
+        dimensions = getattr(section, "dimensions", None) or {}
+        constant = getattr(section, "torsional_constant", None)
+        if not material or not constant:
+            return None
+        try:
+            return rectangle_shear_moduli(
+                float(dimensions["height"]),
+                float(dimensions["width"]),
+                material.elastic_modulus / (2.0 * (1.0 + material.poisson_ratio)),
+                float(constant),
+            )
+        except (KeyError, ValueError) as error:
+            raise MeshingError(
+                f"Member {member.id}: section {getattr(section, 'name', None)!r} "
+                f"cannot be analysed, {error}"
+            ) from error
+
+    def _rectangle_material_name(self, member) -> str:
+        """Name of the material of a torsion-corrected rectangular member."""
+        return f"MAT_RT_{self._get_short_id(member.id)}"
+
+    def _note_torsion_corrected_rectangles(self) -> None:
+        """Say once what the torsion correction of solid rectangles costs."""
+        softest = 1.0
+        count = 0
+        for member in self.domain_model.members:
+            if not self.element_sets.get(f"MEMBER_{self._get_short_id(member.id)}"):
+                continue
+            moduli = self._rectangle_moduli(member)
+            if moduli is None:
+                continue
+            count += 1
+            softest = min(softest, moduli[1] / moduli[0])
+        if count:
+            self._warn_user(
+                f"{count} member(s) with a solid rectangular section are given "
+                "their torsional stiffness by lowering the shear stiffness "
+                f"across their width, by up to {100 * (1 - softest):.0f} %. Bending, "
+                "and shear along their depth, are not affected."
+            )
+
     def _identify_and_retype_u1_members(self) -> None:
         """Mark non-standard-section beam members and retype their elements to U1.
 
@@ -544,6 +599,7 @@ class UnifiedCalculixWriter:
         file. Strip retyped elements from every non-U1 member's set once all
         retyping is complete.
         """
+        self._note_torsion_corrected_rectangles()
         if not self._use_user_elements():
             self._assign_equivalent_sections()
             return
@@ -1069,6 +1125,30 @@ class UnifiedCalculixWriter:
                 file.write(f"{material.density * factor:.6e}\n")
             file.write("\n")
 
+        # One material per solid rectangle, with the shear modulus across its
+        # width lowered so that it twists as it should
+        for member in self.domain_model.members:
+            if not self.element_sets.get(f"MEMBER_{self._get_short_id(member.id)}"):
+                continue
+            moduli = self._rectangle_moduli(member)
+            if moduli is None:
+                continue
+            material = member.material
+            modulus = material.elastic_modulus
+            poisson = material.poisson_ratio
+            file.write(f"*MATERIAL, NAME={self._rectangle_material_name(member)}\n")
+            file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
+            file.write(
+                f"{modulus:.6e}, {modulus:.6e}, {modulus:.6e},"
+                f" {poisson:.6e}, {poisson:.6e}, {poisson:.6e},"
+                f" {moduli[0]:.6e}, {moduli[1]:.6e},\n"
+            )
+            file.write(f"{moduli[0]:.6e}\n")
+            if getattr(material, "density", None):
+                file.write("*DENSITY\n")
+                file.write(f"{material.density:.6e}\n")
+            file.write("\n")
+
     @staticmethod
     def _matched_torsion_constant(member) -> Optional[float]:
         """Torsion constant to give a member's equivalent rectangle, if any."""
@@ -1203,9 +1283,23 @@ class UnifiedCalculixWriter:
         if native is not None:
             dims = getattr(member.section, "dimensions", {})
             data_line = native.format_data_line(dims)
+            if self._rectangle_moduli(member) is None:
+                material_and_axes = f"MAT_{material_id}"
+            else:
+                # Its own orthotropic material: 1 along the member, 2 along
+                # the section's depth.
+                orientation = f"OR_{elset_name}"
+                file.write(f"*ORIENTATION, NAME={orientation}, SYSTEM=RECTANGULAR\n")
+                file.write(
+                    ", ".join(f"{v:.6e}" for v in (*beam_axis, *beam_normal)) + "\n"
+                )
+                material_and_axes = (
+                    f"{self._rectangle_material_name(member)},"
+                    f" ORIENTATION={orientation}"
+                )
             file.write(
                 f"*BEAM SECTION, ELSET={elset_name},"
-                f" MATERIAL=MAT_{material_id}, SECTION={native.ccx_keyword}\n"
+                f" MATERIAL={material_and_axes}, SECTION={native.ccx_keyword}\n"
             )
             file.write(f"{data_line}\n")
             file.write(

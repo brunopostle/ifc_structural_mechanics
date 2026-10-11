@@ -1,10 +1,14 @@
 """Unit tests for the section_profiles registry."""
 
+import pytest
+
 from ifc_structural_mechanics.converters.section_profiles import (
     SECTION_REGISTRY,
     SectionProfile,
+    expanded_rectangle_torsion_stiffness,
     get_native_section,
     is_supported,
+    rectangle_shear_moduli,
     uses_user_element,
 )
 
@@ -132,3 +136,37 @@ class TestIsSupported:
 
     def test_none_is_not_supported(self):
         assert not is_supported(None)
+
+
+class TestRectangleShearModuli:
+    """One shear modulus lowered so that a solid rectangle twists as it should."""
+
+    @pytest.mark.parametrize(
+        "a, b, torsion_constant, lowered",
+        [
+            (0.3, 0.3, 0.1406 * 0.3**4, 0.7295),
+            (0.4, 0.2, 0.229 * 0.4 * 0.2**3, 0.5487),
+            (0.2, 0.4, 0.229 * 0.4 * 0.2**3, 0.8295),
+        ],
+        ids=["square", "deep", "flat"],
+    )
+    def test_torsion_is_matched_and_the_depth_modulus_kept(
+        self, a, b, torsion_constant, lowered
+    ):
+        shear = 80e9
+        modulus_12, modulus_13 = rectangle_shear_moduli(a, b, shear, torsion_constant)
+
+        assert modulus_12 == shear
+        assert modulus_13 / shear == pytest.approx(lowered, abs=2e-3)
+        assert expanded_rectangle_torsion_stiffness(
+            a, b, modulus_12, modulus_13
+        ) == pytest.approx(shear * torsion_constant)
+
+    @pytest.mark.parametrize("torsion_constant", [0.0, -1.0, 0.3 * 0.3**3 / 3, 1.0])
+    def test_impossible_torsion_constant_is_refused(self, torsion_constant):
+        with pytest.raises(ValueError, match="torsion constant"):
+            rectangle_shear_moduli(0.3, 0.3, 80e9, torsion_constant)
+
+    def test_sizes_must_be_positive(self):
+        with pytest.raises(ValueError, match="positive"):
+            rectangle_shear_moduli(0.0, 0.3, 80e9, 1e-4)

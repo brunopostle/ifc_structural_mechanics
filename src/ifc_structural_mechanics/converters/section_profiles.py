@@ -13,7 +13,9 @@ No other files need to change — the writer and validator query this registry.
 Element strategy
 ----------------
 * **Native** (``use_general=False``): a CalculiX beam element with
-  ``SECTION=RECT``. Only the solid rectangle is written this way. CalculiX
+  ``SECTION=RECT``. Only the solid rectangle is written this way, with one
+  shear modulus lowered so that it twists as it should
+  (``rectangle_shear_moduli``). CalculiX
   also has CIRC, PIPE and BOX, but PIPE and BOX exist for B32R alone (B31
   rejects them) and a PIPE cantilever measured 83 % too flexible with the
   weight of a solid bar, so they are not used.
@@ -239,6 +241,58 @@ def equivalent_shear_moduli(
         / expanded_rectangle_torsion_stiffness(a, b, modulus_12, modulus_13)
     )
     return modulus_12 * scale, modulus_13 * scale, scale
+
+
+def rectangle_shear_moduli(
+    a: float, b: float, shear_modulus: float, torsion_constant: float
+) -> Tuple[float, float]:
+    """Return the shear moduli that make a solid rectangle twist as it should.
+
+    CalculiX's own rectangle is too stiff in torsion (see
+    ``expanded_rectangle_torsion_stiffness``): 18.5 % for a square, 16 % for
+    1:2. The modulus of the plane of the member axis and ``a`` is kept, so
+    bending and shear along ``a``, the depth, are untouched. The other one is
+    lowered until the torsional stiffness is ``shear_modulus *
+    torsion_constant``::
+
+        P = G a b**3 / 12
+        Q = G J P / (4 P - G J)        G13 = 12 Q / (b a**3)
+
+    The price is the shear stiffness along ``b``, the width, which goes down
+    in the same proportion as ``G13``: 27 % for a square, 45 % for a section
+    twice as deep as wide, 17 % for one twice as wide as deep. Measured: the
+    deflection of a cantilever loaded along ``a`` is the same to four figures
+    with and without this, and loaded along ``b`` it follows Timoshenko with
+    5/6 of the lowered modulus.
+
+    Args:
+        a: Dimension along the section's 1 direction (the depth).
+        b: The other dimension (the width).
+        shear_modulus: Shear modulus of the material.
+        torsion_constant: Saint-Venant's torsion constant of the rectangle.
+
+    Returns:
+        ``(G12, G13)``.
+
+    Raises:
+        ValueError: If the torsion constant is not one a rectangle of this
+            size can have (it must be positive and below ``a b**3 / 3``).
+    """
+    if not (a > 0 and b > 0 and shear_modulus > 0):
+        raise ValueError(
+            f"rectangle needs positive sizes and shear modulus, got a={a}, "
+            f"b={b}, G={shear_modulus}"
+        )
+    limit = a * b**3 / 3.0
+    if not 0 < torsion_constant < limit:
+        raise ValueError(
+            f"torsion constant {torsion_constant} is not between 0 and "
+            f"a b^3 / 3 = {limit}"
+        )
+    p = shear_modulus * a * b**3 / 12.0
+    target = shear_modulus * torsion_constant
+    q = target * p / (4.0 * p - target)
+    return shear_modulus, 12.0 * q / (b * a**3)
 
 
 def get_native_section(section_type: Optional[str]) -> Optional[SectionProfile]:

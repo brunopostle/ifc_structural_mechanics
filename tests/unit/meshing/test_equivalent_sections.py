@@ -163,7 +163,11 @@ class TestChoiceOfModel:
     def test_user_is_told_and_the_model_remembers(self):
         writer = _writer()
 
-        messages = [w["message"] for w in writer.domain_model.analysis_warnings]
+        messages = [
+            w["message"]
+            for w in writer.domain_model.analysis_warnings
+            if "not a solid rectangle" in w["message"]
+        ]
         assert len(messages) == 1
         assert "1 member(s) whose section is not a solid rectangle" in messages[0]
         assert "no stress is reported" in messages[0]
@@ -182,7 +186,11 @@ class TestChoiceOfModel:
         writer._equivalent_sections = {}
         writer._identify_and_retype_u1_members()
 
-        (message,) = [w["message"] for w in writer.domain_model.analysis_warnings]
+        (message,) = [
+            w["message"]
+            for w in writer.domain_model.analysis_warnings
+            if "not a solid rectangle" in w["message"]
+        ]
         assert "1 with a closed or round section have its torsional" in message
         assert "open section" not in message
 
@@ -357,18 +365,57 @@ class TestWrittenInput:
         assert [float(v) for v in lines[3].split(",")] == pytest.approx([a, b])
         assert [float(v) for v in lines[4].split(",")] == pytest.approx([0, 0, 1])
 
-    def test_native_section_keeps_the_shared_material(self):
+    def test_rectangle_has_its_own_material_with_one_shear_modulus_lowered(self):
+        """CalculiX's rectangle is too stiff in torsion (`aiz.53`)."""
         writer = _writer()
-        out = io.StringIO()
+        column = writer.domain_model.get_member("column")
+        materials = io.StringIO()
+        writer._write_materials(materials)
+        section = io.StringIO()
         writer._write_beam_section_for_set(
-            out,
-            writer.domain_model.get_member("column"),
-            "MEMBER_M2",
-            "steel",
-            (1, 0, 0),
+            section, column, "MEMBER_M2", "steel", (1, 0, 0)
         )
 
-        assert "MATERIAL=MAT_steel, SECTION=RECT" in out.getvalue()
+        name = writer._rectangle_material_name(column)
+        block = materials.getvalue().split(f"*MATERIAL, NAME={name}\n")[1]
+        lines = block.splitlines()
+        assert lines[0] == "*ELASTIC, TYPE=ENGINEERING CONSTANTS"
+        values = [float(v) for v in lines[1].rstrip(",").split(",")]
+        shear = E / (2 * (1 + NU))
+        assert values[:3] == pytest.approx([E] * 3)
+        assert values[6] == pytest.approx(shear)
+        assert values[7] < shear
+        depth, width = 0.3, 0.2
+        assert expanded_rectangle_torsion_stiffness(
+            depth, width, values[6], values[7]
+        ) == pytest.approx(shear * column.section.torsional_constant, rel=1e-5)
+        assert lines[3:5] == ["*DENSITY", f"{RHO:.6e}"]
+
+        written = section.getvalue().splitlines()
+        assert written[0] == "*ORIENTATION, NAME=OR_MEMBER_M2, SYSTEM=RECTANGULAR"
+        assert written[2] == (
+            f"*BEAM SECTION, ELSET=MEMBER_M2, MATERIAL={name},"
+            " ORIENTATION=OR_MEMBER_M2, SECTION=RECT"
+        )
+
+    def test_user_is_told_what_the_rectangles_give_up(self):
+        writer = _writer()
+
+        (message,) = [
+            w["message"]
+            for w in writer.domain_model.analysis_warnings
+            if "solid rectangular section" in w["message"]
+        ]
+        assert message.startswith("1 member(s) with a solid rectangular section")
+        assert "by up to 37 %" in message
+
+    def test_rectangle_whose_sizes_are_missing_is_refused(self):
+        writer = _writer()
+        column = writer.domain_model.get_member("column")
+        del column.section.dimensions["height"]
+
+        with pytest.raises(MeshingError, match="Member column"):
+            writer._rectangle_moduli(column)
 
 
 class TestResults:

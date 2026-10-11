@@ -362,6 +362,20 @@ class TestSection:
         assert section.dimensions["web_thickness"] == 0.01
         assert section.dimensions["flange_thickness"] == 0.015
 
+    @pytest.mark.parametrize(
+        "width, height, beta",
+        [(0.3, 0.3, 0.1406), (0.2, 0.4, 0.229), (0.4, 0.2, 0.229), (0.1, 1.0, 0.312)],
+        ids=["square", "deep", "flat", "strip"],
+    )
+    def test_rectangular_torsion_constant_is_saint_venants(self, width, height, beta):
+        """beta * long * short^3, from the tables. It was once 16 times that."""
+        section = Section.create_rectangular_section("s", "rect", width, height)
+
+        long_side, short_side = max(width, height), min(width, height)
+        assert section.torsional_constant == pytest.approx(
+            beta * long_side * short_side**3, rel=0.005
+        )
+
     def test_hollow_rectangular_section_creation(self):
         """Test creation of hollow rectangular section using factory method."""
         section = Section.create_hollow_rectangular_section(

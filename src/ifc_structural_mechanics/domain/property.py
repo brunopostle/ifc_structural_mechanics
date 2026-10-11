@@ -309,15 +309,15 @@ class Section:
         self.moment_of_inertia_y = (b * h**3) / 12  # About y-axis (strong axis)
         self.moment_of_inertia_z = (h * b**3) / 12  # About z-axis (weak axis)
 
-        # Calculate torsional constant
-        if b >= h:
-            self.torsional_constant = (h * b**3) * (
-                16 / 3 - 3.36 * (b / h) * (1 - (b**4) / (12 * h**4))
-            )
-        else:
-            self.torsional_constant = (b * h**3) * (
-                16 / 3 - 3.36 * (h / b) * (1 - (h**4) / (12 * b**4))
-            )
+        # Saint-Venant's torsion constant, from the half sides (Roark): within
+        # 0.5 % for any proportion
+        long_half, short_half = max(b, h) / 2, min(b, h) / 2
+        self.torsional_constant = (long_half * short_half**3) * (
+            16 / 3
+            - 3.36
+            * (short_half / long_half)
+            * (1 - short_half**4 / (12 * long_half**4))
+        )
 
         # Warping constant (not commonly used for rectangular sections)
         self.warping_constant = None
