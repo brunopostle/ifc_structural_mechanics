@@ -590,6 +590,46 @@ one at a time (a material, a thickness, a position, a load group) and checks tha
 is an error or a warning that names what is missing.
 `tests/unit/analysis/test_loads_are_never_made_up.py` does the same for the load writer.
 
+## Placements
+
+An item's points and directions are in the axes of its `ObjectPlacement`. Every example
+model leaves that placement at the origin, so the code that reads it had never run on
+anything but the identity, and it was wrong in three ways (2026-10-11):
+
+- a member's offset was added to coordinates already in metres without being converted
+  itself, so in a file in millimetres a member placed 2 m away landed 2 km away;
+- point connections and loads did not apply their placement at all, so the supports
+  and loads of such a model stayed where the member had been;
+- a placement relative to another one was read without its parent (and, since the
+  error-handling audit, refused).
+
+The whole chain of placements is now applied, in metres, to member geometry and `Axis`,
+connection positions, edges and condition axes, release axes, load positions and the
+forces of loads given in "global" coordinates (which IFC defines as the axes of the
+action's placement).
+
+`TestPlacedModel` gives every item of an example one nested placement, 13.5 m away and
+a quarter turn about Z, and runs it beside the file as shipped. Measured at the mesh
+sizes of the test:
+
+| Model | Unit | Largest displacement, shipped | placed | Vertical reaction, shipped | placed |
+|---|---|---|---|---|---|
+| `beam_01` | mm | 0.3467 mm | 0.3467 mm | 20 000 N | 20 000 N |
+| `portal_01`, gravity | inch | 105.12 mm | 105.12 mm | 4 791 840 N | 4 791 840 N |
+| `structure_01`, gravity | m | 0.4333 mm | 0.4335 mm | 655.90 N | 655.90 N |
+| `building_01`, Live (1 m, not in the suite) | mm | 0.2857 mm | 0.2857 mm | 282 000 N | 282 000 N |
+
+The X and Y displacement components change places, as they should. `structure_01`
+differs in the fourth figure because its slab is meshed afresh in the new position.
+`tests/unit/ifc/test_object_placement.py` checks the extraction alone, with a placement
+that also tilts: every member, connection, axis and load of five examples must be the
+original moved and turned.
+
+Not covered: items of one model under different placements (the code treats each item
+by its own placement, but the tests give them all the same one), and a model turned so
+that its supports are skew to the global axes, which runs into the skew-support
+limitation below.
+
 ## What is not yet validated
 
 - **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
@@ -609,7 +649,7 @@ is an error or a warning that names what is missing.
   between a beam and a slab is analysed as a hinge line.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
-- **Unsupported input**: applied moments, surface connections, nested placements and
+- **Unsupported input**: applied moments, surface connections and
   load kinds other than forces stop the analysis with an error naming the entity. A
   load that varies along its member is applied at its mean value, with a warning.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but

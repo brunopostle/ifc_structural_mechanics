@@ -82,8 +82,7 @@ the ones a user needs to know before trusting a result.
   - a load has no position or no member, applies a moment, or is of a kind
     other than a point, line or area force (temperature, prescribed
     displacement);
-  - an item is placed relative to another placement that is not at the
-    origin (nested `IfcLocalPlacement`);
+  - an item's placement is not an `IfcLocalPlacement` (a grid placement);
   - self-weight is asked for and a material has no mass density.
 
   It carries on, with a warning in the results, when

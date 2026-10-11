@@ -144,7 +144,7 @@ What holds it back:
   sections are full pins.
 - **Input the tool cannot handle.** It now stops, naming the entity, rather
   than substitute a default; what it does not support at all (applied
-  moments, surface supports, nested placements, loads that vary along a
+  moments, surface supports, loads that vary along a
   member) is listed in the README.
 - **Validation coverage.** Pinned supports, open sections, area loads and a
   torsion frame now have benchmarks; a multi-storey frame does not.

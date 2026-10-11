@@ -303,6 +303,15 @@ IFC entities commonly encountered:
 
 Use `entity_identifier.py` functions to classify IFC entities rather than direct `is_a()` checks.
 
+**Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
+representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the
+forces of a load in `GLOBAL_COORDS`. `get_item_transformation(item, length_scale)`
+returns the whole chain of placements with its offset in metres; apply it with
+`transform_vectors()` to coordinates that are already in metres. No example model has a
+placement away from the origin, so nothing but `tests/unit/ifc/test_object_placement.py`
+and `TestPlacedModel` will tell you if a new extraction path forgets it (`aiz.57`: members
+once added the offset in the file's unit, and supports and loads ignored it).
+
 ## Debugging Tools for LLM Agents
 
 Two CLI query tools are provided so that an LLM agent can inspect analysis files without parsing raw binary or fixed-width formats directly.
