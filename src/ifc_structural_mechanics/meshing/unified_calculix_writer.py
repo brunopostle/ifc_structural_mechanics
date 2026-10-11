@@ -282,6 +282,9 @@ class UnifiedCalculixWriter:
             # Step 2c5: Tie beams lying in a slab or wall to it along their length
             self._build_line_bearings()
 
+            # Step 2c6: Hold members that nothing stops spinning about their axis
+            self._hold_spinning_members()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -701,6 +704,13 @@ class UnifiedCalculixWriter:
                 self.element_sets,
                 dict(self.nodes),
             )
+            holds = self._torsion_hold_dofs()
+            if holds:
+                f.write("** Members held against spinning about their own axis\n")
+                f.write("*BOUNDARY\n")
+                for node, dof in holds:
+                    f.write(f"{node}, {dof}, {dof}\n")
+                f.write("\n")
 
             # Analysis steps
             write_analysis_steps(
@@ -995,11 +1005,11 @@ class UnifiedCalculixWriter:
             # section's depth (2) or width (3), set so that the rectangle has
             # the section's shear stiffness in each direction. They also bring
             # its torsional stiffness down, towards that of the open section.
-            # The rectangle's shear area is its whole area, not 5/6 of it:
-            # CalculiX expands a beam into one quadratic solid across the
-            # section, which cannot hold the parabolic shear distribution the
-            # 5/6 comes from (measured: 5/6 left the shear deflection of the
-            # I-section benchmarks 12 to 18 % short).
+            # The rectangle's shear area is taken as its whole area, not 5/6
+            # of it. That is a calibration: with 5/6 the shear deflection of
+            # the I-section benchmarks came out 12 to 18 % short. An isotropic
+            # rectangle in CalculiX does follow 5/6; these orthotropic ones,
+            # with shear moduli far below their axial modulus, do not.
             shear = material.elastic_modulus / (2.0 * (1.0 + poisson))
             rectangle_shear_area = depth * width
             isotropic = modulus / (2.0 * (1.0 + poisson))
@@ -1496,6 +1506,8 @@ class UnifiedCalculixWriter:
                     for dof in dofs:
                         bc_node_dofs.add((node, dof))
 
+        bc_node_dofs.update(self._torsion_hold_dofs())
+
         logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
         if logger.isEnabledFor(logging.DEBUG):
             # Log first 20 for debugging
@@ -1918,12 +1930,19 @@ class UnifiedCalculixWriter:
         corner to corner and the beams carry nothing.
 
         A curve member with two or more nodes in the mesh of one surface
-        member is taken to lie in it. Each of its nodes that the shell mesh
-        does not already share is made to follow the shell there: its
+        member is taken to lie in it; with one, to meet it at a point (a
+        column ending on a slab or passing through it; the geometry stage
+        seeds a node there in both meshes). Each of its nodes that the shell
+        mesh does not already share is made to follow the shell there: its
         translations are interpolated from the nodes of the triangle it falls
         in, with that element's shape functions. Rotations are not tied, so
-        the line is a hinge line: the surface bears on the member and neither
-        twists the other.
+        a line is a hinge line and a point is a pin: the surface bears on the
+        member and neither twists the other.
+
+        A line connection of the file that joins the two (an
+        ``IfcStructuralCurveConnection``) is honoured the same way, without
+        the warning and whatever ``strict_connections`` says. A point where a
+        connection of the file already joins them is left to that connection.
 
         Nodes on a rigid link are left alone, for the reason given in
         ``_write_point_connection``. With ``strict_connections`` set in the
@@ -1959,10 +1978,33 @@ class UnifiedCalculixWriter:
                     flat.min(axis=0) - tol,
                     flat.max(axis=0) + tol,
                     {n for tri in triangles for n in tri},
+                    member.id,
                 )
             )
         if not surfaces:
             return
+
+        # What the file itself connects: a line connection joining a curve
+        # member and a surface member, and the points where two members share
+        # a connection.
+        explicit_lines = set()
+        shared_points: Dict[Tuple[str, str], List[np.ndarray]] = {}
+        for conn in self.domain_model.connections:
+            ids = [m for m in conn.connected_members or []]
+            position = None
+            if getattr(conn, "position", None):
+                try:
+                    position = np.array([float(v) for v in conn.position[:3]])
+                except (TypeError, ValueError):
+                    position = None
+            for a in ids:
+                for b in ids:
+                    if a == b:
+                        continue
+                    if getattr(conn, "edge", None):
+                        explicit_lines.add((a, b))
+                    if position is not None:
+                        shared_points.setdefault((a, b), []).append(position)
 
         def locate(point: np.ndarray, corners: np.ndarray):
             """Index and barycentric coordinates of the triangle holding ``point``."""
@@ -2000,7 +2042,8 @@ class UnifiedCalculixWriter:
         for surface in surfaces:
             all_shell_nodes |= surface[4]
 
-        bearing_members = 0
+        strict = self.analysis_config.get_strict_connections()
+        lying, meeting = set(), set()
         for member in self.domain_model.members:
             if not isinstance(member, CurveMember):
                 continue
@@ -2019,8 +2062,9 @@ class UnifiedCalculixWriter:
             lo = np.min(list(points.values()), axis=0)
             hi = np.max(list(points.values()), axis=0)
 
-            member_ties: List[Tuple[int, List[Tuple[int, float]]]] = []
-            for triangles, corners, s_lo, s_hi, shell_nodes in surfaces:
+            # (node, terms, implied by geometry alone, along a line)
+            member_ties: List[Tuple[int, List[Tuple[int, float]], bool, bool]] = []
+            for triangles, corners, s_lo, s_hi, shell_nodes, surface_id in surfaces:
                 if (hi < s_lo).any() or (lo > s_hi).any():
                     continue
                 found = 0
@@ -2042,18 +2086,26 @@ class UnifiedCalculixWriter:
                         if abs(weight) > 1e-9
                     ]
                     ties.append((node, terms))
-                if found >= 2:
-                    member_ties.extend(ties)
+                along_a_line = found >= 2
+                connected = (member.id, surface_id) in explicit_lines
+                for node, terms in ties:
+                    if not along_a_line and any(
+                        float(np.linalg.norm(points[node] - p)) <= tol
+                        for p in shared_points.get((member.id, surface_id), ())
+                    ):
+                        continue  # a connection of the file joins them here
+                    member_ties.append((node, terms, not connected, along_a_line))
 
             seen = set()
-            wrote = False
-            for node, terms in member_ties:
+            for node, terms, implied, along_a_line in member_ties:
                 if node in seen or node in linked_nodes or node in all_shell_nodes:
                     continue
                 seen.add(node)
+                if implied:
+                    (lying if along_a_line else meeting).add(member.id)
+                    if strict:
+                        continue
                 self._line_bearings.append((node, terms))
-                wrote = True
-            bearing_members += wrote
 
         # A node shared by two members is tied once
         unique = {}
@@ -2061,25 +2113,42 @@ class UnifiedCalculixWriter:
             unique.setdefault(node, terms)
         self._line_bearings = sorted(unique.items())
 
-        if not self._line_bearings:
-            return
-        found = (
-            f"{bearing_members} curve member(s) lie in a surface member that "
-            "the model does not connect to them along their length. "
-        )
-        if self.analysis_config.get_strict_connections():
-            self._line_bearings = []
-            self._warn_user(
-                found + "Strict connections were requested, so they are left "
-                "unconnected there; a slab connected only at its corners spans "
-                "between them."
+        # A member that both lies in one surface and meets another is reported
+        # for the line only
+        meeting -= lying
+        if lying:
+            found = (
+                f"{len(lying)} curve member(s) lie in a surface member that "
+                "the model does not connect to them along their length. "
             )
-        else:
-            self._warn_user(
-                found + "They are tied to it in translation along the line (a "
-                "hinge line), as a slab bearing on its beams. Use strict "
-                "connections to analyse only the connections in the file."
+            if strict:
+                self._warn_user(
+                    found + "Strict connections were requested, so they are left "
+                    "unconnected there; a slab connected only at its corners spans "
+                    "between them."
+                )
+            else:
+                self._warn_user(
+                    found + "They are tied to it in translation along the line (a "
+                    "hinge line), as a slab bearing on its beams. Use strict "
+                    "connections to analyse only the connections in the file."
+                )
+        if meeting:
+            found = (
+                f"{len(meeting)} curve member(s) meet a surface member at a point "
+                "where the model has no connection. "
             )
+            if strict:
+                self._warn_user(
+                    found + "Strict connections were requested, so they are left "
+                    "unconnected there."
+                )
+            else:
+                self._warn_user(
+                    found + "They are tied to it in translation there, as a "
+                    "column bearing on or passing through a slab. Use strict "
+                    "connections to analyse only the connections in the file."
+                )
 
     @staticmethod
     def _write_equation(file: TextIO, terms: List[Tuple[int, int, float]]) -> None:
@@ -2129,6 +2198,98 @@ class UnifiedCalculixWriter:
                 )
                 constrained_node_dofs.add((node, dof))
         file.write("**\n")
+
+    def _hold_spinning_members(self) -> None:
+        """Hold in torsion the members nothing stops spinning about their axis.
+
+        A beam on two pinned supports, each restraining the three translations
+        and no rotation, is free to turn about its own axis. That is how a
+        simply supported beam is usually described, and it is a mechanism:
+        the solver returns an arbitrary rotation, which shows up in the
+        displacements of the section's faces (a 0.3 m beam came out with more
+        than twice its deflection).
+
+        A member counts as held when a support restrains rotation about its
+        axis, or when it joins another member without a torsional release.
+        One that is not held gets that rotation restrained at one of its
+        supports, and the user is told. A member with no support of its own,
+        or whose axis is not along a global one, is only reported.
+        """
+        from ..analysis.boundary_condition_handling import (
+            get_constrained_dofs,
+            get_released_rotations,
+        )
+
+        self._torsion_holds: List[Tuple[Any, str, int]] = []
+        held, loose = [], []
+        for member in self.domain_model.members:
+            if not isinstance(member, CurveMember) or member.id in self._u1_members:
+                continue
+            endpoints = self._get_member_endpoints(member.id)
+            if endpoints is None:
+                continue
+            axis = endpoints[1] - endpoints[0]
+            length = float(np.linalg.norm(axis))
+            if length < 1e-12:
+                continue
+            axis = np.abs(axis / length)
+            # Global rotation DOFs with a share in rotation about the member
+            about_axis = {4 + i for i in range(3) if axis[i] > 0.5}
+
+            connections = [
+                c
+                for c in self.domain_model.connections
+                if member.id in (c.connected_members or [])
+            ]
+            if not connections:
+                continue
+            restrained = False
+            supports = []
+            for conn in connections:
+                others = [
+                    m
+                    for m in conn.connected_members
+                    if m != member.id and not m.startswith("dummy_member_")
+                ]
+                released = get_released_rotations(conn, member.id)
+                torsion_released = released is None or bool(about_axis & set(released))
+                fixed = set(get_constrained_dofs(conn))
+                if (others and not torsion_released) or (about_axis & fixed):
+                    restrained = True
+                    break
+                if fixed and not others:
+                    supports.append(conn)
+            if restrained:
+                continue
+            aligned = [i for i in range(3) if axis[i] > 1.0 - 1e-6]
+            if supports and aligned:
+                self._torsion_holds.append((supports[0], member.id, 4 + aligned[0]))
+                held.append(member.id)
+            else:
+                loose.append(member.id)
+
+        if held:
+            self._warn_user(
+                f"{len(held)} member(s) are free to spin about their own axis: no "
+                "support or joint restrains that rotation. Each is held in "
+                "torsion at one of its supports so that the results are "
+                f"defined: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''}"
+            )
+        if loose:
+            self._warn_user(
+                f"{len(loose)} member(s) are free to spin about their own axis and "
+                "could not be held automatically; their displacements include "
+                f"an arbitrary rotation: {', '.join(loose[:5])}"
+                f"{' ...' if len(loose) > 5 else ''}"
+            )
+
+    def _torsion_hold_dofs(self) -> List[Tuple[int, int]]:
+        """The ``(node, dof)`` restraints decided by ``_hold_spinning_members``."""
+        holds = []
+        for conn, member_id, dof in getattr(self, "_torsion_holds", []):
+            for _, node in self._find_connection_nodes_at_location(conn, [member_id]):
+                holds.append((node, dof))
+        return holds
 
     def _rigid_link_groups(self) -> Dict[int, int]:
         """Map each node on a rigid link to a label shared by all nodes linked to it."""

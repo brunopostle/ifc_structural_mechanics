@@ -556,7 +556,7 @@ class TestSectionApproximations:
             "IfcCircleProfileDef",
             "IfcLShapeProfileDef",
             "IfcTShapeProfileDef",
-            "IfcChannelProfileDef",
+            "IfcUShapeProfileDef",
         }
 
         def _is_a(*args):

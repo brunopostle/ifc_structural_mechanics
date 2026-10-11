@@ -61,6 +61,14 @@ CANT_G = CANT_E / (2 * (1 + CANT_NU))
 SOB_L, SOB_B, SOB_T = 5.0, 1.0, 0.1
 SOB_BEAM_B, SOB_BEAM_H = 0.2, 0.4
 
+# Columns under slab_01 that the file does not connect to it
+COLUMN_SIDE, COLUMN_HEIGHT = 0.3, 3.0
+COLUMN_POSITIONS = ((1.25, 0.75), (3.75, 0.75), (1.25, 2.25), (3.75, 2.25))
+
+# Cantilever with an arm on its tip, to twist it (built from scratch)
+TORSION_E, TORSION_NU = 2.1e11, 0.3
+TORSION_LA, TORSION_LB, TORSION_P = 3.0, 1.0, 1000.0
+
 # I-profile used for the open-section cases
 I_B, I_H, I_TW, I_TF = 0.2, 0.4, 0.01, 0.02
 I_AREA = 2 * I_B * I_TF + (I_H - 2 * I_TF) * I_TW
@@ -107,14 +115,65 @@ def _edge_condition(model, fixed):
     )
 
 
-def _slab_variant(tmp_path, edge_conditions, extra_edges=()) -> str:
+def _add_area_load(model, slab, force_per_area) -> None:
+    """Put a uniform area load in global axes on a slab, in a load case of its own."""
+    history = slab.OwnerHistory
+    action = model.create_entity(
+        "IfcStructuralPlanarAction",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=history,
+        Name="benchmark area load",
+        ObjectPlacement=slab.ObjectPlacement,
+        AppliedLoad=model.create_entity(
+            "IfcStructuralLoadPlanarForce",
+            None,
+            *[float(component) for component in force_per_area],
+        ),
+        GlobalOrLocal="GLOBAL_COORDS",
+        ProjectedOrTrue="TRUE_LENGTH",
+        PredefinedType="CONST",
+    )
+    model.create_entity(
+        "IfcRelConnectsStructuralActivity",
+        ifcopenshell.guid.new(),
+        history,
+        None,
+        None,
+        slab,
+        action,
+    )
+    case = model.create_entity(
+        "IfcStructuralLoadCase",
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=history,
+        Name="Imposed",
+        PredefinedType="LOAD_CASE",
+        ActionType="VARIABLE_Q",
+        ActionSource="LIVE_LOAD_Q",
+    )
+    model.create_entity(
+        "IfcRelAssignsToGroup",
+        ifcopenshell.guid.new(),
+        history,
+        None,
+        None,
+        [action],
+        None,
+        case,
+    )
+    analysis = model.by_type("IfcStructuralAnalysisModel")[0]
+    analysis.LoadedBy = list(analysis.LoadedBy or []) + [case]
+
+
+def _slab_variant(tmp_path, edge_conditions, extra_edges=(), area_load=None) -> str:
     """Write a copy of slab_01.ifc with new line supports.
 
     slab_01 is a 5 m x 3 m slab, 0.2 m thick, with line supports along x = 0
     and x = 5. ``edge_conditions`` gives the support condition of those two, in
     that order. ``extra_edges`` adds line supports, each as (start, end, fixed).
     The conditions on the member side of each connection are removed, so the
-    support condition alone decides how the edge behaves.
+    support condition alone decides how the edge behaves. ``area_load`` adds a
+    uniform load on the slab (force per area, global axes) in a load case.
     """
     model = ifcopenshell.open(SLAB)
     slab = model.by_type("IfcStructuralSurfaceMember")[0]
@@ -169,6 +228,8 @@ def _slab_variant(tmp_path, edge_conditions, extra_edges=()) -> str:
             connection,
         )
         group.RelatedObjects = list(group.RelatedObjects) + [connection]
+    if area_load is not None:
+        _add_area_load(model, slab, area_load)
     path = str(tmp_path / "variant.ifc")
     model.write(path)
     return path
@@ -676,6 +737,270 @@ class TestFixedFixedBeamLineLoad:
         assert reaction["fy_N"] == pytest.approx(-self.LOAD * self.B.LENGTH, rel=0.01)
 
 
+PIN = (True, True, True, True, False, False)  # torsion held, bending free
+ROLLER = (False, True, True, False, False, False)
+BALL = (True, True, True, False, False, False)
+
+
+def _beam_on_supports(tmp_path, start, end, line_load=None, i_profile=False) -> str:
+    """Write beam_01.ifc with new support conditions (dx, dy, dz, drx, dry, drz).
+
+    The point load stays unless ``line_load`` (N/m, along global -Z) replaces it.
+    """
+    if line_load is None:
+        model = ifcopenshell.open(BEAM)
+        if i_profile:
+            _give_beam_01_an_i_profile(model)
+    else:
+        model = ifcopenshell.open(
+            _beam_with_line_load(tmp_path, (0.0, 0.0, -line_load), i_profile=i_profile)
+        )
+    supports = sorted(
+        model.by_type("IfcStructuralPointConnection"), key=lambda c: c.id()
+    )
+    for support, fixed in zip(supports, (start, end)):
+        support.AppliedCondition = model.create_entity(
+            "IfcBoundaryNodeCondition",
+            None,
+            *[model.create_entity("IfcBoolean", bool(value)) for value in fixed],
+        )
+    path = str(tmp_path / "supports.ifc")
+    model.write(path)
+    return path
+
+
+class TestSimplySupportedBeam:
+    """beam_01 on a pin and a roller: the supports every textbook starts with."""
+
+    B = TestFixedFixedBeamPointLoad
+    LINE_LOAD = 5000.0  # N/m
+    MESH = 0.25
+
+    def _shear_stiffness(self) -> float:
+        return self.B.E / (2 * (1 + self.B.NU)) * self.B.AREA * 5 / 6
+
+    def test_point_load(self, tmp_path):
+        """P L^3 / 48 E I plus shear; moment P L / 4 and shear P / 2."""
+        data = _run(_beam_on_supports(tmp_path, PIN, ROLLER), tmp_path, self.MESH)
+        load, length = self.B.LOAD, self.B.LENGTH
+        expected = load * length**3 / (48 * self.B.E * self.B.INERTIA) + (
+            load * length / (4 * self._shear_stiffness())
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        forces = _curve_member_envelope(data)["section_forces"]
+        assert forces["max_Mf1_Nm"] == pytest.approx(
+            load * length / 4, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Vf1_N"] == pytest.approx(load / 2, rel=FORCE_TOLERANCE)
+        assert forces["max_N_N"] < 1e-3 * load
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            load, rel=1e-3
+        )
+
+    def test_no_moment_at_the_supports(self, tmp_path):
+        data = _run(_beam_on_supports(tmp_path, PIN, ROLLER), tmp_path, self.MESH)
+        diagram = _curve_member_diagram(data)
+        largest = self.B.LOAD * self.B.LENGTH / 4
+        assert abs(diagram["Mf1_Nm"][0]) < 0.01 * largest
+        assert abs(diagram["Mf1_Nm"][-1]) < 0.01 * largest
+
+    def test_roller_end_moves_along_the_beam(self, tmp_path):
+        """Held at both ends the beam cannot shorten; on a roller it does."""
+        roller = _run(_beam_on_supports(tmp_path, PIN, ROLLER), tmp_path, self.MESH)
+        assert roller["global_displacements"]["envelope"]["max_tx_m"] > 0
+
+    def test_line_load(self, tmp_path):
+        """5 w L^4 / 384 E I plus shear; moment w L^2 / 8."""
+        path = _beam_on_supports(tmp_path, PIN, ROLLER, line_load=self.LINE_LOAD)
+        data = _run(path, tmp_path, self.MESH)
+        load, length = self.LINE_LOAD, self.B.LENGTH
+        expected = 5 * load * length**4 / (384 * self.B.E * self.B.INERTIA) + (
+            load * length**2 / (8 * self._shear_stiffness())
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        forces = _curve_member_envelope(data)["section_forces"]
+        assert forces["max_Mf1_Nm"] == pytest.approx(
+            load * length**2 / 8, rel=FORCE_TOLERANCE
+        )
+
+    def test_i_section_line_load(self, tmp_path):
+        """A third of the deflection is shear in the web."""
+        path = _beam_on_supports(
+            tmp_path, PIN, ROLLER, line_load=self.LINE_LOAD, i_profile=True
+        )
+        data = _run(path, tmp_path, self.MESH)
+        load, length = self.LINE_LOAD, self.B.LENGTH
+        shear_modulus = self.B.E / (2 * (1 + self.B.NU))
+        expected = 5 * load * length**4 / (384 * self.B.E * I_STRONG) + (
+            load * length**2 / (8 * shear_modulus * I_H * I_TW)
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_supports_that_leave_the_beam_free_to_spin(self, tmp_path):
+        """Three translations at each end and nothing else: the usual input.
+
+        Nothing stops the beam turning about its own axis. It used to solve
+        anyway, with an arbitrary rotation that more than doubled the
+        deflection read on the faces of the section. It is now held in
+        torsion at one support, and says so.
+        """
+        result = analyze_ifc(
+            ifc_path=_beam_on_supports(tmp_path, BALL, BALL),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(str(tmp_path / "out"), "results.json")) as fh:
+            data = json.load(fh)
+        load, length = self.B.LOAD, self.B.LENGTH
+        expected = load * length**3 / (48 * self.B.E * self.B.INERTIA) + (
+            load * length / (4 * self._shear_stiffness())
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        messages = [w["message"] for w in result["warnings"]]
+        assert any("free to spin about their own axis" in m for m in messages)
+
+    def test_properly_supported_beam_raises_no_such_warning(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=_beam_on_supports(tmp_path, PIN, ROLLER),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+        )
+        assert not any("spin" in w["message"] for w in result["warnings"])
+
+
+def _inertia_of_rectangles(rectangles):
+    """Area and centroidal second moments of a section built of rectangles.
+
+    Each rectangle is ``(x0, x1, y0, y1)``. Returns ``(area, about x, about y)``.
+    """
+    area = sum((x1 - x0) * (y1 - y0) for x0, x1, y0, y1 in rectangles)
+    cx = sum((x1 - x0) * (y1 - y0) * (x0 + x1) / 2 for x0, x1, y0, y1 in rectangles)
+    cy = sum((x1 - x0) * (y1 - y0) * (y0 + y1) / 2 for x0, x1, y0, y1 in rectangles)
+    cx, cy = cx / area, cy / area
+    about_x = sum(
+        (x1 - x0) * (y1 - y0) ** 3 / 12
+        + (x1 - x0) * (y1 - y0) * ((y0 + y1) / 2 - cy) ** 2
+        for x0, x1, y0, y1 in rectangles
+    )
+    about_y = sum(
+        (y1 - y0) * (x1 - x0) ** 3 / 12
+        + (x1 - x0) * (y1 - y0) * ((x0 + x1) / 2 - cx) ** 2
+        for x0, x1, y0, y1 in rectangles
+    )
+    return area, about_x, about_y
+
+
+# T, angle and channel, 200 wide and 400 deep. Each entry: IFC class, its
+# attributes, the rectangles the section is made of, and the shear areas for
+# loads along the depth and along the width.
+_T_WEB, _T_FLANGE, _ANGLE_T = 0.01, 0.02, 0.02
+OPEN_SECTIONS = {
+    "T": (
+        "IfcTShapeProfileDef",
+        {
+            "Depth": I_H,
+            "FlangeWidth": I_B,
+            "WebThickness": _T_WEB,
+            "FlangeThickness": _T_FLANGE,
+        },
+        [
+            (-I_B / 2, I_B / 2, I_H - _T_FLANGE, I_H),
+            (-_T_WEB / 2, _T_WEB / 2, 0.0, I_H - _T_FLANGE),
+        ],
+        _T_WEB * (I_H - _T_FLANGE),
+        I_B * _T_FLANGE,
+    ),
+    "angle": (
+        "IfcLShapeProfileDef",
+        {"Depth": I_H, "Width": I_B, "Thickness": _ANGLE_T},
+        [(0.0, _ANGLE_T, 0.0, I_H), (_ANGLE_T, I_B, 0.0, _ANGLE_T)],
+        2 / 3 * _ANGLE_T * I_H,
+        2 / 3 * _ANGLE_T * I_B,
+    ),
+    "channel": (
+        "IfcUShapeProfileDef",
+        {
+            "Depth": I_H,
+            "FlangeWidth": I_B,
+            "WebThickness": _T_WEB,
+            "FlangeThickness": _T_FLANGE,
+        },
+        [
+            (0.0, _T_WEB, 0.0, I_H),
+            (_T_WEB, I_B, 0.0, _T_FLANGE),
+            (_T_WEB, I_B, I_H - _T_FLANGE, I_H),
+        ],
+        I_H * _T_WEB,
+        2 * I_B * _T_FLANGE,
+    ),
+}
+
+
+class TestTeeAngleAndChannel:
+    """cantilever_01 with a T, an angle and a channel, about both axes.
+
+    The reference is beam theory with the section's second moments about its
+    centroidal axes parallel to its legs, worked out here from its rectangles.
+    For the angle that is the library's assumption, not the whole truth: an
+    angle's principal axes are rotated, and a real one also moves sideways.
+    """
+
+    @pytest.mark.parametrize("shape", sorted(OPEN_SECTIONS))
+    @pytest.mark.parametrize("weak", [False, True], ids=["strong", "weak"])
+    def test_self_weight_deflection_and_reaction(self, tmp_path, shape, weak):
+        ifc_class, attributes, rectangles, shear_depth, shear_width = OPEN_SECTIONS[
+            shape
+        ]
+        area, strong, weak_inertia = _inertia_of_rectangles(rectangles)
+        model = ifcopenshell.open(CANTILEVER)
+        if weak:
+            member = model.by_type("IfcStructuralCurveMember")[0]
+            member.Axis.DirectionRatios = (0.0, 1.0, 0.0)
+        model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+            ifc_class, ProfileType="AREA", ProfileName=shape, **attributes
+        )
+        path = str(tmp_path / "variant.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, gravity=True)
+        expected = _cantilever_self_weight(
+            area,
+            weak_inertia if weak else strong,
+            shear_width if weak else shear_depth,
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            CANT_RHO * G_ACCEL * area * CANT_L, rel=0.02
+        )
+
+    def test_unsupported_profile_stops_the_analysis(self, tmp_path):
+        """A Z section used to be analysed as a 0.1 x 0.2 m rectangle, in silence."""
+        model = ifcopenshell.open(CANTILEVER)
+        model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+            "IfcZShapeProfileDef",
+            ProfileType="AREA",
+            ProfileName="Z 400",
+            Depth=I_H,
+            FlangeWidth=I_B,
+            WebThickness=_T_WEB,
+            FlangeThickness=_T_FLANGE,
+        )
+        path = str(tmp_path / "z.ifc")
+        model.write(path)
+        with pytest.raises(Exception, match="IfcZShapeProfileDef.*not supported"):
+            analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"), gravity=True)
+
+
 class TestFixedFixedISectionBeam:
     """beam_01 with the I section as an equivalent rectangle, under applied loads."""
 
@@ -1087,6 +1412,508 @@ class TestSlabBearingOnBeams:
         assert any("2 curve member(s) lie in a surface member" in m for m in messages)
 
 
+def _balcony_frame(tmp_path, profile_class, profile_attributes) -> str:
+    """Write a cantilever with an arm at right angles on its tip, loaded at the end.
+
+    Member A runs 3 m along X from a fixed support; member B runs 1 m along Y
+    from A's tip, rigidly joined to it; 1 kN acts downwards on B's free end.
+    The load bends both and twists A with a torque of 1 kN m. Units are m, N
+    and Pa, steel.
+    """
+    model = ifcopenshell.file(schema="IFC4")
+    create = model.create_entity
+    guid = ifcopenshell.guid.new
+    up = create("IfcDirection", (0.0, 0.0, 1.0))
+    axes = create(
+        "IfcAxis2Placement3D",
+        create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+        up,
+        create("IfcDirection", (1.0, 0.0, 0.0)),
+    )
+    placement = create("IfcLocalPlacement", None, axes)
+    units = create(
+        "IfcUnitAssignment", [create("IfcSIUnit", None, "LENGTHUNIT", None, "METRE")]
+    )
+    context = create(
+        "IfcGeometricRepresentationContext", None, "Model", 3, 1e-5, axes, None
+    )
+    project = create(
+        "IfcProject",
+        guid(),
+        None,
+        "Benchmark",
+        None,
+        None,
+        None,
+        None,
+        [context],
+        units,
+    )
+    case = create(
+        "IfcStructuralLoadCase",
+        GlobalId=guid(),
+        Name="Tip load",
+        PredefinedType="LOAD_CASE",
+        ActionType="VARIABLE_Q",
+        ActionSource="LIVE_LOAD_Q",
+    )
+    analysis = create(
+        "IfcStructuralAnalysisModel",
+        guid(),
+        None,
+        "Balcony",
+        None,
+        None,
+        "NOTDEFINED",
+        axes,
+        [case],
+        None,
+        placement,
+    )
+    create("IfcRelDeclares", guid(), None, None, None, project, [analysis])
+
+    material = create("IfcMaterial", "Steel", None, None)
+    create(
+        "IfcMaterialProperties",
+        "Pset_MaterialMechanical",
+        None,
+        [
+            create(
+                "IfcPropertySingleValue",
+                "YoungModulus",
+                None,
+                create("IfcModulusOfElasticityMeasure", TORSION_E),
+                None,
+            ),
+            create(
+                "IfcPropertySingleValue",
+                "PoissonRatio",
+                None,
+                create("IfcPositiveRatioMeasure", TORSION_NU),
+                None,
+            ),
+        ],
+        material,
+    )
+    profile = create(
+        profile_class, ProfileType="AREA", ProfileName="Section", **profile_attributes
+    )
+    profile_set = create(
+        "IfcMaterialProfileSet",
+        None,
+        None,
+        [create("IfcMaterialProfile", "Section", None, material, profile, None, None)],
+        None,
+    )
+
+    def vertex(point):
+        return create(
+            "IfcVertexPoint",
+            create("IfcCartesianPoint", tuple(float(v) for v in point)),
+        )
+
+    def shape(kind, item):
+        topology = create(
+            "IfcTopologyRepresentation", context, "Reference", kind, [item]
+        )
+        return create("IfcProductDefinitionShape", None, None, [topology])
+
+    def member(start, end):
+        return create(
+            "IfcStructuralCurveMember",
+            guid(),
+            None,
+            "Member",
+            None,
+            None,
+            placement,
+            shape("Edge", create("IfcEdge", vertex(start), vertex(end))),
+            "RIGID_JOINED_MEMBER",
+            up,
+        )
+
+    def connection(point, fixed):
+        condition = (
+            create(
+                "IfcBoundaryNodeCondition",
+                None,
+                *[create("IfcBoolean", True) for _ in range(6)],
+            )
+            if fixed
+            else None
+        )
+        return create(
+            "IfcStructuralPointConnection",
+            guid(),
+            None,
+            "Connection",
+            None,
+            None,
+            placement,
+            shape("Vertex", vertex(point)),
+            condition,
+            None,
+        )
+
+    def connect(structural_member, structural_connection):
+        create(
+            "IfcRelConnectsStructuralMember",
+            guid(),
+            None,
+            None,
+            None,
+            structural_member,
+            structural_connection,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    root, corner, tip = (0, 0, 0), (TORSION_LA, 0, 0), (TORSION_LA, TORSION_LB, 0)
+    main, arm = member(root, corner), member(corner, tip)
+    support, joint = connection(root, True), connection(corner, False)
+    connect(main, support)
+    connect(main, joint)
+    connect(arm, joint)
+    create(
+        "IfcRelAssociatesMaterial", guid(), None, None, None, [main, arm], profile_set
+    )
+
+    action = create(
+        "IfcStructuralPointAction",
+        GlobalId=guid(),
+        Name="Tip load",
+        ObjectPlacement=placement,
+        Representation=shape("Vertex", vertex(tip)),
+        AppliedLoad=create(
+            "IfcStructuralLoadSingleForce", None, 0.0, 0.0, -TORSION_P, 0.0, 0.0, 0.0
+        ),
+        GlobalOrLocal="GLOBAL_COORDS",
+    )
+    create("IfcRelConnectsStructuralActivity", guid(), None, None, None, arm, action)
+    create("IfcRelAssignsToGroup", guid(), None, None, None, [action], None, case)
+    create(
+        "IfcRelAssignsToGroup",
+        guid(),
+        None,
+        None,
+        None,
+        [main, arm, support, joint],
+        None,
+        analysis,
+    )
+    path = str(tmp_path / "balcony.ifc")
+    model.write(path)
+    return path
+
+
+def _slab_on_unconnected_columns(tmp_path, top: float) -> str:
+    """Write slab_01 standing on four columns that the file does not connect to it.
+
+    The slab's own supports are removed. Four 0.3 m square columns, fixed at
+    z = -3, stand under its quarter points and run up to ``top``: 0 to end on
+    the slab, more to pass through it.
+    """
+    model = ifcopenshell.open(SLAB)
+    slab = model.by_type("IfcStructuralSurfaceMember")[0]
+    group = model.by_type("IfcRelAssignsToGroup")[0]
+    for relation in model.by_type("IfcRelConnectsStructuralMember"):
+        model.remove(relation)
+    for connection in model.by_type("IfcStructuralCurveConnection"):
+        group.RelatedObjects = [o for o in group.RelatedObjects if o != connection]
+        model.remove(connection)
+    history = slab.OwnerHistory
+    context = slab.Representation.Representations[0].ContextOfItems
+    material = model.by_type("IfcMaterial")[0]
+    profile = model.create_entity(
+        "IfcRectangleProfileDef", "AREA", "Column", None, COLUMN_SIDE, COLUMN_SIDE
+    )
+    profile_set = model.create_entity(
+        "IfcMaterialProfileSet",
+        None,
+        None,
+        [
+            model.create_entity(
+                "IfcMaterialProfile", "Column", None, material, profile, None, None
+            )
+        ],
+        None,
+    )
+
+    def vertex(point):
+        return model.create_entity(
+            "IfcVertexPoint",
+            model.create_entity("IfcCartesianPoint", tuple(float(v) for v in point)),
+        )
+
+    def shape(kind, item):
+        return model.create_entity(
+            "IfcProductDefinitionShape",
+            None,
+            None,
+            [
+                model.create_entity(
+                    "IfcTopologyRepresentation", context, "Reference", kind, [item]
+                )
+            ],
+        )
+
+    columns, added = [], []
+    for x, y in COLUMN_POSITIONS:
+        base = (x, y, -COLUMN_HEIGHT)
+        column = model.create_entity(
+            "IfcStructuralCurveMember",
+            ifcopenshell.guid.new(),
+            history,
+            "Column",
+            None,
+            None,
+            slab.ObjectPlacement,
+            shape(
+                "Edge",
+                model.create_entity("IfcEdge", vertex(base), vertex((x, y, top))),
+            ),
+            "RIGID_JOINED_MEMBER",
+            model.create_entity("IfcDirection", (1.0, 0.0, 0.0)),
+        )
+        support = model.create_entity(
+            "IfcStructuralPointConnection",
+            ifcopenshell.guid.new(),
+            history,
+            "Base",
+            None,
+            None,
+            slab.ObjectPlacement,
+            shape("Vertex", vertex(base)),
+            model.create_entity(
+                "IfcBoundaryNodeCondition",
+                None,
+                *[model.create_entity("IfcBoolean", True) for _ in range(6)],
+            ),
+            None,
+        )
+        model.create_entity(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            history,
+            None,
+            None,
+            column,
+            support,
+            None,
+            None,
+            None,
+            None,
+        )
+        columns.append(column)
+        added += [column, support]
+    model.create_entity(
+        "IfcRelAssociatesMaterial",
+        ifcopenshell.guid.new(),
+        history,
+        None,
+        None,
+        columns,
+        profile_set,
+    )
+    group.RelatedObjects = list(group.RelatedObjects) + added
+    path = str(tmp_path / "columns.ifc")
+    model.write(path)
+    return path
+
+
+class TestColumnsMeetingASlabWithNoConnection:
+    """A slab held up by nothing but columns the file does not connect to it.
+
+    By symmetry each column carries a quarter of the slab. Read literally the
+    slab is not supported at all.
+    """
+
+    SLAB_WEIGHT = 7.8 * G_ACCEL * 5.0 * 3.0 * 0.2
+    COLUMN_WEIGHT_PER_METRE = 7.8 * G_ACCEL * COLUMN_SIDE**2
+
+    def _analyse(self, tmp_path, top, **kwargs):
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=_slab_on_unconnected_columns(tmp_path, top),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
+            **kwargs,
+        )
+        data = None
+        if result["status"] == "success":
+            with open(os.path.join(output_dir, "results.json")) as fh:
+                data = json.load(fh)
+        return result, data
+
+    def test_columns_ending_on_the_slab_each_carry_a_quarter(self, tmp_path):
+        result, data = self._analyse(tmp_path, top=0.0)
+        assert result["status"] == "success", result.get("errors")
+        columns = [m for m in data["members"] if m["type"] == "curve"]
+        assert len(columns) == 4
+        at_the_base = (
+            self.SLAB_WEIGHT / 4 + self.COLUMN_WEIGHT_PER_METRE * COLUMN_HEIGHT
+        )
+        for column in columns:
+            forces = column["envelope"]["section_forces"]
+            assert forces["max_compression_N"] == pytest.approx(at_the_base, rel=0.02)
+            assert forces["max_tension_N"] < 0.01 * at_the_base
+        messages = [w["message"] for w in result["warnings"]]
+        assert any(
+            "4 curve member(s) meet a surface member at a point" in m for m in messages
+        )
+
+    def test_columns_passing_through_the_slab(self, tmp_path):
+        """The part above the slab adds its own weight and nothing else."""
+        result, data = self._analyse(tmp_path, top=1.0)
+        assert result["status"] == "success", result.get("errors")
+        at_the_base = self.SLAB_WEIGHT / 4 + self.COLUMN_WEIGHT_PER_METRE * (
+            COLUMN_HEIGHT + 1.0
+        )
+        for column in (m for m in data["members"] if m["type"] == "curve"):
+            assert column["envelope"]["section_forces"][
+                "max_compression_N"
+            ] == pytest.approx(at_the_base, rel=0.02)
+
+    def test_reaction_is_the_weight_of_everything(self, tmp_path):
+        _, data = self._analyse(tmp_path, top=0.0)
+        total = self.SLAB_WEIGHT + 4 * self.COLUMN_WEIGHT_PER_METRE * COLUMN_HEIGHT
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            total, rel=0.01
+        )
+
+    def test_strict_connections_leave_the_slab_in_the_air(self, tmp_path):
+        """Nothing holds it. The solver still returns numbers; the result says so."""
+        result, _ = self._analyse(tmp_path, top=0.0, strict_connections=True)
+        messages = [w["message"] for w in result["warnings"]]
+        assert any("left unconnected there" in m for m in messages)
+        assert any("probably a mechanism" in m for m in messages)
+
+
+class TestTorsion:
+    """A cantilever twisted by a load on an arm at its tip.
+
+    Statics gives the torque in the cantilever (P Lb) and the moments at the
+    two roots (P La and P Lb) whatever the stiffness. The tip deflection adds
+    the twist P Lb^2 La / G J to the bending of both members, so it measures
+    the torsional stiffness the analysis used.
+    """
+
+    MESH = 0.125
+    SHEAR_MODULUS = TORSION_E / (2 * (1 + TORSION_NU))
+
+    def _run(self, tmp_path, profile_class, attributes):
+        path = _balcony_frame(tmp_path, profile_class, attributes)
+        return _run(path, tmp_path, mesh_size=self.MESH)
+
+    def _effective_torsion_constant(self, data, inertia) -> float:
+        """J backed out of the tip deflection, bending taken as exact."""
+        bending = (
+            TORSION_P * (TORSION_LA**3 + TORSION_LB**3) / (3 * TORSION_E * inertia)
+        )
+        twist = _max_vertical_deflection(data) - bending
+        return TORSION_P * TORSION_LB**2 * TORSION_LA / (self.SHEAR_MODULUS * twist)
+
+    def test_torque_and_moments_follow_from_statics(self, tmp_path):
+        data = self._run(tmp_path, "IfcRectangleProfileDef", {"XDim": 0.3, "YDim": 0.3})
+        main, arm = (m["envelope"]["section_forces"] for m in data["members"])
+        assert main["max_T_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE
+        )
+        assert main["max_Mf1_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LA, rel=FORCE_TOLERANCE
+        )
+        assert arm["max_Mf1_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE
+        )
+        assert arm["max_T_Nm"] < 1e-3 * TORSION_P * TORSION_LB
+
+    def test_square_section_twists_as_theory_says(self, tmp_path):
+        """J = 0.1406 s^4 for a square; bending, twist and shear together."""
+        side = 0.3
+        data = self._run(
+            tmp_path, "IfcRectangleProfileDef", {"XDim": side, "YDim": side}
+        )
+        inertia = side**4 / 12
+        shear_stiffness = self.SHEAR_MODULUS * side**2 * 5 / 6
+        expected = (
+            TORSION_P * (TORSION_LA**3 + TORSION_LB**3) / (3 * TORSION_E * inertia)
+            + TORSION_P
+            * TORSION_LB**2
+            * TORSION_LA
+            / (self.SHEAR_MODULUS * 0.1406 * side**4)
+            + TORSION_P * (TORSION_LA + TORSION_LB) / shear_stiffness
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    @pytest.mark.parametrize(
+        "profile_class, attributes, inertia, torsion_constant, measured_ratio",
+        [
+            (
+                "IfcIShapeProfileDef",
+                {
+                    "OverallWidth": I_B,
+                    "OverallDepth": I_H,
+                    "WebThickness": I_TW,
+                    "FlangeThickness": I_TF,
+                },
+                I_STRONG,
+                (2 * I_B * I_TF**3 + (I_H - 2 * I_TF) * I_TW**3) / 3,
+                31.0,
+            ),
+            (
+                "IfcCircleHollowProfileDef",
+                {"Radius": 0.15, "WallThickness": 0.01},
+                math.pi / 4 * (0.15**4 - 0.14**4),
+                math.pi / 2 * (0.15**4 - 0.14**4),
+                0.47,
+            ),
+            (
+                "IfcRectangleHollowProfileDef",
+                {"XDim": 0.2, "YDim": 0.4, "WallThickness": 0.01},
+                (0.2 * 0.4**3 - 0.18 * 0.38**3) / 12,
+                4 * (0.19 * 0.39) ** 2 * 0.01 / (2 * (0.19 + 0.39)),
+                0.67,
+            ),
+            (
+                "IfcCircleProfileDef",
+                {"Radius": 0.1},
+                math.pi / 4 * 0.1**4,
+                math.pi / 2 * 0.1**4,
+                0.83,
+            ),
+        ],
+        ids=["I section", "tube", "box", "round bar"],
+    )
+    def test_equivalent_rectangle_is_wrong_in_torsion_by_a_known_factor(
+        self,
+        tmp_path,
+        profile_class,
+        attributes,
+        inertia,
+        torsion_constant,
+        measured_ratio,
+    ):
+        """Not a pass mark: the size of an error the README owns up to.
+
+        The equivalent rectangle has the section's bending and shear
+        stiffness but not its torsional stiffness. This pins how far off it
+        is (the ratio of the stiffness used to the true one), so that a
+        change to it is noticed, and checks that statics still holds.
+        """
+        data = self._run(tmp_path, profile_class, attributes)
+        ratio = self._effective_torsion_constant(data, inertia) / torsion_constant
+        assert ratio == pytest.approx(measured_ratio, rel=0.15)
+        main = data["members"][0]["envelope"]["section_forces"]
+        assert main["max_T_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE
+        )
+
+
 class TestSimplySupportedPlateSelfWeight:
     """slab_01 supported in translation along all four edges, under gravity.
 
@@ -1098,7 +1925,7 @@ class TestSimplySupportedPlateSelfWeight:
     E, NU, RHO = 2.1e8, 0.2, 7.8
     PINNED = (True, True, True, False, False, False)
 
-    def _plate(self, tmp_path) -> str:
+    def _plate(self, tmp_path, area_load=None) -> str:
         return _slab_variant(
             tmp_path,
             edge_conditions=(self.PINNED, self.PINNED),
@@ -1106,11 +1933,13 @@ class TestSimplySupportedPlateSelfWeight:
                 ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0), self.PINNED),
                 ((0.0, 3.0, 0.0), (5.0, 3.0, 0.0), self.PINNED),
             ),
+            area_load=area_load,
         )
 
-    def _centre_deflection(self) -> float:
+    def _centre_deflection(self, q=None) -> float:
         """Navier series for the centre, with the Mindlin shear deflection."""
-        q = self.RHO * G_ACCEL * self.T
+        if q is None:
+            q = self.RHO * G_ACCEL * self.T
         rigidity = self.E * self.T**3 / (12 * (1 - self.NU**2))
         shear_stiffness = 5 / 6 * self.E / (2 * (1 + self.NU)) * self.T
         bending = moment_sum = 0.0
@@ -1129,6 +1958,33 @@ class TestSimplySupportedPlateSelfWeight:
         assert _max_vertical_deflection(data) == pytest.approx(
             self._centre_deflection(), rel=0.05
         )
+
+    def test_area_load(self, tmp_path):
+        """The same plate under an IfcStructuralPlanarAction of 2.5 kPa.
+
+        Checks an area load end to end: its direction, its total (the
+        reaction) and the deflection it causes.
+        """
+        pressure = 2.5
+        path = self._plate(tmp_path, area_load=(0.0, 0.0, -pressure))
+        data = _run(path, tmp_path, mesh_size=0.5)
+        assert data["load_cases"] == ["Imposed"]
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._centre_deflection(pressure), rel=0.05
+        )
+        # The corners of a simply supported plate are held down, and a load on
+        # a restrained edge node goes straight to ground, so the reported
+        # total is a little short of the load
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            pressure * self.A * self.B, rel=0.1
+        )
+
+    def test_area_load_sideways_does_not_bend_the_plate(self, tmp_path):
+        """Given along global X, the same load acts in the plane of the slab."""
+        path = self._plate(tmp_path, area_load=(2.5, 0.0, 0.0))
+        data = _run(path, tmp_path, mesh_size=0.5)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope.get("max_tz_m", 0.0) < 1e-3 * self._centre_deflection(2.5)
 
     def test_converges_from_below(self, tmp_path):
         """Halving the mesh size moves the answer by little, and upwards."""

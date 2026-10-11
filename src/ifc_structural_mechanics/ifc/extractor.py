@@ -272,6 +272,8 @@ class Extractor:
                                 )
                                 if member:
                                     model.add_member(member)
+                        except ModelExtractionError:
+                            raise  # e.g. a profile that cannot be analysed
                         except Exception as e:
                             self.warnings.append(
                                 f"Failed to extract member {item.GlobalId}: {e}"
@@ -328,6 +330,8 @@ class Extractor:
                     if member:
                         curve_members.append(member)
                         model.add_member(member)
+                except ModelExtractionError:
+                    raise  # e.g. a profile that cannot be analysed
                 except Exception as e:
                     self.warnings.append(
                         f"Failed to extract curve member {entity.GlobalId}: {e}"
@@ -350,6 +354,8 @@ class Extractor:
             self.logger.info(
                 f"Added {len(curve_members) + len(surface_members)} structural members to the model"
             )
+        except ModelExtractionError:
+            raise
         except Exception as e:
             self.logger.error(f"Failed to extract members: {e}")
             self.warnings.append(f"Failed to extract members: {e}")

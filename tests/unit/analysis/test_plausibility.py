@@ -122,3 +122,10 @@ def test_warning_points_at_the_member():
 def test_results_without_members_or_cases_raise_nothing():
     assert plausibility_warnings({}, _model()) == []
     assert plausibility_warnings(_results({"Dead": {"slab": (9.0, 9.0)}}), None) == []
+
+
+def test_distortion_beyond_the_size_of_the_member_is_not_written_as_a_fraction():
+    messages = _messages({"Live": {"slab": (0.5, 0.0), "column": (9.0, 9.0)}})
+    (message,) = [m for m in messages if "distorts by" in m]
+
+    assert "column distorts by 9 m over its 5 m (more than half of it)" in message

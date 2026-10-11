@@ -459,7 +459,7 @@ class PropertiesExtractor:
                 return self._create_t_section(profile)
 
             # Handle C-shape / channel profile
-            elif profile.is_a("IfcChannelProfileDef"):
+            elif profile.is_a("IfcUShapeProfileDef"):
                 return self._create_c_section(profile)
 
             else:
@@ -692,7 +692,7 @@ class PropertiesExtractor:
             return self._create_default_section()
 
     def _create_c_section(self, profile) -> Section:
-        """Extract IfcChannelProfileDef (C/U-section)."""
+        """Extract IfcUShapeProfileDef (C/U-section)."""
         try:
             depth = convert_length(
                 self._safe_get_attribute(profile, "Depth", 0.2), self.length_scale

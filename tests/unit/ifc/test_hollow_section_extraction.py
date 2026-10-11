@@ -114,3 +114,35 @@ def test_thin_tube_shears_over_about_half_its_area():
     )
 
     assert section.shear_area_y / section.area == pytest.approx(0.53, abs=0.01)
+
+
+def test_channel_is_read_from_the_u_shape_profile():
+    """IFC calls a channel IfcUShapeProfileDef; there is no IfcChannelProfileDef."""
+    section = _from_members_extractor(
+        _profile(
+            "IfcUShapeProfileDef",
+            Depth=0.4,
+            FlangeWidth=0.2,
+            WebThickness=0.01,
+            FlangeThickness=0.02,
+        )
+    )
+
+    assert section.section_type == "c"
+    assert section.area == pytest.approx(0.4 * 0.01 + 2 * 0.19 * 0.02)
+    assert section.moment_of_inertia_y > section.moment_of_inertia_z > 0
+
+
+def test_unsupported_profile_is_an_error_not_a_default_section():
+    from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
+
+    profile = _profile(
+        "IfcZShapeProfileDef",
+        Depth=0.4,
+        FlangeWidth=0.2,
+        WebThickness=0.01,
+        FlangeThickness=0.02,
+    )
+
+    with pytest.raises(ModelExtractionError, match="IfcZShapeProfileDef"):
+        _from_members_extractor(profile)

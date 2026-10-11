@@ -601,6 +601,100 @@ class GmshGeometryConverter:
                     inside = not inside
         return inside
 
+    def _seed_crossings(
+        self, domain_model: StructuralModel
+    ) -> Tuple[List[int], List[int]]:
+        """Add Gmsh points where a curve member meets a surface member at a point.
+
+        A column passing through a slab, or ending on one, touches it at a
+        single point. Analysis models do not always put a connection there,
+        and without one neither mesh has a node at that point. Seeding it in
+        both lets the input writer tie the two together there.
+
+        A curve member lying in the plane of a surface is not a crossing; its
+        nodes are located in the shell mesh by the writer.
+
+        Returns:
+            ``(curve point tags, surface point tags)`` to pass as tools to the
+            two fragment() calls.
+        """
+        surfaces = []
+        for member in domain_model.members:
+            if not isinstance(member, SurfaceMember):
+                continue
+            try:
+                polygon = np.array(
+                    [
+                        [float(v) for v in p]
+                        for p in self._convert_surface(member.geometry)
+                    ],
+                    dtype=float,
+                )
+            except (TypeError, ValueError, KeyError, NotImplementedError):
+                continue
+            if polygon.ndim != 2 or polygon.shape[1] != 3 or len(polygon) < 3:
+                continue
+            normal = np.zeros(3)
+            for i in range(len(polygon)):
+                normal += np.cross(polygon[i], polygon[(i + 1) % len(polygon)])
+            length = float(np.linalg.norm(normal))
+            if length < 1e-12:
+                continue
+            surfaces.append(
+                (polygon, normal / length, polygon.min(axis=0), polygon.max(axis=0))
+            )
+        if not surfaces:
+            return [], []
+
+        tol = 1e-4
+        curve_tags: List[int] = []
+        surface_tags: List[int] = []
+        for member in domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+            geom = member.geometry
+            if not geom or len(geom) < 2:
+                continue
+            for i in range(len(geom) - 1):
+                try:
+                    a = np.array([float(v) for v in geom[i]], dtype=float)
+                    b = np.array([float(v) for v in geom[i + 1]], dtype=float)
+                except (TypeError, ValueError):
+                    continue
+                low, high = np.minimum(a, b) - tol, np.maximum(a, b) + tol
+                for polygon, normal, s_low, s_high in surfaces:
+                    if (high < s_low).any() or (low > s_high).any():
+                        continue
+                    along = float(np.dot(b - a, normal))
+                    if abs(along) < 1e-9 * max(float(np.linalg.norm(b - a)), 1e-12):
+                        continue  # parallel to the surface, or lying in it
+                    t = float(np.dot(polygon[0] - a, normal)) / along
+                    reach = tol / float(np.linalg.norm(b - a))
+                    if t < -reach or t > 1.0 + reach:
+                        continue
+                    point = a + min(max(t, 0.0), 1.0) * (b - a)
+                    if not self._point_in_planar_polygon(point, polygon):
+                        continue
+                    key = self._coord_key(point[0], point[1], point[2])
+                    if key not in self._surface_point_registry:
+                        surface_tags.append(
+                            self._get_or_create_point(
+                                point[0], point[1], point[2], dim=2
+                            )
+                        )
+                    if key not in self._curve_point_registry and reach < t < 1 - reach:
+                        curve_tags.append(
+                            self._get_or_create_point(
+                                point[0], point[1], point[2], dim=1
+                            )
+                        )
+        if curve_tags or surface_tags:
+            logger.info(
+                f"Seeded {len(surface_tags)} point(s) on surfaces and "
+                f"{len(curve_tags)} on curves where they cross"
+            )
+        return curve_tags, surface_tags
+
     def _seed_surface_connection_points(
         self, domain_model: StructuralModel
     ) -> List[int]:
@@ -821,6 +915,9 @@ class GmshGeometryConverter:
         # places a node at the exact support location.
         support_point_tags = self._seed_support_points(domain_model)
         surface_point_tags = self._seed_surface_connection_points(domain_model)
+        crossing_curve_tags, crossing_surface_tags = self._seed_crossings(domain_model)
+        support_point_tags += crossing_curve_tags
+        surface_point_tags += crossing_surface_tags
 
         # Phase 2: Fragment for shared topology
         self._fragment_all_entities(support_point_tags, surface_point_tags)

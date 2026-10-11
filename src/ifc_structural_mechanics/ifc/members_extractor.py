@@ -159,10 +159,14 @@ class MembersExtractor:
                         self.logger.warning(
                             f"Failed to extract curve member {entity.id()}: {e}"
                         )
+                except ModelExtractionError:
+                    raise  # an unsupported profile must stop the analysis
                 except Exception as e:
                     self.logger.warning(
                         f"Failed to extract curve member {entity.id()}: {e}"
                     )
+        except ModelExtractionError:
+            raise
         except Exception as e:
             self.logger.warning(f"Error extracting IfcStructuralCurveMembers: {e}")
 
@@ -322,7 +326,12 @@ class MembersExtractor:
             if material and profile:
                 # Create domain material and section with unit conversion
                 domain_material = self._create_material(material)
-                domain_section = self._create_section(profile)
+                try:
+                    domain_section = self._create_section(profile)
+                except ModelExtractionError as error:
+                    raise ModelExtractionError(
+                        f"Member {entity_id} cannot be analysed. {error.message}"
+                    ) from error
 
                 return CurveMember(
                     id=entity_id,
@@ -414,6 +423,8 @@ class MembersExtractor:
                     f"Failed to extract curve member {getattr(entity, 'GlobalId', 'unknown')}: {e}"
                 )
             return None
+        except ModelExtractionError:
+            raise  # an unsupported profile must stop the analysis
         except Exception as e:
             logger.error(f"Unexpected error creating curve member: {e}")
             return None
@@ -1050,8 +1061,9 @@ class MembersExtractor:
                 },
             )
 
-        # Handle C-shape / channel profile
-        elif profile.is_a("IfcChannelProfileDef"):
+        # Handle channel profile (IfcUShapeProfileDef; there is no
+        # IfcChannelProfileDef in IFC)
+        elif profile.is_a("IfcUShapeProfileDef"):
             depth = convert_length(getattr(profile, "Depth", 0.2), self.length_scale)
             flange_width = convert_length(
                 getattr(profile, "FlangeWidth", 0.1), self.length_scale
@@ -1077,17 +1089,11 @@ class MembersExtractor:
                 },
             )
 
-        else:
-            logger.warning(
-                f"Unsupported profile type: {profile.is_a()} — "
-                f"member will use the default section. "
-                f"Consider adding an extractor for this profile type."
-            )
-
-        # Default rectangular section (SI units)
-        return Section.create_rectangular_section(
-            id=str(uuid.uuid4()),
-            name="Default Section",
-            width=0.1,
-            height=0.2,
+        # Analysing some other section in its place would give results that
+        # look like answers and are not.
+        raise ModelExtractionError(
+            f"Profile {getattr(profile, 'ProfileName', None)!r} is an "
+            f"{profile.is_a()}, which is not supported. Supported profiles: "
+            "rectangle, circle, hollow rectangle, hollow circle, I, asymmetric "
+            "I, T, L and U (channel)."
         )

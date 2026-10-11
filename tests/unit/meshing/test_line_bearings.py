@@ -181,17 +181,95 @@ class TestBeamInsideSlab:
         )
 
 
-class TestMembersLeftAlone:
-    def test_column_through_the_slab_is_not_tied(self):
-        writer = _slab_with_beam(
-            {20: (1.0, 0.5, -3.0), 21: (1.0, 0.5, 0.0), 22: (1.0, 0.5, 3.0)},
-            [(20, 21), (21, 22)],
+def _column_through_the_slab():
+    return _slab_with_beam(
+        {20: (1.0, 0.5, -3.0), 21: (1.0, 0.5, 0.0), 22: (1.0, 0.5, 3.0)},
+        [(20, 21), (21, 22)],
+    )
+
+
+def _warnings(writer):
+    return [w["message"] for w in getattr(writer.domain_model, "analysis_warnings", [])]
+
+
+class TestMemberMeetingASurfaceAtAPoint:
+    """A column ending on a slab or passing through it, with no connection."""
+
+    def test_node_in_the_slab_is_tied_to_it(self):
+        writer = _column_through_the_slab()
+        writer._build_line_bearings()
+
+        assert [node for node, _ in writer._line_bearings] == [21]
+        terms = dict(writer._line_bearings)[21]
+        assert _interpolated(writer, terms) == pytest.approx(
+            np.array([1.0, 0.5, 0.0]), abs=1e-9
         )
+
+    def test_user_is_told_it_is_a_point_not_a_line(self):
+        writer = _column_through_the_slab()
+        writer._build_line_bearings()
+
+        (message,) = _warnings(writer)
+        assert "1 curve member(s) meet a surface member at a point" in message
+        assert "lie in a surface member" not in message
+
+    def test_strict_connections_leave_it_unconnected(self):
+        writer = _column_through_the_slab()
+        writer.analysis_config.set_strict_connections(True)
         writer._build_line_bearings()
 
         assert writer._line_bearings == []
-        assert not getattr(writer.domain_model, "analysis_warnings", [])
+        assert "left unconnected there" in _warnings(writer)[0]
 
+    def test_point_the_file_already_connects_is_left_to_that_connection(self):
+        from ifc_structural_mechanics.domain.structural_connection import (
+            PointConnection,
+        )
+
+        writer = _column_through_the_slab()
+        joint = PointConnection("joint", [1.0, 0.5, 0.0])
+        joint.connect_member("beam")
+        joint.connect_member("slab")
+        writer.domain_model.connections.append(joint)
+        writer._build_line_bearings()
+
+        assert writer._line_bearings == []
+        assert _warnings(writer) == []
+
+
+class TestLineConnectionOfTheFile:
+    """An IfcStructuralCurveConnection joining a beam and a slab along an edge."""
+
+    def _connected(self, strict=False):
+        from ifc_structural_mechanics.domain.structural_connection import (
+            RigidConnection,
+        )
+
+        writer = _edge_beam()
+        edge = RigidConnection("edge", [2.0, 0.0, 0.0])
+        edge.edge = [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]]
+        edge.connect_member("beam")
+        edge.connect_member("slab")
+        writer.domain_model.connections.append(edge)
+        writer.analysis_config.set_strict_connections(strict)
+        writer._build_line_bearings()
+        return writer
+
+    def test_beam_is_tied_along_the_edge_without_a_warning(self):
+        writer = self._connected()
+
+        assert [node for node, _ in writer._line_bearings] == [20, 21, 22]
+        assert _warnings(writer) == []
+
+    def test_it_holds_under_strict_connections_too(self):
+        """It is a connection of the file, not one read into the geometry."""
+        writer = self._connected(strict=True)
+
+        assert [node for node, _ in writer._line_bearings] == [20, 21, 22]
+        assert _warnings(writer) == []
+
+
+class TestMembersLeftAlone:
     def test_beam_above_the_slab_is_not_tied(self):
         writer = _slab_with_beam({20: (1.0, 0.5, 0.3), 21: (3.0, 0.5, 0.3)}, [(20, 21)])
         writer._build_line_bearings()

@@ -32,7 +32,7 @@ hollow_rectangular  IfcRectangleHollowProfileDef
 i                   IfcIShapeProfileDef, IfcAsymmetricIShapeProfileDef
 l                   IfcLShapeProfileDef
 t                   IfcTShapeProfileDef
-c                   IfcChannelProfileDef
+c                   IfcUShapeProfileDef
 u                   IfcUShapeProfileDef  (future)
 z                   IfcZShapeProfileDef  (future)
 """
@@ -91,7 +91,7 @@ SECTION_REGISTRY: Dict[str, SectionProfile] = {
     "i_asymmetric": SectionProfile(True, None, None),  # IfcAsymmetricIShapeProfileDef
     "l": SectionProfile(True, None, None),  # IfcLShapeProfileDef
     "t": SectionProfile(True, None, None),  # IfcTShapeProfileDef
-    "c": SectionProfile(True, None, None),  # IfcChannelProfileDef
+    "c": SectionProfile(True, None, None),  # IfcUShapeProfileDef
     "u": SectionProfile(True, None, None),  # IfcUShapeProfileDef
     "z": SectionProfile(True, None, None),  # IfcZShapeProfileDef
 }

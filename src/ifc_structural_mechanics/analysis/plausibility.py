@@ -129,6 +129,7 @@ def plausibility_warnings(
         if distorted:
             distorted.sort(reverse=True)
             ratio, relative, size, member_id = distorted[0]
+            fraction = f"1/{1 / ratio:.0f}" if ratio < 0.5 else "more than half of it"
             others = (
                 f" {len(distorted) - 1} other member(s) exceed the same limit."
                 if len(distorted) > 1
@@ -137,7 +138,7 @@ def plausibility_warnings(
             warnings.append(
                 _warning(
                     f"Load case {case}: member {member_id} distorts by "
-                    f"{_length(relative)} over its {_length(size)} (1/{1 / ratio:.0f}), "
+                    f"{_length(relative)} over its {_length(size)} ({fraction}), "
                     f"more than 1/{1 / MEMBER_LIMIT:.0f}. It is probably not "
                     f"connected or supported as intended.{others}",
                     member_id,
