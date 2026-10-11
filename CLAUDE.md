@@ -123,9 +123,7 @@ Extracts structural information from IFC files:
 - `MembersExtractor`: Extracts curve and surface structural members
 - `ConnectionsExtractor`: Extracts structural connections with stiffness properties
 - `LoadsExtractor`: Extracts loads, load groups, and load combinations
-- `PropertiesExtractor`: Extracts material and section properties
 - `entity_identifier.py`: Utilities for identifying and classifying IFC structural entities
-- `geometry/`: Handles geometric extraction for curves, surfaces, and topology
 
 #### 3. Converters (`src/ifc_structural_mechanics/converters/`)
 Stateless utility functions for type conversions:
@@ -138,7 +136,7 @@ Generates finite element meshes:
 - `unified_calculix_writer.py`: **THE UNIFIED SOLUTION** - Single tool for writing CalculiX input files. This replaces dual systems and eliminates element writing conflicts. **Registers analysis element IDs** in domain model via `StructuralModel.register_analysis_elements()`
 - `gmsh_runner.py`: Executes Gmsh to generate meshes. Outputs `.msh` mesh files (not `.geo` script files).
 - `gmsh_geometry.py`: Creates Gmsh geometry from domain model using **conforming meshes via shared topology**. Uses a shared point registry and `gmsh.model.occ.fragment()` so connected members share mesh nodes automatically. **Registers mesh entity IDs** in domain model via `StructuralModel.register_mesh_entities()`
-- `gmsh_utils.py`: Gmsh utility functions
+- `mesh_mapper.py`: Assigns mesh elements to members from the physical groups
 
 **Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
 1. Create all geometry with shared points (no per-member synchronize)
@@ -161,7 +159,7 @@ without saying so in the results. Two things follow from the middle nodes:
 **Element-to-Member Mapping** (`unified_calculix_writer.py`):
 - Uses `cell_data['gmsh:physical']` from meshio to correctly assign mesh elements to their parent structural members via `_map_elements_via_physical_groups()`
 - Falls back to spatial centroid matching for members whose geometry was merged during fragment (overlapping members)
-- **Important**: The old naive `_distribute_elements_to_members()` (round-robin assignment) is kept only as a last-resort fallback — it produces incorrect spatial mapping for multi-member models
+- **Important**: a mesh with no physical groups can only be attributed when the model has one member of each kind; with more, `MeshMapper` raises `MeshingError`. The old round-robin assignment dealt elements out wherever they were; do not bring it back
 
 **Note**: The workflow uses Gmsh's `.msh` mesh format exclusively. `.geo` geometry script files are not used in production as they may have XAO dependencies in newer Gmsh versions.
 
@@ -210,6 +208,14 @@ Command-line interface:
    - Converters module: Stateless type conversion utilities
 
 5. **Error Handling**: Custom exceptions in `utils/error_handling.py` (`StructuralAnalysisError`, `ModelExtractionError`, `MeshingError`, `AnalysisError`) maintain context through the pipeline.
+
+6. **Nothing is made up, and nothing is dropped quietly** (`aiz.12`, 2026-10-11). The risk in this tool is a wrong answer that looks right, so:
+   - **Never substitute a default for something the file should give** (material, section, thickness, position, load value, load target). Raise the stage's error, with a message that names the entity and says what is missing. `MembersExtractor._create_member()`, `ConnectionsExtractor._create_domain_connection()` and `LoadsExtractor._create_domain_load()` wrap every failure as "Member/Connection/Load <GlobalId> cannot be analysed. <reason>".
+   - **Never leave an entity out and carry on.** A model with a member, support or load missing is another structure.
+   - **`except Exception` may only re-raise as a typed error.** Put `except <TypedError>: raise` in front of it so an inner message is not wrapped twice. The exceptions are cleanup (`gmsh.finalize()`, temp files, `__del__`) and the two API handlers that turn a results-export failure into a warning.
+   - **An approximation the user did not ask for is a warning in the results**, not a log line: `_warn_user()` in the writer, `_warn_model()` in the load writer, `self.warnings` in the extractors (`Extractor._pass_on_warnings()` moves them to `model.analysis_warnings`). One warning for the whole model with a count and the first few ids, never one per member.
+   - **Mocks that say yes to everything hide this.** `mock.is_a.return_value = "IfcX"` makes `is_a("IfcEdge")` true, and a bare `MagicMock` has every attribute. Prefer real `ifcopenshell` entities (see `tests/unit/ifc/test_extraction_fails_loudly.py`), or give the mock a truthful `is_a` and a `spec`.
+   - Do not add code paths that detect a test environment. `LoadsExtractor` once returned invented loads when its file was a mock.
 
 ## Common Development Patterns
 
@@ -444,12 +450,31 @@ so that `G12 a b = G A_shear,y` and `G13 a b = G A_shear,z`. Note the absence
 of 5/6. That is calibrated, not derived: with these strongly orthotropic
 materials the I-section benchmarks come out right with 1.0 and 12 to 18% short
 in shear with 5/6. An ordinary isotropic rectangle does behave as 5/6 (a
-simply supported 0.3 m square matches to 0.01%). Torsion is the price: two
-shear moduli cannot match two shear areas and a torsion constant (I section
-31 times too stiff, tube 0.47, box 0.67, round bar 0.83; `TestTorsion` pins
-these). A new section type therefore only needs
-`A`, `Iy`, `Iz` and the two shear areas in `domain/property.py`, plus an
-extraction handler. In the extractors, test hollow IFC profiles before solid
+simply supported 0.3 m square matches to 0.01%).
+
+**Torsion.** CalculiX puts one solid element across a beam's section, which
+can only warp as `x2 x3`, so an `a` x `b` beam twists with
+`4PQ/(P+Q)`, `P = G12 a b³/12`, `Q = G13 b a³/12`
+(`expanded_rectangle_torsion_stiffness()`; measured to three figures). Two
+shear moduli cannot match two shear areas and a torsion constant, so
+`equivalent_shear_moduli()` picks by section type:
+
+- Open sections keep their shear stiffness; torsion is far too stiff (I
+  section 30 times). Nothing can be done about this with a rectangle.
+- `TORSION_MATCHED_SECTIONS` (circular, hollow circular, hollow rectangular)
+  get both moduli scaled by one number so that torsion is exact; their shear
+  stiffness is then too high by that number (bar 1.1, box 1.4, thin tube
+  1.9). They need `torsional_constant` on the section, else shear is matched.
+- A plain solid rectangle is isotropic and not corrected: a square is 18.5%
+  too stiff in torsion (`aiz.53`).
+
+`TestTorsion` checks all three by reading the twist from the solver's nodes.
+Do not measure torsion from a tip deflection: it is read on element faces,
+where the rotation of the member adds to it.
+
+A new section type only needs `A`, `Iy`, `Iz` and the two shear areas in
+`domain/property.py`, plus an extraction handler (and `torsional_constant`
+with an entry in `TORSION_MATCHED_SECTIONS` if it is closed). In the extractors, test hollow IFC profiles before solid
 ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true. A
 channel is `IfcUShapeProfileDef`. A profile with no handler raises
 `ModelExtractionError`; never fall back to a default section.

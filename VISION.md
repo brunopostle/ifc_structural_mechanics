@@ -131,7 +131,9 @@ What holds it back:
 - **Stresses and torsion of non-rectangular sections.** Every profile other
   than a solid rectangle is analysed as a rectangle of the same axial, bending
   and shear stiffness on a native beam element, so any model runs on stock
-  CalculiX. Its torsional stiffness is only approximate.
+  CalculiX. Tubes, boxes and round bars also have their torsional stiffness,
+  paid for in shear stiffness; open sections are tens of times too stiff in
+  torsion, and solid rectangles up to 18%.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
   independent Code_Aster result to 2%, point by point. `building_01` and
   `building_02` both solve with reactions that match their loads; neither has
@@ -140,8 +142,12 @@ What holds it back:
   machine.
 - **Releases.** Skew supports are not modelled, and end releases on open
   sections are full pins.
-- **Validation coverage.** Pinned beam supports and frames have no benchmark
-  yet.
+- **Input the tool cannot handle.** It now stops, naming the entity, rather
+  than substitute a default; what it does not support at all (applied
+  moments, surface supports, nested placements, loads that vary along a
+  member) is listed in the README.
+- **Validation coverage.** Pinned supports, open sections, area loads and a
+  torsion frame now have benchmarks; a multi-storey frame does not.
 
 **Done when**: every example model either agrees with an independent reference
 or fails with a message that names the cause.

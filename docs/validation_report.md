@@ -180,9 +180,9 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Cantilever reaction | 200 × 400 I, equivalent rectangle | 2.663 N | 2.655 N | 0.3% |
 | Cantilever, strong axis | 200 × 400 I, U1 (`--open-sections user-element`) | 0.1419 mm | 0.1419 mm | < 0.1% |
 | Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
-| Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6589 mm | 0.2% |
-| Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3572 mm | 0.2% |
-| Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1810 mm | 0.2% |
+| Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6584 mm | 0.3% |
+| Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3535 mm | 1.2% |
+| Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1793 mm | 1.2% |
 | Fixed-fixed beam, midspan | 0.3 m square, B32R | 0.3506 mm | 0.3489 mm | 0.5% |
 | Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
 | Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
@@ -256,8 +256,9 @@ Every such profile, and every I, T, L and C profile, is now analysed as a rectan
 `a × b` with a material of its own, where `a = √(12 Iy / A)`, `b = √(12 Iz / A)` and the
 modulus and density are scaled by `A / (a b)`. That reproduces EA, both EI and the
 weight exactly. The material is orthotropic, with the two shear moduli along the member
-set so that the rectangle has the profile's shear stiffness in each direction; without
-that the stocky I cantilever was 5.5% too stiff. The I-section fixed-fixed beam is a hard
+set so that the rectangle has the profile's shear stiffness in each direction (open
+profiles) or its torsional stiffness (tubes, boxes and round bars; see Torsion below);
+without that the stocky I cantilever was 5.5% too stiff. The I-section fixed-fixed beam is a hard
 case, with 37% of its deflection coming from shear in the web.
 
 The shear moduli are set against the rectangle's whole area, not the 5/6 of it that beam
@@ -268,8 +269,8 @@ supported 0.3 m square below matches to 0.01%), so the difference belongs to the
 strongly orthotropic materials.
 
 What the equivalent rectangle does not have is the profile's stresses, so
-`results.json` takes them from the section forces, or its torsional stiffness; see
-Torsion below. U1 elements with a general section remain available with
+`results.json` takes them from the section forces. Nor can it have the profile's shear
+and torsional stiffness at once; see Torsion below. U1 elements with a general section remain available with
 `--open-sections user-element` for models made of such members only. On `portal_01` the
 two agree: 4.111 mm with equivalent rectangles and 4.120 mm with U1 at a 0.25 m mesh.
 
@@ -310,23 +311,51 @@ is now held in torsion at one support and the analysis says so; the same case th
 **Torsion**: a 3 m cantilever with a 1 m arm at right angles on its tip and 1 kN on the
 end of the arm (0.125 m mesh). Statics fixes the forces whatever the stiffness: the
 pipeline gives a torque of 999.99 N·m in the cantilever and moments of 2999.98 and
-999.99 N·m at the two roots. For a 0.3 m square the tip deflection is 0.0982 mm against
-0.0991 mm for bending, twist (J = 0.1406 s⁴) and shear together, 0.9% apart.
+999.99 N·m at the two roots.
 
-The same frame measures the torsional stiffness each section is analysed with, by taking
-the bending out of the tip deflection:
+The torsional stiffness each section is analysed with is read from the solver's own
+nodes: the rotation of two cross-sections of the cantilever, a metre apart, under the
+known torque.
 
-| Section | Equivalent rectangle, J used / J true | U1 element, J used / J true |
-|---------|---------------------------------------|-----------------------------|
-| 200 × 400 I | 31 | 267 |
-| 300 × 10 tube | 0.47 | 0.95 |
-| 200 × 400 × 10 box | 0.67 | 1.63 |
-| 200 mm round bar | 0.83 | 0.99 |
+| Section | Model | J used / J true |
+|---------|-------|-----------------|
+| 0.3 m square | B32R, isotropic | 1.185 |
+| 0.2 × 0.4 m rectangle | B32R, isotropic | 1.164 |
+| 300 × 10 tube | equivalent rectangle, torsion matched | 1.000 |
+| 300 × 40 tube | equivalent rectangle, torsion matched | 1.000 |
+| 200 × 400 × 10 box | equivalent rectangle, torsion matched | 1.000 |
+| 300 × 300 × 20 box | equivalent rectangle, torsion matched | 1.000 |
+| 200 mm round bar | equivalent rectangle, torsion matched | 1.000 |
+| 200 × 400 I | equivalent rectangle, shear matched | 29.9 |
 
-These are errors, not tolerances; a test pins the first column to 15% so that a change is
-noticed. Two shear moduli cannot match two shear areas and a torsion constant, and the
-bending and shear of ordinary frames were given priority. Where open sections carry
-torsion, neither model can be trusted.
+Three things are going on here.
+
+*CalculiX's rectangle is too stiff in torsion.* It puts one solid element across the
+section, and the only warping that element can take is x₂x₃. That gives
+J = a³b³ / 3(a² + b²) in place of Saint-Venant's value: a⁴/6 against 0.1406 a⁴ for a
+square. The measured 1.185 and 1.164 are this formula to three figures. Nothing is done
+about it for solid rectangles; it is a known error of up to 18.5%, fading to nothing for
+a thin strip.
+
+*Tubes, boxes and round bars are given their own torsion constant.* The equivalent
+rectangle's two shear moduli are scaled by one number until the formula above gives G J
+for the section. The cost is shear stiffness, too high by the same number: 1.11 for the
+round bar, 1.40 for the 200 × 400 × 10 box, 1.88 for the 300 × 10 tube. That is why the
+tube and box cantilevers in the table above are 1.2% stiff where they used to be 0.2%.
+Before this change the same sections had the right shear stiffness and 0.53, 0.71 and
+0.90 of their torsional stiffness.
+
+*Open sections cannot be treated the same way.* The I section would need its shear
+moduli cut thirtyfold. It keeps its shear stiffness and is 30 times too stiff in
+torsion. U1 elements (`--open-sections user-element`) are no better: 267 times for the
+same I section and 1.6 for the box, measured from the tip deflection. Where open sections
+carry torsion, neither model can be trusted.
+
+An earlier version of this section said that a solid square matched theory to 0.9% and
+gave 0.47, 0.67, 0.83 and 31 for the other sections. Those came from the tip deflection
+with the bending taken out. Deflections are read on the faces of the expanded elements,
+where the arm's rotation adds to them, and for the square that addition happened to
+cancel an 18% error in the twist.
 
 The slab-on-beams model is written from scratch by the test, with a 0.25 m mesh: a
 5 m × 1 m slab, 0.1 m thick, and two beams lying in it, fully fixed at one end. The IFC
@@ -482,7 +511,7 @@ model.
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
-| `building_02` | — | 25.8 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.0 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
+| `building_02` | — | 25.6 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.0 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
 | `building_01` | — | 0.286 mm (Live), 0.101 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.66 mm and 48.54 MN under self-weight. At 0.5 and 0.25 m: 0.337 and 0.352 mm (Live), 7.76 and 8.51 mm (self-weight). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
@@ -507,7 +536,7 @@ from corner to corner and the beams under its edges carried nothing (0.1 mm of
 deflection in the edge beam, 408 mm in the slab edge beside it).
 
 A curve member lying in a surface member is now tied to it in translation along its
-length, and the analysis says so in a warning. The Live maximum is 25.8 mm, and this
+length, and the analysis says so in a warning. The Live maximum is 25.6 mm, and this
 slab moves 25.3 mm at the middle of its 8.5 m bay; a simply supported plate of that size
 would give 29 mm and a clamped one 9 mm. The reactions are unchanged, and the difference between a 4 m and a
 2 m mesh fell from 17% to 7%. The tie is a hinge line: it carries no moment about the
@@ -531,6 +560,36 @@ found in the result file within the member's outline.
 
 ---
 
+## Input that is refused or reported
+
+An audit of the error handling (2026-10-11) found about 215 handlers that caught every
+exception, most of which logged a line and carried on with a default or without the
+entity. A member that could not be read was left out of the structure; a material with
+no stiffness was analysed as steel; a slab with no thickness was 0.1 m thick; a support
+or a load with no position went to the origin, or the load to node 2; a distributed load
+that named no member went on the first member of the model; a force that could not be
+read became 1 kN. None of this reached the results.
+
+Seventy-one such handlers remain. Fifty-six turn the exception into an error of the
+stage it happened in, naming the entity; the other fifteen are cleanup (closing Gmsh,
+temporary files) or already put a warning in the results. About 4,000 lines that the
+pipeline never ran went with them, including a second section-and-material extractor
+whose only effect was to hang a default 0.1 × 0.2 m section on every slab.
+
+The example models are unaffected: none of the removed fallbacks fired on them, and
+their deflections and reactions are those of the tables above. Two things they did hide
+are now in their results:
+
+- `portal_01`: its steel has no Poisson's ratio in the file; 0.3 is assumed.
+- `building_01`: seven members overlap others and one is left with no elements of its
+  own (a landing lying in a floor slab); where two overlap, the stiffness is that of the
+  member that comes first in the file.
+
+`tests/unit/ifc/test_extraction_fails_loudly.py` takes things out of the example files
+one at a time (a material, a thickness, a position, a load group) and checks that each
+is an error or a warning that names what is missing.
+`tests/unit/analysis/test_loads_are_never_made_up.py` does the same for the load writer.
+
 ## What is not yet validated
 
 - **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
@@ -550,12 +609,16 @@ found in the result file within the member's outline.
   between a beam and a slab is analysed as a hinge line.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
+- **Unsupported input**: applied moments, surface connections, nested placements and
+  load kinds other than forces stop the analysis with an error naming the entity. A
+  load that varies along its member is applied at its mean value, with a warning.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but
   have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins). U1 is no
   longer used unless asked for.
-- **Torsion of non-rectangular sections**: measured, and wrong by the factors in the
-  torsion table above.
+- **Torsion**: right for tubes, boxes and round bars, at the cost of their shear
+  stiffness (1.1 to 1.9 times too high). Up to 18.5% too stiff for solid rectangles and
+  30 times for the I section; see the torsion table above.
 - **`building_01`**: reactions only. Its self-weight deflection is still moving 10%
   between a 0.5 m and a 0.25 m mesh.
 - **Buckling** beyond the single Euler column.
