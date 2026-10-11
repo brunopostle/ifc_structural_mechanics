@@ -2750,6 +2750,7 @@ class TestLoadCombinations:
         }
 
     def test_reactions_by_hand(self, tmp_path):
+        _needs_solver_reactions()
         data = self._two_cases(tmp_path)
         length = self.B.LENGTH
         reactions = data["global_reactions"]["by_load_combination"]
