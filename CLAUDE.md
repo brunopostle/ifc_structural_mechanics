@@ -373,7 +373,8 @@ here. This section only records the constraints that shape day-to-day work.
 - **Stock CalculiX is the target** (decision 2026-10-09). The local `ccx` may be
   a patched Copr build; CI uses the distribution package. Do not rely on the
   gen3delem patch in `patches/`.
-- **Only the solid rectangle is written as a CalculiX section.** Every other
+- **Only the solid rectangle is written as a CalculiX section**, with one
+  shear modulus lowered to correct its torsion. Every other
   profile is an equivalent rectangle (see Beam Section Orientation). Do not
   go back to CalculiX's CIRC, PIPE or BOX: a PIPE cantilever measured 83% too
   flexible with the weight of a solid bar, and B31 rejects PIPE and BOX.
@@ -473,10 +474,16 @@ shear moduli cannot match two shear areas and a torsion constant, so
   get both moduli scaled by one number so that torsion is exact; their shear
   stiffness is then too high by that number (bar 1.1, box 1.4, thin tube
   1.9). They need `torsional_constant` on the section, else shear is matched.
-- A plain solid rectangle is isotropic and not corrected: a square is 18.5%
-  too stiff in torsion (`aiz.53`).
+- A solid rectangle keeps the modulus of its depth and has the one of its
+  width lowered until torsion is exact (`rectangle_shear_moduli()`,
+  `aiz.53`); left alone a square is 18.5% too stiff. It is written with a
+  material of its own (`MAT_RT_<member>`) and an `*ORIENTATION`, real modulus
+  and density, so its stresses stay meaningful. Shear across the width is
+  27% soft for a square and 45% for 1:2; bending and shear along the depth
+  do not move (measured to four figures). These mildly orthotropic rectangles
+  still follow 5/6 in shear, unlike the equivalent ones.
 
-`TestTorsion` checks all three by reading the twist from the solver's nodes.
+`TestTorsion` checks all of these by reading the twist from the solver's nodes.
 Do not measure torsion from a tip deflection: it is read on element faces,
 where the rotation of the member adds to it.
 

@@ -319,8 +319,11 @@ known torque.
 
 | Section | Model | J used / J true |
 |---------|-------|-----------------|
-| 0.3 m square | B32R, isotropic | 1.185 |
-| 0.2 × 0.4 m rectangle | B32R, isotropic | 1.164 |
+| 0.3 m square | CalculiX's rectangle as it comes | 1.185 |
+| 0.2 × 0.4 m rectangle | CalculiX's rectangle as it comes | 1.164 |
+| 0.3 m square | rectangle, width modulus lowered | 1.002 |
+| 0.2 × 0.4 m rectangle, deep or flat | rectangle, width modulus lowered | 1.000 |
+| 0.1 × 0.4 m rectangle | rectangle, width modulus lowered | 1.000 |
 | 300 × 10 tube | equivalent rectangle, torsion matched | 1.000 |
 | 300 × 40 tube | equivalent rectangle, torsion matched | 1.000 |
 | 200 × 400 × 10 box | equivalent rectangle, torsion matched | 1.000 |
@@ -328,14 +331,40 @@ known torque.
 | 200 mm round bar | equivalent rectangle, torsion matched | 1.000 |
 | 200 × 400 I | equivalent rectangle, shear matched | 29.9 |
 
-Three things are going on here.
+Four things are going on here.
 
 *CalculiX's rectangle is too stiff in torsion.* It puts one solid element across the
 section, and the only warping that element can take is x₂x₃. That gives
 J = a³b³ / 3(a² + b²) in place of Saint-Venant's value: a⁴/6 against 0.1406 a⁴ for a
-square. The measured 1.185 and 1.164 are this formula to three figures. Nothing is done
-about it for solid rectangles; it is a known error of up to 18.5%, fading to nothing for
-a thin strip.
+square. The measured 1.185 and 1.164 are this formula to three figures, and were what
+the pipeline gave until 2026-10-11.
+
+*Solid rectangles now have one shear modulus lowered.* The formula has two shear moduli
+in it. The one for the plane of the member's axis and the section's depth is kept; the
+one across the width is lowered until the formula gives Saint-Venant's value. The rows
+"width modulus lowered" are the result, the same with linear and quadratic elements (the
+square's 1.002 is the rounding of 0.1406). What it costs was measured on hand-written
+cantilevers, 3 m and 1.5 m long, comparing the centre line with the same beam left
+isotropic:
+
+| Section (depth × width) | Width modulus | Deflection along the depth | Deflection along the width, 3 m | 1.5 m |
+|---|---|---|---|---|
+| 0.3 × 0.3 m | 0.73 G | 1.0000 | 1.0028 | 1.0107 |
+| 0.4 × 0.2 m | 0.55 G | 1.0000 | 1.0032 | 1.0116 |
+| 0.2 × 0.4 m | 0.83 G | 1.0000 | 1.0027 | 1.0102 |
+
+Loaded along the width, each follows Timoshenko's beam with 5/6 of the lowered modulus as
+closely as the isotropic one follows it with the real one (0.5% at 3 m, 1.2% at 1.5 m,
+both from the clamped end). So the shear stiffness across the width is down by 27%, 45%
+and 17%, nothing else has moved, and the analysis says so in a warning with the number of
+members and the largest reduction. Of the example models, five give the same four figures
+as before; `grid_of_beams` rose from 0.3727 to 0.3732 mm, `building_01` from 0.2857 to
+0.2864 mm under Live and from 6.66 to 6.78 mm under self-weight, and `building_02` from
+25.6 to 25.7 mm under Live. Reactions are unchanged.
+
+The same check found the torsion constant the domain model computed for a rectangle
+sixteen times too large (the formula is in half sides and was given whole ones, the wrong
+way round). Nothing used it before this.
 
 *Tubes, boxes and round bars are given their own torsion constant.* The equivalent
 rectangle's two shear moduli are scaled by one number until the formula above gives G J
@@ -430,7 +459,7 @@ reference value is the largest nodal translation in
 | `cantilever_01` | 0.2766 mm | 0.2800 mm | 0.05 m | +1.2% (shear deflection) | yes, 3% |
 | `structure_01` | 0.4273 mm | 0.4285 / 0.4333 / 0.4343 mm | 1.0 / 0.5 / 0.25 m | +0.3% / +1.4% / +1.6% | yes, 5% at 0.5 m, and convergence |
 | `slab_01`, supports as in the reference run | 0.3761 mm | 0.3686 / 0.3773 / 0.3796 mm | 1.0 / 0.5 / 0.25 m | −2.0% / +0.3% / +0.9% | yes, 3% at 0.5 m |
-| `grid_of_beams` | 0.3963 mm; 0.367 mm without the weight of its rigid arms | 0.3719 / 0.3727 / 0.3727 mm | 1.0 / 0.5 / 0.25 m | +1.5% against 0.367 | yes, 3% at 0.5 m, and 1% between meshes |
+| `grid_of_beams` | 0.3963 mm; 0.367 mm without the weight of its rigid arms | 0.3723 / 0.3731 / 0.3732 mm | 1.0 / 0.5 / 0.25 m | +1.7% against 0.367 | yes, 3% at 0.5 m, and 1% between meshes |
 
 `structure_01` is also compared member by member, on the largest displacement of each
 member in `results.json` at a 0.5 m mesh (tested to 10%):
@@ -511,8 +540,8 @@ model.
 | `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
-| `building_02` | — | 25.6 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.0 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
-| `building_01` | — | 0.286 mm (Live), 0.101 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.66 mm and 48.54 MN under self-weight. At 0.5 and 0.25 m: 0.337 and 0.352 mm (Live), 7.76 and 8.51 mm (self-weight). Reactions match the applied loads; deflections unchecked |
+| `building_02` | — | 25.7 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.1 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
+| `building_01` | — | 0.286 mm (Live), 0.10 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.78 mm and 48.54 MN under self-weight. At 0.5 and 0.25 m: 0.338 and 0.352 mm (Live), 7.90 and 8.63 mm (self-weight). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
@@ -536,7 +565,7 @@ from corner to corner and the beams under its edges carried nothing (0.1 mm of
 deflection in the edge beam, 408 mm in the slab edge beside it).
 
 A curve member lying in a surface member is now tied to it in translation along its
-length, and the analysis says so in a warning. The Live maximum is 25.6 mm, and this
+length, and the analysis says so in a warning. The Live maximum is 25.7 mm, and this
 slab moves 25.3 mm at the middle of its 8.5 m bay; a simply supported plate of that size
 would give 29 mm and a clamped one 9 mm. The reactions are unchanged, and the difference between a 4 m and a
 2 m mesh fell from 17% to 7%. The tie is a hinge line: it carries no moment about the
@@ -692,8 +721,9 @@ limitation below.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins). U1 is no
   longer used unless asked for.
 - **Torsion**: right for tubes, boxes and round bars, at the cost of their shear
-  stiffness (1.1 to 1.9 times too high). Up to 18.5% too stiff for solid rectangles and
-  30 times for the I section; see the torsion table above.
+  stiffness (1.1 to 1.9 times too high), and for solid rectangles at the cost of
+  their shear stiffness across the width (17 to 45% too low). 30 times too stiff for
+  the I section; see the torsion table above.
 - **`building_01`**: reactions only. Its self-weight deflection is still moving 10%
   between a 0.5 m and a 0.25 m mesh.
 - **Buckling** beyond the single Euler column.

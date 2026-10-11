@@ -58,9 +58,14 @@ the ones a user needs to know before trusting a result.
     200 × 400 × 10 box, 1.9 for a 300 × 10 tube. On a cantilever ten
     diameters long this takes about 1% off the deflection; on short, stocky
     members it takes more.
-- **Solid rectangles are up to 18% too stiff in torsion.** This is CalculiX's
-  own beam element: 18.5% for a square, 16% for a 1:2 rectangle, nothing for a
-  thin strip. Bending and shear are not affected.
+- **Solid rectangles are soft in shear across their width**, with a warning
+  that says how many and by how much. CalculiX's own beam element is too
+  stiff in torsion (18.5% for a square, 16% for a 1:2 rectangle), so the shear
+  stiffness across the width is lowered until the torsional stiffness is
+  right: by 27% for a square, 45% for a section twice as deep as wide, 17%
+  for one twice as wide as deep. Bending, and shear along the depth, are not
+  affected. Sideways shear is a small part of a member's deflection: 0.3% for
+  a cantilever ten times as long as it is wide, 1% at five times.
 - For equivalent rectangles the stresses CalculiX computes are the
   rectangle's, so these members have no `max_von_mises_Pa` (their entry in
   `results.json` carries `"section_model": "equivalent_rectangle"`); their
@@ -295,7 +300,7 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 4.04 mm (4.11 mm at 0.25 m) | 85.4 kN | 4.12 mm with U1 elements at 0.25 m | Runs; the two section models agree to 0.2% |
-| `building_02` | Multi-storey building, two load cases | No | 25.6 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
+| `building_02` | Multi-storey building, two load cases | No | 25.7 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
 | `building_01` | Small building with I-section beams and masonry walls, two load cases | No | 0.29 mm (Live), 0.10 mm (floor finishing); 0.34 and 0.11 mm at 0.5 m | 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not

@@ -132,8 +132,9 @@ What holds it back:
   than a solid rectangle is analysed as a rectangle of the same axial, bending
   and shear stiffness on a native beam element, so any model runs on stock
   CalculiX. Tubes, boxes and round bars also have their torsional stiffness,
-  paid for in shear stiffness; open sections are tens of times too stiff in
-  torsion, and solid rectangles up to 18%.
+  paid for in shear stiffness, and so do solid rectangles, paid for in shear
+  stiffness across their width; open sections are tens of times too stiff in
+  torsion.
 - **Multi-member models.** One mixed model (`structure_01`) now agrees with an
   independent Code_Aster result to 2%, point by point. `building_01` and
   `building_02` both solve with reactions that match their loads; neither has
