@@ -589,6 +589,59 @@ class ResultsParser(BaseParser):
                 f"Failed to parse reaction forces: {str(e)}"
             ) from e
 
+    def parse_node_forces(self, dat_file: str) -> List[Dict]:
+        """Read the force on each support node, per step, from a DAT file.
+
+        ``*NODE PRINT, TOTALS=YES`` with ``RF`` writes, for every step, a
+        block headed ``forces (fx,fy,fz) for set ...`` with one line per node.
+        There are no moments: CalculiX's beam and shell nodes have none.
+
+        Args:
+            dat_file (str): Path to the DAT file.
+
+        Returns:
+            List[Dict]: One record per step, in step order, with ``load_case``
+            and ``forces``, a dict of node number to ``[fx, fy, fz]``. Empty
+            if the file is missing or prints no nodal forces.
+        """
+        if not os.path.exists(dat_file):
+            return []
+        steps: List[Dict] = []
+        current: Optional[Dict[int, List[float]]] = None
+        names = self.load_case_names or []
+        with open(dat_file, "r") as file:
+            for line in file:
+                text = line.strip()
+                lowered = text.lower()
+                if lowered.startswith("forces (fx,fy,fz)"):
+                    current = {}
+                    index = len(steps)
+                    steps.append(
+                        {
+                            "load_case": (
+                                names[index]
+                                if index < len(names)
+                                else f"step_{index + 1}"
+                            ),
+                            "forces": current,
+                        }
+                    )
+                    continue
+                if current is None or not text:
+                    continue
+                parts = text.split()
+                try:
+                    node = int(parts[0])
+                    current[node] = [float(value) for value in parts[1:4]]
+                except (ValueError, IndexError):
+                    current = None  # the block has ended
+                    continue
+                if len(current[node]) != 3:
+                    raise ResultProcessingError(
+                        f"Cannot read the support force line {text!r} in {dat_file}"
+                    )
+        return steps
+
     def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
         """
         Parse total reaction forces from CalculiX TOTALS=ONLY format.
@@ -888,6 +941,7 @@ class ResultsParser(BaseParser):
             "reaction": [],
             "buckling": [],
             "section_forces": [],
+            "support_node_forces": [],
         }
 
         try:
@@ -932,6 +986,7 @@ class ResultsParser(BaseParser):
                 # Parse reaction forces
                 reactions = self.parse_reactions(dat_file)
                 parsed_results["reaction"].extend(reactions)
+                parsed_results["support_node_forces"] = self.parse_node_forces(dat_file)
 
                 # Parse buckling eigenvalues (non-empty only for buckling analyses)
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)
@@ -979,7 +1034,8 @@ class ResultsParser(BaseParser):
             List[Dict]: One record per element, cross-section and load case,
             with ``element_id``, ``load_case``, ``position``, ``distance``
             (along the member from its start; absent if the element belongs to
-            no member), ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1`` and ``Mf2``.
+            no member), ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1`` and ``Mf2``,
+            and ``centre``, ``force`` and ``moment`` in global axes.
             Empty when the model has no beam frames or the file no
             connectivity.
         """
@@ -1031,7 +1087,7 @@ class ResultsParser(BaseParser):
                 for forces in element_section_forces(
                     nodes, self.node_coordinates, nodal, axis, direction_1
                 ):
-                    centre = forces.pop("centre")
+                    centre = forces["centre"]
                     if start is not None:
                         forces["distance"] = float(np.dot(centre - start, along))
                     records.append({"element_id": elem, "load_case": case, **forces})

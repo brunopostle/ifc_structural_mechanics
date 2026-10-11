@@ -126,6 +126,32 @@ class TestResultants:
             assert f["T"] == pytest.approx(rate * (I1 + I2))
             assert f["Vf1"] == pytest.approx(0, abs=1e-6)
 
+    def test_resultants_as_global_vectors(self, axis, direction_1):
+        """What the part beyond the cross-section exerts on the part before.
+
+        The moment is of the tractions about the cross-section's centre, so a
+        stress rising along +1 turns about -2.
+        """
+        t, e1, e2 = _frame(axis, direction_1)
+        rate = 2.0e6
+        forces = _forces(
+            lambda x, y, z: (
+                5e4 / AREA + 300.0 * y / I1 - 70.0 * z / I2,
+                -rate * z,
+                rate * y,
+            ),
+            axis=axis,
+            direction_1=direction_1,
+        )
+
+        for f in forces:
+            assert f["force"] == pytest.approx(list(5e4 * t), abs=1e-6)
+            expected = rate * (I1 + I2) * t - 70.0 * e1 - 300.0 * e2
+            assert f["moment"] == pytest.approx(list(expected), abs=1e-6)
+            centre = np.array(f["centre"])
+            lever = np.cross(centre - np.array([3, -2, 5]), t)
+            assert np.linalg.norm(lever) == pytest.approx(0, abs=1e-9)
+
 
 class TestShear:
     def test_parabolic_shear_on_the_end_faces(self):

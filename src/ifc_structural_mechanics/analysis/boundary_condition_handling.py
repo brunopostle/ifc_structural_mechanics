@@ -173,6 +173,8 @@ def write_boundary_conditions(
 
     all_bc_nodes = set()
     unattached = []
+    # What each support restrains, for the reactions in the results
+    domain_model.support_nodes = {}
 
     for connection in domain_model.connections:
         connection_id = connection.id
@@ -207,6 +209,13 @@ def write_boundary_conditions(
 
         node_sets[set_name] = bc_nodes
         all_bc_nodes.update(bc_nodes)
+        domain_model.support_nodes[connection_id] = {
+            "nodes": {
+                int(node): tuple(float(c) for c in node_coords[node])
+                for node in bc_nodes
+            },
+            "dofs": list(dofs_to_fix),
+        }
 
         file.write(f"*NSET, NSET={set_name}\n")
         for i in range(0, len(bc_nodes), 8):
@@ -430,7 +439,8 @@ def _write_step_output_requests(
     """
     file.write("*NODE FILE\n")
     file.write("U\n")
-    file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=ONLY\n")
+    # The force on each support node, and their total
+    file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=YES\n")
     file.write("RF\n")
     if not has_u1_elements:
         file.write("*EL FILE\n")
@@ -438,7 +448,154 @@ def _write_step_output_requests(
     file.write("*END STEP\n\n")
 
 
+class _StepLoadRecorder:
+    """Passes what is written on to the input file and notes each step's loads.
+
+    CalculiX reports the force inside the structure at a support node, not
+    the reaction: a load applied at that node in a restrained direction is
+    missing from it, and one in a free direction appears in it. The loads on
+    support nodes are needed to put that right, and reading them off what is
+    written covers every path that writes one.
+    """
+
+    def __init__(self, file: TextIO):
+        self._file = file
+        self._pending = ""
+        self._block = ""
+        # One per step: {"nodal": {node: [fx, fy, fz]}, "gravity": vector}
+        self.steps: List[Dict[str, Any]] = []
+
+    def write(self, text: str) -> int:
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            self._note(line.strip())
+        return self._file.write(text)
+
+    def _note(self, line: str) -> None:
+        if not line or line.startswith("**"):
+            return
+        if line.startswith("*"):
+            self._block = line.split(",")[0].strip().upper()
+            if self._block == "*STEP":
+                self.steps.append({"nodal": {}, "gravity": None})
+            return
+        if not self.steps:
+            return
+        step = self.steps[-1]
+        parts = [part.strip() for part in line.split(",")]
+        if self._block == "*CLOAD":
+            node, dof, value = int(parts[0]), int(parts[1]), float(parts[2])
+            if 1 <= dof <= 3:
+                step["nodal"].setdefault(node, [0.0, 0.0, 0.0])[dof - 1] += value
+        elif self._block == "*DLOAD" and len(parts) >= 6 and parts[1] == "GRAV":
+            step["gravity"] = float(parts[2]) * np.array([float(v) for v in parts[3:6]])
+
+
+def _weight_on_nodes(
+    domain_model: StructuralModel,
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+    nodes: Optional[set],
+    acceleration: np.ndarray,
+) -> Dict[int, np.ndarray]:
+    """Self-weight that ``*DLOAD GRAV`` puts on some nodes of the mesh.
+
+    ``nodes`` of None means every node.
+
+    CalculiX works it out on the solids it expands beams and shells into, and
+    what reaches a node of the beam or shell is its work-equivalent share:
+    the same shares as for any uniform load (measured on a cantilever, to
+    four figures).
+    """
+    owners = getattr(domain_model, "analysis_element_to_member", None) or {}
+    weights: Dict[int, np.ndarray] = {}
+    per_measure: Dict[str, float] = {}
+    for elem_id, elem in elements_data.items():
+        if nodes is not None and not any(n in nodes for n in elem.get("nodes", [])):
+            continue
+        member_id = owners.get(elem_id)
+        if member_id not in per_measure:
+            member = domain_model.get_member(member_id) if member_id else None
+            density = getattr(getattr(member, "material", None), "density", None)
+            if getattr(member, "entity_type", None) == "curve":
+                size = getattr(getattr(member, "section", None), "area", None)
+            else:
+                size = getattr(getattr(member, "thickness", None), "value", None)
+            per_measure[member_id] = float(density or 0.0) * float(size or 0.0)
+        measured = _element_measure_and_shares(elem, node_coords)
+        if measured is None or not per_measure[member_id]:
+            continue
+        measure, shares = measured
+        for node, share in zip(elem["nodes"], shares):
+            if nodes is None or node in nodes:
+                weights[node] = weights.get(node, np.zeros(3)) + (
+                    per_measure[member_id] * measure * share * acceleration
+                )
+    return weights
+
+
 def write_analysis_steps(
+    file: TextIO,
+    domain_model: Optional[StructuralModel] = None,
+    analysis_type: str = "linear_static",
+    short_id_map: Optional[Dict[str, str]] = None,
+    element_sets: Optional[Dict[str, List[int]]] = None,
+    node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
+    gravity: bool = False,
+    gravity_direction: Optional[List[float]] = None,
+    u1_gravity_nodal_loads: Optional[Dict[int, List[float]]] = None,
+    u1_element_sets: Optional[set] = None,
+    elements_data: Optional[Dict[int, Dict]] = None,
+) -> None:
+    """
+    Write the analysis steps, and record the loads they put on support nodes.
+
+    See ``_write_analysis_steps`` for the arguments. Afterwards
+    ``domain_model.support_node_loads`` holds, for each step in order, the
+    load applied directly at each support node, ``{node: [fx, fy, fz]}``:
+    the results exporter takes it off what the solver reports there.
+    ``domain_model.applied_load_totals`` holds the whole load of each step,
+    ``[fx, fy, fz]``, which the reactions have to balance.
+    """
+    recorder = _StepLoadRecorder(file)
+    _write_analysis_steps(
+        recorder,  # type: ignore[arg-type]
+        domain_model,
+        analysis_type,
+        short_id_map,
+        element_sets,
+        node_coords,
+        gravity,
+        gravity_direction,
+        u1_gravity_nodal_loads,
+        u1_element_sets,
+        elements_data,
+    )
+    supports = getattr(domain_model, "support_nodes", None)
+    if not isinstance(supports, dict):
+        return
+    nodes = {node for record in supports.values() for node in record["nodes"]}
+    recorded = []
+    totals = []
+    for step in recorder.steps:
+        everywhere = {node: np.array(force) for node, force in step["nodal"].items()}
+        if step["gravity"] is not None and elements_data and node_coords:
+            for node, weight in _weight_on_nodes(
+                domain_model, elements_data, node_coords, None, step["gravity"]
+            ).items():
+                everywhere[node] = everywhere.get(node, np.zeros(3)) + weight
+        recorded.append(
+            {n: [float(v) for v in f] for n, f in everywhere.items() if n in nodes}
+        )
+        totals.append(
+            [float(v) for v in sum(everywhere.values(), np.zeros(3))]  # type: ignore
+        )
+    domain_model.support_node_loads = recorded
+    domain_model.applied_load_totals = totals
+
+
+def _write_analysis_steps(
     file: TextIO,
     domain_model: Optional[StructuralModel] = None,
     analysis_type: str = "linear_static",

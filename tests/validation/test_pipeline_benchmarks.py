@@ -22,10 +22,13 @@ Reference values use Timoshenko beam theory (bending plus shear deflection):
   the moment sum
 """
 
+import functools
 import json
 import math
 import os
 import shutil
+import subprocess
+import tempfile
 
 import numpy as np
 import pytest
@@ -360,13 +363,14 @@ class TestRectangularCantileverSelfWeight:
     def test_reaction_balances_self_weight(self, tmp_path):
         """Vertical reaction equals the member's weight.
 
-        CalculiX leaves out the share of the distributed load that lands on the
-        restrained node itself (half an element), hence the 2% allowance.
+        CalculiX reports the force inside the structure at a support node,
+        which lacks the share of the weight that lands on the node itself
+        (1.4 % here at a 0.25 m mesh). The results add it back.
         """
         data = _run(CANTILEVER, tmp_path, gravity=True)
         weight = CANT_RHO * self.AREA * G_ACCEL * CANT_L
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            weight, rel=0.02
+            weight, rel=1e-4
         )
 
 
@@ -473,7 +477,7 @@ class TestISectionAsEquivalentRectangle:
         data = _run(path, tmp_path, gravity=True)
         weight = CANT_RHO * G_ACCEL * I_AREA * CANT_L
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            weight, rel=0.02
+            weight, rel=1e-4
         )
 
     def test_solver_stress_is_not_reported(self, tmp_path):
@@ -572,7 +576,7 @@ class TestRoundAndHollowSections:
             rel=DEFLECTION_TOLERANCE,
         )
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            CANT_RHO * G_ACCEL * area * CANT_L, rel=0.02
+            CANT_RHO * G_ACCEL * area * CANT_L, rel=1e-4
         )
 
     def test_solid_circle(self, tmp_path):
@@ -1026,7 +1030,7 @@ class TestTeeAngleAndChannel:
             expected, rel=DEFLECTION_TOLERANCE
         )
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            CANT_RHO * G_ACCEL * area * CANT_L, rel=0.02
+            CANT_RHO * G_ACCEL * area * CANT_L, rel=1e-4
         )
 
     def test_unsupported_profile_stops_the_analysis(self, tmp_path):
@@ -1824,6 +1828,7 @@ class TestColumnsMeetingASlabWithNoConnection:
             ] == pytest.approx(at_the_base, rel=0.02)
 
     def test_reaction_is_the_weight_of_everything(self, tmp_path):
+        _needs_solver_reactions()
         _, data = self._analyse(tmp_path, top=0.0)
         total = self.SLAB_WEIGHT + 4 * self.COLUMN_WEIGHT_PER_METRE * COLUMN_HEIGHT
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
@@ -1989,6 +1994,275 @@ class TestTorsion:
         )
 
 
+_CLAMPED_REACTION_INPUT = """*NODE
+1,0,0,0
+2,0,0,1
+3,0,0,2
+*ELEMENT, TYPE=B32R, ELSET=B
+1,1,2,3
+*NSET,NSET=S
+1
+*MATERIAL,NAME=M
+*ELASTIC
+2e11,0.3
+*BEAM SECTION,ELSET=B,MATERIAL=M,SECTION=RECT
+0.2,0.1
+1,0,0
+*BOUNDARY
+1,1,6
+*STEP
+*STATIC
+*CLOAD
+3,1,100.
+3,3,-1000.
+*NODE PRINT,NSET=S,TOTALS=ONLY
+RF
+*END STEP
+"""
+
+
+@functools.lru_cache(maxsize=None)
+def _solver_reports_clamped_reactions() -> bool:
+    """Whether the installed CalculiX gets the reaction at a clamped end right.
+
+    2.21 does not (1077 N for this 1000 N pull on a clamped bar that is also
+    bent); 2.23 does. Tests of the solver's own reactions at such supports
+    cannot pass on 2.21, and ``TestSolverReactionsAreChecked`` covers what
+    the results say then.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        with open(os.path.join(folder, "clamped.inp"), "w") as fh:
+            fh.write(_CLAMPED_REACTION_INPUT)
+        subprocess.run(
+            ["ccx", "-i", "clamped"], cwd=folder, capture_output=True, check=False
+        )
+        with open(os.path.join(folder, "clamped.dat")) as fh:
+            lines = [line.split() for line in fh if line.strip()]
+    return abs(float(lines[-1][2]) - 1000.0) < 1.0
+
+
+def _needs_solver_reactions() -> None:
+    if not _solver_reports_clamped_reactions():
+        pytest.skip(
+            "this CalculiX misreports reactions at supports that hold a rotation"
+        )
+
+
+def _support_at(data: dict, position) -> dict:
+    """The support of a results file nearest a point."""
+    return min(
+        data["supports"],
+        key=lambda s: sum((a - b) ** 2 for a, b in zip(s["position_m"], position)),
+    )
+
+
+class TestSupportReactions:
+    """The reaction at each support, against statics (`94g.1`).
+
+    Forces are the solver's. It gives no moments, so those are the section
+    forces at the ends of the members a support holds.
+    """
+
+    def test_cantilever_root(self, tmp_path):
+        """Weight upwards and w L^2 / 2 against the sag."""
+        data = _run(CANTILEVER, tmp_path, gravity=True)
+        (support,) = data["supports"]
+        weight = CANT_RHO * G_ACCEL * 0.2 * 0.4 * CANT_L
+        assert support["type"] == "point"
+        assert support["restrained"] == ["tx", "ty", "tz", "rx", "ry", "rz"]
+        assert support["moments"] == "member_end_forces"
+        reaction = support["by_load_case"]["Gravity"]
+        assert reaction["fz_N"] == pytest.approx(weight, rel=FORCE_TOLERANCE)
+        assert reaction["my_Nm"] == pytest.approx(
+            -weight * CANT_L / 2, rel=FORCE_TOLERANCE
+        )
+        for key in ("fx_N", "fy_N"):
+            assert abs(reaction[key]) < 1e-3 * weight
+        for key in ("mx_Nm", "mz_Nm"):
+            assert abs(reaction[key]) < 1e-3 * weight * CANT_L
+
+    def test_fixed_fixed_beam(self, tmp_path):
+        """Half the load at each end, and P L / 8 turning opposite ways."""
+        beam = TestFixedFixedBeamPointLoad
+        data = _run(BEAM, tmp_path)
+        left = _support_at(data, (0.0, 4.0, 4.0))
+        right = _support_at(data, (beam.LENGTH, 4.0, 4.0))
+        assert left["id"] != right["id"]
+        moment = beam.LOAD * beam.LENGTH / 8
+        for support, sign in ((left, -1.0), (right, 1.0)):
+            (reaction,) = support["by_load_case"].values()
+            assert reaction["fz_N"] == pytest.approx(beam.LOAD / 2, rel=FORCE_TOLERANCE)
+            assert reaction["my_Nm"] == pytest.approx(
+                sign * moment, rel=FORCE_TOLERANCE
+            )
+            assert reaction["resultant_N"] == pytest.approx(
+                beam.LOAD / 2, rel=FORCE_TOLERANCE
+            )
+
+    def test_pin_and_roller_carry_no_bending_moment(self, tmp_path):
+        """w L / 2 each. The pin's hold on the beam's own axis carries nothing."""
+        line_load = 5000.0
+        path = _beam_on_supports(tmp_path, PIN, ROLLER, line_load=line_load)
+        data = _run(path, tmp_path, 0.25)
+        length = TestFixedFixedBeamPointLoad.LENGTH
+        assert len(data["supports"]) == 2
+        for support in data["supports"]:
+            (reaction,) = support["by_load_case"].values()
+            assert reaction["fz_N"] == pytest.approx(line_load * length / 2, rel=1e-6)
+            for key in ("mx_Nm", "my_Nm", "mz_Nm"):
+                assert abs(reaction[key]) < 1e-3 * line_load * length**2 / 8
+        roller = _support_at(data, (length, 4.0, 4.0))
+        assert "tx" not in roller["restrained"]
+
+    def test_load_on_a_support_goes_into_its_reaction(self, tmp_path):
+        """A quarter of a line load's end element lands on the support node.
+
+        The solver's own total at a 1 m mesh is short by w / 3 (two end
+        nodes, a sixth of an element each).
+        """
+        line_load = 5000.0
+        path = _beam_on_supports(tmp_path, PIN, ROLLER, line_load=line_load)
+        data = _run(path, tmp_path, 1.0)
+        length = TestFixedFixedBeamPointLoad.LENGTH
+        (total,) = data["global_reactions"]["by_load_case"].values()
+        assert total["fz_N"] == pytest.approx(line_load * length, rel=1e-6)
+
+    def test_bending_and_torque_at_one_root(self, tmp_path):
+        """A load off the member's line: the root moment is -(r x F) in full."""
+        path = _balcony_frame(
+            tmp_path, "IfcRectangleProfileDef", {"XDim": 0.3, "YDim": 0.3}
+        )
+        data = _run(path, tmp_path, mesh_size=0.125)
+        (support,) = data["supports"]
+        (reaction,) = support["by_load_case"].values()
+        assert reaction["fz_N"] == pytest.approx(TORSION_P, rel=FORCE_TOLERANCE)
+        assert reaction["mx_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE
+        )
+        assert reaction["my_Nm"] == pytest.approx(
+            -TORSION_P * TORSION_LA, rel=FORCE_TOLERANCE
+        )
+        assert abs(reaction["mz_Nm"]) < 1e-3 * TORSION_P * TORSION_LA
+
+    @pytest.mark.parametrize(
+        "name, mesh, gravity",
+        [
+            ("portal_01", 0.25, False),
+            ("structure_01", 0.5, True),
+            ("slab_01", 0.25, True),
+            ("grid_of_beams", 0.25, True),
+            ("building_01", 1.0, False),
+        ],
+    )
+    def test_supports_add_up_to_the_whole(self, tmp_path, name, mesh, gravity):
+        """Every force the solver reports is given to one support."""
+        _needs_solver_reactions()
+        data = _run(
+            os.path.join(IFC_DIR, f"{name}.ifc"), tmp_path, mesh, gravity=gravity
+        )
+        assert data["supports"]
+        for case, total in data["global_reactions"]["by_load_case"].items():
+            scale = max(abs(total[key]) for key in ("fx_N", "fy_N", "fz_N"))
+            for key in ("fx_N", "fy_N", "fz_N"):
+                summed = sum(s["by_load_case"][case][key] for s in data["supports"])
+                assert summed == pytest.approx(total[key], abs=1e-6 * scale)
+
+    def test_portal_feet_mirror_each_other(self, tmp_path):
+        """A symmetric frame under a symmetric load: equal thrusts and moments."""
+        data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)
+        left, right = sorted(data["supports"], key=lambda s: s["position_m"][0])
+        (a,), (b,) = left["by_load_case"].values(), right["by_load_case"].values()
+        assert a["fz_N"] == pytest.approx(b["fz_N"], rel=1e-3)
+        assert a["fx_N"] == pytest.approx(-b["fx_N"], rel=1e-3)
+        assert a["fx_N"] > 0  # the feet are pushed inwards
+        assert a["my_Nm"] == pytest.approx(-b["my_Nm"], rel=1e-3)
+        # Moments about the left foot: the right foot's lift balances the load
+        span = right["position_m"][0] - left["position_m"][0]
+        load = a["fz_N"] + b["fz_N"]
+        assert a["my_Nm"] + b["my_Nm"] - span * b["fz_N"] + load * span / 2 == (
+            pytest.approx(0.0, abs=FORCE_TOLERANCE * load * span)
+        )
+
+    def test_moment_is_left_out_where_it_cannot_be_had(self, tmp_path):
+        """grid_of_beams: the main beams run 0.1 m past their supports.
+
+        A member's end forces are then not the support's, and the solver has
+        none to give. The keys are absent, not zero.
+        """
+        data = _run(
+            os.path.join(IFC_DIR, "grid_of_beams.ifc"), tmp_path, 0.25, gravity=True
+        )
+        assert len(data["supports"]) == 4
+        for support in data["supports"]:
+            assert support["moments"] == "not_computed"
+            reaction = support["by_load_case"]["Gravity"]
+            assert "mx_Nm" not in reaction
+            assert reaction["fz_N"] > 0
+
+    def test_line_support_in_its_own_axes(self, tmp_path):
+        """structure_01's wall foot: x along the edge, the lift along its y."""
+        data = _run(
+            os.path.join(IFC_DIR, "structure_01.ifc"), tmp_path, 0.5, gravity=True
+        )
+        (line,) = [s for s in data["supports"] if s["type"] == "line"]
+        assert line["position_m"] == pytest.approx([5.0, 2.0, 0.0])
+        assert [abs(v) for v in line["axes"]["x"]] == pytest.approx([0.0, 1.0, 0.0])
+        globally = line["by_load_case"]["Gravity"]
+        locally = line["by_load_case_in_axes"]["Gravity"]
+        for name, row in line["axes"].items():
+            expected = sum(
+                component * globally[key]
+                for component, key in zip(row, ("fx_N", "fy_N", "fz_N"))
+            )
+            assert locally[f"f{name}_N"] == pytest.approx(expected)
+        assert globally["fz_N"] > 0.5 * data["global_reactions"]["total"]["fz_N"]
+
+
+class TestSolverReactionsAreChecked:
+    """CalculiX 2.21 misreports the force at a support that holds a rotation.
+
+    The same input gives the same displacements as 2.23 and other reactions,
+    wrong by anything up to the size of the load. The results do not pass
+    that on: such a support is checked against the ends of its members.
+    """
+
+    def _portal(self, tmp_path):
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=os.path.join(IFC_DIR, "portal_01.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.25,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            return result, json.load(fh)
+
+    def test_reactions_are_right_whatever_the_solver_says(self, tmp_path):
+        """Each foot of the portal carries half the load, to 1 %."""
+        _, data = self._portal(tmp_path)
+        (total,) = data["global_reactions"]["by_load_case"].values()
+        load = -total["applied_load_N"][2]
+        assert load == pytest.approx(85405.86, rel=1e-6)
+        for support in data["supports"]:
+            (reaction,) = support["by_load_case"].values()
+            assert reaction["fz_N"] == pytest.approx(load / 2, rel=FORCE_TOLERANCE)
+
+    def test_the_results_say_where_the_forces_come_from(self, tmp_path):
+        result, data = self._portal(tmp_path)
+        (total,) = data["global_reactions"]["by_load_case"].values()
+        sources = {support["forces"] for support in data["supports"]}
+        warned = [w for w in result["warnings"] if "solver reported" in w["message"]]
+        if _solver_reports_clamped_reactions():
+            assert sources == {"solver"}
+            assert total["imbalance_N"] < 1e-6 * total["resultant_N"]
+            assert not warned
+        else:
+            assert sources == {"member_end_forces"}
+            (warning,) = warned
+            assert "At 2 support(s) that hold a rotation" in warning["message"]
+            assert "CalculiX 2.21 and earlier" in warning["message"]
+
+
 class TestSimplySupportedPlateSelfWeight:
     """slab_01 supported in translation along all four edges, under gravity.
 
@@ -2047,11 +2321,10 @@ class TestSimplySupportedPlateSelfWeight:
         assert _max_vertical_deflection(data) == pytest.approx(
             self._centre_deflection(pressure), rel=0.05
         )
-        # The corners of a simply supported plate are held down, and a load on
-        # a restrained edge node goes straight to ground, so the reported
-        # total is a little short of the load
+        # The load on the restrained edge nodes goes straight to ground; the
+        # solver leaves it out of its total (7 % here) and the results add it
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            pressure * self.A * self.B, rel=0.1
+            pressure * self.A * self.B, rel=1e-4
         )
 
     def test_area_load_sideways_does_not_bend_the_plate(self, tmp_path):
@@ -2335,8 +2608,9 @@ class TestPlacedModel:
 
         reactions = placed["global_reactions"]["by_load_case"]
         assert set(reactions) == set(shipped["global_reactions"]["by_load_case"])
+        assert len(placed["members"]) == len(shipped["members"])
+        _needs_solver_reactions()
         for case, reaction in shipped["global_reactions"]["by_load_case"].items():
             assert reactions[case]["fz_N"] == pytest.approx(reaction["fz_N"], rel=1e-4)
             assert abs(reactions[case]["fx_N"]) < 1e-3
             assert abs(reactions[case]["fy_N"]) < 1e-3
-        assert len(placed["members"]) == len(shipped["members"])

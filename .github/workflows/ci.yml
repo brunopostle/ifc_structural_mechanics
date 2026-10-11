@@ -71,3 +71,55 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  # The distribution's CalculiX 2.21 above misreports reactions at supports
+  # that hold a rotation, so tests of them are skipped there. This job runs
+  # the suite on 2.23, where they are right and none of them may be skipped.
+  test-calculix-2-23:
+    name: Test (CalculiX 2.23)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Python and CalculiX 2.23 from conda-forge
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: ccx223
+          create-args: >-
+            python=3.11
+            pip
+            calculix=2.23
+          cache-environment: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libglu1-mesa
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check the solver version
+        run: |
+          which ccx
+          ccx -v | grep "Version 2.23"
+
+      - name: Run fast tests
+        run: |
+          set -o pipefail
+          pytest -m "not slow" -v -rs | tee pytest.log
+
+      - name: Check no reaction test was skipped
+        run: "! grep -E 'SKIPPED.*(misreports|CalculiX not available)' pytest.log"
+
+      - name: Run slow tests
+        run: pytest -m slow -v
+        continue-on-error: true

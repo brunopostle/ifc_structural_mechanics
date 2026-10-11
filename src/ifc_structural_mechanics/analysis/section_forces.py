@@ -116,7 +116,10 @@ def element_section_forces(
         One dict per cross-section with ``position`` (-1 start, 0 middle,
         1 end, along ``axis``), ``centre`` (the cross-section's centre) and
         ``N``, ``Vf1``, ``Vf2``, ``T``, ``Mf1``, ``Mf2``. Empty if a node or
-        its stress is missing.
+        its stress is missing. ``force`` and ``moment`` are the same
+        resultants as vectors in global axes, the moment about ``centre``:
+        what the part of the member beyond the cross-section (along ``axis``)
+        exerts on the part before it.
     """
     try:
         points = np.array([coordinates[n] for n in node_ids], dtype=float)
@@ -157,6 +160,16 @@ def element_section_forces(
                 "T": float(moment_y[2] - moment_z[1]),
                 "Mf1": float(moment_y[0]),
                 "Mf2": float(moment_z[0]),
+                "force": [
+                    float(v)
+                    for v in integral[0] * t + integral[1] * e1 + integral[2] * e2
+                ],
+                "moment": [
+                    float(v)
+                    for v in (moment_y[2] - moment_z[1]) * t
+                    + moment_z[0] * e1
+                    - moment_y[0] * e2
+                ],
             }
         )
     return forces

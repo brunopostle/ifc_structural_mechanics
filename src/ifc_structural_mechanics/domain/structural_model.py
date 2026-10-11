@@ -70,6 +70,15 @@ class StructuralModel:
         # analysis element ID → (member axis, section 1-direction) as written
         # on its beam section card; set by the input writer
         self.beam_section_frames: Dict[int, tuple] = {}
+        # connection.id → {"nodes": {node: (x, y, z)}, "dofs": [1..6]} for
+        # every support, as written to the solver; set by the input writer
+        self.support_nodes: Dict[str, Dict] = {}
+        # Per analysis step, the load applied directly at each support node,
+        # {node: [fx, fy, fz]}; set by the input writer
+        self.support_node_loads: List[Dict[int, List[float]]] = []
+        # Per analysis step, the whole applied load [fx, fy, fz]; set by the
+        # input writer
+        self.applied_load_totals: List[List[float]] = []
         # member.id → its mesh nodes; a node at a joint belongs to several
         self.member_nodes: Dict[str, set] = {}
 

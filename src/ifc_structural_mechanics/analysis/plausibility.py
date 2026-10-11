@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Sequence
 MEMBER_LIMIT = 1.0 / 100.0
 # A displacement larger than this fraction of the size of the whole model.
 MODEL_LIMIT = 0.05
+# Reactions that miss the applied load by more than this fraction of it.
+BALANCE_LIMIT = 1.0e-3
 
 
 def _points(geometry: Any) -> List[Sequence[float]]:
@@ -61,6 +63,67 @@ def _length(value: float) -> str:
     return f"{value * 1000.0:.3g} mm"
 
 
+def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return one warning if the solver's reactions are not to be trusted.
+
+    Statics requires the reactions to balance the loads, so a difference
+    means the solver reported them wrongly (the displacements need not be
+    wrong). CalculiX 2.21 and earlier do this at a support that holds a
+    rotation. Measured: the same input gives the same displacements in 2.21
+    and 2.23, and reactions that are right only in 2.23. The errors of two
+    supports can cancel, so the exporter also checks each such support
+    against the ends of its members and marks the ones it had to replace.
+
+    Args:
+        results: The dict written to ``results.json``.
+
+    Returns:
+        A list with one warning, or an empty list.
+    """
+    unbalanced = []
+    cases = results.get("global_reactions", {}).get("by_load_case", {})
+    for case, reaction in cases.items():
+        load = reaction.get("applied_load_N")
+        imbalance = reaction.get("imbalance_N")
+        if load is None or imbalance is None:
+            continue
+        size = math.sqrt(sum(v * v for v in load))
+        if imbalance > BALANCE_LIMIT * max(size, reaction.get("resultant_N", 0.0)):
+            unbalanced.append((case, imbalance, size))
+    supports = results.get("supports", [])
+    replaced = sum(1 for s in supports if s.get("forces") == "member_end_forces")
+    unreliable = sum(1 for s in supports if s.get("forces") == "unreliable")
+    if not unbalanced and not replaced and not unreliable:
+        return []
+    message = "The reactions the solver reported are wrong."
+    if unbalanced:
+        listed = ", ".join(
+            f"{case} (off by {imbalance:.4g} N of {size:.4g} N)"
+            for case, imbalance, size in unbalanced[:5]
+        )
+        more = f", and {len(unbalanced) - 5} more" if len(unbalanced) > 5 else ""
+        message += (
+            f" They do not balance the applied loads in {len(unbalanced)} load "
+            f"case(s): {listed}{more}; do not rely on the total reactions."
+        )
+    if replaced:
+        message += (
+            f" At {replaced} support(s) that hold a rotation the forces are "
+            "taken from the ends of the members instead, good to about 1 %."
+        )
+    if unreliable:
+        message += (
+            f" At {unreliable} support(s) that hold a rotation there is "
+            "nothing to take them from, and the figures given are wrong."
+        )
+    message += (
+        " CalculiX 2.21 and earlier misreport the force at a support that "
+        "holds a rotation; 2.23 does not. Displacements and member forces "
+        "are not affected."
+    )
+    return [_warning(message)]
+
+
 def plausibility_warnings(
     results: Dict[str, Any], domain_model
 ) -> List[Dict[str, Any]]:
@@ -92,7 +155,7 @@ def plausibility_warnings(
             sizes[member.id] = extent
     model_size = _extent(everything)
 
-    warnings: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = balance_warnings(results)
     members = results.get("members", [])
     by_case = results.get("global_displacements", {}).get("by_load_case", {})
     for case in results.get("load_cases", []) or list(by_case):
