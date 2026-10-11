@@ -8,7 +8,7 @@ and converting them into domain model objects with proper unit conversion.
 
 import logging
 import uuid
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import ifcopenshell
 import numpy as np
@@ -191,6 +191,9 @@ class LoadsExtractor:
                 description=case_description,
                 is_load_case=True,
             )
+            coefficients = case_entity.SelfWeightCoefficients
+            if coefficients is not None:
+                load_case.self_weight_coefficients = [float(c) for c in coefficients]
             all_groups[case_id] = load_case
 
         # Process direct assignments of loads to regular load groups
@@ -262,90 +265,81 @@ class LoadsExtractor:
         """
         Extract all load combinations from the IFC file.
 
+        A combination is an ``IfcStructuralLoadGroup`` with the predefined
+        type ``LOAD_COMBINATION``. Each ``IfcRelAssignsToGroup`` that fills it
+        gives its load cases a factor: ``Factor`` of an
+        ``IfcRelAssignsToGroupByFactor``, otherwise 1. The combination's own
+        ``Coefficient`` multiplies all of them, and a case assigned twice has
+        its factors added.
+
+        A combination that names no load case, or something that is not a
+        load case, cannot be formed: it is left out, and a warning says so.
+
         Returns:
             List of extracted load combinations as domain objects
         """
         self.logger.info("Extracting load combinations")
 
-        # Get all load groups first (we need them for mapping)
-        all_groups = self.extract_load_groups()
-        group_map = {group.id: group for group in all_groups}
+        load_case_ids = {
+            case.GlobalId for case in self._entities_of_type(self.LOAD_CASE_TYPE)
+        }
+        assignments: Dict[str, List[Any]] = {}
+        for rel in self.ifc.by_type("IfcRelAssignsToGroup"):
+            group = rel.RelatingGroup
+            if group is not None and group.is_a(self.LOAD_GROUP_TYPE):
+                assignments.setdefault(group.GlobalId, []).append(rel)
 
-        # Find all load combination entities
         load_combinations = []
-
-        try:
-            # Find all entities that are load combinations
-            combination_entities = []
-            for entity in self.ifc.by_type(self.LOAD_GROUP_TYPE):
-                if (
-                    hasattr(entity, "PredefinedType")
-                    and entity.PredefinedType == "LOAD_COMBINATION"
-                ):
-                    combination_entities.append(entity)
-
-            self.logger.info(
-                f"Found {len(combination_entities)} load combination entities"
+        empty = []
+        not_cases = []
+        for entity in self._entities_of_type(self.LOAD_GROUP_TYPE):
+            if entity.PredefinedType != "LOAD_COMBINATION":
+                continue
+            combination = LoadCombination(
+                id=entity.GlobalId,
+                name=entity.Name or f"Combo-{entity.GlobalId[:8]}",
+                description=entity.Description,
             )
-
-            # Process each combination entity
-            for combo_entity in combination_entities:
-                try:
-                    # Extract basic properties
-                    combo_id = combo_entity.GlobalId
-                    combo_name = getattr(combo_entity, "Name", f"Combo-{combo_id[:8]}")
-                    combo_description = getattr(combo_entity, "Description", None)
-
-                    # Create the domain load combination
-                    load_combination = LoadCombination(
-                        id=combo_id, name=combo_name, description=combo_description
-                    )
-
-                    # Look for load cases included in this combination via IfcRelAssignsToGroup
-                    for rel in self.ifc.by_type("IfcRelAssignsToGroup"):
-                        if (
-                            hasattr(rel, "RelatingGroup")
-                            and hasattr(rel.RelatingGroup, "GlobalId")
-                            and rel.RelatingGroup.GlobalId == combo_id
-                        ):
-                            # Get the factor if available
-                            factor = 1.0
-                            if hasattr(rel, "Factor") and rel.Factor is not None:
-                                factor = float(rel.Factor)
-
-                            # Process each related object - only allow load cases
-                            for obj in rel.RelatedObjects:
-                                if (
-                                    hasattr(obj, "GlobalId")
-                                    and obj.is_a(self.LOAD_CASE_TYPE)
-                                    and obj.GlobalId in group_map
-                                ):
-                                    # Add to combination with factor
-                                    load_combination.add_load_group(
-                                        obj.GlobalId, factor
-                                    )
-                                    self.logger.debug(
-                                        f"Added load case {obj.GlobalId} to combination {combo_id} with factor {factor}"
-                                    )
-
-                    # Add the combination to our result list if it has any load groups
-                    if len(load_combination.load_groups) > 0:
-                        load_combinations.append(load_combination)
-                        self.logger.debug(
-                            f"Created load combination: {combo_name} ({combo_id})"
+            coefficient = entity.Coefficient
+            scale = 1.0 if coefficient is None else float(coefficient)
+            strangers = []
+            for rel in assignments.get(entity.GlobalId, []):
+                factor = scale
+                if rel.is_a("IfcRelAssignsToGroupByFactor"):
+                    factor *= float(rel.Factor)
+                for obj in rel.RelatedObjects:
+                    if obj.GlobalId in load_case_ids:
+                        combination.add_load_group(
+                            obj.GlobalId,
+                            factor + combination.load_groups.get(obj.GlobalId, 0.0),
                         )
-                except ModelExtractionError:
-                    raise
-                except Exception as e:
-                    raise ModelExtractionError(
-                        f"Error creating load combination from {getattr(combo_entity, 'GlobalId', 'unknown')}: {e}"
-                    ) from e
-        except ModelExtractionError:
-            raise
-        except Exception as e:
-            raise ModelExtractionError(
-                f"Error extracting load combinations: {e}"
-            ) from e
+                    else:
+                        strangers.append(obj)
+            label = f"{combination.name} ({entity.GlobalId})"
+            if strangers:
+                not_cases.append(
+                    f"{label}: {strangers[0].is_a()} {strangers[0].GlobalId}"
+                )
+            elif not combination.load_groups:
+                empty.append(label)
+            else:
+                load_combinations.append(combination)
+
+        if empty:
+            self.warnings.append(
+                f"{len(empty)} load combination(s) name no load case and have "
+                f"no results: {', '.join(empty[:3])}"
+                + (" ..." if len(empty) > 3 else "")
+                + "."
+            )
+        if not_cases:
+            self.warnings.append(
+                f"{len(not_cases)} load combination(s) include something that "
+                "is not a load case and have no results (the combination and "
+                f"what it includes): {'; '.join(not_cases[:3])}"
+                + (" ..." if len(not_cases) > 3 else "")
+                + "."
+            )
 
         self.logger.info(f"Extracted {len(load_combinations)} load combinations")
         return load_combinations

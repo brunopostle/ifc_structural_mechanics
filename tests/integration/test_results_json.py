@@ -45,7 +45,7 @@ def _load_results_json(output_dir: str) -> dict:
 
 def _assert_schema(data: dict) -> None:
     """Assert top-level results.json schema is present and well-formed."""
-    assert data.get("schema_version") == "1.1"
+    assert data.get("schema_version") == "1.2"
     units = data.get("units", {})
     assert units.get("displacement") == "m"
     assert units.get("stress") == "Pa"
@@ -311,9 +311,45 @@ class TestBuilding02ResultsJson:
                 assert len({len(values) for values in diagram.values()}) == 1
 
     def test_results_file_stays_a_reasonable_size(self, building_02_run):
+        """Under 4 MB for each load case and combination (2.3 MB as measured).
+
+        The file's 17 combinations each have what a load case has, so its
+        size goes with their number.
+        """
         _, output_dir = building_02_run
         size = os.path.getsize(os.path.join(output_dir, "results.json"))
-        assert size < 20e6, f"results.json is {size / 1e6:.1f} MB"
+        data = _load_results_json(output_dir)
+        states = len(data["load_cases"]) + len(data["load_combinations"])
+        assert states == 20
+        assert size < 4e6 * states, f"results.json is {size / 1e6:.1f} MB"
+
+    def test_combinations_are_the_sums_of_their_cases(self, building_02_run):
+        """Reactions add up exactly; 1.4D+1.6L is the largest of the file's."""
+        _, output_dir = building_02_run
+        data = _load_results_json(output_dir)
+        reactions = data["global_reactions"]
+        (listed,) = [c for c in data["load_combinations"] if c["name"] == "1.4D+1.6L"]
+        assert listed["factors"] == {"Dead": 1.4, "Extra_dead": 1.4, "Live": 1.6}
+        assert listed["cases_without_loads"] == ["Dead"]
+        cases = reactions["by_load_case"]
+        combined = reactions["by_load_combination"]["1.4D+1.6L"]
+        assert combined["fz_N"] == pytest.approx(
+            1.4 * cases["Extra_dead"]["fz_N"] + 1.6 * cases["Live"]["fz_N"], rel=1e-9
+        )
+        assert combined["imbalance_N"] < 1e-6 * combined["fz_N"]
+        largest = max(
+            values["max_displacement_m"]
+            for values in data["global_displacements"]["by_load_combination"].values()
+        )
+        assert (
+            data["global_displacements"]["by_load_combination"]["1.4D+1.6L"][
+                "max_displacement_m"
+            ]
+            == largest
+        )
+        members = [m for m in data["members"] if "by_load_combination" in m]
+        assert len(members) == len(data["members"])
+        assert all(len(m["by_load_combination"]) == 17 for m in members)
 
     def test_surface_members_have_no_section_forces(self, building_02_run):
         _, output_dir = building_02_run

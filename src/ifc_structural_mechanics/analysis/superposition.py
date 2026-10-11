@@ -1,0 +1,248 @@
+"""Results of a load combination, from those of its load cases.
+
+In a linear analysis the response to a sum of loads is the sum of the
+responses. So a combination needs no solver step of its own: displacements,
+stress components, section forces and nodal forces of each load case are
+multiplied by the case's factor and added. That holds for these, which are
+linear in the load, and for nothing derived from them: a displacement
+magnitude, a von Mises stress, the largest value along a member and the
+envelope of a member are all worked out again from the sums, by the same code
+that works them out for a load case.
+
+``combine_results()`` returns results in the form ``ResultsParser`` gives
+them, holding one step named after the combination, so that
+``ResultsExporter`` can be run on them unchanged.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from ..domain.result import DisplacementResult, ReactionForceResult, StressResult
+from ..utils.error_handling import ResultProcessingError
+
+STRESS_COMPONENTS = ("sxx", "syy", "szz", "sxy", "syz", "sxz")
+_SECTION_FORCES = ("N", "Vf1", "Vf2", "T", "Mf1", "Mf2")
+_SECTION_VECTORS = ("force", "moment")
+
+
+def combine_results(
+    parsed_results: Dict[str, Any],
+    factors: Dict[str, float],
+    name: str,
+    support_node_loads: Optional[List[Dict[int, List[float]]]] = None,
+    applied_load_totals: Optional[List[List[float]]] = None,
+) -> Tuple[Dict[str, Any], List[Dict[int, List[float]]], List[List[float]]]:
+    """Add up the results of load cases, each multiplied by its factor.
+
+    Args:
+        parsed_results: What ``ResultsParser.parse_results()`` returned.
+        factors: ``{load case name: factor}``. Every name must be a load
+            case with results.
+        name: The name the combination's results are given.
+        support_node_loads: The loads each step puts on support nodes
+            (``StructuralModel.support_node_loads``).
+        applied_load_totals: The whole load of each step
+            (``StructuralModel.applied_load_totals``).
+
+    Returns:
+        The combined results, and the two per-step lists with the single
+        step of the combination in them (empty when they were not given).
+
+    Raises:
+        ResultProcessingError: If a load case has no results, or the results
+            of two cases are not on the same nodes and cross-sections.
+    """
+    combined: Dict[str, Any] = {
+        "displacement": _combine_displacements(parsed_results, factors, name),
+        "stress": _combine_stresses(parsed_results, factors, name),
+        "strain": [],
+        "buckling": [],
+        "section_forces": _combine_section_forces(parsed_results, factors, name),
+        "reaction": [],
+        "support_node_forces": [],
+    }
+
+    totals = [
+        r
+        for r in parsed_results.get("reaction", [])
+        if getattr(r, "reference_element", None) == "TOTAL"
+    ]
+    by_case = {r.metadata.get("load_case"): r for r in totals}
+    if totals:
+        force = np.zeros(3)
+        moment = np.zeros(3)
+        for case, factor in factors.items():
+            if case not in by_case:
+                raise ResultProcessingError(
+                    f"Load combination {name}: load case {case} has no reactions."
+                )
+            force += factor * np.array(by_case[case].get_forces())
+            moment += factor * np.array(by_case[case].get_moments())
+        total = ReactionForceResult(reference_element="TOTAL", load_case=name)
+        total.set_forces([float(v) for v in force])
+        total.set_moments([float(v) for v in moment])
+        combined["reaction"] = [total]
+
+    steps = parsed_results.get("support_node_forces") or []
+    step_of = {step["load_case"]: index for index, step in enumerate(steps)}
+    if steps:
+        forces: Dict[int, np.ndarray] = {}
+        for case, factor in factors.items():
+            if case not in step_of:
+                raise ResultProcessingError(
+                    f"Load combination {name}: load case {case} has no "
+                    "forces at the supports."
+                )
+            for node, nodal in steps[step_of[case]]["forces"].items():
+                forces[node] = forces.get(node, 0.0) + factor * np.array(nodal)
+        combined["support_node_forces"] = [
+            {
+                "load_case": name,
+                "forces": {n: [float(v) for v in f] for n, f in forces.items()},
+            }
+        ]
+
+    node_loads: List[Dict[int, List[float]]] = []
+    if support_node_loads and step_of:
+        summed: Dict[int, np.ndarray] = {}
+        for case, factor in factors.items():
+            index = step_of[case]
+            if index >= len(support_node_loads):
+                continue
+            for node, load in support_node_loads[index].items():
+                summed[node] = summed.get(node, 0.0) + factor * np.array(load)
+        node_loads = [{n: [float(v) for v in f] for n, f in summed.items()}]
+
+    load_totals: List[List[float]] = []
+    if applied_load_totals and step_of:
+        whole = np.zeros(3)
+        complete = True
+        for case, factor in factors.items():
+            index = step_of[case]
+            if index >= len(applied_load_totals):
+                complete = False
+                break
+            whole += factor * np.array(applied_load_totals[index])
+        if complete:
+            load_totals = [[float(v) for v in whole]]
+
+    return combined, node_loads, load_totals
+
+
+def _by_case(results: List[Any], factors: Dict[str, float]) -> Dict[str, List[Any]]:
+    grouped: Dict[str, List[Any]] = {case: [] for case in factors}
+    for result in results:
+        case = result.metadata.get("load_case")
+        if case in grouped:
+            grouped[case].append(result)
+    return grouped
+
+
+def _check_same_points(name: str, kind: str, counts: Dict[str, int], size: int) -> None:
+    """Every case has to contribute at every point, or the sum is not one."""
+    short = [case for case, count in counts.items() if count != size]
+    if short:
+        raise ResultProcessingError(
+            f"Load combination {name}: the {kind} results of load case "
+            f"{short[0]} are not at the same points as those of the other "
+            "cases, so they cannot be added."
+        )
+
+
+def _combine_displacements(
+    parsed_results: Dict[str, Any], factors: Dict[str, float], name: str
+) -> List[DisplacementResult]:
+    grouped = _by_case(parsed_results.get("displacement", []), factors)
+    # Plain lists: this runs for every node of the model and every case
+    sums: Dict[Any, List[float]] = {}
+    for case, results in grouped.items():
+        if not results:
+            raise ResultProcessingError(
+                f"Load combination {name}: load case {case} has no displacements."
+            )
+        factor = factors[case]
+        for result in results:
+            values = result.values
+            total = sums.get(result.reference_element)
+            if total is None:
+                total = sums[result.reference_element] = [0.0, 0.0, 0.0]
+            total[0] += factor * values.get("tx", 0.0)
+            total[1] += factor * values.get("ty", 0.0)
+            total[2] += factor * values.get("tz", 0.0)
+    _check_same_points(
+        name, "displacement", {c: len(r) for c, r in grouped.items()}, len(sums)
+    )
+    combined = []
+    for node, translation in sums.items():
+        result = DisplacementResult(reference_element=node, load_case=name)
+        result.set_translations(translation)
+        combined.append(result)
+    return combined
+
+
+def _combine_stresses(
+    parsed_results: Dict[str, Any], factors: Dict[str, float], name: str
+) -> List[StressResult]:
+    grouped = _by_case(parsed_results.get("stress", []), factors)
+    if not any(grouped.values()):
+        return []
+    sums: Dict[Any, List[float]] = {}
+    for case, results in grouped.items():
+        factor = factors[case]
+        for result in results:
+            values = result.values
+            total = sums.get(result.reference_element)
+            if total is None:
+                total = sums[result.reference_element] = [0.0] * 6
+            try:
+                for i, key in enumerate(STRESS_COMPONENTS):
+                    total[i] += factor * values[key]
+            except KeyError as e:
+                raise ResultProcessingError(
+                    f"Load combination {name}: a stress of load case {case} "
+                    f"has no component {e}; only components can be added."
+                ) from e
+    _check_same_points(
+        name, "stress", {c: len(r) for c, r in grouped.items()}, len(sums)
+    )
+    combined = []
+    for node, components in sums.items():
+        result = StressResult(reference_element=node, load_case=name)
+        result.values.update(zip(STRESS_COMPONENTS, components))
+        combined.append(result)
+    return combined
+
+
+def _combine_section_forces(
+    parsed_results: Dict[str, Any], factors: Dict[str, float], name: str
+) -> List[Dict]:
+    sums: Dict[tuple, Dict] = {}
+    counts = {case: 0 for case in factors}
+    for record in parsed_results.get("section_forces", []):
+        if not isinstance(record, dict) or record.get("load_case") not in factors:
+            continue
+        case = record["load_case"]
+        factor = factors[case]
+        counts[case] += 1
+        key = (record.get("element_id"), record.get("position"))
+        total = sums.get(key)
+        if total is None:
+            total = {
+                k: v
+                for k, v in record.items()
+                if k not in _SECTION_FORCES and k not in _SECTION_VECTORS
+            }
+            total["load_case"] = name
+            total.update({k: 0.0 for k in _SECTION_FORCES if k in record})
+            total.update({k: np.zeros(3) for k in _SECTION_VECTORS if k in record})
+            sums[key] = total
+        for k in _SECTION_FORCES:
+            if k in record:
+                total[k] += factor * record[k]
+        for k in _SECTION_VECTORS:
+            if k in record:
+                total[k] = total[k] + factor * np.array(record[k], dtype=float)
+    if sums:
+        _check_same_points(name, "section force", counts, len(sums))
+    return list(sums.values())

@@ -7,11 +7,14 @@ writes a ``results.json`` file keyed to IFC GlobalIds.
 Schema (summary level)
 ----------------------
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m"},
   "model": {"id": "...", "name": "..."},
   "load_cases": ["Dead", "Live"],
+  "load_combinations": [
+    {"name": "ULS", "ifc_guid": "...", "factors": {"Dead": 1.35, "Live": 1.5}}
+  ],
   "members": [
     {
       "ifc_guid": "...",
@@ -64,6 +67,32 @@ Schema (summary level)
     }
   ]
 }
+
+``load_combinations`` (schema 1.2) lists the load combinations of the file,
+each with the factor of every load case in it. A combination's results are
+those of its load cases, each multiplied by its factor and added: the solver
+runs the load cases only, and the analysis has to be linear static. What is
+added is what is linear in the load (displacement vectors, stress components,
+section forces at each cross-section, forces at support nodes); magnitudes,
+von Mises stress, the largest values along a member and its section force
+diagram are then worked out from the sums, exactly as for a load case. They
+are found beside each ``by_load_case``, under the combination's name:
+
+- ``members[]``: ``by_load_combination``, ``combination_envelope`` (the
+  largest of each value over the combinations; ``envelope`` remains that of
+  the load cases) and ``section_force_diagrams_by_combination``. ``status``
+  fails if either envelope is over a limit.
+- ``global_displacements`` and ``global_reactions``: ``by_load_combination``.
+- ``supports[]``: ``by_load_combination`` and, where the support has axes of
+  its own, ``by_load_combination_in_axes``.
+
+A load case that has no loads was not solved and adds nothing; a combination
+that includes one names it in ``cases_without_loads``, and one made only of
+such cases is listed without results. Two combinations of one name have the
+GlobalId added to the name of the second. Combinations that cannot be formed
+(no load case, or something in them that is not a load case) are not listed;
+the analysis warns about them. Self-weight asked for with ``--gravity`` is a
+load case of its own, ``Gravity``, which no combination of the file includes.
 
 ``global_reactions`` entries also carry (schema 1.1) ``applied_load_N``, the
 whole load of the case as written to the solver ``[fx, fy, fz]``, and
@@ -156,6 +185,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..analysis.plausibility import BALANCE_LIMIT
+from ..analysis.superposition import combine_results
 
 logger = logging.getLogger(__name__)
 
@@ -173,9 +203,12 @@ class ResultsExporter:
         element_nodes: Node IDs of each element in the result file, from
             ``ResultsParser.element_nodes``. Without it results are attributed
             through the mesh nodes alone, which misses expanded elements.
+        load_combinations: The ``LoadCombination`` objects to give results
+            for, by adding up their load cases. Only for a linear analysis
+            with a step per load case.
     """
 
-    SCHEMA_VERSION = "1.1"
+    SCHEMA_VERSION = "1.2"
 
     def __init__(
         self,
@@ -183,11 +216,16 @@ class ResultsExporter:
         parsed_results: Dict[str, List],
         limits: Optional[Dict[str, float]] = None,
         element_nodes: Optional[Dict[int, List[int]]] = None,
+        load_combinations: Optional[List] = None,
     ):
         self.model = domain_model
         self.parsed_results = parsed_results
         self.limits = limits or {}
         self.element_nodes = element_nodes or {}
+        self.load_combinations = list(load_combinations or [])
+        # What each solver step put on the structure, in step order
+        self._support_node_loads = getattr(domain_model, "support_node_loads", None)
+        self._applied_load_totals = getattr(domain_model, "applied_load_totals", None)
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
         self._mesh_nodes: Optional[Dict[str, set]] = None
         self._translations: Optional[Dict[int, List[Tuple[str, List[float]]]]] = None
@@ -218,7 +256,7 @@ class ResultsExporter:
 
     def _build(self) -> Dict[str, Any]:
         load_cases = self._load_case_names()
-        return {
+        data = {
             "schema_version": self.SCHEMA_VERSION,
             "units": {
                 "length": "m",
@@ -237,6 +275,118 @@ class ResultsExporter:
             "global_reactions": self._global_reactions(),
             "supports": self._supports(),
         }
+        self._add_load_combinations(data)
+        return data
+
+    # ------------------------------------------------------------------
+    # Load combinations
+    # ------------------------------------------------------------------
+
+    def _add_load_combinations(self, data: Dict[str, Any]) -> None:
+        """Add the results of each load combination to *data*.
+
+        A combination's results are those of its load cases, each multiplied
+        by its factor and added (``analysis/superposition.py``); everything
+        that is not linear in the load is then worked out from the sums by
+        this class, run on them as it is run on a load case. One combination
+        is held at a time.
+        """
+        if not self.load_combinations:
+            return
+        solved = set(data["load_cases"])
+        listed: List[Dict[str, Any]] = []
+        names: set = set()
+        for combination in self.load_combinations:
+            name = combination.name
+            if name in names:
+                # Two combinations of one name: tell them apart
+                name = f"{name} ({combination.id})"
+            names.add(name)
+            factors: Dict[str, float] = {}
+            without_loads: List[str] = []
+            for group_id, factor in combination.load_groups.items():
+                group = self.model.get_load_group(group_id)
+                case = group.name if group is not None else group_id
+                factors[case] = factors.get(case, 0.0) + float(factor)
+                if case not in solved:
+                    without_loads.append(case)
+            entry: Dict[str, Any] = {
+                "name": name,
+                "ifc_guid": combination.id,
+                "factors": factors,
+            }
+            if without_loads:
+                entry["cases_without_loads"] = without_loads
+            listed.append(entry)
+            active = {c: f for c, f in factors.items() if c in solved}
+            if active:
+                self._add_one_combination(data, name, active)
+        data["load_combinations"] = listed
+
+        for member in data["members"]:
+            by_combination = member.get("by_load_combination")
+            if not by_combination:
+                continue
+            envelope = self._envelope(
+                {
+                    name: {k: v for k, v in d.items() if isinstance(v, float)}
+                    for name, d in by_combination.items()
+                }
+            )
+            forces = {
+                name: d["section_forces"]
+                for name, d in by_combination.items()
+                if "section_forces" in d
+            }
+            if forces:
+                envelope["section_forces"] = self._envelope(forces)
+            member["combination_envelope"] = envelope
+            if self._status(envelope) == "fail":
+                member["status"] = "fail"
+
+    def _add_one_combination(
+        self, data: Dict[str, Any], name: str, factors: Dict[str, float]
+    ) -> None:
+        combined, node_loads, load_totals = combine_results(
+            self.parsed_results,
+            factors,
+            name,
+            self._support_node_loads,
+            self._applied_load_totals,
+        )
+        part = ResultsExporter(
+            self.model, combined, limits=self.limits, element_nodes=self.element_nodes
+        )
+        part._support_node_loads = node_loads
+        part._applied_load_totals = load_totals
+        part._mesh_nodes = self._mesh_nodes
+        result = part._build()
+
+        for member, combined_member in zip(data["members"], result["members"]):
+            values = combined_member.get("by_load_case", {}).get(name)
+            if values is not None:
+                member.setdefault("by_load_combination", {})[name] = values
+            diagram = combined_member.get("section_force_diagrams", {}).get(name)
+            if diagram is not None:
+                member.setdefault("section_force_diagrams_by_combination", {})[
+                    name
+                ] = diagram
+
+        for block in ("global_displacements", "global_reactions"):
+            values = result.get(block, {}).get("by_load_case", {}).get(name)
+            if values is not None:
+                data[block].setdefault("by_load_combination", {})[name] = values
+
+        for support, combined_support in zip(data["supports"], result["supports"]):
+            for key in ("by_load_case", "by_load_case_in_axes"):
+                values = combined_support.get(key, {}).get(name)
+                if values is not None:
+                    target = key.replace("load_case", "load_combination")
+                    support.setdefault(target, {})[name] = values
+            # A reaction the solver got wrong in a load case is wrong in the
+            # combination; one it only gets wrong added up is as unusable
+            if combined_support["forces"] != "solver" and support["forces"] == "solver":
+                support["forces"] = combined_support["forces"]
 
     # ------------------------------------------------------------------
     # Load case helpers
@@ -729,19 +879,20 @@ class ResultsExporter:
             by_lc[lc].append(r)
 
         def _stats(results) -> Optional[Dict[str, float]]:
-            mags = [r.get_magnitude() for r in results]
-            if not mags:
+            if not results:
                 return None
-            txs = [abs(r.get_translations()[0]) for r in results]
-            tys = [abs(r.get_translations()[1]) for r in results]
-            tzs = [abs(r.get_translations()[2]) for r in results]
-            stats: Dict[str, float] = {"max_displacement_m": max(mags)}
-            if any(v > 0 for v in txs):
-                stats["max_tx_m"] = max(txs)
-            if any(v > 0 for v in tys):
-                stats["max_ty_m"] = max(tys)
-            if any(v > 0 for v in tzs):
-                stats["max_tz_m"] = max(tzs)
+            largest = 0.0
+            along = [0.0, 0.0, 0.0]
+            for r in results:
+                tx, ty, tz = r.get_translations()
+                largest = max(largest, tx * tx + ty * ty + tz * tz)
+                along[0] = max(along[0], abs(tx))
+                along[1] = max(along[1], abs(ty))
+                along[2] = max(along[2], abs(tz))
+            stats: Dict[str, float] = {"max_displacement_m": math.sqrt(largest)}
+            for key, value in zip(("max_tx_m", "max_ty_m", "max_tz_m"), along):
+                if value > 0:
+                    stats[key] = value
             return stats
 
         by_lc_summary = {
@@ -912,7 +1063,7 @@ class ResultsExporter:
             for r in self.parsed_results.get("reaction", [])
             if getattr(r, "reference_element", None) == "TOTAL"
         ]
-        loads = getattr(self.model, "applied_load_totals", None)
+        loads = self._applied_load_totals
         if (
             not isinstance(loads, list)
             or step_index >= len(loads)
@@ -934,7 +1085,7 @@ class ResultsExporter:
 
     def _loads_on_support_nodes(self, step_index: int) -> Dict[int, List[float]]:
         """Loads applied directly at support nodes in one step, by node."""
-        recorded = getattr(self.model, "support_node_loads", None)
+        recorded = self._support_node_loads
         if not isinstance(recorded, list) or step_index >= len(recorded):
             return {}
         return recorded[step_index]
@@ -1041,7 +1192,7 @@ class ResultsExporter:
                 "mz_Nm": moments[2],
                 "resultant_N": math.sqrt(sum(f * f for f in forces)),
             }
-            loads = getattr(self.model, "applied_load_totals", None)
+            loads = self._applied_load_totals
             if isinstance(loads, list) and index < len(loads):
                 load = loads[index]
                 entry["applied_load_N"] = [float(v) for v in load]

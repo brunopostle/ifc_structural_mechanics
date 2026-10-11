@@ -261,10 +261,29 @@ def analyze_ifc(
 
                 # Export GlobalId-keyed JSON results
                 results_json_path = os.path.join(output_dir, "results.json")
+                # A combination is the sum of its load cases' results, which
+                # needs a step per case and a linear analysis
+                combinations = list(domain_model.load_combinations)
+                if combinations and analysis_type != "linear_static":
+                    result["warnings"].append(
+                        {
+                            "message": (
+                                f"{len(combinations)} load combination(s) of "
+                                "the file have no results: combinations are "
+                                "only formed in a linear static analysis."
+                            ),
+                            "severity": "warning",
+                            "entity_type": None,
+                            "ccx_id": None,
+                            "domain_id": None,
+                        }
+                    )
+                    combinations = []
                 exporter = ResultsExporter(
                     domain_model,
                     parsed_results,
                     element_nodes=results_parser.element_nodes,
+                    load_combinations=combinations,
                 )
                 exported = exporter.export(results_json_path)
                 result["warnings"].extend(plausibility_warnings(exported, domain_model))

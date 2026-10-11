@@ -310,6 +310,37 @@ class Extractor:
                             model.add_load_group(group)
                             break
 
+        # A load case can include the weight of the members; that part of it
+        # is not analysed (only --gravity is, as a case of its own)
+        weighty = [
+            group
+            for group in load_groups
+            if any(getattr(group, "self_weight_coefficients", None) or ())
+        ]
+        if weighty:
+            ids = {group.id for group in weighty}
+            combined = [
+                combo.name
+                for combo in model.load_combinations
+                if ids.intersection(combo.load_groups)
+            ]
+            message = (
+                f"{len(weighty)} load case(s) include the weight of the members "
+                "(SelfWeightCoefficients), which is not applied: "
+                f"{', '.join(group.name for group in weighty[:3])}"
+                + (" ..." if len(weighty) > 3 else "")
+                + ". Their results are without it"
+            )
+            if combined:
+                message += (
+                    f", and so are those of the {len(combined)} load "
+                    "combination(s) that include them"
+                )
+            self.warnings.append(
+                message + ". Self-weight is only analysed when asked for "
+                "(gravity), as a load case of its own that no combination includes."
+            )
+
         self.logger.info(f"Added {len(model.load_groups)} load groups to the model")
         self.logger.info(
             f"Added {len(model.load_combinations)} load combinations to the model"

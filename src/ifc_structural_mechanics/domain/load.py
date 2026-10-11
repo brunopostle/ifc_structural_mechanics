@@ -438,6 +438,9 @@ class LoadGroup(DomainEntity):
         self.description = description
         self.loads = loads if loads is not None else []
         self.is_load_case: bool = is_load_case
+        # IfcStructuralLoadCase.SelfWeightCoefficients: the share of the
+        # members' weight the case includes along global x, y and z
+        self.self_weight_coefficients: Optional[List[float]] = None
 
     def add_load(self, load: Load) -> None:
         """Add a load to the group."""

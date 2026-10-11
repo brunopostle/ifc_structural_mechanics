@@ -296,28 +296,6 @@ class TestLoadsExtractor:
         load_ids = [load.id for load in load_case.loads]
         assert "al1" in load_ids  # Area load is directly assigned
 
-    def test_extract_load_combinations(self):
-        """Test extracting load combinations according to IFC spec."""
-        # Enable returning the load combination in the mock
-        self.mock_return_load_combination = True
-
-        # Call the public method
-        combinations = self.extractor.extract_load_combinations()
-
-        # Verify results - should find the combination
-        assert len(combinations) == 1
-
-        # Check combination properties
-        combination = combinations[0]
-        assert combination.id == "lc2"
-        assert combination.name == "Test Load Combination"
-        assert combination.description == "A test load combination"
-
-        # Should reference the load case
-        assert "lc1" in combination.load_groups
-        # Should use the specified factor
-        assert abs(combination.load_groups["lc1"] - 1.5) < 0.01
-
     def test_point_load_creation(self):
         """Test point load is created correctly from IFC."""
         # Use the extract_all_loads method to get a point load

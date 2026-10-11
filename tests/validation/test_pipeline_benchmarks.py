@@ -2614,3 +2614,309 @@ class TestPlacedModel:
             assert reactions[case]["fz_N"] == pytest.approx(reaction["fz_N"], rel=1e-4)
             assert abs(reactions[case]["fx_N"]) < 1e-3
             assert abs(reactions[case]["fy_N"]) < 1e-3
+
+
+COMBINED_DEAD, COMBINED_LIVE = 1.35, 1.5
+LIVE_LINE_LOAD = (0.0, 3000.0, -5000.0)  # N/m, global
+
+
+def _beam_with_two_cases(tmp_path, as_one_case: bool = False) -> str:
+    """beam_01 with a second load case and three combinations of the two.
+
+    Dead keeps its 20 kN at midspan; Live gets a line load with a sideways
+    and a downward part. The combinations are ``1.5 Dead`` (as shipped),
+    ``1.35 Dead + 1.5 Live`` and ``Dead - Live``.
+
+    With ``as_one_case`` there are no combinations, and Dead holds both
+    loads multiplied by the factors of the second one.
+    """
+    model = ifcopenshell.open(BEAM)
+    member = model.by_type("IfcStructuralCurveMember")[0]
+    point_action = model.by_type("IfcStructuralPointAction")[0]
+    scale = COMBINED_LIVE if as_one_case else 1.0
+    action = model.create_entity(
+        "IfcStructuralLinearAction",
+        ifcopenshell.guid.new(),
+        point_action.OwnerHistory,
+        "benchmark live load",
+        None,
+        None,
+        member.ObjectPlacement,
+        member.Representation,
+        model.create_entity(
+            "IfcStructuralLoadLinearForce",
+            None,
+            *[scale * component / 1000.0 for component in LIVE_LINE_LOAD],
+        ),
+        "GLOBAL_COORDS",
+        None,
+        "TRUE_LENGTH",
+    )
+    model.create_entity(
+        "IfcRelConnectsStructuralActivity",
+        ifcopenshell.guid.new(),
+        point_action.OwnerHistory,
+        None,
+        None,
+        member,
+        action,
+    )
+    cases = {case.Name: case for case in model.by_type("IfcStructuralLoadCase")}
+    combinations = {
+        group.Name: group
+        for group in model.by_type("IfcStructuralLoadGroup")
+        if group.PredefinedType == "LOAD_COMBINATION"
+    }
+
+    def assign(objects, group, factor=None):
+        arguments = [
+            ifcopenshell.guid.new(),
+            point_action.OwnerHistory,
+            None,
+            None,
+            objects,
+            None,
+            group,
+        ]
+        if factor is None:
+            model.create_entity("IfcRelAssignsToGroup", *arguments)
+        else:
+            model.create_entity("IfcRelAssignsToGroupByFactor", *arguments, factor)
+
+    if as_one_case:
+        point_action.AppliedLoad.ForceZ *= COMBINED_DEAD
+        assign([action], cases["Dead"])
+        for relation in model.by_type("IfcRelAssignsToGroupByFactor"):
+            model.remove(relation)
+        for combination in combinations.values():
+            model.remove(combination)
+    else:
+        assign([action], cases["Live"])
+        for relation in model.by_type("IfcRelAssignsToGroupByFactor"):
+            if relation.RelatingGroup == combinations["DCon2"]:
+                model.remove(relation)
+        assign([cases["Dead"]], combinations["DCon2"], COMBINED_DEAD)
+        assign([cases["Live"]], combinations["DCon2"], COMBINED_LIVE)
+        third = model.create_entity(
+            "IfcStructuralLoadGroup",
+            ifcopenshell.guid.new(),
+            point_action.OwnerHistory,
+            "Dead - Live",
+            None,
+            None,
+            "LOAD_COMBINATION",
+            "NOTDEFINED",
+            "NOTDEFINED",
+            None,
+            None,
+        )
+        # No factor is a factor of one
+        assign([cases["Dead"]], third)
+        assign([cases["Live"]], third, -1.0)
+    path = str(tmp_path / ("one_case.ifc" if as_one_case else "two_cases.ifc"))
+    model.write(path)
+    return path
+
+
+def _only_curve_member(data: dict) -> dict:
+    (member,) = [m for m in data["members"] if m["type"] == "curve"]
+    return member
+
+
+class TestLoadCombinations:
+    """A combination is the sum of its load cases, each times its factor.
+
+    The solver runs the load cases only. For what is linear in the load the
+    figures are checked by hand; for what is not (a deflection with parts in
+    two directions, von Mises stress, the largest stress in a section) they
+    are checked against one load case holding the factored loads.
+    """
+
+    B = TestFixedFixedBeamPointLoad
+    MESH = 0.25
+    NAME = "DCon2"
+
+    def _two_cases(self, tmp_path):
+        return _run(_beam_with_two_cases(tmp_path), tmp_path, mesh_size=self.MESH)
+
+    def test_combinations_are_listed_with_their_factors(self, tmp_path):
+        data = self._two_cases(tmp_path)
+        assert data["load_cases"] == ["Dead", "Live"]
+        listed = {c["name"]: c["factors"] for c in data["load_combinations"]}
+        assert listed == {
+            "DCon1": {"Dead": 1.5},
+            "DCon2": {"Dead": COMBINED_DEAD, "Live": COMBINED_LIVE},
+            "Dead - Live": {"Dead": 1.0, "Live": -1.0},
+        }
+
+    def test_reactions_by_hand(self, tmp_path):
+        data = self._two_cases(tmp_path)
+        length = self.B.LENGTH
+        reactions = data["global_reactions"]["by_load_combination"]
+        expected_fz = COMBINED_DEAD * self.B.LOAD - COMBINED_LIVE * (
+            LIVE_LINE_LOAD[2] * length
+        )
+        expected_fy = -COMBINED_LIVE * LIVE_LINE_LOAD[1] * length
+        assert reactions[self.NAME]["fz_N"] == pytest.approx(expected_fz, rel=1e-6)
+        assert reactions[self.NAME]["fy_N"] == pytest.approx(expected_fy, rel=1e-6)
+        assert reactions[self.NAME]["applied_load_N"] == pytest.approx(
+            [0.0, -expected_fy, -expected_fz], rel=1e-6, abs=1e-6
+        )
+        assert reactions[self.NAME]["imbalance_N"] < 1e-6 * expected_fz
+        # A negative factor takes a case away: 20 kN down less 5 kN/m down
+        # over 4 m is nothing, and the sideways load is turned round
+        assert reactions["Dead - Live"]["fz_N"] == pytest.approx(0.0, abs=0.01)
+        assert reactions["Dead - Live"]["fy_N"] == pytest.approx(
+            LIVE_LINE_LOAD[1] * length, rel=1e-6
+        )
+        assert reactions["DCon1"]["fz_N"] == pytest.approx(1.5 * self.B.LOAD, rel=1e-6)
+
+    def test_section_forces_by_hand(self, tmp_path):
+        """Fixed ends: P L / 8 and w L^2 / 12 at the supports, P/2 + w L / 2."""
+        data = self._two_cases(tmp_path)
+        length = self.B.LENGTH
+        forces = _only_curve_member(data)["by_load_combination"][self.NAME][
+            "section_forces"
+        ]
+        down = -COMBINED_LIVE * LIVE_LINE_LOAD[2]
+        sideways = COMBINED_LIVE * LIVE_LINE_LOAD[1]
+        point = COMBINED_DEAD * self.B.LOAD
+        assert forces["max_Mf1_Nm"] == pytest.approx(
+            point * length / 8 + down * length**2 / 12, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Vf1_N"] == pytest.approx(
+            point / 2 + down * length / 2, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Mf2_Nm"] == pytest.approx(
+            sideways * length**2 / 12, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Vf2_N"] == pytest.approx(
+            sideways * length / 2, rel=FORCE_TOLERANCE
+        )
+
+    def test_support_moment_by_hand(self, tmp_path):
+        data = self._two_cases(tmp_path)
+        length = self.B.LENGTH
+        moment = (
+            COMBINED_DEAD * self.B.LOAD * length / 8
+            - COMBINED_LIVE * LIVE_LINE_LOAD[2] * length**2 / 12
+        )
+        for support in data["supports"]:
+            assert support["moments"] == "member_end_forces"
+            values = support["by_load_combination"][self.NAME]
+            cases = support["by_load_case"]
+            assert abs(values["my_Nm"]) == pytest.approx(moment, rel=FORCE_TOLERANCE)
+            for key, value in values.items():
+                if key == "resultant_N":
+                    continue
+                assert value == pytest.approx(
+                    COMBINED_DEAD * cases["Dead"][key]
+                    + COMBINED_LIVE * cases["Live"][key],
+                    rel=1e-9,
+                    abs=1e-6,
+                )
+
+    def test_same_as_one_case_holding_the_factored_loads(self, tmp_path):
+        """Everything a member and a support has, to five figures.
+
+        The result file gives six, and the sum is of rounded figures.
+        """
+        combined = self._two_cases(tmp_path)
+        (tmp_path / "one").mkdir()
+        single = _run(
+            _beam_with_two_cases(tmp_path, as_one_case=True),
+            tmp_path / "one",
+            mesh_size=self.MESH,
+        )
+        assert "load_combinations" not in single
+
+        def close(a, b, size):
+            assert a == pytest.approx(b, rel=1e-5, abs=1e-5 * size)
+
+        member = _only_curve_member(combined)
+        reference = _only_curve_member(single)
+        values = member["by_load_combination"][self.NAME]
+        expected = reference["by_load_case"]["Dead"]
+        for key in (
+            "max_displacement_m",
+            "max_relative_displacement_m",
+            "max_von_mises_Pa",
+            "max_normal_stress_Pa",
+        ):
+            close(values[key], expected[key], expected[key])
+        for key, value in expected["section_forces"].items():
+            close(values["section_forces"][key], value, 1.0e4)
+
+        diagram = member["section_force_diagrams_by_combination"][self.NAME]
+        reference_diagram = reference["section_force_diagrams"]["Dead"]
+        assert diagram["distance_m"] == pytest.approx(reference_diagram["distance_m"])
+        for key, series in reference_diagram.items():
+            close(diagram[key], series, 1.0e4)
+
+        close(
+            combined["global_displacements"]["by_load_combination"][self.NAME][
+                "max_displacement_m"
+            ],
+            single["global_displacements"]["by_load_case"]["Dead"][
+                "max_displacement_m"
+            ],
+            1.0e-3,
+        )
+        for support, other in zip(combined["supports"], single["supports"]):
+            assert support["forces"] == other["forces"]
+            for key, value in other["by_load_case"]["Dead"].items():
+                close(support["by_load_combination"][self.NAME][key], value, 1.0e4)
+
+    def test_largest_values_are_not_added(self, tmp_path):
+        """Dead deflects down and Live also sideways: the sizes do not add.
+
+        Nor do the largest moments: each case has its own at the supports,
+        P L / 8 and w L^2 / 12, but one less the other has it at midspan,
+        P L / 8 - w L^2 / 24.
+        """
+        data = self._two_cases(tmp_path)
+        member = _only_curve_member(data)
+        cases = member["by_load_case"]
+        added = (
+            COMBINED_DEAD * cases["Dead"]["max_displacement_m"]
+            + COMBINED_LIVE * cases["Live"]["max_displacement_m"]
+        )
+        combined = member["by_load_combination"][self.NAME]["max_displacement_m"]
+        assert combined < 0.99 * added
+        difference = member["by_load_combination"]["Dead - Live"]
+        assert difference["section_forces"]["max_Mf1_Nm"] == pytest.approx(
+            self.B.LOAD * self.B.LENGTH / 8 + LIVE_LINE_LOAD[2] * self.B.LENGTH**2 / 24,
+            rel=FORCE_TOLERANCE,
+        )
+        assert difference["section_forces"]["max_Mf1_Nm"] > 1.9 * abs(
+            cases["Dead"]["section_forces"]["max_Mf1_Nm"]
+            - cases["Live"]["section_forces"]["max_Mf1_Nm"]
+        )
+
+    def test_envelope_of_the_combinations(self, tmp_path):
+        """Apart from the envelope of the load cases, which stays as it was."""
+        data = self._two_cases(tmp_path)
+        member = _only_curve_member(data)
+        by_combination = member["by_load_combination"]
+        assert member["combination_envelope"]["max_displacement_m"] == max(
+            values["max_displacement_m"] for values in by_combination.values()
+        )
+        assert member["envelope"]["max_displacement_m"] == max(
+            values["max_displacement_m"] for values in member["by_load_case"].values()
+        )
+
+    def test_buckling_has_no_combinations(self, tmp_path):
+        output_dir = str(tmp_path / "buckling")
+        result = analyze_ifc(
+            ifc_path=_beam_with_two_cases(tmp_path),
+            output_dir=output_dir,
+            mesh_size=self.MESH,
+            analysis_type="linear_buckling",
+        )
+        assert result["status"] == "success", result.get("errors")
+        assert any(
+            "3 load combination(s) of the file have no results" in w["message"]
+            for w in result["warnings"]
+        )
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            assert "load_combinations" not in json.load(fh)
