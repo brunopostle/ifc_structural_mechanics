@@ -182,7 +182,7 @@ Configuration system with three main classes:
 
 #### 7. API (`src/ifc_structural_mechanics/api/`)
 Public-facing API for users:
-- `structural_analysis.py`: Main entry point, `analyze_ifc()`. It returns `status: "failed"` with the error in `result["errors"]` for meshing, solver and result-reading failures, and raises `ModelExtractionError` for a file it cannot read
+- `structural_analysis.py`: Main entry point, `analyze_ifc()`. `results.json` (schema in the docstring of `export/results_exporter.py`) is the contract with other tools: bump `SCHEMA_VERSION` when it changes. It returns `status: "failed"` with the error in `result["errors"]` for meshing, solver and result-reading failures, and raises `ModelExtractionError` for a file it cannot read
 
 #### 8. CLI (`src/ifc_structural_mechanics/cli/`)
 Command-line interface:
@@ -371,8 +371,34 @@ Open bugs and proposed work are tracked in beads (`bd list --status=open`), not
 here. This section only records the constraints that shape day-to-day work.
 
 - **Stock CalculiX is the target** (decision 2026-10-09). The local `ccx` may be
-  a patched Copr build; CI uses the distribution package. Do not rely on the
-  gen3delem patch in `patches/`.
+  a patched Copr build; CI runs Ubuntu's package (2.21) on three Python
+  versions and conda-forge's 2.23 in a job of its own
+  (`test-calculix-2-23`). Do not rely on the gen3delem patch in `patches/`.
+- **Reactions are the solver's nodal forces less the loads applied at the
+  support nodes** (`94g.1`). CalculiX's `RF` is the force inside the
+  structure at a node: a load applied there in a restrained direction is
+  missing from it and one in a free direction appears in it (measured).
+  `write_analysis_steps()` records what each step puts on support nodes
+  (`_StepLoadRecorder` reads the `*CLOAD` lines as they are written;
+  `_weight_on_nodes()` gives the share of `*DLOAD GRAV`), and
+  `ResultsExporter` takes it off. Reactions then equal the applied loads to
+  six figures at any mesh size; `global_reactions` carries `applied_load_N`
+  and `imbalance_N`.
+- **CalculiX gives no reaction moments.** `supports[].moments` in
+  `results.json` are the section forces at the ends of the curve members a
+  support holds (`_member_ends_at()`), moved to its position; absent, not
+  zero, where a member runs on past the support or a surface is clamped.
+- **CalculiX 2.21, Ubuntu 24.04's, misreports `RF` at a support that holds
+  a rotation** (2.23 is right, stock as well as the Copr build;
+  displacements are identical). The errors of two
+  supports can cancel, so `ResultsExporter` checks each such support against
+  its member ends (3%) and the whole against the applied load, replaces what
+  it can (`forces: "member_end_forces"`), marks the rest `"unreliable"`, and
+  `plausibility.balance_warnings()` says so. Tests of the solver's own
+  reactions at clamped supports call `_needs_solver_reactions()` and are
+  skipped on 2.21; the 2.23 job in CI fails if any of them is skipped. To run the suite against 2.21 locally: a container from
+  `ubuntu:24.04` with `calculix-ccx`, and a `ccx` script first in `PATH`
+  that runs `podman run --rm -v "$PWD":/w:Z -w /w <image> ccx "$@"`.
 - **Only the solid rectangle is written as a CalculiX section**, with one
   shear modulus lowered to correct its torsion. Every other
   profile is an equivalent rectangle (see Beam Section Orientation). Do not
@@ -616,7 +642,8 @@ global directions (they once sent every vertical line load sideways).
 work-equivalent nodal forces and they are written as `*CLOAD`. A load with
 `coordinate_system == "local"` (IFC `GlobalOrLocal`) is rotated with the
 member's `local_axis` first. Check any change to loads by summing the applied
-load by hand and comparing it with `global_reactions.by_load_case`.
+load by hand and comparing it with `global_reactions.by_load_case`
+(`applied_load_N` there is what was written to the solver, not a check on it).
 
 **Load steps**: CalculiX keeps loads active from step to step. Every static step
 starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise

@@ -33,6 +33,18 @@ the ones a user needs to know before trusting a result.
   plausible, but it has no reference. `building_01` solves and its reactions
   match the applied loads to the newton, with no reference either; its
   `Masonry` material is 202 t/m³ in the file, which dominates its self-weight.
+- **Reactions need CalculiX 2.23 or later to be exact.** CalculiX 2.21 (the
+  version in Ubuntu 24.04) misreports the force at a support that holds a
+  rotation, by anything up to the size of the load; displacements and member
+  forces are the same in both. The analysis detects this and warns. At such
+  a support the forces are then taken from the ends of the members it holds,
+  good to about 1%; where that is not possible (a clamped slab edge, a beam
+  running on past its support) the support is marked `"unreliable"` in
+  `results.json`. The total reaction is the solver's and is then wrong too.
+- **Reaction moments are not from the solver**, which has none to give. They
+  are the section forces at the ends of the members a support holds, good to
+  about 1%, and are left out (not given as zero) at a support that clamps a
+  slab or a member that runs on past it.
 - **A beam lying in a slab or wall is tied to it along its length**, whether or
   not the IFC file connects them there, and the analysis warns that it did so.
   Models that connect a slab only at its corners would otherwise leave the
@@ -130,6 +142,13 @@ the ones a user needs to know before trusting a result.
   about both axes; no shear, torsion or buckling). A `utilisation_ratio` is
   that stress over the yield stress, for materials whose IFC definition has a
   `YieldStress`.
+- **Support reactions.** `supports` in `results.json` (schema 1.1) gives, for
+  every support and load case, the force and moment it exerts on the
+  structure, at its position, in global axes and in the support's own axes
+  if it has any, keyed by the connection's GlobalId. `global_reactions` gives
+  their total, the applied load of each case and the difference between the
+  two, which should be nothing. A load applied at a support node is counted
+  (CalculiX leaves it out of what it reports there).
 - **Force diagrams** (`section_force_diagrams`) list the same six forces with
   their signs along each member, in the axes given by `section_axes`: `x` from
   the first point of the member's IFC edge to the last, `1` along the
@@ -167,7 +186,7 @@ the ones a user needs to know before trusting a result.
 Install these separately before installing this library:
 
 - **Python 3.9 or later** (CI tests 3.9, 3.10 and 3.11)
-- **CalculiX** (`ccx` executable) — finite element solver. The unmodified distribution package is the supported target
+- **CalculiX** (`ccx` executable) — finite element solver. The unmodified distribution package is the supported target; 2.23 or later for exact support reactions (see Known Limitations)
 - **Gmsh with Python API** — mesh generation (`pip install gmsh`)
 - **IfcOpenShell** — IFC file parsing (`pip install ifcopenshell`)
 
@@ -295,20 +314,20 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | Model | Description | `--gravity` | Max displacement | Vertical reaction | Reference | Status |
 |-------|-------------|-------------|------------------|-------------------|-----------|--------|
 | `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.34 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
-| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 17.3 N of 18.4 N at this mesh | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
-| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 651 N of 660 N | 0.427 mm Code_Aster | Verified, within 2% |
-| `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 220 N of 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
-| `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 266 N of 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
+| `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 18.4 N | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
+| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 660 N | 0.427 mm Code_Aster | Verified, within 2% |
+| `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
+| `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 4.04 mm (4.11 mm at 0.25 m) | 85.4 kN | 4.12 mm with U1 elements at 0.25 m | Runs; the two section models agree to 0.2% |
 | `building_02` | Multi-storey building, two load cases | No | 25.7 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
 | `building_01` | Small building with I-section beams and masonry walls, two load cases | No | 0.29 mm (Live), 0.10 mm (floor finishing); 0.34 and 0.11 mm at 0.5 m | 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,
-measured on 2026-10-10. The Code_Aster references are the IfcOpenShell IFC2CA
-results shipped in `examples/analysis-models/models/`. The reported reaction
-leaves out the share of a distributed load that lands on the restrained nodes
-themselves, so it approaches the true weight as the mesh is refined.
+measured on 2026-10-11. The Code_Aster references are the IfcOpenShell IFC2CA
+results shipped in `examples/analysis-models/models/`. Reactions equal the
+applied loads to six figures at any mesh size; `results.json` gives both, and
+the reaction at each support (see below).
 
 To run an example:
 

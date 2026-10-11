@@ -174,10 +174,10 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 |------|---------------------|-----------|----------|-------|
 | Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B32R | 0.2814 mm | 0.2800 mm | 0.5% |
 | Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B32R | 1.1115 mm | 1.1059 mm | 0.5% |
-| Cantilever reaction | 0.2 × 0.4 rectangle, B32R | 18.36 N | 18.31 N | 0.3% |
+| Cantilever reaction | 0.2 × 0.4 rectangle, B32R | 18.36 N | 18.36 N | 0.0% |
 | Cantilever, strong axis | 200 × 400 I, equivalent rectangle | 0.1419 mm | 0.1417 mm | 0.2% |
 | Cantilever, weak axis | 200 × 400 I, equivalent rectangle | 1.6087 mm | 1.5972 mm | 0.7% |
-| Cantilever reaction | 200 × 400 I, equivalent rectangle | 2.663 N | 2.655 N | 0.3% |
+| Cantilever reaction | 200 × 400 I, equivalent rectangle | 2.663 N | 2.663 N | 0.0% |
 | Cantilever, strong axis | 200 × 400 I, U1 (`--open-sections user-element`) | 0.1419 mm | 0.1419 mm | < 0.1% |
 | Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
 | Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6584 mm | 0.3% |
@@ -187,16 +187,16 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
 | Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
-| Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 19.92 kN | 0.4% |
+| Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
 | Fixed-fixed beam, midspan, 20 kN | 200 × 400 I, equivalent rectangle | 1.0776 mm | 1.1002 mm | 2.1% |
 | Fixed-fixed beam, 5 kN/m along global −Z | 200 × 400 I, equivalent rectangle | 0.5388 mm | 0.5389 mm | < 0.1% |
 | Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.376 mm | 0.5% |
 | Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.358 mm | 0.1% |
-| Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 98.96 N | 0.5% |
+| Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 99.47 N | 0.0% |
 | Same, each beam's own entry in `results.json` | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.362 mm | 0.1% |
 | Slab on two cantilever beams inside it | 200 × 400 I beams (equivalent rectangle), 0.1 m slab | 4.913 mm | 4.951 mm | 0.8% |
 
-**Tolerance**: 3% on deflection, 2% on the self-weight reaction. **Status**: PASS
+**Tolerance**: 3% on deflection, 0.01% on the self-weight reaction. **Status**: PASS
 
 Section forces and member stress from `results.json`, same models (tolerance 1%):
 
@@ -240,9 +240,10 @@ Two checks without a hand value: in `portal_01` each column carries 42.70 kN, ha
 and the beam's axial force are both 12.41 kN. In `structure_01` the pin-ended column has
 an axial force and no moment.
 
-The reaction under self-weight is low by the load on the restrained node itself (a sixth
-of an element's weight for a quadratic element): CalculiX does not report the share of a
-distributed load that lands there.
+Until 2026-10-11 the reaction under self-weight came out low by the load on the
+restrained node itself (a sixth of an element's weight for a quadratic element), because
+CalculiX does not report the share of a load that lands there. The results now add it
+back; see Support reactions below.
 
 **Sections other than solid rectangles.** CalculiX expands every beam into solid
 elements, and only its rectangular section came out right. Its PIPE section gave a
@@ -431,8 +432,7 @@ mid-surface only.
 
 The same plate under an `IfcStructuralPlanarAction` of 2.5 kPa along global −Z, in a load
 case of its own, gives 0.01250 mm at a 0.5 m mesh against 0.01220 mm (+2.4%, tolerance
-5%), and a reaction of 34.8 of 37.5 kN: the load on the restrained edge nodes goes
-straight to ground and is not in the reported total. Given along global X instead, the
+5%), and a reaction of 37.50 kN, the whole load. Given along global X instead, the
 same load does not bend the plate.
 
 **Columns meeting a slab with no connection.** The plate with its supports removed and
@@ -535,13 +535,13 @@ model.
 | Model | Load flag | Max displacement | Vertical reaction | Standing |
 |-------|-----------|------------------|-------------------|----------|
 | `beam_01` | — | 0.34 mm | 20.0 kN | Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 3% stiff |
-| `cantilever_01` | `--gravity` | 0.28 mm | 17.3 N | Covered by Tier 2 |
-| `structure_01` | `--gravity` | 0.429 mm | 651 N | Covered by Tier 2 (Code_Aster) |
-| `slab_01` | `--gravity` | 0.173 mm | 220 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
-| `grid_of_beams` | `--gravity` | 0.372 mm | 266 N | Covered by Tier 2 (Code_Aster, corrected) |
+| `cantilever_01` | `--gravity` | 0.28 mm | 18.4 N | Covered by Tier 2 |
+| `structure_01` | `--gravity` | 0.429 mm | 660 N | Covered by Tier 2 (Code_Aster) |
+| `slab_01` | `--gravity` | 0.173 mm | 230 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
+| `grid_of_beams` | `--gravity` | 0.372 mm | 273 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
-| `building_02` | — | 25.7 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 66.9 MN under self-weight. At 4 m: 24.1 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
-| `building_01` | — | 0.286 mm (Live), 0.10 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.78 mm and 48.54 MN under self-weight. At 0.5 and 0.25 m: 0.338 and 0.352 mm (Live), 7.90 and 8.63 mm (self-weight). Reactions match the applied loads; deflections unchecked |
+| `building_02` | — | 25.7 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 67.0 MN under self-weight. At 4 m: 24.1 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
+| `building_01` | — | 0.286 mm (Live), 0.10 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.78 mm and 48.55 MN under self-weight. At 0.5 and 0.25 m: 0.338 and 0.352 mm (Live), 7.90 and 8.63 mm (self-weight). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
@@ -554,7 +554,7 @@ pushed the floor beams sideways (333 mm of horizontal movement), and the total r
 came out with the wrong sign. Distributed loads are now turned into work-equivalent nodal
 forces in their global direction. Summing load × area and load × length over the IFC
 file gives 30.017 MN for Live and 60.286 MN for Extra_dead; the reactions in the two
-steps are 30.017 and 60.283 MN.
+steps are 30.017 and 60.286 MN.
 
 With the loads right, the Live case still gave 462 mm, on the 8.5 m × 21.4 m ground-floor
 slab that carries 16 kPa. The IFC file connects every slab at its four corners and
@@ -679,8 +679,8 @@ sizes of the test:
 | Model | Unit | Largest displacement, shipped | placed | Vertical reaction, shipped | placed |
 |---|---|---|---|---|---|
 | `beam_01` | mm | 0.3467 mm | 0.3467 mm | 20 000 N | 20 000 N |
-| `portal_01`, gravity | inch | 105.12 mm | 105.12 mm | 4 791 840 N | 4 791 840 N |
-| `structure_01`, gravity | m | 0.4333 mm | 0.4335 mm | 655.90 N | 655.90 N |
+| `portal_01`, gravity | inch | 105.12 mm | 105.12 mm | 4 826 215 N | 4 826 215 N |
+| `structure_01`, gravity | m | 0.4333 mm | 0.4335 mm | 660.20 N | 660.20 N |
 | `building_01`, Live (1 m, not in the suite) | mm | 0.2857 mm | 0.2857 mm | 282 000 N | 282 000 N |
 
 The X and Y displacement components change places, as they should. `structure_01`
@@ -694,7 +694,73 @@ by its own placement, but the tests give them all the same one), and a model tur
 that its supports are skew to the global axes, which runs into the skew-support
 limitation below.
 
+## Support reactions
+
+`results.json` gives the reaction at every support (`supports`, schema 1.1), and three
+things about CalculiX's own figures were found on the way (2026-10-11).
+
+**A load applied at a support node is not in the reaction CalculiX reports.** `RF` is the
+force inside the structure at the node. On a 2 m beam fixed at one end and held
+vertically at the other, 100 N down on the held node reads as no force there, and 70 N
+along its free direction reads as 70 N. Distributed loads and self-weight put a share on
+every node, so every total was short by the share on the support nodes, more on a coarse
+mesh. The loads written at support nodes are now recorded and taken off:
+
+| Model, self-weight | Weight | Reaction before, at 1.0 / 0.5 / 0.25 m | Now, at any of them |
+|---|---|---|---|
+| `cantilever_01` | 18.36 N | 17.34 / 17.85 / 18.11 N | 18.36 N |
+| `structure_01` | 660.2 N | 651.2 / 655.9 / 657.9 N | 660.2 N |
+| `slab_01` | 229.6 N | 219.7 / 224.4 / 226.6 N | 229.6 N |
+| `grid_of_beams` | 273.2 N | 265.6 / 267.8 / 270.0 N | 273.2 N |
+
+The 2.5 kPa plate went from 34.8 to 37.50 kN, and a pin-ended beam under 5 kN/m from
+19.58 to 20.00 kN at a 0.25 m mesh. `global_reactions` now also gives the load applied in
+each case and what is left when the two are added: under 3 parts in ten million on every
+example, `building_02` included (30.017, 60.286 and 66.968 MN).
+
+**CalculiX has no reaction moments.** They are taken from the section forces at the ends
+of the members a support holds, moved to the support:
+
+| Case | Statics | Pipeline | Error |
+|---|---|---|---|
+| `cantilever_01`, root moment | 27.55 N·m | 27.51 N·m | 0.1% |
+| `beam_01`, fixed-end moments, P L / 8 | ∓10 000 N·m | ∓10 022 N·m | 0.2% |
+| Cantilever with an arm, root: bending and torque | 3000 and 1000 N·m | 2999.98 and 999.99 N·m | < 0.01% |
+| `portal_01`, feet | equal and opposite | 11 847.29 and −11 847.05 N·m | 0.002% apart |
+
+Where this cannot be done the moment is left out, not given as zero: a support that
+clamps a slab edge (`slab_01`, the wall foot of `structure_01`), and a member that runs on
+past its support (`grid_of_beams`, whose main beams overhang by 0.1 m). In `building_02`
+that is 23 of 51 supports.
+
+**CalculiX 2.21 misreports the force at a support that holds a rotation.** CI installs
+2.21 (Ubuntu 24.04); development was on 2.23. The same input file gives the same
+displacements in both and different reactions:
+
+| Case | True | 2.23 | 2.21 |
+|---|---|---|---|
+| Bar pulled with 1000 N and bent, clamped end, force along it | 1000 N | 1000.0 N | 1076.6 N |
+| `portal_01`, vertical force at the two feet | 42 703 N each | 42 703 and 42 703 N | 34 165 and 44 124 N |
+| `beam_01`, resultant force at one end | 10 000 N | 10 000 N | 11 390 N |
+| Cantilever with an arm, vertical force at the root | 1000 N | 1000 N | 444 N |
+| `structure_01`, total | 660.2 N | 660.2 N | 667.9 N |
+
+In `beam_01` the errors of the two ends cancel in the total, so checking the total
+against the load is not enough. Each support that holds a rotation is compared with the
+forces at the ends of its members: more than 3% apart, or a total that does not balance,
+and the member ends' forces are used (good to about 1%; `"forces": "member_end_forces"`).
+A support with no member ends to use is marked `"unreliable"` and the analysis warns in
+either case. The whole fast suite was run against 2.21 in a container: it passes, with
+the nine tests of the solver's own reactions at clamped supports skipped. Against
+conda-forge's unpatched 2.23, also in a container, none is skipped and all pass; CI now
+runs the suite on both versions.
+
 ## What is not yet validated
+
+- **Reactions on CalculiX 2.21 and earlier** at supports that clamp a slab edge or a
+  member running on past them: marked unreliable, not corrected. The total reaction is
+  the solver's and is wrong there too.
+- **Reaction moments at those same supports**, on any version: not computed.
 
 - **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
   ones are covered by the plate benchmark; local ones only by a unit test.
