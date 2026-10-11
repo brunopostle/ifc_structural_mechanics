@@ -590,6 +590,41 @@ one at a time (a material, a thickness, a position, a load group) and checks tha
 is an error or a warning that names what is missing.
 `tests/unit/analysis/test_loads_are_never_made_up.py` does the same for the load writer.
 
+## Legacy code removed
+
+A second pass (2026-10-11), over code rather than exception handlers: every function of
+the library was traced through the validation suite and four command-line runs, and what
+no run reached was read. About 3,300 lines of source went, and 1,400 of tests. Most were dead; these were not, and each
+could have changed an answer without saying so:
+
+| What it did | Now |
+|---|---|
+| A model with no supports had every node at y = 0 fully fixed | Error: the model has no supports |
+| A support with no mesh node within 0.1 m was left out | Error naming the support |
+| A line support with no node on its edge became a point support at its midpoint | Error |
+| A connection of type "rigid" holding one member was a fixed support, condition or not | Restrains nothing without a support condition |
+| The solver ran `model.inp` instead of the input it was given, if one five times larger lay beside it | Runs the input it is given |
+| An input file left by an earlier run in the output directory was solved instead of the new one | The new one always replaces it |
+| The solver's input was edited (a `*HEADING` inserted) and, after some errors, edited again and rerun | Run as written, once |
+| Result files of any name in the directory were collected if the run's own were missing | Only the run's own |
+| Results that could not be read or exported gave `"success"` with a warning | `"failed"`, with the error |
+| A result file with no displacements read as a structure that does not move | Error |
+| An unknown meshing algorithm became Delaunay | Error |
+| The mesh writer created an empty file in place of a mesh when it ran under pytest | Removed |
+
+None of these fired on the example models, whose deflections and reactions are unchanged
+(checked on seven of them before and after, and on `building_02` by the slow tests). They
+did fire in the test suite: about 25 tests built models with no supports and passed because the
+writer invented them, and two tests of the Python API passed with `"success"` although
+the results had failed to parse. Those tests now build supported models and stand-in
+results.
+
+Also found: `ifc-analysis --json-output` had not worked for some time. It tried to
+serialise the domain model and exited with code 99. It now prints one JSON document.
+
+`tests/unit/analysis/test_supports_are_never_made_up.py` and
+`tests/unit/analysis/test_correct_inp.py` hold the new rules.
+
 ## Placements
 
 An item's points and directions are in the axes of its `ObjectPlacement`. Every example

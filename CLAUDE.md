@@ -126,8 +126,8 @@ Extracts structural information from IFC files:
 - `entity_identifier.py`: Utilities for identifying and classifying IFC structural entities
 
 #### 3. Converters (`src/ifc_structural_mechanics/converters/`)
-Stateless utility functions for type conversions:
-- `calculix_types.py`: Pure functions for element type mapping (Gmsh → CalculiX), error parsing, etc.
+Stateless functions that turn domain properties into what the solver needs:
+- `section_profiles.py`: equivalent rectangles for sections that are not solid rectangles (see Beam Section Orientation)
 
 **Note**: The old `mapping/` module has been removed. Traceability is now embedded directly in domain entities via their `ifc_guid`, `mesh_entity_ids`, and `analysis_element_ids` fields. The `StructuralModel` maintains reverse lookup indices for error propagation.
 
@@ -168,7 +168,6 @@ Runs CalculiX and processes results:
 - `calculix_runner.py`: Executes CalculiX solver
 - `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). `parse_element_nodes()` reads the FRD element block: CalculiX reports on the nodes of the solids it expands beams and shells into, numbered by the solver, and each solid keeps the number of the input element it came from. `ResultsExporter` attributes results to a member through those (member → `analysis_element_ids` → FRD nodes), never through mesh node numbers, except for elements the FRD does not list (U1). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
 - `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
-- `file_writers.py`: Utilities for writing various analysis files
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
 
 #### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
@@ -183,7 +182,7 @@ Configuration system with three main classes:
 
 #### 7. API (`src/ifc_structural_mechanics/api/`)
 Public-facing API for users:
-- `structural_analysis.py`: Main entry point with `run_enhanced_analysis()` (preferred) and `analyze_ifc()` functions
+- `structural_analysis.py`: Main entry point, `analyze_ifc()`. It returns `status: "failed"` with the error in `result["errors"]` for meshing, solver and result-reading failures, and raises `ModelExtractionError` for a file it cannot read
 
 #### 8. CLI (`src/ifc_structural_mechanics/cli/`)
 Command-line interface:
@@ -212,7 +211,7 @@ Command-line interface:
 6. **Nothing is made up, and nothing is dropped quietly** (`aiz.12`, 2026-10-11). The risk in this tool is a wrong answer that looks right, so:
    - **Never substitute a default for something the file should give** (material, section, thickness, position, load value, load target). Raise the stage's error, with a message that names the entity and says what is missing. `MembersExtractor._create_member()`, `ConnectionsExtractor._create_domain_connection()` and `LoadsExtractor._create_domain_load()` wrap every failure as "Member/Connection/Load <GlobalId> cannot be analysed. <reason>".
    - **Never leave an entity out and carry on.** A model with a member, support or load missing is another structure.
-   - **`except Exception` may only re-raise as a typed error.** Put `except <TypedError>: raise` in front of it so an inner message is not wrapped twice. The exceptions are cleanup (`gmsh.finalize()`, temp files, `__del__`) and the two API handlers that turn a results-export failure into a warning.
+   - **`except Exception` may only re-raise as a typed error.** Put `except <TypedError>: raise` in front of it so an inner message is not wrapped twice. The only exceptions are cleanup (`gmsh.finalize()`, temp files, `__del__`). Results that cannot be read or exported fail the analysis (`ResultProcessingError`).
    - **An approximation the user did not ask for is a warning in the results**, not a log line: `_warn_user()` in the writer, `_warn_model()` in the load writer, `self.warnings` in the extractors (`Extractor._pass_on_warnings()` moves them to `model.analysis_warnings`). One warning for the whole model with a count and the first few ids, never one per member.
    - **Mocks that say yes to everything hide this.** `mock.is_a.return_value = "IfcX"` makes `is_a("IfcEdge")` true, and a bare `MagicMock` has every attribute. Prefer real `ifcopenshell` entities (see `tests/unit/ifc/test_extraction_fails_loudly.py`), or give the mock a truthful `is_a` and a `spec`.
    - Do not add code paths that detect a test environment. `LoadsExtractor` once returned invented loads when its file was a mock.
@@ -273,7 +272,7 @@ Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 - Unified workflow: `src/ifc_structural_mechanics/meshing/unified_calculix_writer.py`
 - Configuration: `src/ifc_structural_mechanics/config/`
 - Traceability: `src/ifc_structural_mechanics/domain/structural_model.py` (see `register_*` and `trace_error_to_ifc` methods)
-- Type converters: `src/ifc_structural_mechanics/converters/calculix_types.py`
+- Equivalent sections: `src/ifc_structural_mechanics/converters/section_profiles.py`
 - Result visualization: `src/ifc_structural_mechanics/visualization/result_visualizer.py`
 - Visualization CLI: `visualize.py` (general-purpose: any model, displacement/stress, screenshot/interactive)
 - FRD-only visualization: `visualize_from_frd.py` (reads mesh+results directly from FRD, no IFC needed)
@@ -583,8 +582,20 @@ rotational degrees of freedom**. This drives everything about joints:
   of its supports, with a warning. Ball supports at both ends of a beam are
   the usual cause. Members along a skew axis, or with no support of their own,
   are only reported.
-- **A connection is a support only if it has an `AppliedCondition`.** One that
-  joins two or more members without one restrains nothing.
+- **A connection is a support only if it has an `AppliedCondition`**
+  (`stiffness_properties` in the domain model). Without one it restrains
+  nothing, however many members it joins and whatever its type.
+- **Supports are never invented or dropped** (`aiz.59`).
+  `write_boundary_conditions()` raises `AnalysisError` for a model with no
+  support and for a support with no mesh node within 0.1 m; a line support
+  with no node on its edge is not moved to its midpoint. It once fixed every
+  node at y = 0 when it found no support. A hand-built test model needs a
+  real support: `tests/helpers.fixed_support()`.
+- **The solver runs the input file as written, once.** `CalculixRunner` does
+  not edit it, swap it for another file in the directory, or retry; it
+  collects only the result files named after the input.
+- **Gmsh is used through its Python API only.** The geometry lives there, so
+  the executable cannot mesh it; `GmshRunner` has no executable mode.
 - **Line supports** (`IfcStructuralCurveConnection`) keep their end points in
   `connection.edge` and restrain every node on the segment
   (`find_connection_support_nodes()`).

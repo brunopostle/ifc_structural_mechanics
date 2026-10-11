@@ -83,7 +83,12 @@ the ones a user needs to know before trusting a result.
     other than a point, line or area force (temperature, prescribed
     displacement);
   - an item's placement is not an `IfcLocalPlacement` (a grid placement);
-  - self-weight is asked for and a material has no mass density.
+  - self-weight is asked for and a material has no mass density;
+  - the model has no support, or a support lies more than 0.1 m from every
+    mesh node (a support that holds no member and lies on none is only
+    reported);
+  - the results cannot be read back from the solver or written to
+    `results.json`.
 
   It carries on, with a warning in the results, when
   - a material has no mass density (its members weigh nothing) or no
@@ -214,16 +219,15 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |
 | `--open-sections [equivalent\|user-element]` | How sections other than solid rectangles are analysed: as a rectangle of the same stiffness, or with CalculiX U1 elements (only for models made of nothing else) | `equivalent` |
 | `--verbose` | Enable verbose logging | off |
-| `--json-output` | Write results in JSON format | off |
-| `--enhanced/--no-enhanced` | Use enhanced boundary condition handling | on |
+| `--json-output` | Print the outcome (status, warnings, errors, output files) as one JSON document on standard output | off |
 | `--map-entities/--no-map-entities` | Map errors back to IFC entities | on |
 
 ### Python API
 
 ```python
-from ifc_structural_mechanics.api.structural_analysis import run_enhanced_analysis
+from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
 
-result = run_enhanced_analysis(
+result = analyze_ifc(
     ifc_path="path/to/model.ifc",
     output_dir="./results",
     analysis_type="linear_static",
