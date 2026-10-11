@@ -169,6 +169,7 @@ Runs CalculiX and processes results:
 - `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). `parse_element_nodes()` reads the FRD element block: CalculiX reports on the nodes of the solids it expands beams and shells into, numbered by the solver, and each solid keeps the number of the input element it came from. `ResultsExporter` attributes results to a member through those (member → `analysis_element_ids` → FRD nodes), never through mesh node numbers, except for elements the FRD does not list (U1). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
 - `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
+- `superposition.py`: Results of a load combination from those of its load cases (see Load steps)
 
 #### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
 Interactive 3D result visualization using PyVista:
@@ -247,7 +248,7 @@ Command-line interface:
   - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 3.5 minutes in total, and 1.8 GB of memory). Skip with `-m "not slow"`.
+- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its 17 load combinations, and 2.2 GB of memory). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -454,6 +455,13 @@ here. This section only records the constraints that shape day-to-day work.
 - **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
   (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
   otherwise.
+- **`SelfWeightCoefficients` of a load case is read and not applied**
+  (`LoadGroup.self_weight_coefficients`; `aiz.71`). `Dead` has
+  `(0, 0, -1)` in `beam_01`, `building_01` and `building_02`, where it has no
+  other load, so it has no step and every combination is without it. The
+  extractor warns. `--gravity` adds a separate `Gravity` case that no
+  combination includes. Applying the coefficients will change the `Dead`
+  results of those three models and most `beam_01` benchmarks.
 - **Buckling factors** come from a single `*BUCKLE` step that contains the
   loads. CalculiX scales only loads defined inside that step; a preceding
   `*STATIC` step is a fixed preload. Validated for one Euler column only.
@@ -648,6 +656,25 @@ load by hand and comparing it with `global_reactions.by_load_case`
 **Load steps**: CalculiX keeps loads active from step to step. Every static step
 starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise
 each load case would include all the earlier ones.
+
+**Load combinations are added up, not solved** (`94g.2`).
+`LoadsExtractor.extract_load_combinations()` reads each `LOAD_COMBINATION`
+group with the factor of every load case in it (`Factor` of an
+`IfcRelAssignsToGroupByFactor`, 1 for a plain relation, times the group's
+`Coefficient`). The solver runs the load cases only;
+`analysis/superposition.combine_results()` multiplies and adds what is linear
+in the load (displacement vectors, the six stress components, section force
+records, nodal forces at supports, and what each step applied), and
+`ResultsExporter._add_one_combination()` runs the exporter itself on that
+sum, so magnitudes, von Mises stress, maxima, diagrams, envelopes and support
+reactions are worked out by the code that does it for a load case. Never add
+maxima or envelopes. One combination is held in memory at a time
+(`building_02` has 16). Results go beside each `by_load_case` as
+`by_load_combination`; `envelope` stays that of the load cases. Buckling has
+no combinations (a warning says so). A load case without loads has no step
+and adds nothing (`cases_without_loads`). `TestLoadCombinations` checks a
+combination against hand values and against one case holding the factored
+loads.
 
 **Reference results**: `examples/analysis-models/models/<name>/<name>.rmed` are
 Code_Aster results for the same IFC files under self-weight (HDF5; read

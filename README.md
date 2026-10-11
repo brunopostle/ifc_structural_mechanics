@@ -33,6 +33,14 @@ the ones a user needs to know before trusting a result.
   plausible, but it has no reference. `building_01` solves and its reactions
   match the applied loads to the newton, with no reference either; its
   `Masonry` material is 202 t/m³ in the file, which dominates its self-weight.
+- **The self-weight a load case asks for is not applied.** An
+  `IfcStructuralLoadCase` can include the weight of the members through its
+  `SelfWeightCoefficients` (`Dead` does in `beam_01`, `building_01` and
+  `building_02`). That part is left out of the case and of every combination
+  that includes it, and the analysis warns. Self-weight is only analysed with
+  `--gravity`, as a load case of its own (`Gravity`) that no combination
+  includes. In `building_02` the `Dead` case is nothing but self-weight, so
+  its combinations are without their dead load.
 - **Reactions need CalculiX 2.23 or later to be exact.** CalculiX 2.21 (the
   version in Ubuntu 24.04) misreports the force at a support that holds a
   rotation, by anything up to the size of the load; displacements and member
@@ -50,8 +58,8 @@ the ones a user needs to know before trusting a result.
   Models that connect a slab only at its corners would otherwise leave the
   beams under its edges carrying nothing. The tie passes forces, not moments.
   `--strict-connections` analyses only the connections in the file.
-- **Large models are slow.** `building_02` takes about 200 s and 1.8 GB at a
-  2 m mesh, and needs more than 5 GB at 1 m. Its deflections move about 7%
+- **Large models are slow.** `building_02` takes about 280 s (100 s of it for
+  its 17 load combinations) and 2.2 GB at a 2 m mesh, and needs more than 5 GB at 1 m. Its deflections move about 7%
   between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
@@ -142,6 +150,18 @@ the ones a user needs to know before trusting a result.
   about both axes; no shear, torsion or buckling). A `utilisation_ratio` is
   that stress over the yield stress, for materials whose IFC definition has a
   `YieldStress`.
+- **Load combinations.** Every `LOAD_COMBINATION` group of the file is
+  reported with the factor of each load case in it
+  (`IfcRelAssignsToGroupByFactor`), and has the results a load case has:
+  displacements, stresses, section forces and their diagrams, reactions at
+  each support (`by_load_combination` in `results.json`, schema 1.2). The
+  solver runs the load cases only; a combination is their factored sum, with
+  everything that is not linear in the load (magnitudes, von Mises stress,
+  the largest values along a member) worked out again from the sum. Linear
+  static analysis only. A beam under `1.35 Dead + 1.5 Live` matches one load
+  case holding the factored loads to one part in a million. `building_02`'s 17
+  combinations add about 100 s to its 180 s, and take its `results.json`
+  from 5 MB to 44 MB.
 - **Support reactions.** `supports` in `results.json` (schema 1.1) gives, for
   every support and load case, the force and moment it exerts on the
   structure, at its position, in global axes and in the support's own axes

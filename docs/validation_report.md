@@ -755,8 +755,60 @@ the nine tests of the solver's own reactions at clamped supports skipped. Agains
 conda-forge's unpatched 2.23, also in a container, none is skipped and all pass; CI now
 runs the suite on both versions.
 
+## Load combinations
+
+A combination is not solved: its results are the sum of its load cases' results, each
+times its factor (`analysis/superposition.py`). Only what is linear in the load is
+added (displacement vectors, stress components, section forces at each cross-section,
+forces at support nodes); the exporter then works out magnitudes, von Mises stress,
+maxima, diagrams and reactions from the sum as it does for a load case.
+
+Benchmark (`TestLoadCombinations`): `beam_01`, 4 m, fixed at both ends, 0.3 m square,
+0.25 m mesh. `Dead` is 20 kN down at midspan; `Live` is a line load of 5 kN/m down and
+3 kN/m sideways. Combination `1.35 Dead + 1.5 Live`:
+
+| Quantity | By hand | Combination | One case with the factored loads |
+|---|---|---|---|
+| Vertical reaction | 57 000 N | 56 999.995 N | |
+| Sideways reaction | 18 000 N | 18 000.000 N | |
+| End moment, vertical bending (P L/8 + w L²/12) | 23 500 N·m | 23 512.22 N·m | 23 512.23 N·m |
+| End shear, vertical | 28 500 N | 28 498.95 N | 28 498.85 N |
+| End moment, sideways bending | 6 000 N·m | 5 989.38 N·m | 5 989.37 N·m |
+| End shear, sideways | 9 000 N | 8 999.65 N | 8 999.65 N |
+| Moment at each support (from member ends) | 23 500 N·m | 23 512.22 N·m | 23 512.23 N·m |
+| Largest displacement | | 0.744 365 8 mm | 0.744 366 6 mm |
+| Largest von Mises stress | | 5.720 798 MPa | 5.720 792 MPa |
+| Largest normal stress in the section | | 6.555 910 MPa | 6.555 910 MPa |
+
+The combination and the single case differ by one part in a million, which is the
+precision of the solver's result file. Adding the largest values of the two cases
+instead would give 0.772 mm and 6.09 MPa: 3.7% and 6.5% too much, because the two
+cases deflect in different directions. With a negative factor the error is larger:
+`Dead - Live` has its largest moment at midspan, 6 633 N·m (by hand
+P L/8 − w L²/24 = 6 667), where the difference of the two cases' largest moments,
+which are both at the supports, is 3 367.
+
+`building_02` (2 m mesh) has 17 combinations of `Dead`, `Live`, `Extra_dead`, `WIND`,
+`EQX` and `EQY`. Only `Live` and `Extra_dead` have loads; `Dead` is self-weight alone
+(see below). Reactions: `Live` 30.0166 MN, `Extra_dead` 60.2858 MN, `1.4D+1.6L`
+132.4268 MN = 1.4 × 60.2858 + 1.6 × 30.0166; largest displacement 25.7, 15.3 and
+44.5 mm. The combinations take the run from 178 s to 277 s (5.8 s each), `results.json`
+from 5.4 to 43.7 MB, and leave peak memory at 2.2 GB (one is held at a time).
+
+What the extraction does with combinations (`tests/unit/ifc/test_load_combinations.py`,
+on the example files): a relation without a factor counts once; the combination's
+`Coefficient` multiplies its factors; a case assigned twice has its factors added. A
+combination that names no load case, or includes something that is not a load case, is
+left out with a warning. The old code read these silently as empty or partial, and
+kept only the last factor of a case assigned twice.
+
 ## What is not yet validated
 
+- **Self-weight of a load case** (`SelfWeightCoefficients`): read, not applied, with a
+  warning. `Dead` in `beam_01`, `building_01` and `building_02` is without it, and so
+  is every combination of those files. In `building_02`, `Dead` has nothing else.
+- **Load combinations** are checked on one beam. Buckling has none. A case without
+  loads adds nothing and is named in `cases_without_loads`.
 - **Reactions on CalculiX 2.21 and earlier** at supports that clamp a slab edge or a
   member running on past them: marked unreliable, not corrected. The total reaction is
   the solver's and is wrong there too.
