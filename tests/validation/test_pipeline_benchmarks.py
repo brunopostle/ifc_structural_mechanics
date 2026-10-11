@@ -2242,3 +2242,90 @@ class TestCodeAsterReferences:
         with open(os.path.join(output_dir, "results.json")) as fh:
             reaction = json.load(fh)["global_reactions"]["total"]["fz_N"]
         assert 600 < reaction < 700
+
+
+def _placed_variant(tmp_path, name: str) -> str:
+    """An example with every item under a placement that moves and turns it.
+
+    The placement is nested: its parent is 12, -7, 3 m away and a quarter
+    turn about Z, and it adds 1.5, 2.5, -0.5 m in the parent's axes. Offsets
+    are written in the file's own length unit.
+    """
+    import ifcopenshell
+    import ifcopenshell.util.unit
+
+    model = ifcopenshell.open(os.path.join(IFC_DIR, f"{name}.ifc"))
+    scale = ifcopenshell.util.unit.calculate_unit_scale(model)
+
+    def axes(offset, x_axis):
+        return model.create_entity(
+            "IfcAxis2Placement3D",
+            Location=model.create_entity(
+                "IfcCartesianPoint", [c / scale for c in offset]
+            ),
+            Axis=model.create_entity("IfcDirection", (0.0, 0.0, 1.0)),
+            RefDirection=model.create_entity("IfcDirection", x_axis),
+        )
+
+    parent = model.create_entity(
+        "IfcLocalPlacement", RelativePlacement=axes((12.0, -7.0, 3.0), (0.0, 1.0, 0.0))
+    )
+    placement = model.create_entity(
+        "IfcLocalPlacement",
+        PlacementRelTo=parent,
+        RelativePlacement=axes((1.5, 2.5, -0.5), (1.0, 0.0, 0.0)),
+    )
+    for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
+        for entity in model.by_type(kind):
+            entity.ObjectPlacement = placement
+    path = str(tmp_path / f"{name}_placed.ifc")
+    model.write(path)
+    return path
+
+
+class TestPlacedModel:
+    """A model moved and turned by its placements is the same structure.
+
+    The examples keep every placement at the origin, which hid three faults
+    (``aiz.57``): a member's offset was added without converting it to
+    metres, supports and loads ignored their placement, and a parent
+    placement was not applied. The quarter turn swaps global X and Y, so the
+    supports stay in axes the writer can restrain.
+    """
+
+    @pytest.mark.parametrize(
+        "name, gravity",
+        [("beam_01", False), ("portal_01", True), ("structure_01", True)],
+        ids=["beam_01 (mm)", "portal_01 (inches)", "structure_01 (m)"],
+    )
+    def test_results_are_those_of_the_model_as_shipped(self, tmp_path, name, gravity):
+        mesh = 0.5 if name == "structure_01" else 0.25
+        shipped = _run(
+            os.path.join(IFC_DIR, f"{name}.ifc"),
+            tmp_path / "shipped",
+            mesh_size=mesh,
+            gravity=gravity,
+        )
+        placed = _run(
+            _placed_variant(tmp_path, name),
+            tmp_path / "placed",
+            mesh_size=mesh,
+            gravity=gravity,
+        )
+
+        before = shipped["global_displacements"]["envelope"]
+        after = placed["global_displacements"]["envelope"]
+        # The mesh of a surface is not the same after the move
+        tolerance = 0.002
+        for moved, original in (("tx", "ty"), ("ty", "tx"), ("tz", "tz")):
+            assert after[f"max_{moved}_m"] == pytest.approx(
+                before[f"max_{original}_m"], rel=tolerance, abs=1e-9
+            )
+
+        reactions = placed["global_reactions"]["by_load_case"]
+        assert set(reactions) == set(shipped["global_reactions"]["by_load_case"])
+        for case, reaction in shipped["global_reactions"]["by_load_case"].items():
+            assert reactions[case]["fz_N"] == pytest.approx(reaction["fz_N"], rel=1e-4)
+            assert abs(reactions[case]["fx_N"]) < 1e-3
+            assert abs(reactions[case]["fy_N"]) < 1e-3
+        assert len(placed["members"]) == len(shipped["members"])

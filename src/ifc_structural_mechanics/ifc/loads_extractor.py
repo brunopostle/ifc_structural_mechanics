@@ -22,7 +22,11 @@ from ..domain.load import (
     PointLoad,
 )
 from ..utils.error_handling import ModelExtractionError
-from .entity_identifier import find_member_endpoints
+from .entity_identifier import (
+    find_member_endpoints,
+    get_item_transformation,
+    transform_vectors,
+)
 
 
 class LoadsExtractor:
@@ -407,7 +411,9 @@ class LoadsExtractor:
             force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
             force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
             force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
-            force_vector = [f * self.force_scale for f in (force_x, force_y, force_z)]
+            force_vector = self._in_global_axes(
+                ifc_load, [f * self.force_scale for f in (force_x, force_y, force_z)]
+            )
 
             # Extract position
             position = self._extract_load_position(ifc_load)
@@ -443,7 +449,9 @@ class LoadsExtractor:
             else:
                 # Concentrated force: scale = force_scale
                 scale = self.force_scale
-            force_vector = [f * scale for f in force_vector]
+            force_vector = self._in_global_axes(
+                ifc_load, [f * scale for f in force_vector]
+            )
 
             # Extract start and end positions
             start_pos, end_pos = self._extract_load_line(ifc_load)
@@ -502,6 +510,8 @@ class LoadsExtractor:
                     "action only IfcStructuralLoadPlanarForce is supported."
                 )
 
+            force_vector = self._in_global_axes(ifc_load, force_vector)
+
             # Find related surface
             surface_ref = self._get_surface_reference(ifc_load)
 
@@ -529,6 +539,22 @@ class LoadsExtractor:
             f"It is an {ifc_load.is_a()}; only point, linear, curve and planar "
             "actions are supported."
         )
+
+    def _in_global_axes(self, ifc_load, force_vector: List[float]) -> List[float]:
+        """Turn a force given in "global" coordinates to the global axes.
+
+        IFC's GLOBAL_COORDS are the axes of the action's ObjectPlacement,
+        which need not be the global ones. A load in LOCAL_COORDS is in its
+        member's axes and is turned when it is written.
+        """
+        if self._coordinate_system(ifc_load) == "local":
+            return force_vector
+        transformation = get_item_transformation(ifc_load)
+        if not transformation:
+            return force_vector
+        return transform_vectors(
+            [force_vector], transformation, include_translation=False
+        )[0]
 
     @staticmethod
     def _coordinate_system(ifc_load) -> str:
@@ -676,7 +702,7 @@ class LoadsExtractor:
         Raises:
             ModelExtractionError: If neither gives a position.
         """
-        candidates = [getattr(ifc_load, "PointLocation", None)]
+        candidates = [(ifc_load, getattr(ifc_load, "PointLocation", None))]
         items = [ifc_load] + [
             rel.RelatingElement
             for rel in getattr(ifc_load, "AssignedToStructuralItem", None) or []
@@ -688,13 +714,18 @@ class LoadsExtractor:
                 if rep.RepresentationType != "Vertex":
                     continue
                 candidates.extend(
-                    getattr(vertex, "VertexGeometry", None) for vertex in rep.Items
+                    (item, getattr(vertex, "VertexGeometry", None))
+                    for vertex in rep.Items
                 )
-        for location in candidates:
+        for item, location in candidates:
             coords = getattr(location, "Coordinates", None)
             if coords:
                 padded = [float(c) for c in coords] + [0.0, 0.0]
-                return [c * self.length_scale for c in padded[:3]]
+                # A vertex is in the axes of the placement of its own item
+                return transform_vectors(
+                    [[c * self.length_scale for c in padded[:3]]],
+                    get_item_transformation(item, self.length_scale),
+                )[0]
         raise ModelExtractionError(
             "Its position cannot be found: it has no vertex of its own and "
             "is not assigned to an item that has one."

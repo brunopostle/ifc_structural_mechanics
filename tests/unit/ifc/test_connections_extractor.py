@@ -123,7 +123,7 @@ class TestConnectionsExtractor:
         ]
 
         # Define mock functions for key functionality
-        def mock_get_transformation(placement):
+        def mock_get_transformation(placement, length_scale=1.0):
             # Return a valid identity transformation
             return {"location": np.array([0.0, 0.0, 0.0]), "rotationMatrix": np.eye(3)}
 

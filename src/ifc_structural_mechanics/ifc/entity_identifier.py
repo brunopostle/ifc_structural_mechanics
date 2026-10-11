@@ -373,7 +373,8 @@ def find_member_endpoints(
         unit_scale: Scale factor to convert to SI units
 
     Returns:
-        List[List[float]]: List of endpoint coordinates in SI units
+        List[List[float]]: List of endpoint coordinates in SI units, in the
+            global axes
     """
     if member is None or not is_structural_curve_member(member):
         return []
@@ -385,88 +386,84 @@ def find_member_endpoints(
             start = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
             end = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
             if start and end:
-                return [start, end]
+                return transform_vectors(
+                    [start, end], get_item_transformation(member, unit_scale)
+                )
     return []
 
 
-def get_transformation(placement):
+def get_transformation(placement, length_scale: float = 1.0):
     """
-    Get the transformation matrix from an IFC placement object.
+    Get the transformation an IFC placement stands for.
+
+    The whole chain of ``PlacementRelTo`` is followed, so the result takes the
+    item's own coordinates to the global ones.
 
     Args:
         placement: The IFC placement object
+        length_scale: Factor from the file's length unit to metres. The
+            offset is returned in metres, so apply the transformation to
+            coordinates that are in metres already (or leave this at 1.0 and
+            scale afterwards).
 
     Returns:
         Dictionary with location and rotation matrix, or None if identity transform
+
+    Raises:
+        ModelExtractionError: If the placement is not an IfcLocalPlacement or
+            cannot be read.
     """
     if not placement:
         return None
 
     try:
-        if placement.is_a("IfcLocalPlacement"):
-            if placement.PlacementRelTo:
-                # Only this placement's own axes are applied. A parent that
-                # moves or turns it would put the item somewhere else.
-                import ifcopenshell.util.placement
-
-                parent = ifcopenshell.util.placement.get_local_placement(
-                    placement.PlacementRelTo
-                )
-                if not np.allclose(parent, np.eye(4)):
-                    raise ModelExtractionError(
-                        "Its placement is relative to another placement that "
-                        "is not at the origin of the global axes "
-                        "(PlacementRelTo); nested placements are not supported."
-                    )
-
-            axes = placement.RelativePlacement
-            location = np.array(get_coordinate(axes.Location))
-
-            if axes.Axis and axes.RefDirection:
-                # Get RefDirection (usually X) and Axis (usually Z)
-                xAxis = np.array(axes.RefDirection.DirectionRatios)
-                zAxis = np.array(axes.Axis.DirectionRatios)
-                zAxis /= np.linalg.norm(zAxis)
-
-                # Calculate Y using cross product
-                yAxis = np.cross(zAxis, xAxis)
-                yAxis /= np.linalg.norm(yAxis)
-
-                # Recalculate X for orthogonality
-                xAxis = np.cross(yAxis, zAxis)
-                xAxis /= np.linalg.norm(xAxis)
-            else:
-                # Default orientation if not specified
-                if np.allclose(location, np.array([0.0, 0.0, 0.0])):
-                    return None
-                xAxis = np.array([1.0, 0.0, 0.0])
-                yAxis = np.array([0.0, 1.0, 0.0])
-                zAxis = np.array([0.0, 0.0, 1.0])
-
-            # Check if transformation is identity
-            is_identity = (
-                np.allclose(location, np.array([0.0, 0.0, 0.0]))
-                and np.allclose(xAxis, np.array([1.0, 0.0, 0.0]))
-                and np.allclose(yAxis, np.array([0.0, 1.0, 0.0]))
-                and np.allclose(zAxis, np.array([0.0, 0.0, 1.0]))
-            )
-
-            if is_identity:
-                return None
-
-            return {
-                "location": location,
-                "rotationMatrix": np.array([xAxis, yAxis, zAxis]).transpose(),
-            }
-        else:
+        if not placement.is_a("IfcLocalPlacement"):
             raise ModelExtractionError(
                 f"Its placement is an {placement.is_a()}; only "
                 "IfcLocalPlacement is supported."
             )
+
+        import ifcopenshell.util.placement
+
+        # Parallel axes divide by zero in there; that is reported below
+        with np.errstate(invalid="ignore", divide="ignore"):
+            matrix = np.array(
+                ifcopenshell.util.placement.get_local_placement(placement),
+                dtype=float,
+            )
+        if not np.all(np.isfinite(matrix)):
+            raise ModelExtractionError(
+                "The axes of its placement cannot be read (Axis and "
+                "RefDirection are parallel)."
+            )
+        if np.allclose(matrix, np.eye(4)):
+            return None
+        return {
+            "location": matrix[:3, 3] * length_scale,
+            "rotationMatrix": matrix[:3, :3],
+        }
     except ModelExtractionError:
         raise
     except Exception as e:
         raise ModelExtractionError(f"Error getting transformation: {e}") from e
+
+
+def get_item_transformation(item, length_scale: float = 1.0):
+    """
+    Get the transformation of a structural item's or activity's ObjectPlacement.
+
+    Everything an item gives (the points of its representation, its ``Axis``,
+    its ``ConditionCoordinateSystem``, the forces of a load in "global"
+    coordinates) is in the axes of that placement, not in the global ones.
+
+    Args:
+        item: An IfcStructuralItem or IfcStructuralActivity (or None)
+        length_scale: Factor from the file's length unit to metres
+
+    Returns:
+        As ``get_transformation``; None when there is nothing to apply.
+    """
+    return get_transformation(getattr(item, "ObjectPlacement", None), length_scale)
 
 
 def transform_vectors(geometry, transformation, include_translation=True):

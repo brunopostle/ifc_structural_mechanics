@@ -11,9 +11,6 @@ import pytest
 
 ifcopenshell = pytest.importorskip("ifcopenshell")
 
-from ifc_structural_mechanics.ifc.entity_identifier import (  # noqa: E402
-    get_transformation,
-)
 from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
@@ -150,34 +147,3 @@ class TestLoads:
         )
         with pytest.raises(ModelExtractionError, match="IfcStructuralLoadTemperature"):
             Extractor(model).extract_model()
-
-
-class TestPlacement:
-    def _placement(self, model, parent_offset):
-        def axes(offset):
-            return model.create_entity(
-                "IfcAxis2Placement3D",
-                Location=model.create_entity("IfcCartesianPoint", offset),
-            )
-
-        parent = model.create_entity(
-            "IfcLocalPlacement", RelativePlacement=axes(parent_offset)
-        )
-        return model.create_entity(
-            "IfcLocalPlacement",
-            PlacementRelTo=parent,
-            RelativePlacement=axes((1.0, 0.0, 0.0)),
-        )
-
-    def test_placement_under_a_moved_parent_is_an_error(self):
-        """The parent used to be ignored, with a line in the log."""
-        model = ifcopenshell.file(schema="IFC4")
-        _FILES.append(model)
-        with pytest.raises(ModelExtractionError, match="nested placements"):
-            get_transformation(self._placement(model, (0.0, 5.0, 0.0)))
-
-    def test_placement_under_a_parent_at_the_origin_is_read(self):
-        model = ifcopenshell.file(schema="IFC4")
-        _FILES.append(model)
-        transformation = get_transformation(self._placement(model, (0.0, 0.0, 0.0)))
-        assert list(transformation["location"]) == [1.0, 0.0, 0.0]

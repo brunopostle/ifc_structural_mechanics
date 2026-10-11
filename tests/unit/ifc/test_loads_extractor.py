@@ -31,6 +31,8 @@ class TestLoadsExtractor:
         # Create mock point load (IFC4 style)
         self.point_load = MagicMock()
         self.point_load.GlobalId = "pl1"
+        # A mock placement has a parent, which has a parent, without end
+        self.point_load.ObjectPlacement = None
         self.point_load.is_a.return_value = False  # Default
         self.point_load.is_a.side_effect = lambda x: x in (
             "IfcStructuralPointAction",
@@ -57,6 +59,8 @@ class TestLoadsExtractor:
         # Create mock line load (IFC4 style)
         self.line_load = MagicMock()
         self.line_load.GlobalId = "ll1"
+        # A mock placement has a parent, which has a parent, without end
+        self.line_load.ObjectPlacement = None
         self.line_load.is_a.return_value = False  # Default
         self.line_load.is_a.side_effect = lambda x: x in (
             "IfcStructuralLinearAction",
@@ -82,6 +86,8 @@ class TestLoadsExtractor:
         # Create mock area load (IFC4 style)
         self.area_load = MagicMock()
         self.area_load.GlobalId = "al1"
+        # A mock placement has a parent, which has a parent, without end
+        self.area_load.ObjectPlacement = None
         self.area_load.is_a.return_value = False  # Default
         self.area_load.is_a.side_effect = lambda x: x in (
             "IfcStructuralPlanarAction",
@@ -190,6 +196,8 @@ class TestLoadsExtractor:
         # Create a mock structural member for the line load to apply to
         member = MagicMock()
         member.GlobalId = "member1"
+        # A mock placement has a parent, which has a parent, without end
+        member.ObjectPlacement = None
         member.is_a.return_value = True  # is_a returns True for any input
 
         # Mock geometry endpoints
@@ -205,11 +213,17 @@ class TestLoadsExtractor:
         def mock_endpoints(m, unit_scale=None):
             return [from_point, to_point]
 
-        # Apply patch
-        patch(
+        # Apply patch; teardown_method takes it off again. It used to stay on
+        # for every test that ran after this file.
+        self._endpoints_patch = patch(
             "ifc_structural_mechanics.ifc.loads_extractor.find_member_endpoints",
             side_effect=mock_endpoints,
-        ).start()
+        )
+        self._endpoints_patch.start()
+
+    def teardown_method(self):
+        """Take the patch of find_member_endpoints off."""
+        self._endpoints_patch.stop()
 
     def test_extract_all_loads(self):
         """Test extracting all loads."""

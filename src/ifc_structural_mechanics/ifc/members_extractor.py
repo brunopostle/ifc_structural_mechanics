@@ -16,8 +16,8 @@ from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMem
 from ..ifc.entity_identifier import (
     get_1D_orientation,
     get_coordinate,
+    get_item_transformation,
     get_representation,
-    get_transformation,
     transform_vectors,
 )
 from ..utils.error_handling import ModelExtractionError
@@ -232,14 +232,14 @@ class MembersExtractor:
         if getattr(entity, "Axis", None) is not None:
             orientation = get_1D_orientation(geometry, entity.Axis)
 
-        if getattr(entity, "ObjectPlacement", None):
-            transformation = get_transformation(entity.ObjectPlacement)
-            if transformation:
-                geometry = transform_vectors(geometry, transformation)
-                if orientation:
-                    orientation = transform_vectors(
-                        [orientation], transformation, include_translation=False
-                    )[0]
+        # The geometry is in metres by now, so the offset has to be too
+        transformation = get_item_transformation(entity, self.length_scale)
+        if transformation:
+            geometry = transform_vectors(geometry, transformation)
+            if orientation:
+                orientation = transform_vectors(
+                    orientation, transformation, include_translation=False
+                )
 
         return CurveMember(
             id=entity.GlobalId,
@@ -264,10 +264,9 @@ class MembersExtractor:
         if not geometry:
             raise ModelExtractionError("The outline of its face cannot be read.")
 
-        if getattr(entity, "ObjectPlacement", None):
-            transformation = get_transformation(entity.ObjectPlacement)
-            if transformation:
-                geometry = transform_vectors(geometry, transformation)
+        transformation = get_item_transformation(entity, self.length_scale)
+        if transformation:
+            geometry = transform_vectors(geometry, transformation)
 
         thickness_value = convert_length(
             getattr(entity, "Thickness", None) or 0.0, self.length_scale

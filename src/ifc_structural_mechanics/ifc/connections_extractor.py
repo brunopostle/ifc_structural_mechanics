@@ -26,8 +26,8 @@ from .entity_identifier import (
     analyze_connection_type,
     find_connected_elements,
     get_coordinate,
+    get_item_transformation,
     get_representation,
-    get_transformation,
     transform_vectors,
 )
 
@@ -281,24 +281,27 @@ class ConnectionsExtractor:
         """
         try:
             rotation = None
-            placement = getattr(ifc_connection, "ObjectPlacement", None)
-            if placement:
-                transformation = get_transformation(placement)
-                if transformation:
-                    rotation = np.array(transformation["rotationMatrix"], dtype=float)
+            transformation = get_item_transformation(ifc_connection)
+            if transformation:
+                rotation = np.array(transformation["rotationMatrix"], dtype=float)
 
             if ifc_connection.is_a("IfcStructuralPointConnection"):
                 axes = getattr(ifc_connection, "ConditionCoordinateSystem", None)
-                if not axes:
+                if not axes and rotation is None:
                     return None
+                # With no system of its own, the axes of its placement
                 z_axis = np.array(
-                    axes.Axis.DirectionRatios if axes.Axis else (0.0, 0.0, 1.0),
+                    (
+                        axes.Axis.DirectionRatios
+                        if axes and axes.Axis
+                        else (0.0, 0.0, 1.0)
+                    ),
                     dtype=float,
                 )
                 x_axis = np.array(
                     (
                         axes.RefDirection.DirectionRatios
-                        if axes.RefDirection
+                        if axes and axes.RefDirection
                         else (1.0, 0.0, 0.0)
                     ),
                     dtype=float,
@@ -357,6 +360,17 @@ class ConnectionsExtractor:
             when they are the global axes or cannot be determined.
         """
         try:
+            member = getattr(relation, "RelatingStructuralMember", None)
+            # Directions are in the axes of the member's placement
+            transformation = get_item_transformation(member)
+
+            def placed(vector):
+                if not transformation:
+                    return vector
+                return transformation["rotationMatrix"].dot(
+                    np.array(vector, dtype=float)
+                )
+
             axes = getattr(relation, "ConditionCoordinateSystem", None)
             if axes:
                 z_axis = axes.Axis.DirectionRatios if axes.Axis else (0.0, 0.0, 1.0)
@@ -365,8 +379,7 @@ class ConnectionsExtractor:
                     if axes.RefDirection
                     else (1.0, 0.0, 0.0)
                 )
-                return self._orthonormal_axes(x_axis, z_axis)
-            member = getattr(relation, "RelatingStructuralMember", None)
+                return self._orthonormal_axes(placed(x_axis), placed(z_axis))
             if member is None or not member.is_a("IfcStructuralCurveMember"):
                 return None
             representation = get_representation(member, "Edge")
@@ -379,7 +392,7 @@ class ConnectionsExtractor:
             x_axis = np.array(geometry[-1], dtype=float) - np.array(
                 geometry[0], dtype=float
             )
-            return self._orthonormal_axes(x_axis, axis.DirectionRatios)
+            return self._orthonormal_axes(placed(x_axis), placed(axis.DirectionRatios))
         except ModelExtractionError:
             raise
         except Exception as e:
@@ -503,8 +516,12 @@ class ConnectionsExtractor:
                     )
                     return result
                 else:
-                    # For points, convert to SI units
-                    result = [g * self.length_scale for g in geometry]
+                    # For points, convert to SI units; the vertex is in the
+                    # axes of the connection's placement
+                    result = transform_vectors(
+                        [[g * self.length_scale for g in geometry]],
+                        get_item_transformation(ifc_connection, self.length_scale),
+                    )[0]
                     self.logger.debug(
                         f"Connection {ifc_connection.GlobalId}: Method 1 result (flat list) = {result}"
                     )
@@ -589,12 +606,8 @@ class ConnectionsExtractor:
             Transformed geometry in SI units
         """
         # Apply transformation if available
-        transformation = None
-        if (
-            hasattr(ifc_connection, "ObjectPlacement")
-            and ifc_connection.ObjectPlacement
-        ):
-            transformation = get_transformation(ifc_connection.ObjectPlacement)
+        # In the file's own unit here; the scale follows
+        transformation = get_item_transformation(ifc_connection)
 
         if transformation and geometry:
             geometry = transform_vectors(geometry, transformation)
