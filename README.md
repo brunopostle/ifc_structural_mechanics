@@ -17,7 +17,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections). Elements are quadratic by default: three-node beams (B32R) and six-node triangular shells (S6)
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
-- **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other profile (circular, hollow circular, hollow rectangular, I, T, L, C) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
+- **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
@@ -49,17 +49,31 @@ the ones a user needs to know before trusting a result.
 - **Sections other than solid rectangles are analysed as equivalent
   rectangles**, with a warning that says how many. Axial, bending and shear
   stiffness and weight are those of the real section. Torsional stiffness is
-  not: it is too high for open sections (I, T, L, C) and about half the true
-  value for thin tubes and boxes. The stresses CalculiX computes are the
+  not. Measured on a twisted cantilever, it is 31 times too high for a
+  200 × 400 I section, and 0.47, 0.67 and 0.83 of the true value for a thin
+  tube, a box and a round bar. Solid rectangles are right. Do not rely on
+  results where open sections carry torsion. The stresses CalculiX computes are the
   rectangle's, so these members have no `max_von_mises_Pa` (their entry in
   `results.json` carries `"section_model": "equivalent_rectangle"`); their
   stress is the normal stress from the section forces, below.
 - **`--open-sections user-element`** analyses them with CalculiX U1 elements
-  instead, which have the section's own torsional stiffness. It only works
+  instead. Their torsion is right for round sections (0.95 to 0.99) but worse
+  for the others: 267 times too stiff for the same I section. It only works
   when every member of the model is such a section: stock CalculiX crashes
   when a U1 element shares a model with any other beam or shell element.
   With U1, a release about one or two axes becomes a full pin (with a
   warning) and the reactions are reported with the wrong sign.
+- **Unsupported profiles stop the analysis.** A Z section, a lipped C or an
+  arbitrary profile raises an error that names the member and the profile.
+- **A beam with nothing restraining rotation about its own axis is held at
+  one support**, with a warning. Two supports that each fix the three
+  translations and no rotation, the usual description of a simply supported
+  beam, leave it free to spin; the solver then returns an arbitrary rotation
+  that used to more than double the reported deflection.
+- **A column meeting a slab at a point with no connection is pinned to it
+  there**, with a warning, like a beam lying in a slab. `--strict-connections`
+  turns both off. A line connection in the file between a beam and a slab is
+  always honoured, as a hinge along the line.
 - **Section approximations.** No product of inertia and no offset between
   centroid and member axis. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
   L (angle) sections are analysed about their leg-parallel axes rather than

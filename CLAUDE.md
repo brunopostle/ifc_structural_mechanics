@@ -441,11 +441,18 @@ scales the elastic modulus and the density, so EA, both EI and the weight per
 length are exact. The material is orthotropic (`*ELASTIC, TYPE=ENGINEERING
 CONSTANTS` with an `*ORIENTATION` along the member): `G12` and `G13` are set
 so that `G12 a b = G A_shear,y` and `G13 a b = G A_shear,z`. Note the absence
-of 5/6: CalculiX expands a beam into one quadratic solid across the section,
-which shears over its whole area. A new section type therefore only needs
+of 5/6. That is calibrated, not derived: with these strongly orthotropic
+materials the I-section benchmarks come out right with 1.0 and 12 to 18% short
+in shear with 5/6. An ordinary isotropic rectangle does behave as 5/6 (a
+simply supported 0.3 m square matches to 0.01%). Torsion is the price: two
+shear moduli cannot match two shear areas and a torsion constant (I section
+31 times too stiff, tube 0.47, box 0.67, round bar 0.83; `TestTorsion` pins
+these). A new section type therefore only needs
 `A`, `Iy`, `Iz` and the two shear areas in `domain/property.py`, plus an
 extraction handler. In the extractors, test hollow IFC profiles before solid
-ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true.
+ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true. A
+channel is `IfcUShapeProfileDef`. A profile with no handler raises
+`ModelExtractionError`; never fall back to a default section.
 
 **Area loads follow the member's outline.** Where one surface member lies
 inside another (a landing on a floor slab), fragmenting gives each element to
@@ -531,6 +538,17 @@ rotational degrees of freedom**. This drives everything about joints:
   `--strict-connections` (`AnalysisConfig.get_strict_connections()`) leaves
   the ties out and the warning then says what was left unconnected.
 - **`*EQUATION` data lines take at most four terms.** Use `_write_equation()`.
+- **A curve member meeting a surface member at one point** (a column ending
+  on a slab or passing through it) is pinned to it there by the same code,
+  unless a connection of the file already joins them at that point.
+  `_seed_crossings()` in the geometry stage puts a node there in both meshes.
+  A line connection of the file joining a beam and a slab is tied the same
+  way, with no warning and under strict connections too.
+- **A member nothing stops spinning about its own axis is held**
+  (`_hold_spinning_members()`): rotation about its axis is restrained at one
+  of its supports, with a warning. Ball supports at both ends of a beam are
+  the usual cause. Members along a skew axis, or with no support of their own,
+  are only reported.
 - **A connection is a support only if it has an `AppliedCondition`.** One that
   joins two or more members without one restrains nothing.
 - **Line supports** (`IfcStructuralCurveConnection`) keep their end points in

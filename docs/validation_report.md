@@ -260,18 +260,73 @@ set so that the rectangle has the profile's shear stiffness in each direction; w
 that the stocky I cantilever was 5.5% too stiff. The I-section fixed-fixed beam is a hard
 case, with 37% of its deflection coming from shear in the web.
 
-One thing this showed: CalculiX's expanded rectangle shears over its whole area, not the
-5/6 of beam theory, because one quadratic solid across the section cannot hold a
-parabolic shear distribution. Using 5/6 left the shear deflection of the I benchmarks 12
-to 18% short. The solid-rectangle rows above are quoted against 5/6 and are a little
-stiff for that reason, by less than 1%.
+The shear moduli are set against the rectangle's whole area, not the 5/6 of it that beam
+theory gives a rectangle. That is a calibration: with 5/6 the shear deflection of the I
+benchmarks came out 12 to 18% short, and with the whole area the simply supported I beam
+below has it within 5%. An ordinary isotropic rectangle does follow 5/6 (the simply
+supported 0.3 m square below matches to 0.01%), so the difference belongs to these
+strongly orthotropic materials.
 
-What the equivalent rectangle does not have is the profile's torsional stiffness (too
-high for open sections, about half for thin closed ones) or its stresses, so
-`results.json` reports no stress for these members. U1 elements with a general section
-remain available with `--open-sections user-element` for models made of such members
-only. On `portal_01` the two agree: 4.111 mm with equivalent rectangles and 4.120 mm with
-U1 at a 0.25 m mesh.
+What the equivalent rectangle does not have is the profile's stresses, so
+`results.json` takes them from the section forces, or its torsional stiffness; see
+Torsion below. U1 elements with a general section remain available with
+`--open-sections user-element` for models made of such members only. On `portal_01` the
+two agree: 4.111 mm with equivalent rectangles and 4.120 mm with U1 at a 0.25 m mesh.
+
+**T, angle and channel**, all 200 × 400 mm, as cantilevers under self-weight about both
+axes (0.05 m mesh, tolerance 3%). The reference uses the second moments about the
+centroidal axes parallel to the legs, computed in the test from the section's rectangles.
+
+| Section | Strong axis: theory / pipeline | Weak axis: theory / pipeline |
+|---------|-------------------------------|------------------------------|
+| T | 0.2405 / 0.2401 mm (0.2%) | 2.1608 / 2.1501 mm (0.5%) |
+| Angle | 0.2264 / 0.2261 mm (0.2%) | 1.2464 / 1.2423 mm (0.3%) |
+| Channel | 0.1419 / 0.1417 mm (0.2%) | 0.8772 / 0.8721 mm (0.6%) |
+
+For the angle this is the library's assumption rather than the whole truth: its principal
+axes are rotated, and a real angle also moves sideways. A channel is an
+`IfcUShapeProfileDef`. Until 2026-10-11 the extractor looked for an entity name that does
+not exist in IFC, so every real channel became a default 0.1 × 0.2 m rectangle without a
+word (682% out on this case). A profile the library cannot read, a Z section for
+instance, now stops the analysis with an error naming the member and the profile.
+
+**Simply supported beam**: `beam_01` on a pin and a roller, 0.25 m mesh.
+
+| Case | Quantity | Theory | Pipeline | Error |
+|------|----------|--------|----------|-------|
+| 20 kN at midspan, 0.3 m square | Deflection | 1.3382 mm | 1.3383 mm | < 0.1% |
+| 20 kN at midspan, 0.3 m square | Moment / shear | 20.000 kN·m / 10.000 kN | 20.000 / 9.9996 | < 0.1% |
+| 5 kN/m, 0.3 m square | Deflection | 0.8337 mm | 0.8337 mm | < 0.1% |
+| 5 kN/m, 0.3 m square | Moment at midspan | 10.000 kN·m | 10.026 kN·m | 0.3% |
+| 5 kN/m, 200 × 400 I | Deflection | 1.8940 mm | 1.8983 mm | 0.2% |
+
+A pin here holds the three translations and rotation about the beam's axis. Supports that
+hold the translations alone, at both ends, leave the beam free to turn about its own
+axis. The solver does not object; it returns an arbitrary rotation, and the deflection
+read on the faces of the 0.3 m section came out as 2.92 mm instead of 1.34. Such a member
+is now held in torsion at one support and the analysis says so; the same case then gives
+1.3383 mm.
+
+**Torsion**: a 3 m cantilever with a 1 m arm at right angles on its tip and 1 kN on the
+end of the arm (0.125 m mesh). Statics fixes the forces whatever the stiffness: the
+pipeline gives a torque of 999.99 N·m in the cantilever and moments of 2999.98 and
+999.99 N·m at the two roots. For a 0.3 m square the tip deflection is 0.0982 mm against
+0.0991 mm for bending, twist (J = 0.1406 s⁴) and shear together, 0.9% apart.
+
+The same frame measures the torsional stiffness each section is analysed with, by taking
+the bending out of the tip deflection:
+
+| Section | Equivalent rectangle, J used / J true | U1 element, J used / J true |
+|---------|---------------------------------------|-----------------------------|
+| 200 × 400 I | 31 | 267 |
+| 300 × 10 tube | 0.47 | 0.95 |
+| 200 × 400 × 10 box | 0.67 | 1.63 |
+| 200 mm round bar | 0.83 | 0.99 |
+
+These are errors, not tolerances; a test pins the first column to 15% so that a change is
+noticed. Two shear moduli cannot match two shear areas and a torsion constant, and the
+bending and shear of ordinary frames were given priority. Where open sections carry
+torsion, neither model can be trusted.
 
 The slab-on-beams model is written from scratch by the test, with a 0.25 m mesh: a
 5 m × 1 m slab, 0.1 m thick, and two beams lying in it, fully fixed at one end. The IFC
@@ -315,6 +370,20 @@ CalculiX expands a shell into solid elements. S3 becomes a six-node wedge, which
 too stiff in bending; S6 becomes a fifteen-node wedge. The S6 result settles about 3%
 above thin-plate theory, as expected of a solid model whose supported edges are held at
 mid-surface only.
+
+The same plate under an `IfcStructuralPlanarAction` of 2.5 kPa along global −Z, in a load
+case of its own, gives 0.01250 mm at a 0.5 m mesh against 0.01220 mm (+2.4%, tolerance
+5%), and a reaction of 34.8 of 37.5 kN: the load on the restrained edge nodes goes
+straight to ground and is not in the reported total. Given along global X instead, the
+same load does not bend the plate.
+
+**Columns meeting a slab with no connection.** The plate with its supports removed and
+four 0.3 m square columns, fixed at their bases, standing under its quarter points. The
+file has no connection between slab and columns. Read literally the slab is in the air:
+with `--strict-connections` the run reports a displacement of 5 × 10⁵ km and a probable
+mechanism. By default each column is pinned to the slab where it meets it, and carries a
+quarter of the slab plus its own weight: 78.05 N at the base against 78.05 N by statics.
+With the columns continued 1 m above the slab, 84.93 N against 84.93 N.
 
 ---
 
@@ -464,32 +533,29 @@ found in the result file within the member's outline.
 
 ## What is not yet validated
 
-- **Distributed loads on shells** (`IfcStructuralPlanarAction`): the totals are checked
-  on `building_02`, but no deflection is compared with a reference. Loads on beams are
-  covered by Tier 2.
-- **Pinned and roller supports of beams** through the pipeline (Tier 1 covers them in
-  CalculiX only).
-- **Torque and axial force in section forces**: checked on synthetic stress fields in
-  unit tests and by joint equilibrium in `portal_01`, not against a pipeline benchmark
-  of their own.
+- **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
+  ones are covered by the plate benchmark; local ones only by a unit test.
+- **Supports released in bending only at one end**, and members along a skew axis that
+  are free to spin: the first has no benchmark, the second is reported but not fixed.
 - **Member stress** is the normal stress from axial force and bending only. Shear,
   torsion, buckling and anything specific to concrete are not checked.
 - **Shell members in membrane action**: walls are only checked through `structure_01`.
-- **T, L and C sections**: section properties are unit-tested against hand calculations,
-  and they go through the same equivalent rectangle as the I section, but none has a
-  pipeline benchmark of its own. L sections ignore the product of inertia.
+- **Angles about their true principal axes**: the product of inertia is ignored.
+  Z, lipped C and arbitrary profiles are not supported at all.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
 - **Beams tied to the slab or wall they lie in**: covered by Tier 2 for a slab on two
-  beams. Beams in walls and columns in walls use the same code but have no benchmark.
+  beams and for columns under and through a slab. Beams in walls and columns in walls
+  use the same code but have no benchmark. A rigid (moment-carrying) line connection
+  between a beam and a slab is analysed as a hinge line.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
 - **Skew supports**: not modelled. Releases in skew axes between members are, but
   have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins). U1 is no
   longer used unless asked for.
-- **Torsion of non-rectangular sections**: approximate by construction, and not
-  measured.
+- **Torsion of non-rectangular sections**: measured, and wrong by the factors in the
+  torsion table above.
 - **`building_01`**: reactions only. Its self-weight deflection is still moving 10%
   between a 0.5 m and a 0.25 m mesh.
 - **Buckling** beyond the single Euler column.
