@@ -1,15 +1,16 @@
 """
-Updated unit tests for the CLI commands module to work with enhanced analysis.
+Unit tests for the CLI commands module.
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-# We'll use run_enhanced_analyze from original commands.py to maintain compatibility
+# We'll use run_analyze from original commands.py to maintain compatibility
 # Update these imports to match your enhanced implementation
-from ifc_structural_mechanics.cli.commands import cli, run_enhanced_analyze
+from ifc_structural_mechanics.cli.commands import cli, run_analyze
 from ifc_structural_mechanics.utils.error_handling import (
     AnalysisError,
     MeshingError,
@@ -29,7 +30,7 @@ class TestEnhancedCLICommands:
     def mock_analyze_ifc(self):
         """Create a mock for the analyze_ifc function with enhanced capabilities."""
         with patch(
-            "ifc_structural_mechanics.api.structural_analysis.run_enhanced_analysis"
+            "ifc_structural_mechanics.api.structural_analysis.analyze_ifc"
         ) as mock:
             # Default successful result
             mock.return_value = {
@@ -74,26 +75,23 @@ class TestEnhancedCLICommands:
         assert "--output" in result.output
         assert "--analysis-type" in result.output
         assert "--mesh-size" in result.output
-        # Check for the new enhanced option
-        assert "--enhanced" in result.output
 
     def test_analyze_successful(self, mock_analyze_ifc, temp_ifc_file, temp_output_dir):
         """Test successful analysis run with enhanced analysis."""
-        # We're going to test using a patched version of run_enhanced_analyze
+        # We're going to test using a patched version of run_analyze
         # that uses our mock_analyze_ifc
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
+            exit_code = run_analyze(
                 ifc_file=temp_ifc_file,
                 output_dir=temp_output_dir,
                 analysis_type="linear_static",
                 mesh_size=0.1,
                 verbose=False,
                 json_output=False,
-                map_entities=True,
-                enhanced=True,  # Use the enhanced analysis option
+                map_entities=True,  # Use the enhanced analysis option
                 gravity=False,
             )
             assert exit_code == 0  # Success
@@ -117,10 +115,10 @@ class TestEnhancedCLICommands:
     ):
         """Test analysis with custom parameters."""
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
+            exit_code = run_analyze(
                 ifc_file=temp_ifc_file,
                 output_dir=temp_output_dir,
                 analysis_type="linear_buckling",
@@ -128,7 +126,6 @@ class TestEnhancedCLICommands:
                 verbose=True,
                 json_output=False,
                 map_entities=True,
-                enhanced=True,
                 gravity=False,
             )
             assert exit_code == 0  # Success
@@ -152,10 +149,10 @@ class TestEnhancedCLICommands:
     ):
         """The strict-connections choice reaches the analysis."""
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
+            exit_code = run_analyze(
                 ifc_file=temp_ifc_file,
                 output_dir=temp_output_dir,
                 strict_connections=True,
@@ -168,10 +165,10 @@ class TestEnhancedCLICommands:
     ):
         """The choice of model for open sections reaches the analysis."""
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
+            exit_code = run_analyze(
                 ifc_file=temp_ifc_file,
                 output_dir=temp_output_dir,
                 open_sections="user_element",
@@ -201,12 +198,10 @@ class TestEnhancedCLICommands:
         }
 
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
-                ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-            )
+            exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 0  # Success with warnings is still success
 
     def test_analyze_with_errors(
@@ -231,34 +226,28 @@ class TestEnhancedCLICommands:
         }
 
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             mock_analyze_ifc,
         ):
-            exit_code = run_enhanced_analyze(
-                ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-            )
+            exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 1  # Failure due to errors in result
 
     def test_analyze_with_exception(self, temp_ifc_file, temp_output_dir):
         """Test handling of exceptions."""
         # Test ModelExtractionError
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             side_effect=ModelExtractionError("Failed to extract model"),
         ):
-            exit_code = run_enhanced_analyze(
-                ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-            )
+            exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 2  # Exit code for ModelExtractionError
 
         # Test MeshingError
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             side_effect=MeshingError("Meshing failed"),
         ):
-            exit_code = run_enhanced_analyze(
-                ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-            )
+            exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 3  # Exit code for MeshingError
 
         # Test AnalysisError with error details
@@ -271,51 +260,48 @@ class TestEnhancedCLICommands:
             }
         ]
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis",
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
             side_effect=AnalysisError(
                 "Analysis calculation failed", error_details=error_details
             ),
         ):
-            exit_code = run_enhanced_analyze(
-                ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-            )
+            exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 4  # Exit code for AnalysisError
 
-    def test_enhanced_vs_standard_option(
-        self, mock_analyze_ifc, temp_ifc_file, temp_output_dir
-    ):
-        """Test that the enhanced option routes to the correct analysis function."""
-        # Set up the mocks for both enhanced and standard analysis
+
+class TestJsonOutput:
+    """--json-output prints one JSON document; it used to fail with exit code 99."""
+
+    RESULT = {
+        "status": "success",
+        "warnings": [{"message": "a warning"}],
+        "errors": [],
+        "output_files": {"results_json": "out/results.json"},
+        "mesh_statistics": {},
+        # Python objects for callers of the API; not serialisable
+        "model": object(),
+        "parsed_results": {"displacement": [object()]},
+    }
+
+    def test_result_with_the_domain_model_is_printed(self, tmp_path):
+        ifc_file = tmp_path / "model.ifc"
+        ifc_file.write_text("ISO-10303-21;")
         with patch(
-            "ifc_structural_mechanics.cli.commands.run_enhanced_analysis"
-        ) as mock_enhanced:
-            mock_enhanced.return_value = {
-                "status": "success",
-                "output_files": {},
-                "notes": ["Used enhanced analysis"],
-            }
-
-            with patch(
-                "ifc_structural_mechanics.cli.commands.analyze_ifc"
-            ) as mock_standard:
-                mock_standard.return_value = {"status": "success", "output_files": {}}
-
-                # Test with enhanced=True
-                exit_code = run_enhanced_analyze(
-                    ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=True
-                )
-                assert exit_code == 0
-                mock_enhanced.assert_called_once()
-                mock_standard.assert_not_called()
-
-                # Reset mocks
-                mock_enhanced.reset_mock()
-                mock_standard.reset_mock()
-
-                # Test with enhanced=False
-                exit_code = run_enhanced_analyze(
-                    ifc_file=temp_ifc_file, output_dir=temp_output_dir, enhanced=False
-                )
-                assert exit_code == 0
-                mock_enhanced.assert_not_called()
-                mock_standard.assert_called_once()
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            return_value=dict(self.RESULT),
+        ):
+            outcome = CliRunner().invoke(
+                cli,
+                [
+                    "analyze",
+                    str(ifc_file),
+                    "--output",
+                    str(tmp_path / "out"),
+                    "--json-output",
+                ],
+            )
+        assert outcome.exit_code == 0, outcome.output
+        printed = json.loads(outcome.output)
+        assert printed["status"] == "success"
+        assert printed["output_files"] == {"results_json": "out/results.json"}
+        assert "model" not in printed and "parsed_results" not in printed

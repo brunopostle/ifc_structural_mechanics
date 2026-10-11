@@ -36,9 +36,6 @@ if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
         GmshRunner=MagicMock(),
     )
 
-if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
-    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
-
 from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E402
     PointConnection,
     StructuralConnection,

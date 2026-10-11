@@ -26,6 +26,7 @@ from src.ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
     run_complete_analysis_workflow,
 )
+from tests.helpers import fixed_support
 
 
 class TestDomainToCalculixUnifiedWorkflow(unittest.TestCase):
@@ -74,7 +75,13 @@ class TestDomainToCalculixUnifiedWorkflow(unittest.TestCase):
 
         # Add members to model
         self.model.add_member(self.beam)
+        self.model.connections.append(
+            fixed_support((0, 0, 0), self.beam.id, "support_" + self.beam.id)
+        )
         self.model.add_member(self.plate)
+        self.model.connections.append(
+            fixed_support((0, 0, 0), self.plate.id, "support_" + self.plate.id)
+        )
 
         # Create temporary files for testing
         self.temp_dir = tempfile.mkdtemp()
@@ -230,6 +237,9 @@ $EndElements
         # Create a model with only a surface member to focus on triangular elements
         surface_model = StructuralModel("surface_model", "Surface Model")
         surface_model.add_member(self.plate)
+        surface_model.connections.append(
+            fixed_support((0, 0, 0), self.plate.id, "support_" + self.plate.id)
+        )
 
         # Create unified writer with correct parameters
         writer = UnifiedCalculixWriter(
@@ -284,6 +294,9 @@ $EndElements
         # Create a minimal but valid CalculiX input file using unified writer
         minimal_model = StructuralModel("minimal", "Minimal Model")
         minimal_model.add_member(self.beam)
+        minimal_model.connections.append(
+            fixed_support((0, 0, 0), self.beam.id, "support_" + self.beam.id)
+        )
 
         # Create unified writer with correct parameters
         writer = UnifiedCalculixWriter(
@@ -528,6 +541,9 @@ $EndElements
         # Create a simple model that would have been problematic with dual writing
         simple_model = StructuralModel("simple", "Simple Model")
         simple_model.add_member(self.beam)
+        simple_model.connections.append(
+            fixed_support((0, 0, 0), self.beam.id, "support_" + self.beam.id)
+        )
 
         # Generate output with unified writer using correct parameters
         writer = UnifiedCalculixWriter(

@@ -88,23 +88,6 @@ def generate_unique_id():
     return str(uuid.uuid4())
 
 
-def test_point_conversion(gmsh_converter):
-    """Test point conversion methods."""
-    # Test valid 3D point
-    point = [1.0, 2.0, 3.0]
-    converted_point = gmsh_converter._convert_point(point)
-
-    assert isinstance(converted_point, np.ndarray)
-    assert converted_point.shape == (3,)
-    np.testing.assert_array_almost_equal(converted_point, point)
-
-    # Test invalid point raises NotImplementedError
-    with pytest.raises(NotImplementedError):
-        gmsh_converter._convert_point([1.0, 2.0])  # Incorrect dimensions
-    with pytest.raises(NotImplementedError):
-        gmsh_converter._convert_point("not a point")
-
-
 def test_curve_conversion(gmsh_converter):
     """Test curve conversion methods."""
     # Test valid curve (list of 3D points)

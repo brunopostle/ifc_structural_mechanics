@@ -7,7 +7,6 @@ the structural analysis extension.
 """
 
 import re
-from contextlib import contextmanager
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -889,31 +888,3 @@ class ErrorDetector:
             mapper (Any): Entity mapper for mapping analysis IDs to domain IDs.
         """
         self.mapper = mapper
-
-
-@contextmanager
-def error_context(context: Dict[str, Any]):
-    """
-    Context manager for error handling with additional context.
-
-    This context manager captures exceptions and re-raises them
-    with additional context information.
-
-    Args:
-        context (Dict[str, Any]): Context information to add to exceptions.
-
-    Yields:
-        None
-
-    Raises:
-        StructuralAnalysisError: The original exception with added context.
-    """
-    try:
-        yield
-    except StructuralAnalysisError as e:
-        # Add context to existing structural analysis error
-        e.context.update(context)
-        raise
-    except Exception as e:
-        # Wrap other exceptions in StructuralAnalysisError
-        raise StructuralAnalysisError(str(e), **context) from e

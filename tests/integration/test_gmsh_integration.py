@@ -106,8 +106,6 @@ class TestGmshIntegration:
         """
         Test meshing with the Python API.
         """
-        # Configure to use Python API
-        self.meshing_config.use_python_api = True
 
         # Create the runner
         runner = GmshRunner(
@@ -127,127 +125,10 @@ class TestGmshIntegration:
         assert os.path.exists(mesh_file)
         assert os.path.getsize(mesh_file) > 0
 
-    def test_executable_meshing(self):
-        """
-        Test meshing with the Gmsh executable.
-        """
-        # Skip if gmsh executable not found
-        gmsh_path = subprocess.getoutput("which gmsh").strip()
-        if not gmsh_path:
-            pytest.skip("Gmsh executable not found in PATH")
-
-        # Log the found gmsh path
-        print(f"Found Gmsh executable at: {gmsh_path}")
-
-        # Try running gmsh directly to get version information
-        try:
-            result = subprocess.run(
-                [gmsh_path, "--info"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            print(f"Gmsh version information:\n{result.stdout}")
-        except Exception as e:
-            print(f"Error getting Gmsh version: {e}")
-
-        # Configure to use executable
-        self.meshing_config.use_python_api = False
-
-        # Create the runner
-        runner = GmshRunner(
-            meshing_config=self.meshing_config, system_config=self.system_config
-        )
-
-        # Make sure the runner has the correct gmsh path
-        print(f"Runner gmsh path: {runner.gmsh_path}")
-
-        # Create a simple .geo file for testing
-        test_geo = os.path.join(self.temp_dir, "test.geo")
-        test_msh = os.path.join(self.temp_dir, "test.msh")
-
-        # Write a simple geometry file
-        with open(test_geo, "w") as f:
-            f.write(
-                """
-            // Simple cube
-            Point(1) = {0, 0, 0, 1.0};
-            Point(2) = {1, 0, 0, 1.0};
-            Point(3) = {1, 1, 0, 1.0};
-            Point(4) = {0, 1, 0, 1.0};
-            Point(5) = {0, 0, 1, 1.0};
-            Point(6) = {1, 0, 1, 1.0};
-            Point(7) = {1, 1, 1, 1.0};
-            Point(8) = {0, 1, 1, 1.0};
-
-            Line(1) = {1, 2};
-            Line(2) = {2, 3};
-            Line(3) = {3, 4};
-            Line(4) = {4, 1};
-            Line(5) = {5, 6};
-            Line(6) = {6, 7};
-            Line(7) = {7, 8};
-            Line(8) = {8, 5};
-            Line(9) = {1, 5};
-            Line(10) = {2, 6};
-            Line(11) = {3, 7};
-            Line(12) = {4, 8};
-
-            Curve Loop(1) = {1, 2, 3, 4};
-            Plane Surface(1) = {1};
-            Curve Loop(2) = {5, 6, 7, 8};
-            Plane Surface(2) = {2};
-            Curve Loop(3) = {1, 10, -5, -9};
-            Plane Surface(3) = {3};
-            Curve Loop(4) = {2, 11, -6, -10};
-            Plane Surface(4) = {4};
-            Curve Loop(5) = {3, 12, -7, -11};
-            Plane Surface(5) = {5};
-            Curve Loop(6) = {4, 9, -8, -12};
-            Plane Surface(6) = {6};
-
-            Surface Loop(1) = {1, 2, 3, 4, 5, 6};
-            Volume(1) = {1};
-            """
-            )
-
-        # Try running gmsh directly with subprocess
-        try:
-            cmd = [gmsh_path, test_geo, "-3", "-o", test_msh]
-            print(f"Running gmsh with command: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
-            print(f"Gmsh output: {result.stdout}")
-            print(f"Gmsh errors: {result.stderr}")
-
-            # Check if the file was created
-            if os.path.exists(test_msh):
-                print(
-                    f"Mesh file created: {test_msh}, size: {os.path.getsize(test_msh)}"
-                )
-            else:
-                print(f"Mesh file not created: {test_msh}")
-        except Exception as e:
-            print(f"Error running Gmsh subprocess: {e}")
-
-        # Now try using the runner
-        result = runner.run_meshing()
-        assert result is True
-
-        # Generate mesh file and check it exists
-        output_file = os.path.join(self.temp_dir, "cube.msh")
-        mesh_file = runner.generate_mesh_file(output_file)
-
-        assert os.path.exists(mesh_file)
-        assert os.path.getsize(mesh_file) > 0
-
     def test_format_conversion(self):
         """
         Test converting the mesh to different formats.
         """
-        # Configure to use Python API for simplicity
-        self.meshing_config.use_python_api = True
 
         # Create the runner
         runner = GmshRunner(
@@ -263,7 +144,7 @@ class TestGmshIntegration:
 
         for fmt in formats:
             output_file = os.path.join(self.temp_dir, f"cube.{fmt}")
-            mesh_file = runner.generate_mesh_file(output_file, format=fmt)
+            mesh_file = runner.generate_mesh_file(output_file)
 
             assert os.path.exists(mesh_file)
             assert os.path.getsize(mesh_file) > 0

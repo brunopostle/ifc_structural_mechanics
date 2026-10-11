@@ -1,192 +1,119 @@
+"""CalculixRunner solves the input file it is given, as written, once.
+
+It used to swap ``analysis.inp`` for a ``model.inp`` lying beside it when that
+was five times larger, insert a ``*HEADING`` into large inputs, and edit the
+input and run again after some errors.
+"""
+
 import os
-import shutil
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ifc_structural_mechanics.analysis.calculix_runner import CalculixRunner
-from ifc_structural_mechanics.utils.temp_dir import create_temp_subdir
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
+
+INPUT = "** analysis\n*NODE\n1, 0, 0, 0\n*STEP\n*STATIC\n*END STEP\n"
+RUN = "ifc_structural_mechanics.analysis.calculix_runner.run_subprocess"
 
 
-class TestCalculixRunner:
-    """Test suite for CalculixRunner file handling."""
+def _result(success=True, stdout="Job finished", stderr=""):
+    result = MagicMock()
+    result.success = success
+    result.stdout = stdout
+    result.stderr = stderr
+    result.return_code = 0 if success else 201
+    return result
 
-    def setup_method(self):
-        """Set up test environment."""
-        # Create a temporary directory for the test
-        self.temp_dir = create_temp_subdir(prefix="test_calculix_runner_")
 
-        # Create dummy input files
-        self.model_inp = os.path.join(self.temp_dir, "model.inp")
-        self.analysis_inp = os.path.join(self.temp_dir, "analysis.inp")
+@pytest.fixture
+def system_config():
+    config = MagicMock()
+    config.get_calculix_path.return_value = "/usr/bin/ccx"
+    return config
 
-        # Write some content to the files to distinguish them
-        with open(self.model_inp, "w") as f:
-            f.write("** This is model.inp\n*NODE\n1, 0, 0, 0\n")
 
-        with open(self.analysis_inp, "w") as f:
-            f.write(
-                "** This is analysis.inp\n*NODE\n1, 0, 0, 0\n*STEP\n*STATIC\n*END STEP\n"
-            )
+def _runner(directory, system_config, working_dir=None):
+    path = os.path.join(str(directory), "analysis.inp")
+    with open(path, "w") as f:
+        f.write(INPUT)
+    return CalculixRunner(
+        input_file_path=path,
+        system_config=system_config,
+        working_dir=str(working_dir or directory),
+    )
 
-        # Mock system_config
-        self.mock_system_config = MagicMock()
-        self.mock_system_config.get_calculix_path.return_value = "/usr/bin/ccx"
 
-        # Mock analysis_config
-        self.mock_analysis_config = MagicMock()
-        self.mock_analysis_config.get_analysis_type.return_value = "linear_static"
-        self.mock_analysis_config.get_solver_params.return_value = {}
-
-    def teardown_method(self):
-        """Clean up after test."""
-        try:
-            shutil.rmtree(self.temp_dir)
-        except Exception:
-            pass
-
-    @patch("ifc_structural_mechanics.analysis.calculix_runner.run_subprocess")
-    def test_correct_input_file_used(self, mock_run_subprocess):
-        """Test that CalculixRunner uses the correct input file."""
-        # Configure the mock to return a successful result
-        mock_result = MagicMock()
-        mock_result.success = True
-        mock_result.stdout = "Job finished"
-        mock_result.stderr = ""
-        mock_run_subprocess.return_value = mock_result
-
-        # Make model.inp smaller than analysis.inp to simulate our new logic
-        # that prefers the larger file
-        with open(self.model_inp, "w") as f:
-            f.write("** This is a small model.inp\n*NODE\n1, 0, 0, 0\n")
-
-        with open(self.analysis_inp, "w") as f:
-            f.write(
-                "** This is a larger analysis.inp\n*NODE\n1, 0, 0, 0\n2, 1, 0, 0\n*ELEMENT, TYPE=B31\n1, 1, 2\n*STEP\n*STATIC\n*END STEP\n"
-            )
-
-        # Create a CalculixRunner instance with analysis.inp
-        runner = CalculixRunner(
-            input_file_path=self.analysis_inp,
-            system_config=self.mock_system_config,
-            analysis_config=self.mock_analysis_config,
-            working_dir=self.temp_dir,
-        )
-
-        # Add mock _collect_result_files method
-        runner._collect_result_files = MagicMock(return_value={"results": "dummy.frd"})
-        runner._check_convergence = MagicMock(return_value=True)
-
-        # Run the analysis
-        runner.run_analysis()
-
-        # Check that run_subprocess was called with the correct command
-        args, kwargs = mock_run_subprocess.call_args
-        command = args[0]
-
-        # The command should use "analysis" as the base name since it's now the larger file
-        assert (
-            "analysis" in command
-        ), f"Command does not reference analysis.inp: {command}"
-
-        # Check that the working directory is correct
-        assert kwargs.get("cwd") == str(self.temp_dir)
-
-        # NEW TEST: Check that both files still exist (no renaming happens now)
-        assert os.path.exists(self.model_inp), "model.inp should still exist"
-        assert os.path.exists(self.analysis_inp), "analysis.inp should still exist"
-
-        # Add a second test method
-
-    def test_prefers_larger_input_file(self):
-        """Test that CalculixRunner prefers the larger input file."""
-        # Mock system and analysis configs
-        mock_system_config = MagicMock()
-        mock_system_config.get_calculix_path.return_value = "/usr/bin/ccx"
-
-        mock_analysis_config = MagicMock()
-        mock_analysis_config.get_analysis_type.return_value = "linear_static"
-        mock_analysis_config.get_solver_params.return_value = {}
-
-        # Create files with model.inp much larger than analysis.inp
-        with open(os.path.join(self.temp_dir, "model.inp"), "w") as f:
-            # Write a large model.inp
-            f.write("** This is a large model.inp\n")
-            for i in range(1000):
-                f.write(f"*NODE\n{i}, {i}.0, 0, 0\n")
-
-        with open(os.path.join(self.temp_dir, "analysis.inp"), "w") as f:
-            # Write a small analysis.inp
-            f.write(
-                "** This is a small analysis.inp\n*NODE\n1, 0, 0, 0\n*STEP\n*STATIC\n*END STEP\n"
-            )
-
-        # Patch run_subprocess
-        with patch(
-            "ifc_structural_mechanics.analysis.calculix_runner.run_subprocess"
-        ) as mock_run:
-            # Configure the mock to return a successful result
-            mock_result = MagicMock()
-            mock_result.success = True
-            mock_result.stdout = "Job finished"
-            mock_result.stderr = ""
-            mock_run.return_value = mock_result
-
-            # Create a CalculixRunner instance with analysis.inp
-            runner = CalculixRunner(
-                input_file_path=os.path.join(self.temp_dir, "analysis.inp"),
-                system_config=mock_system_config,
-                analysis_config=mock_analysis_config,
-                working_dir=self.temp_dir,
-            )
-
-            # Add mock methods
-            runner._collect_result_files = MagicMock(
-                return_value={"results": "dummy.frd"}
-            )
-            runner._check_convergence = MagicMock(return_value=True)
-
-            # Run the analysis
+class TestInputFile:
+    def test_the_given_input_is_run(self, tmp_path, system_config):
+        runner = _runner(tmp_path, system_config)
+        with patch(RUN, return_value=_result()) as run:
             runner.run_analysis()
+        assert run.call_args[0][0] == ["/usr/bin/ccx", "-i", "analysis"]
 
-            # Check that run_subprocess was called with the correct command
-            args, kwargs = mock_run.call_args
-            command = args[0]
-
-            # The command should use "model" as the base name since it's the larger file
-            assert (
-                "model" in command
-            ), f"Command should reference model.inp (the larger file): {command}"
-
-    @patch("ifc_structural_mechanics.analysis.calculix_runner.run_subprocess")
-    def test_missing_input_file_handling(self, mock_run_subprocess):
-        """Test that CalculixRunner handles missing input files correctly."""
-        # Configure the mock to return a successful result
-        mock_result = MagicMock()
-        mock_result.success = True
-        mock_result.stdout = "Job finished"
-        mock_result.stderr = ""
-        mock_run_subprocess.return_value = mock_result
-
-        # Create a non-existent input file path
-        # Create a CalculixRunner with a file that exists at initialization but will be deleted before run
-        runner = CalculixRunner(
-            input_file_path=self.analysis_inp,
-            system_config=self.mock_system_config,
-            analysis_config=self.mock_analysis_config,
-            working_dir=self.temp_dir,
-        )
-
-        # Add mock _collect_result_files method
-        runner._collect_result_files = MagicMock(return_value={"results": "dummy.frd"})
-        runner._check_convergence = MagicMock(return_value=True)
-
-        # Delete the input file to simulate it going missing
-        os.remove(self.analysis_inp)
-
-        # Run the analysis - should raise an error because the file is gone
-        with pytest.raises(Exception) as exc_info:
+    def test_a_larger_file_beside_it_is_not_run_instead(self, tmp_path, system_config):
+        with open(tmp_path / "model.inp", "w") as f:
+            f.write("** another model\n" + "*NODE\n" * 2000)
+        runner = _runner(tmp_path, system_config)
+        with patch(RUN, return_value=_result()) as run:
             runner.run_analysis()
+        assert run.call_args[0][0] == ["/usr/bin/ccx", "-i", "analysis"]
 
-        # The error should mention the missing file
-        assert "not found" in str(exc_info.value) or "copy" in str(exc_info.value)
+    def test_the_input_is_not_edited(self, tmp_path, system_config):
+        runner = _runner(tmp_path, system_config)
+        big = INPUT + "*ELEMENT, TYPE=B31\n" * 1500
+        with open(runner.input_file_path, "w") as f:
+            f.write(big)
+        with patch(RUN, return_value=_result()):
+            runner.run_analysis()
+        with open(runner.input_file_path) as f:
+            assert f.read() == big
+        assert not os.path.exists(str(runner.input_file_path) + ".original")
+
+    def test_a_failed_run_is_not_repeated(self, tmp_path, system_config):
+        runner = _runner(tmp_path, system_config)
+        failure = _result(False, stdout="*ERROR reading *ELEMENT: increase ne_")
+        with patch(RUN, return_value=failure) as run:
+            with pytest.raises(AnalysisError, match="return code 201"):
+                runner.run_analysis()
+        assert run.call_count == 1
+        with open(runner.input_file_path) as f:
+            assert f.read() == INPUT
+
+    def test_a_stale_input_in_the_working_directory_is_replaced(
+        self, tmp_path, system_config
+    ):
+        """An earlier run's file of the same name must not be solved instead."""
+        source, work = tmp_path / "source", tmp_path / "work"
+        source.mkdir()
+        work.mkdir()
+        with open(work / "analysis.inp", "w") as f:
+            f.write("** an earlier analysis\n")
+        runner = _runner(source, system_config, working_dir=work)
+        with patch(RUN, return_value=_result()):
+            runner.run_analysis()
+        with open(work / "analysis.inp") as f:
+            assert f.read() == INPUT
+
+    def test_missing_input_is_an_error(self, tmp_path, system_config):
+        runner = _runner(tmp_path, system_config)
+        os.remove(runner.input_file_path)
+        with patch(RUN, return_value=_result()) as run:
+            with pytest.raises(AnalysisError, match="Input file not found"):
+                runner.run_analysis()
+        run.assert_not_called()
+
+
+class TestResultFiles:
+    def test_only_this_run_s_files_are_collected(self, tmp_path, system_config):
+        """Another analysis may have left its results in the directory."""
+        runner = _runner(tmp_path, system_config)
+        for name in ("analysis.frd", "analysis.dat", "other.frd", "other.sta"):
+            with open(tmp_path / name, "w") as f:
+                f.write("x")
+        with patch(RUN, return_value=_result()):
+            files = runner.run_analysis()
+        assert files == {
+            "results": str(tmp_path / "analysis.frd"),
+            "data": str(tmp_path / "analysis.dat"),
+        }

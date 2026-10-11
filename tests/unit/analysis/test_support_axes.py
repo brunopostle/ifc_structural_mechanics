@@ -17,7 +17,7 @@ ALONG_Y = [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
 SKEW = [[0.6, 0.8, 0.0], [-0.8, 0.6, 0.0], [0.0, 0.0, 1.0]]
 
 
-def _support(fixity, local_axes=None, members=("m1", "dummy_member_2_s")):
+def _support(fixity, local_axes=None, members=("m1",)):
     connection = RigidConnection("s", [0.0, 0.0, 0.0])
     connection.set_stiffness_properties(
         dict(zip(("dx", "dy", "dz", "drx", "dry", "drz"), fixity))

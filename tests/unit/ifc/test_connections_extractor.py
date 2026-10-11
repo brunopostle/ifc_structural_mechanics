@@ -127,10 +127,6 @@ class TestConnectionsExtractor:
             # Return a valid identity transformation
             return {"location": np.array([0.0, 0.0, 0.0]), "rotationMatrix": np.eye(3)}
 
-        def mock_get_0D_orientation(coord_system):
-            # Return a valid orientation matrix as a list of lists
-            return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-
         def mock_get_1D_orientation(geometry, axis):
             # Return a valid orientation matrix as a list of lists
             return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -169,10 +165,6 @@ class TestConnectionsExtractor:
             patch(
                 "ifc_structural_mechanics.ifc.entity_identifier.get_transformation",
                 side_effect=mock_get_transformation,
-            ),
-            patch(
-                "ifc_structural_mechanics.ifc.entity_identifier.get_0D_orientation",
-                side_effect=mock_get_0D_orientation,
             ),
             patch(
                 "ifc_structural_mechanics.ifc.entity_identifier.get_1D_orientation",

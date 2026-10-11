@@ -339,21 +339,3 @@ def test_meshing_config_element_type_validation():
         # Verify an error is raised for invalid element types
         with pytest.raises(ValueError, match="Invalid element type"):
             config.set_element_type(member_type, "non_existent_type")
-
-
-def test_python_api_setting():
-    """
-    Test the use_python_api property and related methods.
-    """
-    config = MeshingConfig()
-
-    # Test default value
-    assert config.use_python_api is True
-
-    # Test setting via method
-    config.set_use_python_api(False)
-    assert config.get_use_python_api() is False
-
-    # Test setting via property
-    config.use_python_api = True
-    assert config.use_python_api is True

@@ -206,9 +206,7 @@ class TestConnectionEquations:
         # Count connections with 2+ real members
         real_connections = 0
         for conn in model.connections:
-            real_members = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            real_members = list(conn.connected_members)
             if len(real_members) >= 2:
                 real_connections += 1
 

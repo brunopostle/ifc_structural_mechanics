@@ -33,7 +33,11 @@ from ..converters.section_profiles import (
 )
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
-from ..utils.error_handling import AnalysisError, MeshingError
+from ..utils.error_handling import (
+    AnalysisError,
+    MeshingError,
+    StructuralAnalysisError,
+)
 from ..utils.temp_dir import create_temp_subdir, get_temp_dir
 from .mesh_mapper import BEAM_ELEMENT_TYPES, SHELL_ELEMENT_TYPES, MeshMapper
 
@@ -240,7 +244,6 @@ class UnifiedCalculixWriter:
         self,
         mesh_file: str,
         output_file: str,
-        mapping_file: Optional[str] = None,
     ) -> str:
         """
         THE MAIN METHOD: Write CalculiX input file from Gmsh mesh.
@@ -251,7 +254,6 @@ class UnifiedCalculixWriter:
         Args:
             mesh_file: Path to Gmsh mesh file (.msh)
             output_file: Path for output CalculiX input file (.inp)
-            mapping_file: Optional path for mapping information
 
         Returns:
             str: Path to generated CalculiX input file
@@ -296,16 +298,15 @@ class UnifiedCalculixWriter:
             # Step 3: Write complete CalculiX input file
             self._write_calculix_input_file(output_file)
 
-            # Step 4: Save mapping if requested
-            if mapping_file:
-                self._save_mapping(mapping_file)
-
             logger.info(f"Successfully wrote unified CalculiX input: {output_file}")
             return output_file
 
+        except StructuralAnalysisError:
+            raise
         except Exception as e:
-            logger.error(f"Error writing unified CalculiX input: {e}")
-            raise AnalysisError(f"Failed to write CalculiX input: {str(e)}")
+            raise AnalysisError(
+                f"Failed to write CalculiX input: {type(e).__name__}: {e}"
+            ) from e
 
     def _process_mesh(self, mesh: meshio.Mesh) -> None:
         """
@@ -1632,9 +1633,7 @@ class UnifiedCalculixWriter:
             return node
 
         for conn in self.domain_model.connections:
-            real_members = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            real_members = list(conn.connected_members)
             if len(real_members) < 2 or conn.entity_type not in ("point", "rigid"):
                 continue
             released = getattr(conn, "released_dofs_by_member", None) or {}
@@ -1722,9 +1721,7 @@ class UnifiedCalculixWriter:
 
         for conn in self.domain_model.connections:
             edge = getattr(conn, "edge", None)
-            members = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            members = list(conn.connected_members)
             if edge is None or len(edge) != 2 or len(members) < 2:
                 continue
 
@@ -1853,9 +1850,7 @@ class UnifiedCalculixWriter:
             return pairs[0][1] if pairs else None
 
         for conn in self.domain_model.connections:
-            members = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            members = list(conn.connected_members)
             if len(members) < 2 or getattr(conn, "edge", None) is not None:
                 continue
             if conn.entity_type == "hinge":
@@ -2304,11 +2299,7 @@ class UnifiedCalculixWriter:
             restrained = False
             supports = []
             for conn in connections:
-                others = [
-                    m
-                    for m in conn.connected_members
-                    if m != member.id and not m.startswith("dummy_member_")
-                ]
+                others = [m for m in conn.connected_members if m != member.id]
                 released = get_released_rotations(conn, member.id)
                 torsion_released = released is None or bool(about_axis & set(released))
                 fixed = set(get_constrained_dofs(conn))
@@ -2426,10 +2417,8 @@ class UnifiedCalculixWriter:
         self._write_edge_hinges(file, constrained_node_dofs)
 
         for conn in self.domain_model.connections:
-            # Skip connections with dummy members (boundary conditions)
-            real_members = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            # A connection holding one member is a support, not a joint
+            real_members = list(conn.connected_members)
             if len(real_members) < 2:
                 logger.debug(
                     f"Skipping connection {conn.id} - only {len(real_members)} real members (boundary condition)"
@@ -2587,12 +2576,6 @@ class UnifiedCalculixWriter:
 
         file.write("**\n")
 
-    def _write_rigid_connection(
-        self, file: TextIO, conn, member_ids: List[str], constrained_node_dofs: set
-    ) -> None:
-        """Write a rigid connection (same as point connection for now)."""
-        self._write_point_connection(file, conn, member_ids, constrained_node_dofs)
-
     def _get_member_endpoints(self, member_id: str):
         """
         Return (start, end) numpy arrays for a curve member's geometry endpoints.
@@ -2653,7 +2636,10 @@ class UnifiedCalculixWriter:
                 conn_pos = np.array([float(pos[0]), float(pos[1]), float(pos[2])])
 
         if conn_pos is None:
-            return self._find_connection_nodes(conn, member_ids)
+            raise MeshingError(
+                f"Connection {conn.id} has no position, so the nodes it joins "
+                "cannot be found."
+            )
 
         # Build member node sets lazily (cached for repeated lookups)
         if not hasattr(self, "_member_node_cache"):
@@ -2741,125 +2727,6 @@ class UnifiedCalculixWriter:
 
         return connection_pairs
 
-    def _find_connection_nodes(self, conn, member_ids: List[str]) -> List[int]:
-        """
-        Find mesh nodes shared by connected members.
-
-        Strategy:
-        1. Get all nodes from elements of each connected member
-        2. Find nodes that are spatially coincident (within tolerance)
-        3. Return nodes at the connection point
-        """
-        # Collect all nodes from all connected members
-        member_nodes = {}  # member_id -> set of node_ids
-
-        for member_id in member_ids:
-            # Get element set for this member
-            short_id = self._get_short_id(member_id)
-            member_set = f"MEMBER_{short_id}"
-
-            if member_set not in self.element_sets:
-                self._warn_user(
-                    f"Connection {conn.id}: Member {member_id} has no element set {member_set}"
-                )
-                continue
-
-            # Get all nodes from this member's elements
-            nodes = set()
-            for elem_id in self.element_sets[member_set]:
-                if elem_id in self.elements:
-                    elem_nodes = self.elements[elem_id]["nodes"]
-                    nodes.update(elem_nodes)
-
-            member_nodes[member_id] = nodes
-
-        if len(member_nodes) < 2:
-            self._warn_user(
-                f"Connection {conn.id}: Could not find nodes for enough members ({len(member_nodes)} < 2)"
-            )
-            return []
-
-        # Find coincident nodes: nodes that appear in multiple members
-        # or are spatially close to nodes from other members
-        tolerance = 1e-3  # Spatial tolerance
-
-        connection_node_ids = []
-        all_nodes = set().union(*member_nodes.values())
-
-        # Group nodes by spatial proximity
-        node_groups = []  # List of lists of coincident node IDs
-        processed = set()
-
-        for node_id in all_nodes:
-            if node_id in processed:
-                continue
-
-            # Start a new group with this node
-            group = [node_id]
-            processed.add(node_id)
-            node_pos = self.nodes[node_id]
-
-            # Find all other unprocessed nodes within tolerance
-            for other_id in all_nodes:
-                if other_id in processed:
-                    continue
-
-                other_pos = self.nodes[other_id]
-                dist = np.sqrt(sum((node_pos[i] - other_pos[i]) ** 2 for i in range(3)))
-
-                if dist < tolerance:
-                    group.append(other_id)
-                    processed.add(other_id)
-
-            if len(group) > 1 or self._node_connects_multiple_members(
-                group[0], member_nodes
-            ):
-                node_groups.append(group)
-
-        # Find the largest group (most likely the connection point)
-        if node_groups:
-            largest_group = max(node_groups, key=len)
-            connection_node_ids = largest_group
-            logger.debug(
-                f"Connection {conn.id}: Found {len(connection_node_ids)} coincident nodes"
-            )
-        else:
-            self._warn_user(f"Connection {conn.id}: No coincident nodes found")
-
-        # Wrap with None member IDs: this fallback cannot attribute nodes to members
-        return [(None, nid) for nid in connection_node_ids]
-
-    def _node_connects_multiple_members(
-        self, node_id: int, member_nodes: Dict[str, set]
-    ) -> bool:
-        """Check if a node belongs to elements from multiple members."""
-        count = sum(1 for nodes in member_nodes.values() if node_id in nodes)
-        return count >= 2
-
-    def _check_rotational_dofs_at_nodes(self, node_ids: List[int]) -> bool:
-        """
-        Check if all elements connected to these nodes support rotational DOFs.
-
-        Returns:
-            True if all elements support rotations (beam elements), False otherwise
-        """
-        # Element types that support rotational DOFs in CalculiX
-        rotational_types = {"B31", "B32", "B33"}  # Beam elements
-
-        for node_id in node_ids:
-            # Find all elements using this node
-            for elem_id, elem_data in self.elements.items():
-                if node_id in elem_data["nodes"]:
-                    elem_type = elem_data["type"]
-                    if elem_type not in rotational_types:
-                        # Found an element that doesn't support rotations (e.g., shell)
-                        logger.debug(
-                            f"Node {node_id} has element {elem_id} of type {elem_type} (no rotational DOFs)"
-                        )
-                        return False
-
-        return True
-
     def _detect_mechanism_risk(self) -> List[str]:
         """Return warning strings when the model may be a kinematic mechanism under lateral loads.
 
@@ -2879,9 +2746,7 @@ class UnifiedCalculixWriter:
 
         # --- 1. Any support with rotational fixity (DOF 4-6)? ---
         for conn in model.connections:
-            real = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            real = list(conn.connected_members)
             if len(real) >= 2:
                 continue  # member-to-member connection
             if any(d in {4, 5, 6} for d in get_constrained_dofs(conn)):
@@ -2891,9 +2756,7 @@ class UnifiedCalculixWriter:
 
         # --- 2. Any moment-resisting connection between members? ---
         for conn in model.connections:
-            real = [
-                m for m in conn.connected_members if not m.startswith("dummy_member_")
-            ]
+            real = list(conn.connected_members)
             if len(real) < 2:
                 continue  # support
             if conn.entity_type == "hinge":
@@ -2967,12 +2830,6 @@ class UnifiedCalculixWriter:
 
         return orientation_groups
 
-    def _save_mapping(self, mapping_file: str) -> None:
-        """Save domain to CalculiX mapping (deprecated - now in domain model)."""
-        logger.debug(
-            "Mapping file generation deprecated - traceability is in domain model"
-        )
-
     def get_statistics(self) -> Dict[str, Any]:
         """Get processing statistics."""
         element_types = {}
@@ -2995,7 +2852,6 @@ def generate_calculix_input(
     mesh_file: str,
     output_file: str,
     analysis_config: Optional[AnalysisConfig] = None,
-    mapping_file: Optional[str] = None,
 ) -> str:
     """
     THE SIMPLE SOLUTION: Generate CalculiX input from domain model and mesh.
@@ -3008,7 +2864,6 @@ def generate_calculix_input(
         mesh_file: Gmsh mesh file (.msh)
         output_file: Output CalculiX input file (.inp)
         analysis_config: Analysis configuration
-        mapping_file: Optional mapping file
 
     Returns:
         str: Path to generated CalculiX input file
@@ -3021,7 +2876,6 @@ def generate_calculix_input(
     result = writer.write_calculix_input_from_mesh(
         mesh_file=mesh_file,
         output_file=output_file,
-        mapping_file=mapping_file,
     )
 
     # Log statistics
@@ -3104,8 +2958,6 @@ def run_complete_analysis_workflow(
         else:
             temp_dir = get_temp_dir()
             mesh_file = str(Path(temp_dir) / f"mesh_{domain_model.id}.msh")
-        # Traceability lives in the domain model; no mapping file is written.
-        mapping_file = None
 
         mesh_file = gmsh_runner.generate_mesh_file(mesh_file)
         logger.info(f"Generated mesh file: {mesh_file}")
@@ -3128,7 +2980,6 @@ def run_complete_analysis_workflow(
         mesh_file=mesh_file,
         output_file=output_inp_file,
         analysis_config=analysis_config,
-        mapping_file=mapping_file,
     )
 
     logger.info(f"Complete workflow finished successfully: {result}")

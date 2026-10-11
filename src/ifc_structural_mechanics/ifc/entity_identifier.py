@@ -141,38 +141,6 @@ def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> 
         ) from e
 
 
-def is_structural_load(entity: Optional[ifcopenshell.entity_instance]) -> bool:
-    """
-    Check if the given entity is a structural load.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to check
-
-    Returns:
-        bool: True if the entity is a structural load, False otherwise
-    """
-    if entity is None:
-        return False
-
-    try:
-        if not hasattr(entity, "is_a") or not callable(entity.is_a):
-            return False
-
-        load_types = [
-            "IfcStructuralPointAction",
-            "IfcStructuralLinearAction",
-            "IfcStructuralPlanarAction",
-            "IfcStructuralLoadCase",
-        ]
-        return entity.is_a() in load_types
-    except ModelExtractionError:
-        raise
-    except Exception as e:
-        raise ModelExtractionError(
-            f"Error checking if entity is structural load: {e}"
-        ) from e
-
-
 def get_coordinate(point, unit_scale: float = 1.0):
     """
     Extract coordinates from an IfcCartesianPoint with robust validation.
@@ -500,30 +468,6 @@ def transform_vectors(geometry, transformation, include_translation=True):
         raise ModelExtractionError(f"Error transforming vectors: {e}") from e
 
 
-def get_0D_orientation(axes):
-    """
-    Get the orientation for a 0D element.
-
-    Args:
-        axes: The coordinate system
-
-    Returns:
-        List of orientation vectors or None
-    """
-    if axes and axes.Axis and axes.RefDirection:
-        xAxis = np.array(axes.RefDirection.DirectionRatios)
-        zAxis = np.array(axes.Axis.DirectionRatios)
-        zAxis /= np.linalg.norm(zAxis)
-        yAxis = np.cross(zAxis, xAxis)
-        yAxis /= np.linalg.norm(yAxis)
-        xAxis = np.cross(yAxis, zAxis)
-        xAxis /= np.linalg.norm(xAxis)
-
-        return [xAxis.tolist(), yAxis.tolist(), zAxis.tolist()]
-    else:
-        return None  # Return None to copy the element's orientation
-
-
 def get_1D_orientation(geometry, zAxis):
     """
     Get the orientation for a 1D element with robust null checking.
@@ -638,30 +582,6 @@ def get_1D_orientation(geometry, zAxis):
         raise ModelExtractionError(
             f"Unexpected error in 1D orientation calculation: {e}"
         ) from e
-
-
-def get_2D_orientation(representation):
-    """
-    Get the orientation for a 2D element.
-
-    Args:
-        representation: The representation of the element
-
-    Returns:
-        List of orientation vectors
-    """
-    if not representation or not representation.Items:
-        return np.eye(3).tolist()
-
-    item = representation.Items[0]
-    if item.is_a("IfcFaceSurface"):
-        sameSense = item.SameSense
-        axes = item.FaceSurface.Position
-        orientation = get_0D_orientation(axes)
-        if orientation and not sameSense:
-            orientation = [[-v for v in vec] for vec in orientation]
-        return orientation
-    return np.eye(3).tolist()
 
 
 def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) -> str:

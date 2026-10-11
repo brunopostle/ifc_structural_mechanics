@@ -35,7 +35,6 @@ class MeshingConfig(BaseConfig):
                 "default_element_size": 0.1,  # Default element size (meters)
                 "max_element_size": 1.0,
                 "min_element_size": 0.01,
-                "use_python_api": True,  # Use Python API by default instead of executable
             },
             "member_types": {
                 "curve_members": {
@@ -137,7 +136,6 @@ class MeshingConfig(BaseConfig):
             "default_element_size": default_size,
             "max_element_size": max_size,
             "min_element_size": min_size,
-            "use_python_api": global_settings.get("use_python_api", True),
         }
         self._config["global_settings"] = global_settings
 
@@ -251,46 +249,6 @@ class MeshingConfig(BaseConfig):
 
         # Update mesh quality in config
         self._config["mesh_quality"] = mesh_quality
-
-    # Methods for use_python_api
-    def get_use_python_api(self) -> bool:
-        """
-        Get whether to use Python API for Gmsh or the executable.
-
-        Returns:
-            bool: True if Python API should be used, False if the executable should be used.
-        """
-        return self._config["global_settings"].get("use_python_api", True)
-
-    def set_use_python_api(self, use_python_api: bool):
-        """
-        Set whether to use Python API for Gmsh or the executable.
-
-        Args:
-            use_python_api (bool): True to use Python API, False to use executable.
-        """
-        self._config["global_settings"]["use_python_api"] = bool(use_python_api)
-
-    # Property for more convenient access in the GmshRunner class
-    @property
-    def use_python_api(self) -> bool:
-        """
-        Property for accessing the use_python_api setting.
-
-        Returns:
-            bool: True if Python API should be used, False if the executable should be used.
-        """
-        return self.get_use_python_api()
-
-    @use_python_api.setter
-    def use_python_api(self, value: bool):
-        """
-        Setter for the use_python_api property.
-
-        Args:
-            value (bool): True to use Python API, False to use executable.
-        """
-        self.set_use_python_api(value)
 
     def get_element_size(self, member_type: str) -> float:
         """

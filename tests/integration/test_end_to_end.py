@@ -27,6 +27,7 @@ from ifc_structural_mechanics.utils.temp_dir import (
     create_temp_subdir,
     setup_temp_dir,
 )
+from tests.helpers import fixed_support
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -62,15 +63,10 @@ class MockExtractor(Extractor):
             section=section,
         )
 
-        # Add a fixed boundary condition to the beam at the first point
-        class BoundaryCondition:
-            def __init__(self, id, type):
-                self.id = id
-                self.type = type
-
-        beam.boundary_conditions = [BoundaryCondition(id="fixed_end", type="fixed")]
-
         model.add_member(beam)
+        model.connections.append(
+            fixed_support((0, 0, 0), beam.id, "support_" + beam.id)
+        )
 
         # We'll skip the surface member to reduce complexity and element count
         # This eliminates the issues with shell sections
@@ -242,6 +238,7 @@ def test_unified_writer_writes_correct_element_types():
     )
 
     model.add_member(beam)
+    model.connections.append(fixed_support((0, 0, 0), beam.id, "support_" + beam.id))
 
     # Create analysis configuration
     analysis_config = AnalysisConfig()
@@ -336,6 +333,7 @@ def test_unified_writer_element_preservation():
     )
 
     model.add_member(plate)
+    model.connections.append(fixed_support((0, 0, 0), plate.id, "support_" + plate.id))
 
     # Create analysis configuration
     analysis_config = AnalysisConfig()
@@ -449,6 +447,7 @@ def test_unified_writer_direct_mesh_processing():
         section=section,
     )
     model.add_member(beam)
+    model.connections.append(fixed_support((0, 0, 0), beam.id, "support_" + beam.id))
 
     # Add a surface
     thickness = Thickness(id="thickness_1", name="Plate Thickness", value=0.01)
@@ -462,6 +461,7 @@ def test_unified_writer_direct_mesh_processing():
         thickness=thickness,
     )
     model.add_member(plate)
+    model.connections.append(fixed_support((0, 0, 0), plate.id, "support_" + plate.id))
 
     # Create unified writer
     analysis_config = AnalysisConfig()

@@ -39,9 +39,6 @@ if "ifc_structural_mechanics.meshing.gmsh_geometry" not in sys.modules:
 if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
 
-if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
-    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
-
 # ---------------------------------------------------------------------------
 # Now it is safe to import the real module under test
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     generate_calculix_input,
     run_complete_analysis_workflow,
 )
+from tests.helpers import fixed_support
 
 
 class TestUnifiedMeshingWorkflow:
@@ -79,7 +80,13 @@ class TestUnifiedMeshingWorkflow:
         # Create structural model
         model = StructuralModel(id="test_model", name="Test Structural Model")
         model.add_member(beam)
+        model.connections.append(
+            fixed_support((0, 0, 0), beam.id, "support_" + beam.id)
+        )
         model.add_member(slab)
+        model.connections.append(
+            fixed_support((0, 0, 0), slab.id, "support_" + slab.id)
+        )
 
         return model
 
@@ -89,8 +96,6 @@ class TestUnifiedMeshingWorkflow:
         Fixture to create a sample meshing configuration.
         """
         config = MeshingConfig()
-        # Ensure we use the Python API for testing
-        config.use_python_api = True
         return config
 
     @pytest.fixture
@@ -184,8 +189,6 @@ class TestUnifiedMeshingWorkflow:
 
             # Run meshing
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Make sure the Python API mode is set to True for testing
-                meshing_config.use_python_api = True
 
                 # Run meshing
                 result = runner.run_meshing()
@@ -517,6 +520,9 @@ class TestSimplifiedWorkflow:
 
         model = StructuralModel(id="simple_beam", name="Simple Beam Model")
         model.add_member(beam)
+        model.connections.append(
+            fixed_support((0, 0, 0), beam.id, "support_" + beam.id)
+        )
 
         # Output file
         output_file = os.path.abspath(os.path.join(tmp_path, "simple_beam.inp"))
@@ -588,6 +594,9 @@ class TestSimplifiedWorkflow:
             thickness=thickness,
         )
         model.add_member(surface)
+        model.connections.append(
+            fixed_support((0, 0, 0), surface.id, "support_" + surface.id)
+        )
 
         # Create unified writer
         writer = UnifiedCalculixWriter(domain_model=model)

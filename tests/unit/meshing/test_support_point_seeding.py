@@ -49,9 +49,6 @@ if not hasattr(_gmsh_mod.model, "occ"):
 # Runner / utils stubs (only if not already present)
 if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
-if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
-    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
-
 # Force the REAL gmsh_geometry module to be loaded (remove any earlier stub).
 sys.modules.pop("ifc_structural_mechanics.meshing.gmsh_geometry", None)
 
@@ -158,7 +155,7 @@ class TestSeedSupportPoints:
 
     @pytest.fixture(autouse=True)
     def mock_gmsh_model(self):
-        # When real gmsh is in sys.modules (loaded by test_gmsh_utils.py earlier),
+        # When real gmsh is in sys.modules (loaded by an earlier test),
         # the conditional stub at module level doesn't replace model/occ.  Patch
         # model for the duration of these tests so OCC calls don't fail.
         with patch.object(_gmsh_mod, "model", MagicMock()):
@@ -197,7 +194,6 @@ class TestSeedSupportPoints:
         conn = PointConnection(conn_id, list(position))
         # Add enough members to pass validation
         conn.connect_member(member_id)
-        conn.connect_member(f"dummy_member_1_{conn_id}")
         # Set translational stiffness (True = fixed) so get_constrained_dofs returns DOFs
 
         conn.set_stiffness_properties({"dx": 1e20, "dy": 1e20, "dz": 1e20})
@@ -253,7 +249,6 @@ class TestSeedSupportPoints:
         # Connection with no stiffness → get_constrained_dofs returns []
         conn = PointConnection("c1", [3, 0, 0])
         conn.connect_member("m1")
-        conn.connect_member("dummy_member_1_c1")
         model.connections.append(conn)
 
         tags = conv._seed_support_points(model)

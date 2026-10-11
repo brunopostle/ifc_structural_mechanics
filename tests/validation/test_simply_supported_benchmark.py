@@ -50,13 +50,7 @@ def _write_ss_beam_inp(inp_path: str) -> None:
     Pin at node 1 (DOF 1-3), roller at node 21 (DOF 2-3).
     Midspan point load at node 11 (x=1.0).
     """
-    from ifc_structural_mechanics.analysis.file_writers import (
-        write_node_sets,
-        write_nodes,
-    )
-
     nodes = {i + 1: (round(i * 0.1, 1), 0.0, 0.0) for i in range(21)}
-    {i + 1: {"type": "B31", "nodes": [i + 1, i + 2]} for i in range(20)}
     node_sets = {
         "PINA": [1],
         "ROLLERB": [21],
@@ -68,8 +62,9 @@ def _write_ss_beam_inp(inp_path: str) -> None:
         f.write(
             "*HEADING\nSimply supported beam benchmark: midspan load, 20 B31 elements\n"
         )
-        write_nodes(f, nodes)
-        # write_elements doesn't support ELSET on the *ELEMENT line, so write directly
+        f.write("*NODE\n")
+        for node_id, (x, y, z) in nodes.items():
+            f.write(f"{node_id}, {x}, {y}, {z}\n")
         f.write("*ELEMENT, TYPE=B31, ELSET=BEAM\n")
         for i in range(20):
             f.write(f"{i + 1}, {i + 1}, {i + 2}\n")
@@ -79,7 +74,9 @@ def _write_ss_beam_inp(inp_path: str) -> None:
         f.write("*MATERIAL, NAME=STEEL\n")
         f.write("*ELASTIC\n")
         f.write("210.0E9, 0.3\n")
-        write_node_sets(f, node_sets)
+        for name, members in node_sets.items():
+            f.write(f"*NSET, NSET={name}\n")
+            f.write(", ".join(str(n) for n in members) + "\n")
         f.write("*BOUNDARY\n")
         f.write("PINA, 1, 3, 0.0\n")
         f.write("ROLLERB, 2, 3, 0.0\n")

@@ -12,6 +12,7 @@ from ifc_structural_mechanics.domain.result import (
     StressResult,
 )
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
+from ifc_structural_mechanics.utils.error_handling import ResultProcessingError
 
 
 class TestResultsParser:
@@ -298,14 +299,27 @@ class TestElementNodes:
     def test_missing_file_gives_nothing(self, tmp_path):
         assert ResultsParser().parse_element_nodes(str(tmp_path / "none.frd")) == {}
 
-    def test_parse_results_keeps_the_connectivity(self, tmp_path):
+    def test_parse_results_keeps_the_connectivity(self, tmp_path, monkeypatch):
         frd = tmp_path / "a.frd"
         frd.write_text(FRD_WITH_ELEMENTS)
         parser = ResultsParser()
+        # The excerpt has no displacement block, which parse_results insists on
+        monkeypatch.setattr(parser, "parse_displacements", lambda path: [object()])
 
         parser.parse_results({"results": str(frd)})
 
         assert sorted(parser.element_nodes) == [7, 12]
+
+    def test_results_without_displacements_are_an_error(self, tmp_path):
+        """They used to read as a structure that does not move."""
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_ELEMENTS)
+        with pytest.raises(ResultProcessingError, match="holds no displacements"):
+            ResultsParser().parse_results({"results": str(frd)})
+
+    def test_no_result_file_is_an_error(self):
+        with pytest.raises(ResultProcessingError, match="wrote no result file"):
+            ResultsParser().parse_results({})
 
 
 class TestStressLoadCases:

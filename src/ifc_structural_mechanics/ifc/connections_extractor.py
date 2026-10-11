@@ -226,26 +226,8 @@ class ConnectionsExtractor:
             else:
                 raise ModelExtractionError("It has no edge representation.")
 
-        # COLLECT ALL CONNECTED MEMBERS FIRST
-        connected_elements = find_connected_elements(ifc_connection)
-
-        # ENSURE WE ALWAYS HAVE AT LEAST 2 MEMBERS FOR VALIDATION
-        # This is the key fix: guarantee validation success by having enough members
-        all_members = list(connected_elements)  # Start with real members
-
-        # Add dummy members if we don't have enough
-        while len(all_members) < 2:
-            dummy_id = f"dummy_member_{len(all_members) + 1}_{connection_id}"
-            all_members.append(dummy_id)
-
-        # Add all members to the connection
-        for member_id in all_members:
+        for member_id in find_connected_elements(ifc_connection):
             connection.connect_member(member_id)
-
-        self.logger.debug(
-            f"Connection {connection_id} has {len(connection.connected_members)} members "
-            f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
-        )
 
         connection.local_axes = self._extract_local_axes(
             ifc_connection, getattr(connection, "edge", None)

@@ -28,6 +28,7 @@ from src.ifc_structural_mechanics.utils.temp_dir import (
     set_keep_temp_files,
     setup_temp_dir,
 )
+from tests.helpers import fixed_support
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -81,14 +82,6 @@ class TestUnifiedAnalysisWorkflow:
             id="beam1", geometry=beam_geometry, material=material, section=section
         )
 
-        # Add fixed boundary condition
-        fixed_support = {
-            "id": "bc1",
-            "type": "fixed",
-            "position": [0, 0, 0],
-        }
-        beam.add_boundary_condition(fixed_support)
-
         # Create point load
         load = PointLoad(
             id="load1",
@@ -106,6 +99,7 @@ class TestUnifiedAnalysisWorkflow:
 
         # Add beam to model
         model.add_member(beam)
+        model.connections.append(fixed_support((0, 0, 0), "beam1"))
 
         return model
 
@@ -561,6 +555,7 @@ class TestUnifiedAnalysisWorkflow:
                 section=section,
             )
             model.add_member(beam)
+        model.connections.append(fixed_support((0, 0, 0), "beam_0"))
 
         working_dir = create_temp_subdir(prefix="performance_test_")
         output_file = os.path.join(working_dir, "performance_test.inp")

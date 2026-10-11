@@ -13,7 +13,6 @@ from ifc_structural_mechanics.ifc.entity_identifier import (
     get_coordinate,
     is_structural_connection,
     is_structural_curve_member,
-    is_structural_load,
     is_structural_member,
     is_structural_surface_member,
 )
@@ -84,20 +83,6 @@ def test_is_structural_connection():
     assert not is_structural_connection(create_mock_entity("IfcBeam"))
     assert not is_structural_connection(create_mock_entity("IfcWall"))
     assert not is_structural_connection(None)
-
-
-def test_is_structural_load():
-    """Test identification of structural loads."""
-    # Test positive cases
-    assert is_structural_load(create_mock_entity("IfcStructuralPointAction"))
-    assert is_structural_load(create_mock_entity("IfcStructuralLinearAction"))
-    assert is_structural_load(create_mock_entity("IfcStructuralPlanarAction"))
-    assert is_structural_load(create_mock_entity("IfcStructuralLoadCase"))
-
-    # Test negative cases
-    assert not is_structural_load(create_mock_entity("IfcBeam"))
-    assert not is_structural_load(create_mock_entity("IfcWall"))
-    assert not is_structural_load(None)
 
 
 def test_find_connected_elements():

@@ -202,27 +202,6 @@ class ResultsParser(BaseParser):
 
                 i += 1
 
-            # If no results found, try alternative format from the .dat file
-            if not displacements:
-                dat_file = frd_file.replace(".frd", ".dat")
-                if os.path.exists(dat_file):
-                    logger.debug(
-                        f"Trying to parse displacement results from DAT file: {dat_file}"
-                    )
-                    displacements = self._parse_displacements_from_dat(dat_file)
-
-            # If still no results, check for an actual .dat file with the right name
-            if not displacements:
-                # Some versions of CalculiX create a .dat file with the same base name
-                base_name = os.path.splitext(os.path.basename(frd_file))[0]
-                dat_file = os.path.join(os.path.dirname(frd_file), f"{base_name}.dat")
-
-                if os.path.exists(dat_file) and dat_file != frd_file.replace(
-                    ".frd", ".dat"
-                ):
-                    logger.debug(f"Trying alternative DAT file: {dat_file}")
-                    displacements = self._parse_displacements_from_dat(dat_file)
-
             logger.info(f"Parsed {len(displacements)} displacement results")
             return displacements
 
@@ -299,81 +278,6 @@ class ResultsParser(BaseParser):
                 elif line.startswith(" -3"):
                     break
         return element_nodes
-
-    def _parse_displacements_from_dat(self, dat_file: str) -> List[DisplacementResult]:
-        """
-        Parse displacement results from a DAT file.
-
-        Args:
-            dat_file (str): Path to the DAT file.
-
-        Returns:
-            List[DisplacementResult]: List of displacement result objects.
-        """
-        displacements = []
-        try:
-            # Read the DAT file
-            try:
-                dat_content = self.parse_file_content(dat_file)
-                dat_lines = dat_content.splitlines()
-            except (FileNotFoundError, IOError):
-                logger.debug(f"DAT file not found or cannot be read: {dat_file}")
-                return displacements
-
-            # Look for displacement data in the .dat file
-            in_disp_section = False
-            for line in dat_lines:
-                line = line.strip()
-
-                # Look for displacement section headers
-                if any(
-                    marker in line.lower()
-                    for marker in ["displacements", "displacement", "vx,vy,vz"]
-                ):
-                    logger.debug(f"Found displacement section in DAT file: {line}")
-                    in_disp_section = True
-                    continue
-
-                # End of section markers
-                if in_disp_section and (not line or line.startswith(("---", "total"))):
-                    in_disp_section = False
-                    continue
-
-                # Parse displacement data lines
-                if in_disp_section and line and line[0].isdigit():
-                    parts = line.split()
-                    logger.debug(f"Parsing displacement line from DAT: {line}")
-
-                    if len(parts) >= 4:  # At least node_id + 3 translations
-                        try:
-                            node_id = parts[0]
-                            translations = [float(parts[j + 1]) for j in range(3)]
-                            rotations = [0.0, 0.0, 0.0]  # Default
-
-                            # Extract rotations if present
-                            if len(parts) >= 7:
-                                rotations = [float(parts[j + 4]) for j in range(3)]
-
-                            result = DisplacementResult(reference_element=node_id)
-                            result.set_translations(translations)
-                            result.set_rotations(rotations)
-
-                            displacements.append(result)
-                            logger.debug(
-                                f"Added displacement for node {node_id} from DAT file: {translations}"
-                            )
-                        except (ValueError, IndexError) as e:
-                            logger.warning(
-                                f"Error parsing displacement line from DAT: {line}, {e}"
-                            )
-        except ResultProcessingError:
-            raise
-        except Exception as e:
-            raise ResultProcessingError(
-                f"Error parsing DAT file {dat_file}: {str(e)}"
-            ) from e
-
-        return displacements
 
     def parse_stresses(self, frd_file: str) -> List[StressResult]:
         """
@@ -987,6 +891,14 @@ class ResultsParser(BaseParser):
         }
 
         try:
+            # An analysis that wrote no displacements has no results; an
+            # empty set would read as a structure that does not move
+            if "results" not in result_files:
+                raise ResultProcessingError(
+                    "CalculiX wrote no result file (.frd), so there are no "
+                    "results to read."
+                )
+
             # Parse FRD file for displacements, stresses, and strains
             if "results" in result_files:
                 frd_file = result_files["results"]
@@ -994,6 +906,10 @@ class ResultsParser(BaseParser):
 
                 # Parse displacement results
                 displacements = self.parse_displacements(frd_file)
+                if not displacements:
+                    raise ResultProcessingError(
+                        f"The result file {frd_file} holds no displacements."
+                    )
                 parsed_results["displacement"].extend(displacements)
 
                 # Parse stress results
@@ -1037,10 +953,11 @@ class ResultsParser(BaseParser):
 
             return parsed_results
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
-            logger.error(f"Error parsing result files: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse result files: {str(e)}"
+                f"Failed to parse result files: {type(e).__name__}: {e}"
             ) from e
 
     def compute_beam_section_forces(self, stresses: List[StressResult]) -> List[Dict]:

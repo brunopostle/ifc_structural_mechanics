@@ -25,6 +25,7 @@ from ..utils.error_handling import (
     AnalysisError,
     MeshingError,
     ModelExtractionError,
+    ResultProcessingError,
     StructuralAnalysisError,
 )
 from ..utils.file_utils import ensure_directory
@@ -233,7 +234,10 @@ def analyze_ifc(
                 )
                 # Don't raise exception here - let user see the results
 
-        # Parse result files for detailed results
+        # Parse result files for detailed results. An analysis whose results
+        # cannot be read or written has not succeeded: that is an error, not
+        # a warning beside a "success".
+        results_json_path = None
         if calculix_output_files:
             try:
                 load_cases = [
@@ -256,41 +260,22 @@ def analyze_ifc(
                 logger.info("Successfully parsed analysis results")
 
                 # Export GlobalId-keyed JSON results
-                try:
-                    json_path = os.path.join(output_dir, "results.json")
-                    exporter = ResultsExporter(
-                        domain_model,
-                        parsed_results,
-                        element_nodes=results_parser.element_nodes,
-                    )
-                    exported = exporter.export(json_path)
-                    result["warnings"].extend(
-                        plausibility_warnings(exported, domain_model)
-                    )
-                    result["output_files"]["results_json"] = json_path
-                    logger.info(f"Wrote results JSON: {json_path}")
-                except Exception as e:
-                    logger.warning(f"Could not write results.json: {e}")
-                    result["warnings"].append(
-                        {
-                            "message": f"Could not write results.json: {str(e)}",
-                            "severity": "warning",
-                            "entity_type": None,
-                            "ccx_id": None,
-                            "domain_id": None,
-                        }
-                    )
-            except Exception as e:
-                logger.warning(f"Error parsing detailed results: {e}")
-                result["warnings"].append(
-                    {
-                        "message": f"Could not parse detailed results: {str(e)}",
-                        "severity": "warning",
-                        "entity_type": None,
-                        "ccx_id": None,
-                        "domain_id": None,
-                    }
+                results_json_path = os.path.join(output_dir, "results.json")
+                exporter = ResultsExporter(
+                    domain_model,
+                    parsed_results,
+                    element_nodes=results_parser.element_nodes,
                 )
+                exported = exporter.export(results_json_path)
+                result["warnings"].extend(plausibility_warnings(exported, domain_model))
+                logger.info(f"Wrote results JSON: {results_json_path}")
+            except StructuralAnalysisError:
+                raise
+            except Exception as e:
+                raise ResultProcessingError(
+                    f"The analysis ran but its results could not be read: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
 
         # Step 7: Copy output files to output directory and organize them
         organized_output_files = {}
@@ -317,6 +302,9 @@ def analyze_ifc(
                     dst_path = os.path.join(output_dir, filename)
                     shutil.copy2(src_path, dst_path)
                     organized_output_files[f"intermediate_{filename}"] = dst_path
+
+        if results_json_path:
+            organized_output_files["results_json"] = results_json_path
 
         # Add organized output files to result
         result["output_files"] = organized_output_files
@@ -358,7 +346,7 @@ def analyze_ifc(
         # Re-raise model extraction errors
         raise
 
-    except (MeshingError, AnalysisError) as e:
+    except (MeshingError, AnalysisError, ResultProcessingError) as e:
         # Handle known analysis errors
         logger.error(f"Analysis workflow error: {str(e)}")
         result["errors"].append(
@@ -587,72 +575,3 @@ def _get_file_size(file_path: Optional[str]) -> Optional[int]:
         pass
 
     return None
-
-
-# Simplified convenience function for common use cases
-def analyze_ifc_simple(ifc_path: str, output_dir: str) -> bool:
-    """
-    Simplified analysis function for basic use cases.
-
-    Args:
-        ifc_path (str): Path to the IFC file to analyze
-        output_dir (str): Directory where results will be saved
-
-    Returns:
-        bool: True if analysis succeeded, False otherwise
-    """
-    try:
-        result = analyze_ifc(ifc_path, output_dir)
-        return result["status"] == "success"
-    except Exception as e:
-        logger.error(f"Simple analysis failed: {e}")
-        return False
-
-
-# Migration helper for existing code
-def run_enhanced_analysis(
-    ifc_path: str,
-    output_dir: str,
-    analysis_type: str = "linear_static",
-    mesh_size: float = 1.0,
-    verbose: bool = False,
-    gravity: bool = False,
-    calculix_timeout: Optional[int] = 600,
-    element_order: int = 2,
-    strict_connections: bool = False,
-    open_sections: str = "equivalent",
-) -> Dict[str, Any]:
-    """
-    Enhanced analysis function - now just calls the unified analyze_ifc.
-
-    This function is kept for backward compatibility but now uses the
-    simplified unified workflow internally.
-
-    Args:
-        ifc_path (str): Path to the IFC file to analyze.
-        output_dir (str): Directory where the analysis results will be saved.
-        analysis_type (str): Type of structural analysis to perform.
-        mesh_size (float): Size of the mesh elements.
-        verbose (bool): Whether to print verbose output.
-        gravity (bool): Whether to include self-weight gravity loads.
-        element_order (int): 2 for quadratic elements, 1 for linear ones.
-        strict_connections (bool): Analyse only the connections in the file.
-        open_sections (str): "equivalent" or "user_element".
-
-    Returns:
-        Dict[str, Any]: Dictionary containing the analysis results and output file paths.
-    """
-    logger.info("Using unified analysis workflow (enhanced analysis is now standard)")
-
-    return analyze_ifc(
-        ifc_path=ifc_path,
-        output_dir=output_dir,
-        analysis_type=analysis_type,
-        mesh_size=mesh_size,
-        verbose=verbose,
-        gravity=gravity,
-        calculix_timeout=calculix_timeout,
-        element_order=element_order,
-        strict_connections=strict_connections,
-        open_sections=open_sections,
-    )

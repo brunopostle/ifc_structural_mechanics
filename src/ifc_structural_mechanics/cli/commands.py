@@ -1,7 +1,7 @@
 """
-Enhanced command-line interface for IFC Structural Mechanics.
+Command-line interface for IFC Structural Mechanics.
 
-This module provides an enhanced CLI that incorporates improved boundary condition
+This module provides the CLI: analysis of an IFC file, with boundary condition
 and load handling for structural analysis of IFC files.
 """
 
@@ -12,10 +12,7 @@ import sys
 
 import click
 
-from ifc_structural_mechanics.api.structural_analysis import (
-    analyze_ifc,
-    run_enhanced_analysis,
-)
+from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
 from ifc_structural_mechanics.utils.error_handling import (
     AnalysisError,
     MeshingError,
@@ -31,7 +28,7 @@ logger = logging.getLogger(__name__)
 @click.group()
 @click.version_option()
 def cli():
-    """IFC Structural Analysis - Enhanced Command Line Interface.
+    """IFC Structural Analysis - Command Line Interface.
 
     Run structural analysis on IFC building models with improved boundary condition
     and load handling.
@@ -82,12 +79,6 @@ def cli():
     help="Map errors back to original IFC entities",
 )
 @click.option(
-    "--enhanced/--no-enhanced",
-    default=True,
-    show_default=True,
-    help="Use enhanced boundary condition and load handling",
-)
-@click.option(
     "--gravity",
     is_flag=True,
     default=False,
@@ -133,7 +124,6 @@ def analyze(
     verbose: bool = False,
     json_output: bool = False,
     map_entities: bool = True,
-    enhanced: bool = True,
     gravity: bool = False,
     timeout: int = 600,
     element_order: str = "2",
@@ -141,11 +131,11 @@ def analyze(
     open_sections: str = "equivalent",
 ):
     """
-    Run structural analysis on an IFC file with enhanced boundary condition handling.
+    Run structural analysis on an IFC file.
 
     IFC_FILE is the path to the IFC file to analyze.
     """
-    exit_code = run_enhanced_analyze(
+    exit_code = run_analyze(
         ifc_file,
         output_dir,
         analysis_type,
@@ -153,7 +143,6 @@ def analyze(
         verbose,
         json_output,
         map_entities,
-        enhanced,
         gravity,
         timeout,
         int(element_order),
@@ -164,7 +153,7 @@ def analyze(
     sys.exit(exit_code)
 
 
-def run_enhanced_analyze(
+def run_analyze(
     ifc_file: str,
     output_dir: str,
     analysis_type: str = "linear_static",
@@ -172,7 +161,6 @@ def run_enhanced_analyze(
     verbose: bool = False,
     json_output: bool = False,
     map_entities: bool = True,
-    enhanced: bool = True,
     gravity: bool = False,
     timeout: int = 600,
     element_order: int = 2,
@@ -180,7 +168,7 @@ def run_enhanced_analyze(
     open_sections: str = "equivalent",
 ) -> int:
     """
-    Run the analysis with enhanced boundary condition handling and return the appropriate exit code.
+    Run the analysis and return the appropriate exit code.
 
     Args:
         ifc_file (str): Path to the IFC file to analyze.
@@ -190,7 +178,6 @@ def run_enhanced_analyze(
         verbose (bool): Enable verbose output.
         json_output (bool): Output results in JSON format.
         map_entities (bool): Map errors back to original IFC entities.
-        enhanced (bool): Use enhanced boundary condition and load handling.
         gravity (bool): Include self-weight gravity loads.
         timeout (int): CalculiX solver timeout in seconds (0 = no limit).
         element_order (int): 2 for quadratic elements, 1 for linear ones.
@@ -208,15 +195,12 @@ def run_enhanced_analyze(
 
     # Print welcome message
     if not json_output:
-        click.echo(
-            click.style("IFC Structural Analysis (Enhanced)", fg="blue", bold=True)
-        )
+        click.echo(click.style("IFC Structural Analysis", fg="blue", bold=True))
         click.echo(click.style(f"{'=' * 50}", fg="blue"))
         click.echo(f"Input file:    {ifc_file}")
         click.echo(f"Output directory: {output_dir}")
         click.echo(f"Analysis type: {analysis_type}")
         click.echo(f"Mesh size:     {mesh_size}")
-        click.echo(f"Enhanced mode: {'On' if enhanced else 'Off'}")
         click.echo(click.style(f"{'=' * 50}", fg="blue"))
         click.echo("Starting analysis...")
 
@@ -231,6 +215,9 @@ def run_enhanced_analyze(
         if not gmsh.isInitialized():
             gmsh.initialize()
             gmsh_initialized = True
+            if json_output:
+                # Standard output is the JSON document and nothing else
+                gmsh.option.setNumber("General.Terminal", 0)
             logger.info("Successfully initialized Gmsh")
     except ImportError:
         logger.warning("Gmsh Python API not found. Ensure Gmsh is properly installed.")
@@ -238,34 +225,18 @@ def run_enhanced_analyze(
         logger.warning(f"Failed to initialize Gmsh: {e}")
 
     try:
-        # Run the analysis, choosing between standard and enhanced mode
-        if enhanced:
-            # Use the enhanced analysis function from the API module
-            result = run_enhanced_analysis(
-                ifc_path=ifc_file,
-                output_dir=output_dir,
-                analysis_type=analysis_type,
-                mesh_size=mesh_size,
-                verbose=verbose,
-                gravity=gravity,
-                calculix_timeout=timeout or None,
-                element_order=element_order,
-                strict_connections=strict_connections,
-                open_sections=open_sections,
-            )
-        else:
-            # Use the original analysis function
-            result = analyze_ifc(
-                ifc_path=ifc_file,
-                output_dir=output_dir,
-                analysis_type=analysis_type,
-                mesh_size=mesh_size,
-                verbose=verbose,
-                gravity=gravity,
-                element_order=element_order,
-                strict_connections=strict_connections,
-                open_sections=open_sections,
-            )
+        result = analyze_ifc(
+            ifc_path=ifc_file,
+            output_dir=output_dir,
+            analysis_type=analysis_type,
+            mesh_size=mesh_size,
+            verbose=verbose,
+            gravity=gravity,
+            calculix_timeout=timeout or None,
+            element_order=element_order,
+            strict_connections=strict_connections,
+            open_sections=open_sections,
+        )
 
         # Format and display results
         if json_output:
@@ -313,6 +284,9 @@ def _make_serializable(result: dict) -> dict:
     """
     Convert a result dictionary to a JSON-serializable format.
 
+    The domain model and the parsed result objects are left out: they are
+    Python objects for callers of the API. What they hold is in results.json.
+
     Args:
         result: The analysis result dictionary.
 
@@ -322,6 +296,8 @@ def _make_serializable(result: dict) -> dict:
     serializable = {}
 
     for key, value in result.items():
+        if key in ("model", "parsed_results"):
+            continue
         if key == "output_files":
             # Convert file paths to strings
             serializable[key] = {k: str(v) for k, v in value.items()}
@@ -345,7 +321,7 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
     click.echo("\nAnalysis Results:")
     click.echo(click.style(f"Status: {status}", fg=status_color, bold=True))
 
-    # Display enhanced info if available
+    # Display notes if available
     if "notes" in result and result["notes"]:
         click.echo("\nNotes:")
         for note in result["notes"]:

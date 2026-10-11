@@ -36,9 +36,6 @@ if "ifc_structural_mechanics.meshing.gmsh_geometry" not in sys.modules:
 if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
 
-if "ifc_structural_mechanics.meshing.gmsh_utils" not in sys.modules:
-    _stub("ifc_structural_mechanics.meshing.gmsh_utils")
-
 from ifc_structural_mechanics.domain.load import LoadGroup, PointLoad  # noqa: E402
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
 from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E402
@@ -72,7 +69,6 @@ def _pinned_support(conn_id, position, member_id="col"):
     """Translational-only support (DOF 1-3), no rotational fixity."""
     conn = PointConnection(conn_id, list(position))
     conn.connect_member(member_id)
-    conn.connect_member(f"dummy_member_{conn_id}")
     conn.set_stiffness_properties({"dx": 1e20, "dy": 1e20, "dz": 1e20})
     return conn
 
@@ -81,7 +77,6 @@ def _fixed_support(conn_id, position, member_id="col"):
     """Fully fixed support (DOF 1-6)."""
     conn = PointConnection(conn_id, list(position))
     conn.connect_member(member_id)
-    conn.connect_member(f"dummy_member_{conn_id}")
     conn.set_stiffness_properties(
         {"dx": 1e20, "dy": 1e20, "dz": 1e20, "drx": 1e20, "dry": 1e20, "drz": 1e20}
     )

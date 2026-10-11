@@ -179,13 +179,6 @@ class StructuralConnection(DomainEntity):
         # Raises ValueError on a connection with no position or members
         base_valid = bool(super().validate())
 
-        # MEMBERS VALIDATION
-        members_count = len(self.connected_members)
-        members_valid = members_count >= 2
-        logger.debug(
-            f"Connection {self.id}: Members validation - count={members_count}, valid={members_valid}"
-        )
-
         # STIFFNESS VALIDATION with detailed debugging
         stiffness_valid = True
         if self.stiffness_properties:
@@ -236,15 +229,14 @@ class StructuralConnection(DomainEntity):
             logger.debug(f"Connection {self.id}: No stiffness properties to validate")
 
         # OVERALL RESULT
-        overall_valid = base_valid and members_valid and stiffness_valid
+        overall_valid = base_valid and stiffness_valid
         logger.debug(
-            f"Connection {self.id}: Overall validation - base={base_valid}, members={members_valid}, stiffness={stiffness_valid}, result={overall_valid}"
+            f"Connection {self.id}: Overall validation - base={base_valid}, stiffness={stiffness_valid}, result={overall_valid}"
         )
 
         if not overall_valid:
             logger.error(f"Connection {self.id}: VALIDATION FAILED")
             logger.error(f"  - Base valid: {base_valid}")
-            logger.error(f"  - Members valid: {members_valid} (count: {members_count})")
             logger.error(f"  - Stiffness valid: {stiffness_valid}")
             if self.stiffness_properties:
                 logger.error(f"  - Stiffness data: {self.stiffness_properties}")
@@ -427,9 +419,9 @@ def create_connection_from_stiffness(
     """Create appropriate connection type based on stiffness properties."""
 
     # Ensure position is valid
-    if not isinstance(position, list) or len(position) != 3:
-        position = [0.0, 0.0, 0.0]
-    position = [float(p) if p is not None else 0.0 for p in position]
+    if not isinstance(position, (list, tuple)) or len(position) != 3:
+        raise ValueError(f"Connection {connection_id} has no position")
+    position = [float(p) for p in position]
 
     # If explicit type is provided, use it
     if connection_type:

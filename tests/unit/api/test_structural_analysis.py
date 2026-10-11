@@ -10,11 +10,9 @@ import pytest
 
 from ifc_structural_mechanics.api.structural_analysis import (
     analyze_ifc,
-    analyze_ifc_simple,
     create_analysis_config,
     create_meshing_config,
     extract_model,
-    run_enhanced_analysis,
 )
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
 from ifc_structural_mechanics.config.meshing_config import MeshingConfig
@@ -74,6 +72,23 @@ def mock_domain_model():
 
 
 # Test the extract_model function
+@pytest.fixture
+def results_stage():
+    """Stand-ins for reading and exporting the results.
+
+    These tests mock the solver, so there is no result file. Reading one that
+    is not there is an error now; it used to be a warning beside a "success".
+    """
+    base = "ifc_structural_mechanics.api.structural_analysis."
+    with (
+        patch(base + "ResultsParser") as parser,
+        patch(base + "ResultsExporter"),
+        patch(base + "plausibility_warnings", return_value=[]),
+    ):
+        parser.return_value.parse_results.return_value = {}
+        yield
+
+
 @patch("ifc_structural_mechanics.api.structural_analysis.Extractor")
 def test_extract_model(mock_extractor_class):
     """Test model extraction from IFC file."""
@@ -338,6 +353,7 @@ def test_analyze_ifc_analysis_error_unified(
     assert any("Analysis failed" in error["message"] for error in result["errors"])
 
 
+@pytest.mark.usefixtures("results_stage")
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
 @patch(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
@@ -415,6 +431,7 @@ def test_analyze_ifc_with_warnings_unified(
     assert len(result["errors"]) == 0
 
 
+@pytest.mark.usefixtures("results_stage")
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
 @patch(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
@@ -512,61 +529,6 @@ def test_analyze_ifc_unsupported_analysis_type():
     assert "Unsupported analysis type" in str(excinfo.value)
 
 
-# Test convenience functions
-
-
-@patch("ifc_structural_mechanics.api.structural_analysis.analyze_ifc")
-def test_analyze_ifc_simple(mock_analyze_ifc):
-    """Test the simplified analysis function."""
-    # Mock successful analysis
-    mock_analyze_ifc.return_value = {"status": "success"}
-
-    result = analyze_ifc_simple("test.ifc", "output_dir")
-    assert result is True
-
-    # Mock failed analysis
-    mock_analyze_ifc.return_value = {"status": "failed"}
-
-    result = analyze_ifc_simple("test.ifc", "output_dir")
-    assert result is False
-
-    # Mock exception
-    mock_analyze_ifc.side_effect = Exception("Test error")
-
-    result = analyze_ifc_simple("test.ifc", "output_dir")
-    assert result is False
-
-
-@patch("ifc_structural_mechanics.api.structural_analysis.analyze_ifc")
-def test_run_enhanced_analysis_backward_compatibility(mock_analyze_ifc):
-    """Test that run_enhanced_analysis maintains backward compatibility."""
-    # Mock successful analysis
-    expected_result = {"status": "success", "warnings": [], "errors": []}
-    mock_analyze_ifc.return_value = expected_result
-
-    result = run_enhanced_analysis(
-        ifc_path="test.ifc",
-        output_dir="output_dir",
-        analysis_type="linear_static",
-        mesh_size=0.1,
-        verbose=True,
-    )
-
-    assert result == expected_result
-    mock_analyze_ifc.assert_called_once_with(
-        ifc_path="test.ifc",
-        output_dir="output_dir",
-        analysis_type="linear_static",
-        mesh_size=0.1,
-        verbose=True,
-        gravity=False,
-        calculix_timeout=600,
-        element_order=2,
-        strict_connections=False,
-        open_sections="equivalent",
-    )
-
-
 # Test error propagation in unified workflow
 
 
@@ -593,6 +555,7 @@ def test_unexpected_error_handling(
 # Test file organization in results
 
 
+@pytest.mark.usefixtures("results_stage")
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
 @patch(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
@@ -667,3 +630,48 @@ def test_file_organization(
 
 if __name__ == "__main__":
     pytest.main(["-v", __file__])
+
+
+@patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
+@patch(
+    "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
+)
+@patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
+@patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
+@patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
+@pytest.mark.parametrize(
+    "broken", ["ResultsParser", "ResultsExporter"], ids=["reading", "exporting"]
+)
+def test_results_that_cannot_be_read_fail_the_analysis(
+    mock_ensure_directory,
+    mock_validate_model,
+    mock_calculix_runner_class,
+    mock_unified_workflow,
+    mock_extract_model,
+    broken,
+    mock_domain_model,
+):
+    """It used to be a "success" with a warning and no results."""
+    mock_ensure_directory.return_value = "output_dir"
+    mock_extract_model.return_value = mock_domain_model
+    mock_unified_workflow.return_value = "output_dir/analysis.inp"
+    mock_validate_model.return_value = []
+    mock_calculix_runner_class.return_value.run_analysis.return_value = {
+        "results": "output_dir/analysis.frd"
+    }
+
+    base = "ifc_structural_mechanics.api.structural_analysis."
+    with (
+        patch(base + "ResultsParser") as parser,
+        patch(base + "ResultsExporter") as exporter,
+        patch(base + "plausibility_warnings", return_value=[]),
+    ):
+        parser.return_value.parse_results.return_value = {}
+        failing = parser if broken == "ResultsParser" else exporter
+        failing.side_effect = KeyError("node 12")
+        result = analyze_ifc(ifc_path="path/to/test.ifc", output_dir="output_dir")
+
+    assert result["status"] == "failed"
+    (error,) = result["errors"]
+    assert "results could not be read" in error["message"]
+    assert "node 12" in error["message"]

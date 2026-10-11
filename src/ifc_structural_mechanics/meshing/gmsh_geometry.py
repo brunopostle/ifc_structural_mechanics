@@ -562,9 +562,7 @@ class GmshGeometryConverter:
                 if found:
                     break
 
-            if not found and not any(
-                m.startswith("dummy_member_") for m in conn.connected_members
-            ):
+            if not found:
                 # Real connection not at any member endpoint or segment — warn.
                 logger.debug(
                     f"Support {conn.id} at {pos.tolist()} does not lie on "
@@ -965,27 +963,6 @@ class GmshGeometryConverter:
     # Public standalone API (for individual member conversion and tests)
     # ------------------------------------------------------------------
 
-    def _convert_point(self, point: Any) -> np.ndarray:
-        """
-        Convert a point representation to a numpy array.
-
-        Args:
-            point (Any): Point representation from the domain model.
-
-        Returns:
-            np.ndarray: 3D point coordinates.
-
-        Raises:
-            NotImplementedError: If point conversion is not implemented.
-        """
-        # Basic implementation - assumes point is already a list or numpy array of 3 coordinates
-        if isinstance(point, (list, np.ndarray)) and len(point) == 3:
-            return np.array(point)
-
-        raise NotImplementedError(
-            f"Point conversion not implemented for type {type(point)}"
-        )
-
     def _convert_curve(self, curve: Any) -> List[np.ndarray]:
         """
         Convert a curve representation to a list of points.
@@ -1079,12 +1056,6 @@ class GmshGeometryConverter:
                 if "boundaries" in surface and surface["boundaries"]:
                     boundary = surface["boundaries"][0]
                     return [np.array(p, dtype=float) for p in boundary]
-                # Create a default rectangular boundary based on normal and point
-                elif "normal" in surface and "point" in surface:
-                    normal = np.array(surface["normal"], dtype=float)
-                    point = np.array(surface["point"], dtype=float)
-                    # Create a rectangle in plane defined by normal and point
-                    return self._create_rectangle_in_plane(point, normal)
 
         # Case 3: List of boundary points
         if isinstance(surface, list):
@@ -1097,55 +1068,6 @@ class GmshGeometryConverter:
 
         # If we get here, the format is not recognized
         raise NotImplementedError(f"Cannot convert surface points: {surface}")
-
-    def _create_rectangle_in_plane(
-        self, point: np.ndarray, normal: np.ndarray, size: float = 10.0
-    ) -> List[np.ndarray]:
-        """
-        Create a rectangular boundary in a plane defined by a point and normal.
-
-        Args:
-            point: A point on the plane
-            normal: Normal vector to the plane
-            size: Size of the rectangle (default 10.0)
-
-        Returns:
-            List of 3D points forming a rectangle in the plane
-        """
-        # Normalize the normal vector
-        normal = normal / np.linalg.norm(normal)
-
-        # Find two perpendicular vectors in the plane
-        if abs(normal[2]) < 0.9:  # Not aligned with Z axis
-            v1 = np.cross(np.array([0, 0, 1]), normal)
-        else:  # Aligned with Z axis, use X axis
-            v1 = np.cross(np.array([1, 0, 0]), normal)
-
-        v1 = v1 / np.linalg.norm(v1)
-        v2 = np.cross(normal, v1)
-
-        # Create four corners of the rectangle
-        half_size = size / 2
-        corners = [
-            point - half_size * v1 - half_size * v2,
-            point + half_size * v1 - half_size * v2,
-            point + half_size * v1 + half_size * v2,
-            point - half_size * v1 + half_size * v2,
-        ]
-
-        return corners
-
-    def save_mapping(self, file_path: str) -> None:
-        """Save mapping (deprecated - traceability is now in domain model)."""
-        logger.debug(
-            "Mapping file generation deprecated - traceability is in domain model"
-        )
-
-    def load_mapping(self, file_path: str) -> None:
-        """Load mapping (deprecated - traceability is now in domain model)."""
-        logger.warning(
-            "Mapping file loading deprecated - traceability is in domain model"
-        )
 
     def __del__(self):
         """

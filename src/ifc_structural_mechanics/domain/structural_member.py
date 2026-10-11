@@ -23,7 +23,6 @@ class StructuralMember(DomainEntity):
         entity_type (str): Type of the entity, automatically set to the class name.
         geometry (Any): Geometry representation of the member.
         material (Any): Material properties of the member.
-        boundary_conditions (List): List of boundary conditions applied to the member.
         loads (List): List of loads applied to the member.
     """
 
@@ -54,7 +53,6 @@ class StructuralMember(DomainEntity):
         # Initialize instance variables before calling parent constructor
         self.geometry = geometry
         self.material = material
-        self.boundary_conditions: List[Any] = []
         self.loads: List[Any] = []
 
         # NEW: Traceability fields for error propagation
@@ -100,36 +98,6 @@ class StructuralMember(DomainEntity):
 
         return True
 
-    def add_boundary_condition(self, boundary_condition: Any) -> None:
-        """
-        Add a boundary condition to the member.
-
-        Args:
-            boundary_condition (Any): The boundary condition to add.
-
-        Raises:
-            ValueError: If the boundary condition is None.
-        """
-        if boundary_condition is None:
-            raise ValueError("Boundary condition cannot be None")
-
-        self.boundary_conditions.append(boundary_condition)
-
-    def remove_boundary_condition(self, boundary_condition: Any) -> None:
-        """
-        Remove a boundary condition from the member.
-
-        Args:
-            boundary_condition (Any): The boundary condition to remove.
-
-        Raises:
-            ValueError: If the boundary condition is not found.
-        """
-        if boundary_condition not in self.boundary_conditions:
-            raise ValueError("Boundary condition not found")
-
-        self.boundary_conditions.remove(boundary_condition)
-
     def add_load(self, load: Any) -> None:
         """
         Add a load to the member.
@@ -174,7 +142,6 @@ class StructuralMember(DomainEntity):
             {
                 "geometry": self.geometry,
                 "material": self.material,
-                "boundary_conditions": self.boundary_conditions,
                 "loads": self.loads,
             }
         )

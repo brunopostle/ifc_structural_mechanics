@@ -52,12 +52,11 @@ class TestStructuralConnection:
         """Test validation of structural connections."""
         connection = StructuralConnection("conn-1", "test-type")
 
-        # Connection with no members should be invalid
-        assert not connection.validate()
+        # The number of members is no test of validity: a support holds one
+        assert connection.validate()
 
-        # Connection with one member should be invalid
         connection.connect_member("member-1")
-        assert not connection.validate()
+        assert connection.validate()
 
         # Connection with two or more members should be valid
         connection.connect_member("member-2")
@@ -81,12 +80,11 @@ class TestPointConnection:
         """Test validation of point connections."""
         connection = PointConnection("conn-1", [1.0, 2.0, 3.0])
 
-        # Connection with no members should be invalid
-        assert not connection.validate()
+        # The number of members is no test of validity: a support holds one
+        assert connection.validate()
 
-        # Connection with one member should be invalid
         connection.connect_member("member-1")
-        assert not connection.validate()
+        assert connection.validate()
 
         # Connection with two or more members should be valid
         connection.connect_member("member-2")
@@ -133,8 +131,8 @@ class TestRigidConnection:
         # Test with position
         connection = RigidConnection("conn-1", [1.0, 2.0, 3.0])
 
-        # Connection with no members should be invalid
-        assert not connection.validate()
+        # The number of members is no test of validity: a support holds one
+        assert connection.validate()
 
         # Connection with two members should be valid
         connection.connect_member("member-1")
@@ -184,8 +182,8 @@ class TestHingeConnection:
         # Test with rotation axis
         connection = HingeConnection("conn-1", [1.0, 2.0, 3.0], [0.0, 0.0, 1.0])
 
-        # Connection with no members should be invalid
-        assert not connection.validate()
+        # The number of members is no test of validity: a support holds one
+        assert connection.validate()
 
         # Connection with two members should be valid
         connection.connect_member("member-1")

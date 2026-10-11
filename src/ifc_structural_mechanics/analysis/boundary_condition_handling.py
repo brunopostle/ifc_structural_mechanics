@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 
-from ..domain.load import AreaLoad, LineLoad, PointLoad
+from ..domain.load import PointLoad
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError
 
@@ -98,23 +98,14 @@ def get_released_rotations(connection, member_id: str) -> Optional[List[int]]:
     return sorted(global_axis[dof - 4] + 4 for dof in released if dof in (4, 5, 6))
 
 
-def _real_members(connection) -> List[str]:
-    """Return the members a connection joins, without extractor placeholders."""
-    return [
-        m
-        for m in getattr(connection, "connected_members", [])
-        if not str(m).startswith("dummy_member_")
-    ]
-
-
 def get_constrained_dofs(connection) -> List[int]:
     """
     Return the CalculiX DOF numbers that should be constrained for a connection.
 
     Reads per-DOF stiffness from the connection's stiffness_properties dict when
     available (keys dx/dy/dz/drx/dry/drz).  A DOF is constrained when its
-    stiffness >= _RIGID_STIFFNESS_THRESHOLD.  Falls back to entity_type when
-    no stiffness properties are present.
+    stiffness >= _RIGID_STIFFNESS_THRESHOLD.  A connection with no stiffness
+    properties restrains nothing, whatever its type.
 
     The stiffness keys are in the connection's own axes (``local_axes``); the
     DOF numbers returned are global:
@@ -141,23 +132,14 @@ def get_constrained_dofs(connection) -> List[int]:
         for local, is_fixed in enumerate(fixed):
             if is_fixed:
                 dofs.add(3 * (local // 3) + global_axis[local % 3] + 1)
-        members = _real_members(connection)
+        members = list(getattr(connection, "connected_members", []))
         if len(members) == 1:
             dofs -= set(get_released_rotations(connection, members[0]) or [])
         return sorted(dofs)
 
-    # No support condition. A connection that joins two or more members is a
-    # joint between them, not a support: IFC expresses a support through the
-    # connection's AppliedCondition, which is where the stiffness comes from.
-    if len(_real_members(connection)) >= 2:
-        return []
-
-    # Fallback for single-member connections: entity_type-based defaults
-    entity_type = getattr(connection, "entity_type", "point")
-    if entity_type in ("rigid", "fixed"):
-        return [1, 2, 3, 4, 5, 6]
-    if entity_type == "hinge":
-        return [1, 2, 3]
+    # No support condition, so no support: IFC expresses a support through
+    # the connection's AppliedCondition, which is where the stiffness comes
+    # from. A connection without one only joins its members.
     return []
 
 
@@ -169,7 +151,11 @@ def write_boundary_conditions(
     node_coords: Dict[int, Tuple[float, float, float]],
 ) -> None:
     """
-    Write boundary conditions to the CalculiX input file with improved node identification.
+    Write the supports of the model to the CalculiX input file.
+
+    Every connection that restrains something becomes a node set and a
+    ``*BOUNDARY`` card. The nodes of all supports are collected in
+    ``ALL_BC_NODES``, which the steps use to print the reactions.
 
     Args:
         file (TextIO): The file object to write to.
@@ -177,433 +163,87 @@ def write_boundary_conditions(
         node_sets (Dict[str, List[int]]): Dictionary of node sets.
         element_sets (Dict[str, List[int]]): Dictionary of element sets.
         node_coords (Dict[int, Tuple[float, float, float]]): Dictionary of node coordinates.
-    """
-    if not domain_model:
-        file.write("** No boundary conditions defined (no domain model)\n\n")
-        return
 
+    Raises:
+        AnalysisError: If a support has no mesh node to act on, or the model
+            has no support at all. Neither is replaced by a guess: this
+            function used to fix every node at y = 0 when it found no support.
+    """
     file.write("** Boundary Conditions\n")
 
-    # Keep track of which nodes have been assigned to BCs
-    bc_nodes_found = False
-    all_bc_nodes = (
-        set()
-    )  # Collect all nodes with boundary conditions for reaction output
+    all_bc_nodes = set()
+    unattached = []
 
-    # Process connections (which are often supports/boundary conditions)
     for connection in domain_model.connections:
         connection_id = connection.id
         set_name = f"BC_{connection_id}"
 
-        # Determine BC type from connection
-        if hasattr(connection, "connection_type"):
-            bc_type = connection.connection_type
-        else:
-            bc_type = getattr(connection, "entity_type", "point")
-
-        # Determine which DOFs to constrain for this connection
         dofs_to_fix = get_constrained_dofs(connection)
 
-        # Skip connections that constrain nothing (purely geometric / load-application points)
+        # A connection that restrains nothing only joins members
         if not dofs_to_fix:
-            logger.debug(f"Skipping connection {connection_id} — no DOFs to constrain")
             continue
 
         if support_is_skew(connection):
-            message = (
+            _warn_model(
+                domain_model,
                 f"Support {connection_id} restrains only some directions, in "
                 "axes that are not parallel to the global ones. Skew supports "
-                "are not modelled: it is analysed as if its axes were global."
-            )
-            logger.warning(message)
-            if not hasattr(domain_model, "analysis_warnings"):
-                domain_model.analysis_warnings = []
-            domain_model.analysis_warnings.append(
-                {
-                    "message": message,
-                    "severity": "warning",
-                    "entity_type": None,
-                    "ccx_id": None,
-                    "domain_id": connection_id,
-                }
+                "are not modelled: it is analysed as if its axes were global.",
             )
 
-        # Find the nodes this support acts on (one node, or a whole edge)
-        if hasattr(connection, "position") and connection.position:
-            bc_nodes = find_connection_support_nodes(connection, node_coords)
+        bc_nodes = find_connection_support_nodes(connection, node_coords)
+        if not bc_nodes and not getattr(connection, "connected_members", None):
+            # It holds no member and lies on none: it supports nothing
+            unattached.append(str(connection_id))
+            continue
+        if not bc_nodes:
+            raise AnalysisError(
+                f"Support {connection_id} cannot be applied: the mesh has no "
+                f"node within {SUPPORT_TOLERANCE} m of its position "
+                f"{[round(float(c), 4) for c in connection.position]}. Check "
+                "that it lies on a member."
+            )
 
-            if bc_nodes:
-                # Create node set for this boundary condition
-                node_sets[set_name] = bc_nodes
-                all_bc_nodes.update(bc_nodes)  # Track for reaction force output
+        node_sets[set_name] = bc_nodes
+        all_bc_nodes.update(bc_nodes)
 
-                # Write the node set
-                file.write(f"*NSET, NSET={set_name}\n")
-                # Write node IDs with at most 8 per line
-                for i in range(0, len(bc_nodes), 8):
-                    line_nodes = bc_nodes[i : i + 8]
-                    line = ", ".join(map(str, line_nodes))
-                    file.write(f"{line}\n")
+        file.write(f"*NSET, NSET={set_name}\n")
+        for i in range(0, len(bc_nodes), 8):
+            file.write(", ".join(map(str, bc_nodes[i : i + 8])) + "\n")
 
-                # Write the boundary condition — one line per contiguous DOF range
-                file.write("*BOUNDARY\n")
-                # Write contiguous DOF ranges (e.g. 1,3 or 1,6) for efficiency
-                first = dofs_to_fix[0]
-                prev = first
-                for dof in dofs_to_fix[1:]:
-                    if dof == prev + 1:
-                        prev = dof
-                    else:
-                        file.write(f"{set_name}, {first}, {prev}\n")
-                        first = dof
-                        prev = dof
+        # One line per contiguous range of degrees of freedom
+        file.write("*BOUNDARY\n")
+        first = prev = dofs_to_fix[0]
+        for dof in dofs_to_fix[1:]:
+            if dof != prev + 1:
                 file.write(f"{set_name}, {first}, {prev}\n")
+                first = dof
+            prev = dof
+        file.write(f"{set_name}, {first}, {prev}\n\n")
 
-                bc_nodes_found = True
-                file.write("\n")
-
-    # Process explicit boundary conditions on members
-    for member in domain_model.members:
-        for bc in getattr(member, "boundary_conditions", []):
-            # Create a node set for this boundary condition
-            bc_id = getattr(bc, "id", f"BC_{len(node_sets) + 1}")
-            set_name = f"BC_{bc_id}"
-
-            bc_nodes = []
-
-            # Find which member endpoint this BC applies to
-            if member.entity_type == "curve" and hasattr(member, "geometry"):
-                # For curve members, BCs typically apply at endpoints
-                geometry = member.geometry
-
-                # Parse the geometry to get endpoints
-                points = extract_curve_endpoints(geometry)
-
-                if points:
-                    # Typically, BCs apply to the first point (start) for fixed supports
-                    bc_position = points[
-                        0
-                    ]  # Adjust this logic based on your specific model
-                    bc_nodes = find_support_nodes(
-                        bc_position, node_coords, tolerance=0.1
-                    )
-
-            # If we found nodes for this BC
-            if bc_nodes:
-                # Create node set for this boundary condition
-                node_sets[set_name] = bc_nodes
-                all_bc_nodes.update(bc_nodes)  # Track for reaction force output
-
-                # Write the node set
-                file.write(f"*NSET, NSET={set_name}\n")
-                # Write node IDs with at most 8 per line
-                for i in range(0, len(bc_nodes), 8):
-                    line_nodes = bc_nodes[i : i + 8]
-                    line = ", ".join(map(str, line_nodes))
-                    file.write(f"{line}\n")
-
-                # Write the boundary condition
-                file.write("*BOUNDARY\n")
-
-                # Get BC type
-                bc_type = getattr(bc, "type", "fixed").lower()
-
-                if bc_type == "fixed":
-                    # Fixed: constrain all 6 DOF (1-6)
-                    file.write(f"{set_name}, 1, 6\n")
-                elif bc_type == "pinned":
-                    # Pinned: constrain translations (1-3), but not rotations
-                    file.write(f"{set_name}, 1, 3\n")
-                elif bc_type == "roller":
-                    # Roller: constrain only in certain directions
-                    # For simplicity, we'll constrain vertical movement (2)
-                    file.write(f"{set_name}, 2, 2\n")
-
-                bc_nodes_found = True
-                file.write("\n")
-
-    # If no boundary conditions were found, check for any nodes at y=0 as these might be supports
-    if not bc_nodes_found:
-        # Find nodes with y coordinate near 0 (potential supports at base level)
-        potential_support_nodes = []
-        for node_id, coords in node_coords.items():
-            if abs(coords[1]) < 0.01:  # y coordinate close to 0
-                potential_support_nodes.append(node_id)
-
-        if potential_support_nodes:
-            set_name = "BC_AUTO"
-            node_sets[set_name] = potential_support_nodes
-            all_bc_nodes.update(
-                potential_support_nodes
-            )  # Track for reaction force output
-
-            # Write the node set
-            file.write(f"*NSET, NSET={set_name}\n")
-            # Write node IDs with at most 8 per line
-            for i in range(0, len(potential_support_nodes), 8):
-                line_nodes = potential_support_nodes[i : i + 8]
-                line = ", ".join(map(str, line_nodes))
-                file.write(f"{line}\n")
-
-            # Write the boundary condition as fixed support
-            file.write("*BOUNDARY\n")
-            file.write(f"{set_name}, 1, 6\n")
-            file.write("\n")
-
-            logger.warning(
-                "No explicit boundary conditions found. Automatically adding fixed supports at y=0."
-            )
-            bc_nodes_found = True
-
-    # Create a combined node set for all boundary condition nodes (for reaction force output)
-    if all_bc_nodes:
-        file.write("** Combined set of all nodes with boundary conditions\n")
-        file.write("*NSET, NSET=ALL_BC_NODES\n")
-        bc_nodes_list = sorted(list(all_bc_nodes))
-        for i in range(0, len(bc_nodes_list), 8):
-            line_nodes = bc_nodes_list[i : i + 8]
-            line = ", ".join(map(str, line_nodes))
-            file.write(f"{line}\n")
-        file.write("\n")
-        node_sets["ALL_BC_NODES"] = bc_nodes_list
-        logger.info(
-            f"Created ALL_BC_NODES set with {len(bc_nodes_list)} nodes for reaction force output"
+    if unattached:
+        _warn_model(
+            domain_model,
+            f"{len(unattached)} support(s) are connected to no member and lie "
+            "on none; they support nothing and are left out: "
+            + ", ".join(unattached[:5])
+            + (", ..." if len(unattached) > 5 else ""),
         )
 
-    # If still no boundary conditions, add a warning comment
-    if not bc_nodes_found:
-        file.write("** WARNING: No fixed boundary conditions defined\n")
-        file.write("** Add appropriate *BOUNDARY definitions here\n\n")
+    if not all_bc_nodes:
+        raise AnalysisError(
+            "The model has no supports: no connection has an AppliedCondition "
+            "that restrains anything. It cannot be analysed."
+        )
 
-
-def write_loads(
-    file: TextIO,
-    domain_model: StructuralModel,
-    node_sets: Dict[str, List[int]],
-    element_sets: Dict[str, List[int]],
-    node_coords: Dict[int, Tuple[float, float, float]],
-) -> None:
-    """
-    Enhanced load writing outside of analysis steps.
-
-    Note: This creates load sets but actual loads should be written within steps.
-    """
-    if not domain_model:
-        return
-
-    file.write("** Load Definitions (Element/Node Sets)\n")
-    sets_created = 0
-
-    # Create element sets for distributed loads
-    for load_group in domain_model.load_groups:
-        for load in load_group.loads:
-            if isinstance(load, (LineLoad, AreaLoad)):
-                set_name = f"LOAD_{load.id}"
-
-                # Try to find appropriate elements
-                if isinstance(load, AreaLoad) and hasattr(load, "surface_reference"):
-                    surface_set = f"MEMBER_{load.surface_reference}"
-                    if surface_set in element_sets and element_sets[surface_set]:
-                        element_sets[set_name] = element_sets[surface_set]
-
-                        file.write(f"*ELSET, ELSET={set_name}\n")
-                        elements = element_sets[set_name][:8]  # Limit for line length
-                        file.write(", ".join(map(str, elements)) + "\n\n")
-                        sets_created += 1
-
-    if sets_created == 0:
-        file.write("** No distributed load sets created\n")
-    else:
-        file.write(f"** Created {sets_created} load element sets\n")
-
+    file.write("** Combined set of all nodes with boundary conditions\n")
+    file.write("*NSET, NSET=ALL_BC_NODES\n")
+    bc_nodes_list = sorted(all_bc_nodes)
+    for i in range(0, len(bc_nodes_list), 8):
+        file.write(", ".join(map(str, bc_nodes_list[i : i + 8])) + "\n")
     file.write("\n")
-
-
-def write_point_load(
-    file: TextIO,
-    load: PointLoad,
-    node_sets: Dict[str, List[int]],
-    node_coords: Dict[int, Tuple[float, float, float]],
-) -> bool:
-    """
-    Write a point load to the CalculiX input file.
-    """
-    if not hasattr(load, "position") or not load.position:
-        logger.warning(f"Point load {load.id} missing position information")
-        return False
-
-    # A point load acts on exactly one node. *CLOAD on a node set applies the
-    # full force to every node in it, so a set of several nearby nodes would
-    # multiply the load.
-    closest_node = find_closest_node(load.position, node_coords)
-    load_nodes = [closest_node] if closest_node else []
-
-    if not load_nodes:
-        logger.warning(
-            f"Could not find nodes for point load {load.id} at position {load.position}"
-        )
-        return False
-
-    # Create node set for this load
-    set_name = f"LOAD_{load.id}"
-    node_sets[set_name] = load_nodes
-
-    # Write the node set
-    file.write(f"*NSET, NSET={set_name}\n")
-    file.write(", ".join(map(str, load_nodes)) + "\n")
-
-    # Get force components
-    force_vector = load.get_force_vector()
-
-    # Only write forces if magnitude is non-zero
-    if isinstance(force_vector, (list, np.ndarray)):
-        # Write concentrated load only if load is significant
-        significant_forces = [
-            (i + 1, component)
-            for i, component in enumerate(force_vector)
-            if abs(component) > 1e-10
-        ]
-
-        if significant_forces:
-            file.write("*CLOAD\n")
-            for dof, force in significant_forces:
-                file.write(f"{set_name}, {dof}, {force:.6e}\n")
-            file.write("\n")
-
-    return True
-
-
-def write_line_load(
-    file: TextIO,
-    load: LineLoad,
-    element_sets: Dict[str, List[int]],
-    member_elements: List[int] = None,
-) -> bool:
-    """
-    Write a line load to the CalculiX input file.
-
-    Args:
-        file (TextIO): The file object to write to.
-        load (LineLoad): The line load to write.
-        element_sets (Dict[str, List[int]]): Dictionary of element sets.
-        member_elements (List[int], optional): List of element IDs for the member this load applies to.
-
-    Returns:
-        bool: True if the load was written, False otherwise.
-    """
-    # Find elements along the line load
-    set_name = f"LOAD_{load.id}"
-
-    # If member elements were provided, use them
-    if member_elements:
-        load_elements = member_elements
-    else:
-        # This would need a more sophisticated algorithm in real implementation
-        # to find elements along the line defined by start_position and end_position
-        logger.warning(
-            f"No member elements provided for line load {load.id}. Using empty set."
-        )
-        load_elements = []
-
-    if not load_elements:
-        logger.warning(f"Could not find elements for line load {load.id}")
-        return False
-
-    # Create element set for this load
-    element_sets[set_name] = load_elements
-
-    # Write the element set
-    file.write(f"*ELSET, ELSET={set_name}\n")
-    # Write element IDs with at most 8 per line
-    for i in range(0, len(load_elements), 8):
-        line_elements = load_elements[i : i + 8]
-        line = ", ".join(map(str, line_elements))
-        file.write(f"{line}\n")
-
-    # Write distributed load
-    file.write("*DLOAD\n")
-
-    # Get load magnitude and direction
-    if hasattr(load, "get_force_vector"):
-        force_vector = load.get_force_vector()
-        magnitude = np.linalg.norm(force_vector)
-    else:
-        magnitude = load.magnitude
-        if isinstance(magnitude, (list, np.ndarray)):
-            magnitude = np.linalg.norm(magnitude)
-
-    # Apply as a pressure in the global Y direction by default
-    # A more sophisticated implementation would consider the load direction and distribution
-    file.write(f"{set_name}, P2, {magnitude:.6e}\n\n")
-
-    return True
-
-
-def write_area_load(
-    file: TextIO,
-    load: AreaLoad,
-    element_sets: Dict[str, List[int]],
-    member_elements: List[int] = None,
-) -> bool:
-    """
-    Write an area load to the CalculiX input file.
-
-    Args:
-        file (TextIO): The file object to write to.
-        load (AreaLoad): The area load to write.
-        element_sets (Dict[str, List[int]]): Dictionary of element sets.
-        member_elements (List[int], optional): List of element IDs for the member this load applies to.
-
-    Returns:
-        bool: True if the load was written, False otherwise.
-    """
-    # Find elements in the surface
-    set_name = f"LOAD_{load.id}"
-
-    # If member elements were provided, use them
-    if member_elements:
-        load_elements = member_elements
-    elif load.surface_reference:
-        # Try to find elements belonging to the referenced surface
-        surface_set = f"MEMBER_{load.surface_reference}"
-        load_elements = element_sets.get(surface_set, [])
-    else:
-        logger.warning(
-            f"No surface reference or member elements for area load {load.id}"
-        )
-        load_elements = []
-
-    if not load_elements:
-        logger.warning(f"Could not find elements for area load {load.id}")
-        return False
-
-    # Create element set for this load
-    element_sets[set_name] = load_elements
-
-    # Write the element set
-    file.write(f"*ELSET, ELSET={set_name}\n")
-    # Write element IDs with at most 8 per line
-    for i in range(0, len(load_elements), 8):
-        line_elements = load_elements[i : i + 8]
-        line = ", ".join(map(str, line_elements))
-        file.write(f"{line}\n")
-
-    # Write distributed load
-    file.write("*DLOAD\n")
-
-    # Get load magnitude and direction
-    if hasattr(load, "get_force_vector"):
-        force_vector = load.get_force_vector()
-        magnitude = np.linalg.norm(force_vector)
-    else:
-        magnitude = load.magnitude
-        if isinstance(magnitude, (list, np.ndarray)):
-            magnitude = np.linalg.norm(magnitude)
-
-    # Apply as a pressure normal to the surface
-    file.write(f"{set_name}, P, {magnitude:.6e}\n\n")
-
-    return True
+    node_sets["ALL_BC_NODES"] = bc_nodes_list
 
 
 def _write_u1_gravity_cloads(
@@ -834,52 +474,6 @@ def write_analysis_steps(
             key).  When provided, distributed loads on U1 sets are converted to
             work-equivalent *CLOAD nodal forces instead of being dropped.
     """
-    if not domain_model:
-        logger.error("Cannot write analysis steps without domain model")
-        file.write("** ERROR: No domain model provided for analysis steps\n")
-        file.write("** Analysis will likely fail\n\n")
-        return
-
-    # VALIDATION: Check model completeness and report issues
-    validation_errors = []
-    validation_warnings = []
-
-    total_loads = sum(len(lg.loads) for lg in domain_model.load_groups)
-    total_loads += sum(len(getattr(m, "loads", [])) for m in domain_model.members)
-
-    if total_loads == 0 and not gravity:
-        validation_errors.append("No loads defined in the model")
-
-    has_connections = len(domain_model.connections) > 0
-    has_member_bc = any(
-        hasattr(m, "boundary_conditions") and m.boundary_conditions
-        for m in domain_model.members
-    )
-    if not (has_connections or has_member_bc):
-        validation_warnings.append(
-            "No explicit boundary conditions found - will attempt auto-generation"
-        )
-
-    members_without_material = [m.id for m in domain_model.members if not m.material]
-    if members_without_material:
-        validation_errors.append(
-            f"Members without materials: {members_without_material}"
-        )
-
-    file.write("** Analysis Validation Results\n")
-    if validation_errors:
-        file.write("** VALIDATION ERRORS:\n")
-        for error in validation_errors:
-            file.write(f"** ERROR: {error}\n")
-        file.write("** Analysis may fail due to above errors\n")
-    if validation_warnings:
-        file.write("** VALIDATION WARNINGS:\n")
-        for warning in validation_warnings:
-            file.write(f"** WARNING: {warning}\n")
-    if not validation_errors:
-        file.write("** Validation PASSED - Analysis should execute successfully\n")
-    file.write("\n")
-
     file.write("** Analysis Steps\n")
 
     # Linear buckling: a single *BUCKLE step carrying the reference loads.
@@ -996,107 +590,8 @@ def write_analysis_steps(
         _write_step_output_requests(file, has_u1_elements=has_u1_elements)
 
 
-def _write_loads_within_step(file: TextIO, domain_model: StructuralModel) -> None:
-    """
-    Write loads within the step section of the CalculiX input file.
-
-    This helper function is called by write_analysis_steps to ensure loads
-    are placed correctly within a step section.
-
-    Args:
-        file (TextIO): The file object to write to.
-        domain_model (StructuralModel): The structural domain model.
-    """
-    # Process load groups
-    has_loads = False
-
-    for load_group in domain_model.load_groups:
-        if not load_group.loads:
-            continue
-
-        file.write(f"** Load Group: {load_group.name}\n")
-
-        # Process point loads (these use *CLOAD)
-        point_loads = [load for load in load_group.loads if isinstance(load, PointLoad)]
-        if point_loads:
-            file.write("*CLOAD\n")
-            for load in point_loads:
-                # Determine the node ID(s) for the load
-                # For testing, we can just assume node 2 (end of beam)
-                node_id = 2  # This is a simplification for testing
-
-                # Get force components
-                force_vector = load.get_force_vector()
-
-                # Write as CLOAD directives
-                if isinstance(force_vector, (list, np.ndarray)):
-                    for i, component in enumerate(force_vector):
-                        if abs(component) > 1e-10:  # Only write non-zero components
-                            file.write(f"{node_id}, {i+1}, {component:.6e}\n")
-            file.write("\n")
-            has_loads = True
-
-        # Process other types of loads (would need to implement as needed)
-
-    # Process loads directly on members (simplified approach)
-    for member in domain_model.members:
-        # Process point loads on members
-        point_loads = [
-            load for load in getattr(member, "loads", []) if isinstance(load, PointLoad)
-        ]
-
-        if point_loads:
-            file.write(f"** Point loads on member {member.id}\n")
-            file.write("*CLOAD\n")
-            for load in point_loads:
-                # Determine the node ID - for testing assume node 2 for loads
-                node_id = 2  # This is a simplification for testing
-
-                # Get force components
-                force_vector = load.get_force_vector()
-
-                # Write as CLOAD directives
-                if isinstance(force_vector, (list, np.ndarray)):
-                    for i, component in enumerate(force_vector):
-                        if abs(component) > 1e-10:  # Only write non-zero components
-                            file.write(f"{node_id}, {i+1}, {component:.6e}\n")
-            file.write("\n")
-            has_loads = True
-
-    if not has_loads:
-        file.write("** No loads defined in the model\n\n")
-
-
-def find_nodes_at_position(
-    position: List[float],
-    node_coords: Dict[int, Tuple[float, float, float]],
-    tolerance: float = 0.01,
-) -> List[int]:
-    """
-    Find nodes at or near a specific position.
-
-    Args:
-        position (List[float]): The position [x, y, z] to search for.
-        node_coords (Dict[int, Tuple[float, float, float]]): Dictionary of node coordinates.
-        tolerance (float): Distance tolerance for matching nodes.
-
-    Returns:
-        List[int]: List of node IDs found at the position.
-    """
-    matching_nodes = []
-
-    # Convert position to numpy array for easier calculations
-    pos_array = np.array(position)
-
-    for node_id, coords in node_coords.items():
-        # Calculate distance
-        dist = np.linalg.norm(pos_array - np.array(coords))
-
-        # Add node if it's within tolerance
-        if dist <= tolerance:
-            matching_nodes.append(node_id)
-
-    return matching_nodes
+# Largest distance from a point support to the mesh node that takes it
+SUPPORT_TOLERANCE = 0.1
 
 
 def find_support_nodes(
@@ -1170,53 +665,11 @@ def find_connection_support_nodes(
     """
     edge = getattr(connection, "edge", None)
     if edge is not None and len(edge) == 2:
-        nodes = find_nodes_on_segment(edge[0], edge[1], node_coords)
-        if nodes:
-            return nodes
+        # No node on the edge is no support; its midpoint is not a substitute
+        return find_nodes_on_segment(edge[0], edge[1], node_coords)
     position = getattr(connection, "position", None)
-    if position:
-        return find_support_nodes(position, node_coords, tolerance=0.1)
-    return []
-
-
-def extract_curve_endpoints(geometry: Any) -> List[List[float]]:
-    """
-    Extract endpoints from curve geometry.
-
-    Args:
-        geometry (Any): The geometry representation of a curve.
-
-    Returns:
-        List[List[float]]: List of curve endpoint coordinates.
-    """
-    # Case 1: Tuple of two points (start, end)
-    if (
-        isinstance(geometry, tuple)
-        and len(geometry) == 2
-        and all(isinstance(p, (list, tuple, np.ndarray)) for p in geometry)
-    ):
-        return [list(geometry[0]), list(geometry[1])]
-
-    # Case 2: List of points
-    if isinstance(geometry, list):
-        if all(
-            isinstance(p, (list, tuple, np.ndarray)) and len(p) == 3 for p in geometry
-        ):
-            return [list(geometry[0]), list(geometry[-1])]
-
-    # Case 3: Dictionary format with "boundaries"
-    if isinstance(geometry, dict) and "boundaries" in geometry:
-        boundaries = geometry.get("boundaries", [])
-        if boundaries and isinstance(boundaries[0], list):
-            return [list(boundaries[0][0]), list(boundaries[0][-1])]
-
-    # Case 4: Dictionary with specific start/end
-    if isinstance(geometry, dict) and "type" in geometry:
-        if geometry["type"] == "line" and "start" in geometry and "end" in geometry:
-            return [list(geometry["start"]), list(geometry["end"])]
-
-    # If none of the formats match, return an empty list
-    logger.warning(f"Could not extract endpoints from geometry: {geometry}")
+    if position is not None and len(position) == 3:
+        return find_support_nodes(position, node_coords, tolerance=SUPPORT_TOLERANCE)
     return []
 
 

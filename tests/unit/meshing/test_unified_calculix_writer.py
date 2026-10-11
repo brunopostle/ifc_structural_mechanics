@@ -39,6 +39,7 @@ from src.ifc_structural_mechanics.utils.temp_dir import (
     set_keep_temp_files,
     setup_temp_dir,
 )
+from tests.helpers import fixed_support
 
 # Configure for debugging
 set_keep_temp_files(keep_files=True)
@@ -139,6 +140,7 @@ class TestUnifiedCalculixWriter:
         model.add_member(beam)
         model.add_member(column)
         model.add_member(slab)
+        model.connections.append(fixed_support((0, 0, 0), "column_1"))
 
         # Create loads
         point_load = PointLoad(
@@ -516,6 +518,7 @@ class TestUnifiedWorkflowFunctions:
         )
 
         model.add_member(beam)
+        model.connections.append(fixed_support((0, 0, 0), "beam_simple"))
         return model
 
     @patch("meshio.read")
