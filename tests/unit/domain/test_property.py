@@ -382,6 +382,14 @@ class TestSection:
         expected_area = 0.2 * 0.3 - inner_width * inner_height
         assert math.isclose(section.area, expected_area, rel_tol=1e-10)
 
+        # Bredt: 4 Am^2 t / perimeter on the wall's centre line
+        enclosed, perimeter = 0.19 * 0.29, 2 * (0.19 + 0.29)
+        assert math.isclose(
+            section.torsional_constant,
+            4 * enclosed**2 * 0.01 / perimeter,
+            rel_tol=1e-10,
+        )
+
     def test_hollow_circular_section_creation(self):
         """Test creation of hollow circular section using factory method."""
         section = Section.create_hollow_circular_section(

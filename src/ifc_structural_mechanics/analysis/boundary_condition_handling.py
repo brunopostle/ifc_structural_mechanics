@@ -12,6 +12,7 @@ import numpy as np
 
 from ..domain.load import AreaLoad, LineLoad, PointLoad
 from ..domain.structural_model import StructuralModel
+from ..utils.error_handling import AnalysisError
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1301,8 +1302,8 @@ def _write_validated_loads_within_step(
                 written_load_ids.add(load.id)
 
                 # Position-based node determination
-                node_id = _determine_load_node_with_fallback(
-                    load, node_coords=node_coords
+                node_id = _determine_load_node(
+                    load, node_coords=node_coords, domain_model=domain_model
                 )
 
                 # Enhanced force vector validation
@@ -1323,23 +1324,7 @@ def _write_validated_loads_within_step(
             # Accumulate equivalent CLOADs for U1 members; written after DLOAD block.
             u1_extra_cloads: Dict[int, List[float]] = {}
 
-            file.write("*DLOAD\n")
             for load in distributed_loads:
-                # Get magnitude with validation
-                if hasattr(load, "get_force_vector"):
-                    force_vector = _get_validated_force_vector(load)
-                    magnitude = (
-                        force_vector[0] ** 2
-                        + force_vector[1] ** 2
-                        + force_vector[2] ** 2
-                    ) ** 0.5
-                else:
-                    magnitude = getattr(load, "magnitude", 1000.0)
-
-                # Ensure magnitude is valid
-                if not isinstance(magnitude, (int, float)) or magnitude <= 0:
-                    magnitude = 1000.0
-
                 # FIXED: Find the appropriate element set for this load
                 element_set_name = None
 
@@ -1371,41 +1356,23 @@ def _write_validated_loads_within_step(
                         else:
                             element_set_name = f"MEMBER_{load.applied_to}"
 
-                # Strategy 2: If no direct reference, try to find members to apply loads to
                 if not element_set_name:
-                    # For line loads, prefer curve members; for area loads, prefer surface members
-                    if isinstance(load, LineLoad):
-                        target_members = [
-                            m for m in domain_model.members if m.entity_type == "curve"
-                        ]
-                    else:
-                        target_members = [
-                            m
-                            for m in domain_model.members
-                            if m.entity_type == "surface"
-                        ]
-                    if not target_members:
-                        target_members = list(domain_model.members)
-                    if target_members:
-                        # Use short ID if available
-                        if short_id_map and target_members[0].id in short_id_map:
-                            element_set_name = (
-                                f"MEMBER_{short_id_map[target_members[0].id]}"
-                            )
-                        else:
-                            element_set_name = f"MEMBER_{target_members[0].id}"
-                        logger.info(
-                            f"Applied load {getattr(load, 'id', 'unknown')} to member {target_members[0].id}"
-                        )
+                    raise AnalysisError(
+                        f"Load {getattr(load, 'id', '?')} is not assigned to a "
+                        "member of the model, so it cannot be applied."
+                    )
+                if not (elements_data and node_coords):
+                    raise AnalysisError(
+                        "Distributed loads need the mesh to be turned into "
+                        "nodal forces, and no mesh was given."
+                    )
 
-                # Write the load if we found a valid element set that exists
                 if element_set_name:
                     # Check if this element set actually exists and is
                     # non-empty (may be empty if the member was merged during
                     # fragment, or lost all its elements to an overlapping
                     # member during overlap resolution) — an empty set has no
-                    # corresponding *ELSET card in the file, so referencing it
-                    # by name in *DLOAD is a fatal CalculiX error.
+                    # corresponding *ELSET card in the file.
                     if element_sets and not element_sets.get(element_set_name):
                         _warn_model(
                             domain_model,
@@ -1437,27 +1404,6 @@ def _write_validated_loads_within_step(
                             entry[0] += fvec[0]
                             entry[1] += fvec[1]
                             entry[2] += fvec[2]
-                    elif u1_element_sets and element_set_name in u1_element_sets:
-                        logger.warning(
-                            f"Skipping DLOAD for {element_set_name} — U1 elements "
-                            "do not support *DLOAD; distributed load is not applied"
-                        )
-                    elif isinstance(load, LineLoad):
-                        file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
-                        loads_written = True
-                    elif isinstance(load, AreaLoad):
-                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                        loads_written = True
-                    else:
-                        # Default to area load pressure
-                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                        loads_written = True
-                else:
-                    logger.warning(
-                        f"Cannot determine element set for distributed load {getattr(load, 'id', 'unknown')}"
-                    )
-
-            file.write("\n")
 
             # Write the distributed loads as equivalent nodal forces
             if u1_extra_cloads:
@@ -1486,8 +1432,8 @@ def _write_validated_loads_within_step(
             file.write("*CLOAD\n")
             for load in point_loads:
                 written_load_ids.add(load.id)
-                node_id = _determine_load_node_with_fallback(
-                    load, node_coords=node_coords, default_node=2
+                node_id = _determine_load_node(
+                    load, node_coords=node_coords, domain_model=domain_model
                 )
                 force_vector = _get_validated_force_vector(load)
 
@@ -1544,30 +1490,10 @@ def _write_validated_loads_within_step(
                         file.write("\n")
                         loads_written = True
                     continue
-                file.write("*DLOAD\n")
-                for load in distributed_loads:
-                    # Get magnitude
-                    if hasattr(load, "get_force_vector"):
-                        force_vector = _get_validated_force_vector(load)
-                        magnitude = (
-                            force_vector[0] ** 2
-                            + force_vector[1] ** 2
-                            + force_vector[2] ** 2
-                        ) ** 0.5
-                    else:
-                        magnitude = getattr(load, "magnitude", 1000.0)
-
-                    if not isinstance(magnitude, (int, float)) or magnitude <= 0:
-                        magnitude = 1000.0
-
-                    if isinstance(load, LineLoad):
-                        file.write(f"{element_set_name}, P2, {magnitude:.6e}\n")
-                    elif isinstance(load, AreaLoad):
-                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                    else:
-                        file.write(f"{element_set_name}, P, {magnitude:.6e}\n")
-                    loads_written = True
-                file.write("\n")
+                raise AnalysisError(
+                    "Distributed loads need the mesh to be turned into nodal "
+                    "forces, and no mesh was given."
+                )
 
     # Log results
     if total_loads_attempted > 0:
@@ -1585,70 +1511,57 @@ def _write_validated_loads_within_step(
     return loads_written
 
 
-def _determine_load_node_with_fallback(load, node_coords=None, default_node=2):
+def _determine_load_node(load, node_coords=None, domain_model=None) -> int:
+    """Return the mesh node nearest a point load.
+
+    A load that lands more than ``_POINT_LOAD_SNAP`` from its position is
+    reported: it is still applied, at the node, but not where the file says.
+
+    Raises:
+        AnalysisError: If the load has no position or there is no mesh.
+            A load is never sent to an arbitrary node.
     """
-    Determine which node a load should be applied to using position-based lookup.
-
-    Uses the load's position attribute and the mesh node coordinates to find
-    the closest mesh node. Falls back to default_node if position is unavailable.
-
-    Args:
-        load: Load object (should have a .position attribute)
-        node_coords: Dict[int, Tuple[float, float, float]] of mesh node coordinates
-        default_node: Fallback node ID if position lookup fails
-
-    Returns:
-        int: Node ID for load application
-    """
-    if hasattr(load, "position") and load.position and node_coords:
-        # Use position-based lookup to find the closest mesh node
-        closest = find_closest_node(load.position, node_coords)
-        if closest is not None:
-            logger.debug(
-                f"Load {getattr(load, 'id', '?')} at position {load.position} "
-                f"mapped to node {closest}"
-            )
-            return closest
-
-    # Fallback to default node
-    return default_node
+    load_id = getattr(load, "id", "?")
+    position = getattr(load, "position", None)
+    if position is None or not len(position):
+        raise AnalysisError(f"Point load {load_id} cannot be applied: no position.")
+    closest = find_closest_node(position, node_coords) if node_coords else None
+    if closest is None:
+        raise AnalysisError(
+            f"Point load {load_id} cannot be applied: there are no mesh nodes."
+        )
+    distance = float(
+        np.linalg.norm(np.array(position, float) - np.array(node_coords[closest]))
+    )
+    if distance > _POINT_LOAD_SNAP and domain_model is not None:
+        _warn_model(
+            domain_model,
+            f"Point load {load_id} is applied at the nearest mesh node, "
+            f"{distance:.2f} m from its position.",
+        )
+    return closest
 
 
-def _get_validated_force_vector(load):
-    """
-    Get and validate force vector from load object with robust error handling.
+# Distance a point load may be moved to reach a mesh node without comment
+_POINT_LOAD_SNAP = 0.1
 
-    Args:
-        load: Load object
 
-    Returns:
-        list: Validated force vector [Fx, Fy, Fz]
+def _get_validated_force_vector(load) -> List[float]:
+    """Return a load's force vector as three floats.
+
+    Raises:
+        AnalysisError: If the load has no usable force vector. A force is
+            never made up.
     """
     try:
-        force_vector = load.get_force_vector()
-
-        # Handle numpy arrays
-        if hasattr(force_vector, "tolist"):
-            force_vector = force_vector.tolist()
-
-        # Handle list/tuple
-        if hasattr(force_vector, "__iter__") and len(force_vector) >= 3:
-            return [
-                float(force_vector[0]),
-                float(force_vector[1]),
-                float(force_vector[2]),
-            ]
-
-        # Handle mock objects (for testing)
-        if hasattr(force_vector, "__class__") and "Mock" in str(force_vector.__class__):
-            return [0.0, -1000.0, 0.0]  # Default downward force
-
-        # If we get here, something's wrong
-        logger.warning(
-            f"Invalid force vector from load {getattr(load, 'id', 'unknown')}"
+        force_vector = np.asarray(load.get_force_vector(), dtype=float).ravel()
+    except (AttributeError, TypeError, ValueError) as error:
+        raise AnalysisError(
+            f"Load {getattr(load, 'id', '?')} has no usable force vector: {error}"
+        ) from error
+    if force_vector.size < 3 or not np.all(np.isfinite(force_vector[:3])):
+        raise AnalysisError(
+            f"Load {getattr(load, 'id', '?')} has no usable force vector: "
+            f"{force_vector.tolist()}"
         )
-        return [0.0, -1000.0, 0.0]  # Safe default
-
-    except Exception as e:
-        logger.warning(f"Error getting force vector from load: {e}")
-        return [0.0, -1000.0, 0.0]  # Safe default
+    return [float(component) for component in force_vector[:3]]

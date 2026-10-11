@@ -174,9 +174,10 @@ class GmshRunner:
             gmsh.model.mesh.generate(self.meshing_config.get_mesh_dimension())
 
             return True
+        except MeshingError:
+            raise
         except Exception as e:
-            logger.error(f"Error in API meshing: {str(e)}")
-            return False
+            raise MeshingError(f"Error in API meshing: {str(e)}") from e
 
     def _run_executable_meshing(
         self, algorithm: str, timeout: Optional[int] = None
@@ -531,63 +532,6 @@ class GmshRunner:
         }
 
         return algo_map.get(algorithm, 5)  # Default to Delaunay if unknown
-
-    def set_mesh_size(self, dim: int, tag: int, size: float) -> None:
-        """
-        Set mesh size for a specific entity.
-
-        Args:
-            dim (int): Dimension of the entity.
-            tag (int): Tag of the entity.
-            size (float): Mesh size to apply.
-        """
-        try:
-            gmsh.model.mesh.setSize([(dim, tag)], size)
-        except Exception as e:
-            logger.warning(
-                f"Error setting mesh size for entity ({dim}, {tag}): {str(e)}"
-            )
-
-    def set_transfinite_curve(self, tag: int, num_points: int) -> None:
-        """
-        Set transfinite meshing for a curve.
-
-        Args:
-            tag (int): Tag of the curve.
-            num_points (int): Number of mesh points on the curve.
-        """
-        try:
-            gmsh.model.mesh.setTransfiniteCurve(tag, num_points)
-        except Exception as e:
-            logger.warning(
-                f"Error setting transfinite curve for entity {tag}: {str(e)}"
-            )
-
-    def set_transfinite_surface(self, tag: int) -> None:
-        """
-        Set transfinite meshing for a surface.
-
-        Args:
-            tag (int): Tag of the surface.
-        """
-        try:
-            gmsh.model.mesh.setTransfiniteSurface(tag)
-        except Exception as e:
-            logger.warning(
-                f"Error setting transfinite surface for entity {tag}: {str(e)}"
-            )
-
-    def set_recombine_surface(self, tag: int) -> None:
-        """
-        Set recombine option for a surface to generate quadrilateral elements.
-
-        Args:
-            tag (int): Tag of the surface.
-        """
-        try:
-            gmsh.model.mesh.setRecombine(2, tag)
-        except Exception as e:
-            logger.warning(f"Error setting recombine for surface {tag}: {str(e)}")
 
     def __del__(self):
         """

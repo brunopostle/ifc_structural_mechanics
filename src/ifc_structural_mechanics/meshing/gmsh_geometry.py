@@ -19,6 +19,7 @@ import numpy as np
 from ..config.meshing_config import MeshingConfig
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
+from ..utils.error_handling import MeshingError
 
 logger = logging.getLogger(__name__)
 
@@ -113,26 +114,16 @@ class GmshGeometryConverter:
 
                 # Reduce terminal output
                 gmsh.option.setNumber("General.Terminal", 0)
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Failed to initialize Gmsh: {e}")
+                raise MeshingError(f"Failed to initialize Gmsh: {e}") from e
 
-        # Now try to set up the model
-        try:
-            # Try to add a new model
-            try:
-                gmsh.model.add("structural_model")
-            except Exception as e:
-                logger.debug(f"Could not add model: {e}")
-                # If model already exists, remove it first
-                try:
-                    gmsh.model.remove()
-                    gmsh.model.add("structural_model")
-                except Exception as e:
-                    logger.debug(f"Could not remove/add model: {e}")
-                    # If that still fails, just continue
-                    pass
-        except Exception as e:
-            logger.warning(f"Failed to set up Gmsh model: {e}")
+        # A model of this name left over from an earlier run is replaced
+        if "structural_model" in gmsh.model.list():
+            gmsh.model.setCurrent("structural_model")
+            gmsh.model.remove()
+        gmsh.model.add("structural_model")
 
     # ------------------------------------------------------------------
     # Shared point registry helpers
@@ -189,16 +180,24 @@ class GmshGeometryConverter:
             try:
                 pt = self._get_or_create_point(point[0], point[1], point[2], dim=1)
                 point_tags.append(pt)
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
+                raise MeshingError(
+                    f"Error adding Gmsh point for member {member.id}: {e}"
+                ) from e
 
         line_tags = []
         for i in range(len(point_tags) - 1):
             try:
                 line_tag = gmsh.model.occ.addLine(point_tags[i], point_tags[i + 1])
                 line_tags.append(line_tag)
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Error adding Gmsh line for member {member.id}: {e}")
+                raise MeshingError(
+                    f"Error adding Gmsh line for member {member.id}: {e}"
+                ) from e
 
         # Accumulate for fragment
         for tag in line_tags:
@@ -245,8 +244,12 @@ class GmshGeometryConverter:
             try:
                 pt = self._get_or_create_point(point[0], point[1], point[2], dim=2)
                 point_tags.append(pt)
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Error adding Gmsh point for member {member.id}: {e}")
+                raise MeshingError(
+                    f"Error adding Gmsh point for member {member.id}: {e}"
+                ) from e
 
         # Create lines forming a closed loop
         line_tags = []
@@ -256,17 +259,24 @@ class GmshGeometryConverter:
                     point_tags[i], point_tags[(i + 1) % len(point_tags)]
                 )
                 line_tags.append(line_tag)
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Error adding Gmsh line for member {member.id}: {e}")
+                raise MeshingError(
+                    f"Error adding Gmsh line for member {member.id}: {e}"
+                ) from e
 
         # Create curve loop and surface
         surface_tag = None
         try:
             curve_loop_tag = gmsh.model.occ.addCurveLoop(line_tags)
             surface_tag = gmsh.model.occ.addPlaneSurface([curve_loop_tag])
+        except MeshingError:
+            raise
         except Exception as e:
-            logger.warning(f"Error creating surface for member {member.id}: {e}")
-            return None, point_tags
+            raise MeshingError(
+                f"Error creating surface for member {member.id}: {e}"
+            ) from e
 
         # Accumulate for fragment
         self._all_surface_dim_tags.append((2, surface_tag))
@@ -347,8 +357,10 @@ class GmshGeometryConverter:
                         else ""
                     )
                 )
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Curve fragment failed: {e}")
+                raise MeshingError(f"Curve fragment failed: {e}") from e
 
         # Fragment surfaces against surfaces (and against connection points)
         surface_tools = [(0, pt) for pt in (surface_point_tags or [])]
@@ -363,8 +375,10 @@ class GmshGeometryConverter:
                 logger.info(
                     f"Fragment surfaces: {len(self._all_surface_dim_tags)} -> {len(out_s)}"
                 )
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.warning(f"Surface fragment failed: {e}")
+                raise MeshingError(f"Surface fragment failed: {e}") from e
 
         # Build combined fragment_map aligned with the combined input list
         # (curves first, then surfaces) so _remap_tags_after_fragment works
@@ -823,8 +837,12 @@ class GmshGeometryConverter:
                 for mid in member_ids:
                     self.physical_group_map[phys_tag] = mid
                 phys_tag += 1
+            except MeshingError:
+                raise
             except Exception as e:
-                logger.debug(f"Could not create physical group for {member_ids}: {e}")
+                raise MeshingError(
+                    f"Could not create physical group for {member_ids}: {e}"
+                ) from e
 
         logger.info(f"Created {phys_tag - 1} physical groups")
 
@@ -854,22 +872,17 @@ class GmshGeometryConverter:
 
         # Also collect points from post-fragment entities that may have new tags
         # Get all points in the model after synchronize
-        try:
-            all_points = gmsh.model.getEntities(0)
-            # For any point not yet assigned a size, use a reasonable default
-            default_size = min(point_sizes.values()) if point_sizes else 1.0
-            for dim, tag in all_points:
-                if tag not in point_sizes:
-                    point_sizes[tag] = default_size
-        except Exception:
-            pass
+        existing = {tag for _, tag in gmsh.model.getEntities(0)}
+        # For any point not yet assigned a size, use a reasonable default
+        default_size = min(point_sizes.values()) if point_sizes else 1.0
+        for tag in existing:
+            point_sizes.setdefault(tag, default_size)
 
-        # Apply sizes
+        # Apply sizes; fragmenting merges coincident points, so some of the
+        # tags recorded before it no longer exist
         for pt, size in point_sizes.items():
-            try:
+            if pt in existing:
                 gmsh.model.mesh.setSize([(0, pt)], size)
-            except Exception as e:
-                logger.debug(f"Could not set mesh size for point {pt}: {e}")
 
     # ------------------------------------------------------------------
     # Main entry point: convert_model with shared topology
@@ -925,8 +938,10 @@ class GmshGeometryConverter:
         # Phase 3: Single synchronize
         try:
             gmsh.model.occ.synchronize()
+        except MeshingError:
+            raise
         except Exception as e:
-            logger.warning(f"Error synchronizing Gmsh model: {e}")
+            raise MeshingError(f"Error synchronizing Gmsh model: {e}") from e
 
         # Phase 4: Remap tags + traceability
         self._remap_tags_after_fragment(domain_model)
@@ -949,186 +964,6 @@ class GmshGeometryConverter:
     # ------------------------------------------------------------------
     # Public standalone API (for individual member conversion and tests)
     # ------------------------------------------------------------------
-
-    def convert_curve_member(self, member: CurveMember) -> List[int]:
-        """
-        Convert a curve member to Gmsh geometry (standalone, with synchronize).
-
-        Args:
-            member (CurveMember): The curve member to convert.
-
-        Returns:
-            List[int]: List of Gmsh entity tags created for this member.
-        """
-        # Ensure Gmsh is initialized
-        self._ensure_gmsh_initialized()
-
-        # Get element type and size for curve members
-        element_type = self.meshing_config.get_element_type("curve_members")
-        element_size = self.meshing_config.get_element_size("curve_members")
-
-        # Convert curve geometry
-        curve_points = self._convert_curve(member.geometry)
-
-        # Create line from points
-        line_tags = []
-        point_tags = []
-
-        # First create all points
-        for point in curve_points:
-            try:
-                point_tag = gmsh.model.occ.addPoint(point[0], point[1], point[2])
-                point_tags.append(point_tag)
-            except Exception as e:
-                logger.warning(f"Error adding Gmsh point: {e}")
-
-        # Then create lines between consecutive points
-        for i in range(len(point_tags) - 1):
-            try:
-                line_tag = gmsh.model.occ.addLine(point_tags[i], point_tags[i + 1])
-                line_tags.append(line_tag)
-            except Exception as e:
-                logger.warning(f"Error adding Gmsh line: {e}")
-
-        # Synchronize before applying mesh parameters
-        try:
-            gmsh.model.occ.synchronize()
-        except Exception as e:
-            logger.warning(f"Error synchronizing Gmsh model: {e}")
-
-        # Apply mesh size to the points (instead of lines)
-        for point_tag in point_tags:
-            try:
-                gmsh.model.mesh.setSize([(0, point_tag)], element_size)
-            except Exception as e:
-                logger.warning(f"Error setting mesh size: {e}")
-
-        # Register mesh entities in domain model for traceability
-        if hasattr(self, "domain_model") and self.domain_model:
-            # Convert tags to strings for consistent ID format
-            mesh_ids = [str(tag) for tag in line_tags]
-            self.domain_model.register_mesh_entities(
-                member.id, mesh_ids, entity_type="member"
-            )
-
-        # Maintain backward compatibility with _entity_map
-        self._entity_map[member.id] = {
-            "type": "curve",
-            "gmsh_tags": line_tags,
-            "element_type": element_type,
-        }
-
-        logger.info(
-            f"Converted curve member {member.id} to Gmsh geometry with {len(line_tags)} line segments"
-        )
-        return line_tags
-
-    def convert_surface_member(self, member: SurfaceMember) -> List[int]:
-        """
-        Convert a surface member to Gmsh geometry (standalone, with synchronize).
-
-        Args:
-            member (SurfaceMember): The surface member to convert.
-
-        Returns:
-            List[int]: List of Gmsh entity tags created for this member.
-        """
-        # Ensure Gmsh is initialized
-        self._ensure_gmsh_initialized()
-
-        # Get element type and size for surface members
-        element_type = self.meshing_config.get_element_type("surface_members")
-        element_size = self.meshing_config.get_element_size("surface_members")
-
-        # Convert surface geometry
-        surface_points = self._convert_surface(member.geometry)
-
-        # Create points
-        point_tags = []
-        for point in surface_points:
-            try:
-                point_tag = gmsh.model.occ.addPoint(point[0], point[1], point[2])
-                point_tags.append(point_tag)
-            except Exception as e:
-                logger.warning(f"Error adding Gmsh point: {e}")
-
-        # Create lines to form a closed loop
-        line_tags = []
-        for i in range(len(point_tags)):
-            try:
-                line_tag = gmsh.model.occ.addLine(
-                    point_tags[i], point_tags[(i + 1) % len(point_tags)]
-                )
-                line_tags.append(line_tag)
-            except Exception as e:
-                logger.warning(f"Error adding Gmsh line: {e}")
-
-        # Create a curve loop
-        curve_loop_tag = None
-        surface_tag = None
-        try:
-            curve_loop_tag = gmsh.model.occ.addCurveLoop(line_tags)
-
-            # Create the surface using the curve loop
-            surface_tag = gmsh.model.occ.addPlaneSurface([curve_loop_tag])
-        except Exception as e:
-            logger.warning(f"Error creating surface: {e}")
-            # Return early if we couldn't create the surface
-            if not surface_tag:
-                return []
-
-        # Synchronize before applying mesh parameters
-        try:
-            gmsh.model.occ.synchronize()
-        except Exception as e:
-            logger.warning(f"Error synchronizing Gmsh model: {e}")
-
-        # Apply mesh size to points
-        for point_tag in point_tags:
-            try:
-                gmsh.model.mesh.setSize([(0, point_tag)], element_size)
-            except Exception as e:
-                logger.warning(f"Error setting mesh size: {e}")
-
-        # Register mesh entities in domain model for traceability
-        if hasattr(self, "domain_model") and self.domain_model:
-            # Convert tag to string for consistent ID format
-            mesh_ids = [str(surface_tag)]
-            self.domain_model.register_mesh_entities(
-                member.id, mesh_ids, entity_type="member"
-            )
-
-        # Maintain backward compatibility with _entity_map
-        self._entity_map[member.id] = {
-            "type": "surface",
-            "gmsh_tags": [surface_tag] if surface_tag else [],
-            "element_type": element_type,
-        }
-
-        logger.info(
-            f"Converted surface member {member.id} to Gmsh geometry with surface tag {surface_tag}"
-        )
-        return [surface_tag] if surface_tag else []
-
-    def apply_mesh_size(
-        self, gmsh_entity: int, size: float, dimension: int = 1
-    ) -> None:
-        """
-        Apply mesh size to a Gmsh geometric entity.
-
-        Args:
-            gmsh_entity (int): Gmsh entity tag to apply mesh size to.
-            size (float): Desired mesh element size.
-            dimension (int, optional): Dimension of the entity. Defaults to 1 (curve).
-        """
-        # Ensure Gmsh is initialized
-        self._ensure_gmsh_initialized()
-
-        # Apply mesh size using the simpler setSize method instead of fields
-        try:
-            gmsh.model.mesh.setSize([(dimension, gmsh_entity)], size)
-        except Exception as e:
-            logger.warning(f"Error applying mesh size: {e}")
 
     def _convert_point(self, point: Any) -> np.ndarray:
         """

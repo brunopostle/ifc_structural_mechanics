@@ -8,6 +8,7 @@ and match the IFC specification for load hierarchies.
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from ifc_structural_mechanics.domain.load import (
     AreaLoad,
@@ -15,6 +16,7 @@ from ifc_structural_mechanics.domain.load import (
     PointLoad,
 )
 from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
+from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
 
 
 class TestLoadsExtractor:
@@ -49,6 +51,8 @@ class TestLoadsExtractor:
         self.point_load_applied.ForceZ = -2000.0
         self.point_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
         self.point_load.AppliedLoad = self.point_load_applied
+        # A load with no position is an error, not a load at the origin
+        self.point_load.PointLocation.Coordinates = [1.0, 2.0, 3.0]
 
         # Create mock line load (IFC4 style)
         self.line_load = MagicMock()
@@ -67,7 +71,8 @@ class TestLoadsExtractor:
         self.line_load.MomentZ = 0.0
 
         # Set up AppliedLoad for the line_load to handle extraction more robustly
-        self.line_load_applied = MagicMock()
+        # spec: a bare mock has every attribute, LinearForceX included
+        self.line_load_applied = MagicMock(spec=["ForceX", "ForceY", "ForceZ", "is_a"])
         self.line_load_applied.ForceX = 0.0
         self.line_load_applied.ForceY = 0.0
         self.line_load_applied.ForceZ = -5000.0
@@ -91,12 +96,18 @@ class TestLoadsExtractor:
         self.area_load.MomentZ = 0.0
 
         # Set up AppliedLoad for the area_load to handle extraction more robustly
-        self.area_load_applied = MagicMock()
+        # spec: a bare mock has every attribute, LinearForceX included
+        self.area_load_applied = MagicMock(spec=["ForceX", "ForceY", "ForceZ", "is_a"])
         self.area_load_applied.ForceX = 0.0
         self.area_load_applied.ForceY = 0.0
         self.area_load_applied.ForceZ = -2000.0
         self.area_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
         self.area_load.AppliedLoad = self.area_load_applied
+        # A load on no member is an error, not a load on a default surface
+        slab_relation = MagicMock()
+        slab_relation.is_a = lambda x: x == "IfcRelConnectsStructuralActivity"
+        slab_relation.RelatingElement.GlobalId = "surface_1"
+        self.area_load.AssignedToStructuralItem = [slab_relation]
 
         # Setup mock load group (IFC4 style)
         self.load_group = MagicMock()
@@ -188,7 +199,7 @@ class TestLoadsExtractor:
         # Mock relationship to member
         applied_rel = MagicMock()
         applied_rel.RelatingElement = member
-        load.AppliedOn = [applied_rel]
+        load.AssignedToStructuralItem = [applied_rel]
 
         # Create patch function for find_member_endpoints
         def mock_endpoints(m, unit_scale=None):
@@ -345,14 +356,38 @@ class TestLoadsExtractor:
 
     def test_error_handling(self):
         """Test error handling when extractor encounters issues."""
-        # Configure IFC to raise an exception
+        # A file that cannot be queried is an error, not a model with no loads
         self.mock_ifc.by_type.side_effect = Exception("Test error")
 
-        # Call the method - should not raise an exception
-        loads = self.extractor.extract_all_loads()
+        with pytest.raises(Exception, match="Test error"):
+            self.extractor.extract_all_loads()
 
-        # Verify empty result
-        assert loads == []
+    def test_load_without_position_is_an_error(self):
+        self.point_load.PointLocation = None
+        self.point_load.Representation = None
+        self.point_load.AssignedToStructuralItem = []
+        with pytest.raises(ModelExtractionError, match="pl1.*position"):
+            self.extractor.extract_all_loads()
+
+    def test_applied_moment_is_an_error(self):
+        self.point_load_applied.MomentY = 250.0
+        with pytest.raises(ModelExtractionError, match="pl1.*MomentY"):
+            self.extractor.extract_all_loads()
+
+    def test_unsupported_applied_load_is_an_error(self):
+        self.point_load_applied.is_a = lambda *args: (
+            args[0] == "IfcStructuralLoadTemperature"
+            if args
+            else "IfcStructuralLoadTemperature"
+        )
+        with pytest.raises(ModelExtractionError, match="IfcStructuralLoadTemperature"):
+            self.extractor.extract_all_loads()
+
+    def test_area_load_on_no_member_is_an_error(self):
+        self.area_load.AssignedToStructuralItem = []
+        self.mock_ifc.get_inverse.return_value = []
+        with pytest.raises(ModelExtractionError, match="al1.*not assigned"):
+            self.extractor.extract_all_loads()
 
     def test_no_default_load_group(self):
         """Test that no default group is created when no load groups exist."""
@@ -488,13 +523,20 @@ class TestLoadConfigurationAveraging:
         result, is_per_length = ext._extract_line_force_vector(cfg)
         assert is_per_length is True
         assert abs(result[2] - (-1500.0)) < 1e-9
+        # The distribution is lost, and the user is told so
+        assert any("varies along its member" in w for w in ext.warnings)
 
-    def test_empty_config_returns_zero(self):
+    def test_uniform_configuration_raises_no_warning(self):
+        ext = self._make_extractor()
+        values = [self._make_linear_force(fz=-1000.0) for _ in range(2)]
+        ext._extract_line_force_vector(self._make_config(values))
+        assert ext.warnings == []
+
+    def test_empty_config_is_an_error(self):
         ext = self._make_extractor()
         cfg = self._make_config([])
-        result, is_per_length = ext._extract_line_force_vector(cfg)
-        assert result == [0.0, 0.0, 0.0]
-        assert is_per_length is False
+        with pytest.raises(ModelExtractionError, match="no values"):
+            ext._extract_line_force_vector(cfg)
 
     def test_three_point_load_averages_correctly(self):
         ext = self._make_extractor()

@@ -77,7 +77,8 @@ class Material:
         if not self.name:
             raise ValueError("Material name cannot be empty")
 
-        if self.density <= 0:
+        # None: the file gives no density and the member weighs nothing
+        if self.density is not None and self.density <= 0:
             raise ValueError(f"Density must be positive, got {self.density}")
 
         if self.elastic_modulus <= 0:
@@ -501,8 +502,11 @@ class Section:
         self.moment_of_inertia_y = (bo * ho**3) / 12 - (bi * hi**3) / 12
         self.moment_of_inertia_z = (ho * bo**3) / 12 - (hi * bi**3) / 12
 
-        # Approximate torsional constant
-        self.torsional_constant = 2 * t * (bo - t) * (ho - t) ** 2 / (bo + ho - 2 * t)
+        # Torsional constant of a thin-walled closed section (Bredt):
+        # 4 Am^2 t / perimeter, on the wall's centre line
+        self.torsional_constant = (
+            2 * t * (bo - t) ** 2 * (ho - t) ** 2 / (bo + ho - 2 * t)
+        )
 
         # Warping constant - simplified approximation
         self.warping_constant = None  # Complex calculation

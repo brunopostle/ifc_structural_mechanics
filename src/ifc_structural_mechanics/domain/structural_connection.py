@@ -176,14 +176,8 @@ class StructuralConnection(DomainEntity):
         """
         logger = logging.getLogger(__name__)
 
-        # SAFE BASE VALIDATION
-        base_valid = True
-        try:
-            super().validate()
-            logger.debug(f"Connection {self.id}: Base validation passed")
-        except Exception as e:
-            logger.debug(f"Connection {self.id}: Base validation failed (handled): {e}")
-            base_valid = True  # We handle this gracefully
+        # Raises ValueError on a connection with no position or members
+        base_valid = bool(super().validate())
 
         # MEMBERS VALIDATION
         members_count = len(self.connected_members)

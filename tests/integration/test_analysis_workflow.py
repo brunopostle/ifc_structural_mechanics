@@ -600,6 +600,10 @@ class TestUnifiedAnalysisWorkflow:
 
             mock_mesh.cells = MagicMock()
             mock_mesh.cells.items = mock_cell_items
+            # One physical group per member, as the geometry stage writes
+            # them: without them elements cannot be told apart
+            mock_mesh.cell_data = {"gmsh:physical": [list(range(1, 11))]}
+            mock_mesh.field_data = {f"beam_{i}": [i + 1, 1] for i in range(10)}
             mock_meshio_read.return_value = mock_mesh
 
             # Time the workflow (simple timing check)
@@ -640,9 +644,15 @@ class TestUnifiedAnalysisWorkflow:
                 "src.ifc_structural_mechanics.meshing.gmsh_geometry.GmshGeometryConverter"
             ),
             patch("src.ifc_structural_mechanics.meshing.gmsh_runner.GmshRunner"),
-            patch("meshio.read"),
+            patch("meshio.read") as mock_meshio_read,
             patch("builtins.open", MagicMock()),
         ):
+            # A mesh for the point load to land on
+            mock_mesh = MagicMock()
+            mock_mesh.points = [[0, 0, 0], [2.5, 0, 0], [5, 0, 0]]
+            mock_mesh.cells = MagicMock()
+            mock_mesh.cells.items = lambda: [("line", [[0, 1], [1, 2]])]
+            mock_meshio_read.return_value = mock_mesh
 
             result_file = run_complete_analysis_workflow(
                 domain_model=domain_model,

@@ -9,7 +9,7 @@ different parts of the model.
 import logging
 import os
 import uuid
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.unit
@@ -20,13 +20,11 @@ from .connections_extractor import ConnectionsExtractor
 from .entity_identifier import (
     is_structural_connection,
     is_structural_curve_member,
-    is_structural_load,
     is_structural_member,
     is_structural_surface_member,
 )
 from .loads_extractor import LoadsExtractor
 from .members_extractor import MembersExtractor
-from .properties_extractor import PropertiesExtractor
 
 
 class Extractor:
@@ -49,7 +47,9 @@ class Extractor:
             FileNotFoundError: If the IFC file does not exist
         """
         self.logger = logging.getLogger(__name__)
-        self.warnings = []  # Store warnings for reporting
+        # What the analysis will not do exactly as the file says. They end
+        # up in ``model.analysis_warnings`` and from there in the results
+        self.warnings: List[str] = []
 
         # Handle different input types
         if isinstance(ifc_file, str):
@@ -74,7 +74,6 @@ class Extractor:
 
         # Initialize specialized extractors with unit scales
         self.members_extractor = MembersExtractor(self.ifc, self.unit_scales)
-        self.properties_extractor = PropertiesExtractor(self.ifc, self.unit_scales)
         self.connections_extractor = ConnectionsExtractor(self.ifc, self.unit_scales)
         self.loads_extractor = LoadsExtractor(self.ifc, self.unit_scales)
 
@@ -87,79 +86,36 @@ class Extractor:
         """
         unit_scales = {}
 
-        try:
-            # Common unit types used in structural analysis
-            unit_types = [
-                "LENGTHUNIT",
-                "FORCEUNIT",
-                "PRESSUREUNIT",
-                "MOMENTUNIT",
-                "MASSUNIT",
-                "TIMEUNIT",
-            ]
+        for unit_type in ("LENGTHUNIT", "FORCEUNIT", "PRESSUREUNIT", "MASSUNIT"):
+            try:
+                scale = ifcopenshell.util.unit.calculate_unit_scale(self.ifc, unit_type)
+            except ModelExtractionError:
+                raise
+            except Exception as error:
+                raise ModelExtractionError(
+                    f"The {unit_type} of the IFC file cannot be worked out, so "
+                    f"its values cannot be converted: {error}"
+                ) from error
+            unit_scales[unit_type] = scale
+            self.logger.info(f"Unit scale for {unit_type}: {scale}")
 
-            for unit_type in unit_types:
-                try:
-                    scale = ifcopenshell.util.unit.calculate_unit_scale(
-                        self.ifc, unit_type
+        # Fix ifcopenshell bug: calculate_unit_scale for MASSUNIT with
+        # GRAM-based units (e.g. MEGA GRAM) returns prefix*1.0 instead
+        # of prefix*0.001 because GRAM != KILOGRAM (the SI base).
+        # Detect GRAM-based mass units and apply the missing 0.001 factor.
+        if unit_scales["MASSUNIT"] != 1.0:
+            for assignment in self.ifc.by_type("IfcUnitAssignment"):
+                if any(
+                    getattr(unit, "UnitType", None) == "MASSUNIT"
+                    and getattr(unit, "Name", None) == "GRAM"
+                    for unit in assignment.Units
+                ):
+                    unit_scales["MASSUNIT"] *= 0.001
+                    self.logger.info(
+                        f"Corrected MASSUNIT scale for GRAM base: "
+                        f"{unit_scales['MASSUNIT']}"
                     )
-                    unit_scales[unit_type] = scale
-                    self.logger.info(f"Unit scale for {unit_type}: {scale}")
-                except Exception as e:
-                    # If we can't get a specific unit, use default scale (1.0)
-                    unit_scales[unit_type] = 1.0
-                    self.logger.warning(
-                        f"Could not determine scale for {unit_type}, using 1.0: {e}"
-                    )
-
-            # Fix ifcopenshell bug: calculate_unit_scale for MASSUNIT with
-            # GRAM-based units (e.g. MEGA GRAM) returns prefix*1.0 instead
-            # of prefix*0.001 because GRAM != KILOGRAM (the SI base).
-            # Detect GRAM-based mass units and apply the missing 0.001 factor.
-            if "MASSUNIT" in unit_scales and unit_scales["MASSUNIT"] != 1.0:
-                try:
-                    for ua in self.ifc.by_type("IfcUnitAssignment"):
-                        for unit in ua.Units:
-                            if (
-                                hasattr(unit, "UnitType")
-                                and unit.UnitType == "MASSUNIT"
-                                and hasattr(unit, "Name")
-                                and unit.Name == "GRAM"
-                            ):
-                                unit_scales["MASSUNIT"] *= 0.001
-                                self.logger.info(
-                                    f"Corrected MASSUNIT scale for GRAM base: "
-                                    f"{unit_scales['MASSUNIT']}"
-                                )
-                                break
-                except Exception:
-                    pass
-
-            # If we couldn't get any units, use defaults
-            if not unit_scales:
-                unit_scales = {
-                    "LENGTHUNIT": 1.0,  # Default: meters
-                    "FORCEUNIT": 1.0,  # Default: newtons
-                    "PRESSUREUNIT": 1.0,  # Default: pascals
-                    "MOMENTUNIT": 1.0,  # Default: newton meters
-                    "MASSUNIT": 1.0,  # Default: kilograms
-                    "TIMEUNIT": 1.0,  # Default: seconds
-                }
-                self.logger.warning(
-                    "Could not determine unit scales, using default values (SI units)"
-                )
-
-        except Exception as e:
-            self.logger.error(f"Error getting unit scales: {e}")
-            # Use default values
-            unit_scales = {
-                "LENGTHUNIT": 1.0,
-                "FORCEUNIT": 1.0,
-                "PRESSUREUNIT": 1.0,
-                "MOMENTUNIT": 1.0,
-                "MASSUNIT": 1.0,
-                "TIMEUNIT": 1.0,
-            }
+                    break
 
         # Warn when the model is not in SI base units so engineers know
         # their values will be scaled. Most structural tools use metres, but
@@ -168,7 +124,6 @@ class Extractor:
             "LENGTHUNIT": "m",
             "FORCEUNIT": "N",
             "PRESSUREUNIT": "Pa",
-            "MOMENTUNIT": "N·m",
             "MASSUNIT": "kg",
         }
         for unit_type, si_label in _si_labels.items():
@@ -202,49 +157,66 @@ class Extractor:
         analysis_models = list(self.ifc.by_type("IfcStructuralAnalysisModel"))
 
         if analysis_models:
-            self.logger.info(f"Found {len(analysis_models)} structural analysis models")
-            # Use the first analysis model if multiple are present
             analysis_model = analysis_models[0]
-
-            # Use analysis model ID and name if not provided
-            if model_id is None:
-                model_id = analysis_model.GlobalId
-            if name is None:
-                name = analysis_model.Name or "Structural Analysis Model"
-
-            # Get all structural items from the model
-            model = StructuralModel(model_id, name)
-
-            # Extract items from the analysis model's groups
+            if len(analysis_models) > 1:
+                self.warnings.append(
+                    f"The file has {len(analysis_models)} structural analysis "
+                    f"models; only the first, "
+                    f"'{analysis_model.Name or analysis_model.GlobalId}', is "
+                    "analysed."
+                )
+            model = StructuralModel(
+                model_id or analysis_model.GlobalId,
+                name or analysis_model.Name or "Structural Analysis Model",
+            )
             self._extract_items_from_analysis_model(analysis_model, model)
-
-            # Extract loads and load groups
-            self._extract_loads_for_model(model)
-
-            self._extract_properties_for_model(model)
-
         else:
             self.logger.info(
                 "No IfcStructuralAnalysisModel found, extracting structural elements directly"
             )
-            # Create a new model with provided or default ID/name
-            if model_id is None:
-                model_id = self._generate_model_id()
-            if name is None:
-                name = self._extract_model_name() or "Structural Analysis Model"
-
-            # Create a new structural model
-            model = StructuralModel(model_id, name)
-
-            # Extract structural elements directly
+            model = StructuralModel(
+                model_id or self._generate_model_id(),
+                name or self._extract_model_name() or "Structural Analysis Model",
+            )
             self._extract_items_directly(model)
 
-            # Extract loads and load groups
-            self._extract_loads_for_model(model)
-
-            self._extract_properties_for_model(model)
-
+        self._extract_loads_for_model(model)
+        self._pass_on_warnings(model)
         return model
+
+    def _pass_on_warnings(self, model: StructuralModel) -> None:
+        """Put the extractors' warnings where the results pick them up."""
+        messages = list(self.warnings)
+        for extractor in (
+            self.members_extractor,
+            self.connections_extractor,
+            self.loads_extractor,
+        ):
+            messages.extend(getattr(extractor, "warnings", None) or [])
+        if not hasattr(model, "analysis_warnings"):
+            model.analysis_warnings = []
+        seen = {warning["message"] for warning in model.analysis_warnings}
+        for message in messages:
+            if message in seen:
+                continue
+            seen.add(message)
+            self.logger.warning(message)
+            model.analysis_warnings.append(
+                {
+                    "message": message,
+                    "severity": "warning",
+                    "entity_type": None,
+                    "ccx_id": None,
+                    "domain_id": None,
+                }
+            )
+
+    def _add_member(self, entity, model) -> None:
+        """Add the member an IFC entity describes; an error if it cannot be."""
+        if is_structural_curve_member(entity):
+            model.add_member(self.members_extractor._create_curve_member(entity))
+        elif is_structural_surface_member(entity):
+            model.add_member(self.members_extractor._create_surface_member(entity))
 
     def _extract_items_from_analysis_model(self, analysis_model, model):
         """
@@ -253,62 +225,20 @@ class Extractor:
         Args:
             analysis_model: The IfcStructuralAnalysisModel entity
             model: The domain model to populate
+
+        Raises:
+            ModelExtractionError: If a member or connection of the model
+                cannot be analysed. Loads are read with their load groups.
         """
-        # Get all structural items grouped in the analysis model
         for group in analysis_model.IsGroupedBy:
-            if hasattr(group, "RelatedObjects"):
-                for item in group.RelatedObjects:
-                    if is_structural_member(item):
-                        try:
-                            if is_structural_curve_member(item):
-                                member = self.members_extractor._create_curve_member(
-                                    item
-                                )
-                                if member:
-                                    model.add_member(member)
-                            elif is_structural_surface_member(item):
-                                member = self.members_extractor._create_surface_member(
-                                    item
-                                )
-                                if member:
-                                    model.add_member(member)
-                        except ModelExtractionError:
-                            raise  # e.g. a profile that cannot be analysed
-                        except Exception as e:
-                            self.warnings.append(
-                                f"Failed to extract member {item.GlobalId}: {e}"
-                            )
-                            self.logger.error(f"Failed to extract member: {e}")
+            for item in getattr(group, "RelatedObjects", None) or []:
+                if is_structural_member(item):
+                    self._add_member(item, model)
+                elif is_structural_connection(item):
+                    model.add_connection(
+                        self.connections_extractor._create_domain_connection(item)
+                    )
 
-                    elif is_structural_connection(item):
-                        try:
-                            connection = (
-                                self.connections_extractor._create_domain_connection(
-                                    item
-                                )
-                            )
-                            if connection:
-                                model.add_connection(connection)
-                        except Exception as e:
-                            self.warnings.append(
-                                f"Failed to extract connection {item.GlobalId}: {e}"
-                            )
-                            self.logger.error(f"Failed to extract connection: {e}")
-
-                    elif is_structural_load(item):
-                        # Extract load directly
-                        try:
-                            load = self.loads_extractor._create_domain_load(item)
-                            if load:
-                                # We'll handle adding to load groups later
-                                pass
-                        except Exception as e:
-                            self.warnings.append(
-                                f"Failed to extract load {item.GlobalId}: {e}"
-                            )
-                            self.logger.error(f"Failed to extract load: {e}")
-
-        # Report results
         self.logger.info(f"Added {len(model.members)} structural members to the model")
         self.logger.info(
             f"Added {len(model.connections)} structural connections to the model"
@@ -320,74 +250,27 @@ class Extractor:
 
         Args:
             model: The domain model to populate
+
+        Raises:
+            ModelExtractionError: If a member or connection cannot be analysed.
         """
-        # Extract members
-        try:
-            curve_members = []
-            for entity in self.ifc.by_type("IfcStructuralCurveMember"):
-                try:
-                    member = self.members_extractor._create_curve_member(entity)
-                    if member:
-                        curve_members.append(member)
-                        model.add_member(member)
-                except ModelExtractionError:
-                    raise  # e.g. a profile that cannot be analysed
-                except Exception as e:
-                    self.warnings.append(
-                        f"Failed to extract curve member {entity.GlobalId}: {e}"
-                    )
-                    self.logger.warning(f"Failed to extract curve member: {e}")
+        for entity_type in ("IfcStructuralCurveMember", "IfcStructuralSurfaceMember"):
+            for entity in self.ifc.by_type(entity_type):
+                self._add_member(entity, model)
+        self.logger.info(f"Added {len(model.members)} structural members to the model")
 
-            surface_members = []
-            for entity in self.ifc.by_type("IfcStructuralSurfaceMember"):
-                try:
-                    member = self.members_extractor._create_surface_member(entity)
-                    if member:
-                        surface_members.append(member)
-                        model.add_member(member)
-                except Exception as e:
-                    self.warnings.append(
-                        f"Failed to extract surface member {entity.GlobalId}: {e}"
-                    )
-                    self.logger.warning(f"Failed to extract surface member: {e}")
-
-            self.logger.info(
-                f"Added {len(curve_members) + len(surface_members)} structural members to the model"
-            )
-        except ModelExtractionError:
-            raise
-        except Exception as e:
-            self.logger.error(f"Failed to extract members: {e}")
-            self.warnings.append(f"Failed to extract members: {e}")
-
-        # Extract connections
-        try:
-            connections = []
-            for entity_type in [
-                "IfcStructuralPointConnection",
-                "IfcStructuralCurveConnection",
-                "IfcStructuralSurfaceConnection",
-            ]:
-                for entity in self.ifc.by_type(entity_type):
-                    try:
-                        connection = (
-                            self.connections_extractor._create_domain_connection(entity)
-                        )
-                        if connection:
-                            connections.append(connection)
-                            model.add_connection(connection)
-                    except Exception as e:
-                        self.warnings.append(
-                            f"Failed to extract connection {entity.GlobalId}: {e}"
-                        )
-                        self.logger.warning(f"Failed to extract connection: {e}")
-
-            self.logger.info(
-                f"Added {len(connections)} structural connections to the model"
-            )
-        except Exception as e:
-            self.logger.error(f"Failed to extract connections: {e}")
-            self.warnings.append(f"Failed to extract connections: {e}")
+        for entity_type in (
+            "IfcStructuralPointConnection",
+            "IfcStructuralCurveConnection",
+            "IfcStructuralSurfaceConnection",
+        ):
+            for entity in self.ifc.by_type(entity_type):
+                model.add_connection(
+                    self.connections_extractor._create_domain_connection(entity)
+                )
+        self.logger.info(
+            f"Added {len(model.connections)} structural connections to the model"
+        )
 
     def _extract_loads_for_model(self, model):
         """
@@ -395,147 +278,42 @@ class Extractor:
 
         Args:
             model: The domain model to populate with loads and load groups
+
+        Raises:
+            ModelExtractionError: If a load of a group cannot be analysed.
         """
-        try:
-            # Extract load groups
-            self.logger.info("Extracting load groups")
-            load_groups = self.loads_extractor.extract_load_groups()
-            self.logger.info(f"Extracted {len(load_groups)} load groups from IFC")
+        load_groups = self.loads_extractor.extract_load_groups()
+        for group in load_groups:
+            if group.loads:
+                model.add_load_group(group)
 
-            # Add all valid load groups to the model
-            valid_group_count = 0
-            for group in load_groups:
-                if len(group.loads) > 0:
-                    model.add_load_group(group)
-                    valid_group_count += 1
-                    self.logger.info(
-                        f"Added load group '{group.name}' with {len(group.loads)} loads"
-                    )
-
-            # If we didn't add any groups but have some load groups,
-            # something might be wrong with the load assignments
-            if valid_group_count == 0 and load_groups:
-                # Create a basic integrity test - extract all loads directly
-                # and see if we can assign them to groups
-                all_loads = self.loads_extractor.extract_all_loads()
-                if all_loads:
-                    # Create a default group for these loads
-                    import uuid
-
-                    from ..domain.load import LoadGroup
-
-                    default_group = LoadGroup(
-                        id=str(uuid.uuid4()),
-                        name="Default Load Group",
-                        description="Automatically created for unassigned loads",
-                    )
-
-                    for load in all_loads:
-                        default_group.add_load(load)
-
-                    model.add_load_group(default_group)
-                    self.logger.info(
-                        f"Created default load group with {len(all_loads)} loads"
-                    )
-                    valid_group_count += 1
-
-            # Extract load combinations
-            self.logger.info("Extracting load combinations")
-            load_combinations = self.loads_extractor.extract_load_combinations()
-
-            # Add all combinations to the model
-            for combo in load_combinations:
-                model.add_load_combination(combo)
-                self.logger.info(f"Added load combination '{combo.name}'")
-
-                # Make sure the referenced load groups exist in the model
-                for group_id in combo.load_groups.keys():
-                    if model.get_load_group(group_id) is None:
-                        # This load group doesn't exist, find it in the original load_groups list
-                        for group in load_groups:
-                            if group.id == group_id:
-                                # Add this group to the model even if it has no loads
-                                model.add_load_group(group)
-                                self.logger.info(
-                                    f"Added load group '{group.name}' referenced by combination"
-                                )
-                                break
-
-            # Report results
-            self.logger.info(f"Added {len(model.load_groups)} load groups to the model")
-            self.logger.info(
-                f"Added {len(model.load_combinations)} load combinations to the model"
+        grouped = {load.id for group in load_groups for load in group.loads}
+        loose = [
+            action
+            for action in self.ifc.by_type("IfcStructuralAction")
+            if action.GlobalId not in grouped
+        ]
+        if loose:
+            self.warnings.append(
+                f"{len(loose)} load(s) of the file belong to no load group or "
+                "load case and are not applied (the first is "
+                f"{loose[0].GlobalId})."
             )
 
-        except Exception as e:
-            self.logger.error(f"Failed to extract loads for model: {e}")
-            self.warnings.append(f"Failed to extract loads: {e}")
+        for combo in self.loads_extractor.extract_load_combinations():
+            model.add_load_combination(combo)
+            # A combination may name a group that has no loads of its own
+            for group_id in combo.load_groups:
+                if model.get_load_group(group_id) is None:
+                    for group in load_groups:
+                        if group.id == group_id:
+                            model.add_load_group(group)
+                            break
 
-    def _extract_properties_for_model(self, model):
-        """Extract material and section properties for all members."""
-        try:
-            materials_extracted = 0
-            sections_extracted = 0
-
-            # Extract properties for each member
-            for member in model.members:
-                # Get the original IFC entity for this member
-                ifc_entity = self._find_ifc_entity_by_id(member.id)
-                if not ifc_entity:
-                    continue
-
-                # Extract material if not already set
-                if not hasattr(member, "material") or member.material is None:
-                    material = self.properties_extractor.extract_material(ifc_entity)
-                    if material:
-                        member.material = material
-                        materials_extracted += 1
-
-                # Extract section if not already set
-                if not hasattr(member, "section") or member.section is None:
-                    section = self.properties_extractor.extract_section(ifc_entity)
-                    if section:
-                        member.section = section
-                        sections_extracted += 1
-
-                # For surface members, extract thickness
-                if hasattr(member, "member_type") and member.member_type == "surface":
-                    if not hasattr(member, "thickness") or member.thickness is None:
-                        thickness = self.properties_extractor.extract_thickness(
-                            ifc_entity
-                        )
-                        if thickness:
-                            member.thickness = thickness
-
-            self.logger.info(
-                f"Extracted {materials_extracted} materials and {sections_extracted} sections"
-            )
-
-        except Exception as e:
-            self.logger.error(f"Failed to extract properties: {e}")
-            self.warnings.append(f"Failed to extract properties: {e}")
-
-    def _find_ifc_entity_by_id(self, entity_id):
-        """Find IFC entity by GlobalId."""
-        try:
-            # Search through relevant IFC entity types
-            entity_types = [
-                "IfcStructuralCurveMember",
-                "IfcStructuralSurfaceMember",
-                "IfcStructuralPointConnection",
-                "IfcStructuralCurveConnection",
-                "IfcStructuralSurfaceConnection",
-            ]
-
-            for entity_type in entity_types:
-                for entity in self.ifc.by_type(entity_type):
-                    if hasattr(entity, "GlobalId") and entity.GlobalId == entity_id:
-                        return entity
-
-        except Exception as e:
-            self.logger.warning(f"Error finding IFC entity for ID {entity_id}: {e}")
-
-        return None
+        self.logger.info(f"Added {len(model.load_groups)} load groups to the model")
+        self.logger.info(
+            f"Added {len(model.load_combinations)} load combinations to the model"
+        )
 
     def _generate_model_id(self) -> str:
         """
@@ -553,20 +331,16 @@ class Extractor:
         Returns:
             A name string or None if extraction fails
         """
-        try:
-            # Try to get name from project
-            projects = list(self.ifc.by_type("IfcProject"))
-            if projects and hasattr(projects[0], "Name") and projects[0].Name:
-                return projects[0].Name
+        # Try to get name from project
+        projects = list(self.ifc.by_type("IfcProject"))
+        if projects and hasattr(projects[0], "Name") and projects[0].Name:
+            return projects[0].Name
 
-            # Try to get name from the filename
-            if hasattr(self.ifc, "wrapped_data") and hasattr(
-                self.ifc.wrapped_data, "filename"
-            ):
-                filename = self.ifc.wrapped_data.filename
-                return os.path.splitext(os.path.basename(filename))[0]
+        # Try to get name from the filename
+        if hasattr(self.ifc, "wrapped_data") and hasattr(
+            self.ifc.wrapped_data, "filename"
+        ):
+            filename = self.ifc.wrapped_data.filename
+            return os.path.splitext(os.path.basename(filename))[0]
 
-            return None
-        except Exception as e:
-            self.logger.warning(f"Failed to extract model name: {e}")
-            return None
+        return None

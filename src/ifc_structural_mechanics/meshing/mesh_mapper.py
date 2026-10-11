@@ -19,6 +19,7 @@ from typing import Callable, Dict, List, Set
 import numpy as np
 
 from ..domain.structural_model import StructuralModel
+from ..utils.error_handling import MeshingError
 
 logger = logging.getLogger(__name__)
 
@@ -162,9 +163,11 @@ class MeshMapper:
             if not geom or not isinstance(geom, list):
                 continue
             try:
-                pts = np.array(geom)
+                pts = np.array(geom, dtype=float)
                 centroid = pts.mean(axis=0)
-            except Exception:
+            except (ValueError, TypeError):
+                # No usable points: the member gets no elements, which the
+                # writer reports
                 continue
 
             is_surface = member.entity_type == "surface"
@@ -187,7 +190,7 @@ class MeshMapper:
                     elem_centroid = np.mean(node_coords, axis=0)
                     dist = float(np.linalg.norm(elem_centroid - centroid))
                     best_elems.append((dist, elem_id))
-                except Exception:
+                except (ValueError, TypeError):
                     continue
 
             if not best_elems:
@@ -253,8 +256,13 @@ class MeshMapper:
     def _distribute(self, elements: List[int], members: List, member_type: str) -> None:
         """Distribute elements equally among members (naive round-robin)."""
         if not elements or not members:
-            logger.warning(f"No {member_type} elements or members to distribute")
             return
+        if len(members) > 1:
+            raise MeshingError(
+                f"The mesh carries no physical groups, so its {len(elements)} "
+                f"{member_type} elements cannot be attributed to the "
+                f"{len(members)} {member_type} members."
+            )
         per = len(elements) // len(members)
         rem = len(elements) % len(members)
         start = 0

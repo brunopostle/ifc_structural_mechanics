@@ -27,11 +27,21 @@ import math
 import os
 import shutil
 
+import numpy as np
 import pytest
 
 ifcopenshell = pytest.importorskip("ifcopenshell")
 
+from ifc_structural_mechanics.analysis.results_parser import (  # noqa: E402
+    ResultsParser,
+)
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc  # noqa: E402
+from ifc_structural_mechanics.converters.section_profiles import (  # noqa: E402
+    expanded_rectangle_torsion_stiffness,
+)
+from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
+    ModelExtractionError,
+)
 
 IFC_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 CANTILEVER = os.path.join(IFC_DIR, "cantilever_01.ifc")
@@ -498,6 +508,42 @@ class TestISectionAsEquivalentRectangle:
         assert envelope["max_normal_stress_Pa"] == pytest.approx(
             moment / inertia * fibre, rel=FORCE_TOLERANCE
         )
+
+
+class TestMaterialWithoutDensity:
+    """cantilever_01 with the density taken out of its material.
+
+    The member used to be given the weight of steel. Now it weighs nothing,
+    the result says so, and asking for self-weight is refused.
+    """
+
+    def _variant(self, tmp_path) -> str:
+        model = ifcopenshell.open(CANTILEVER)
+        for pset in model.by_type("IfcMaterialProperties"):
+            if pset.Name == "Pset_MaterialCommon":
+                model.remove(pset)
+        path = str(tmp_path / "variant.ifc")
+        model.write(path)
+        return path
+
+    def test_warning_reaches_the_result(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=self._variant(tmp_path),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=MESH_SIZE,
+        )
+        assert result["status"] == "success", result.get("errors")
+        messages = [w["message"] for w in result["warnings"]]
+        assert any("no mass density" in m and "weightless" in m for m in messages)
+
+    def test_self_weight_is_refused(self, tmp_path):
+        with pytest.raises(ModelExtractionError, match="no mass density"):
+            analyze_ifc(
+                ifc_path=self._variant(tmp_path),
+                output_dir=str(tmp_path / "out"),
+                mesh_size=MESH_SIZE,
+                gravity=True,
+            )
 
 
 class TestRoundAndHollowSections:
@@ -1796,9 +1842,13 @@ class TestTorsion:
     """A cantilever twisted by a load on an arm at its tip.
 
     Statics gives the torque in the cantilever (P Lb) and the moments at the
-    two roots (P La and P Lb) whatever the stiffness. The tip deflection adds
-    the twist P Lb^2 La / G J to the bending of both members, so it measures
-    the torsional stiffness the analysis used.
+    two roots (P La and P Lb) whatever the stiffness. The rate at which the
+    cantilever twists, read from the solver's own nodes at two of its
+    cross-sections, gives the torsional stiffness the analysis used.
+
+    The tip deflection is not used for that: it is read on the faces of the
+    expanded elements, where the arm's rotation adds to it, and that once
+    made a square section 18 % too stiff look right.
     """
 
     MESH = 0.125
@@ -1808,13 +1858,35 @@ class TestTorsion:
         path = _balcony_frame(tmp_path, profile_class, attributes)
         return _run(path, tmp_path, mesh_size=self.MESH)
 
-    def _effective_torsion_constant(self, data, inertia) -> float:
-        """J backed out of the tip deflection, bending taken as exact."""
-        bending = (
-            TORSION_P * (TORSION_LA**3 + TORSION_LB**3) / (3 * TORSION_E * inertia)
-        )
-        twist = _max_vertical_deflection(data) - bending
-        return TORSION_P * TORSION_LB**2 * TORSION_LA / (self.SHEAR_MODULUS * twist)
+    def _torsion_constant_used(self, tmp_path) -> float:
+        """J backed out of the twist between two cross-sections of the cantilever."""
+        frd = str(tmp_path / f"out_{self.MESH}" / "analysis.frd")
+        parser = ResultsParser()
+        coordinates = parser.parse_node_coordinates(frd)
+        vertical = {
+            int(result.reference_element): result.get_translations()[2]
+            for result in parser.parse_displacements(frd)
+        }
+        twists = []
+        for target in (TORSION_LA / 3, 2 * TORSION_LA / 3):
+            station = min(
+                (xyz[0] for xyz in coordinates.values() if abs(xyz[1]) < 0.5),
+                key=lambda x: abs(x - target),
+            )
+            nodes = [
+                node
+                for node, xyz in coordinates.items()
+                if abs(xyz[0] - station) < 1e-6 and node in vertical
+            ]
+            slope = np.polyfit(
+                [coordinates[node][1] for node in nodes],
+                [vertical[node] for node in nodes],
+                1,
+            )[0]
+            twists.append((station, slope))
+        (x1, twist1), (x2, twist2) = twists
+        rate = abs((twist2 - twist1) / (x2 - x1))
+        return TORSION_P * TORSION_LB / (self.SHEAR_MODULUS * rate)
 
     def test_torque_and_moments_follow_from_statics(self, tmp_path):
         data = self._run(tmp_path, "IfcRectangleProfileDef", {"XDim": 0.3, "YDim": 0.3})
@@ -1830,84 +1902,76 @@ class TestTorsion:
         )
         assert arm["max_T_Nm"] < 1e-3 * TORSION_P * TORSION_LB
 
-    def test_square_section_twists_as_theory_says(self, tmp_path):
-        """J = 0.1406 s^4 for a square; bending, twist and shear together."""
-        side = 0.3
-        data = self._run(
-            tmp_path, "IfcRectangleProfileDef", {"XDim": side, "YDim": side}
+    @pytest.mark.parametrize(
+        "width, depth, saint_venant, excess",
+        [(0.3, 0.3, 0.1406 * 0.3**4, 1.185), (0.2, 0.4, 0.229 * 0.4 * 0.2**3, 1.164)],
+        ids=["square", "one by two"],
+    )
+    def test_solid_rectangle_is_too_stiff_in_torsion_by_a_known_factor(
+        self, tmp_path, width, depth, saint_venant, excess
+    ):
+        """Not a pass mark: CalculiX's own error, which the README owns up to.
+
+        One solid element across the section can only warp as x2 * x3, which
+        gives J = a^3 b^3 / 3 (a^2 + b^2) instead of Saint-Venant's value.
+        """
+        self._run(tmp_path, "IfcRectangleProfileDef", {"XDim": width, "YDim": depth})
+        used = self._torsion_constant_used(tmp_path)
+        assert used == pytest.approx(
+            expanded_rectangle_torsion_stiffness(depth, width, 1.0, 1.0), rel=0.01
         )
-        inertia = side**4 / 12
-        shear_stiffness = self.SHEAR_MODULUS * side**2 * 5 / 6
-        expected = (
-            TORSION_P * (TORSION_LA**3 + TORSION_LB**3) / (3 * TORSION_E * inertia)
-            + TORSION_P
-            * TORSION_LB**2
-            * TORSION_LA
-            / (self.SHEAR_MODULUS * 0.1406 * side**4)
-            + TORSION_P * (TORSION_LA + TORSION_LB) / shear_stiffness
-        )
-        assert _max_vertical_deflection(data) == pytest.approx(
-            expected, rel=DEFLECTION_TOLERANCE
-        )
+        assert used / saint_venant == pytest.approx(excess, rel=0.01)
 
     @pytest.mark.parametrize(
-        "profile_class, attributes, inertia, torsion_constant, measured_ratio",
+        "profile_class, attributes, torsion_constant",
         [
-            (
-                "IfcIShapeProfileDef",
-                {
-                    "OverallWidth": I_B,
-                    "OverallDepth": I_H,
-                    "WebThickness": I_TW,
-                    "FlangeThickness": I_TF,
-                },
-                I_STRONG,
-                (2 * I_B * I_TF**3 + (I_H - 2 * I_TF) * I_TW**3) / 3,
-                31.0,
-            ),
             (
                 "IfcCircleHollowProfileDef",
                 {"Radius": 0.15, "WallThickness": 0.01},
-                math.pi / 4 * (0.15**4 - 0.14**4),
                 math.pi / 2 * (0.15**4 - 0.14**4),
-                0.47,
             ),
             (
                 "IfcRectangleHollowProfileDef",
                 {"XDim": 0.2, "YDim": 0.4, "WallThickness": 0.01},
-                (0.2 * 0.4**3 - 0.18 * 0.38**3) / 12,
                 4 * (0.19 * 0.39) ** 2 * 0.01 / (2 * (0.19 + 0.39)),
-                0.67,
             ),
-            (
-                "IfcCircleProfileDef",
-                {"Radius": 0.1},
-                math.pi / 4 * 0.1**4,
-                math.pi / 2 * 0.1**4,
-                0.83,
-            ),
+            ("IfcCircleProfileDef", {"Radius": 0.1}, math.pi / 2 * 0.1**4),
         ],
-        ids=["I section", "tube", "box", "round bar"],
+        ids=["tube", "box", "round bar"],
     )
-    def test_equivalent_rectangle_is_wrong_in_torsion_by_a_known_factor(
-        self,
-        tmp_path,
-        profile_class,
-        attributes,
-        inertia,
-        torsion_constant,
-        measured_ratio,
+    def test_closed_and_round_sections_twist_as_theory_says(
+        self, tmp_path, profile_class, attributes, torsion_constant
     ):
+        """Their equivalent rectangle is given the section's torsion constant."""
+        data = self._run(tmp_path, profile_class, attributes)
+        assert self._torsion_constant_used(tmp_path) == pytest.approx(
+            torsion_constant, rel=0.01
+        )
+        main = data["members"][0]["envelope"]["section_forces"]
+        assert main["max_T_Nm"] == pytest.approx(
+            TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE
+        )
+
+    def test_open_section_is_far_too_stiff_in_torsion(self, tmp_path):
         """Not a pass mark: the size of an error the README owns up to.
 
-        The equivalent rectangle has the section's bending and shear
-        stiffness but not its torsional stiffness. This pins how far off it
-        is (the ratio of the stiffness used to the true one), so that a
-        change to it is noticed, and checks that statics still holds.
+        An I section's equivalent rectangle has its bending and shear
+        stiffness; nothing can give it the section's torsional stiffness as
+        well. This pins how far off it is, so that a change is noticed.
         """
-        data = self._run(tmp_path, profile_class, attributes)
-        ratio = self._effective_torsion_constant(data, inertia) / torsion_constant
-        assert ratio == pytest.approx(measured_ratio, rel=0.15)
+        data = self._run(
+            tmp_path,
+            "IfcIShapeProfileDef",
+            {
+                "OverallWidth": I_B,
+                "OverallDepth": I_H,
+                "WebThickness": I_TW,
+                "FlangeThickness": I_TF,
+            },
+        )
+        torsion_constant = (2 * I_B * I_TF**3 + (I_H - 2 * I_TF) * I_TW**3) / 3
+        ratio = self._torsion_constant_used(tmp_path) / torsion_constant
+        assert ratio == pytest.approx(29.9, rel=0.05)
         main = data["members"][0]["envelope"]["section_forces"]
         assert main["max_T_Nm"] == pytest.approx(
             TORSION_P * TORSION_LB, rel=FORCE_TOLERANCE

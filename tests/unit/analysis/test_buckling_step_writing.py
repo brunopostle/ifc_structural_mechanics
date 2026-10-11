@@ -40,6 +40,7 @@ class TestBucklingStepWriting:
     def _get_text(self, model=None, **kwargs):
         model = model or _buckling_model()
         buf = io.StringIO()
+        kwargs.setdefault("node_coords", {1: (0.0, 0.0, 0.0), 2: (0.0, 0.0, 2.0)})
         write_analysis_steps(buf, model, analysis_type="linear_buckling", **kwargs)
         return buf.getvalue()
 

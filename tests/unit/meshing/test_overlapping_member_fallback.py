@@ -187,7 +187,10 @@ class TestResolveOverlappingElementSets:
 
         assert writer.element_sets["MEMBER_ma"] == [10, 11]
         assert writer.element_sets["MEMBER_mb"] == []
-        assert any("already claimed" in r.message.lower() for r in caplog.records)
+        # The user is told, in the results and not only in the log
+        (message,) = [call.args[0] for call in writer._warn_user.call_args_list]
+        assert "1 member(s) overlap another member" in message
+        assert "mb" in message
 
     def test_partial_overlap_keeps_unclaimed_elements(self, caplog):
         """A member sharing only SOME elements with an earlier member keeps

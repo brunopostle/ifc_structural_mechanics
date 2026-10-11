@@ -15,7 +15,6 @@ import numpy as np
 
 # Updated imports to use existing domain model
 from ..domain.structural_connection import (
-    PointConnection,
     StructuralConnection,
     create_connection_from_stiffness,
 )
@@ -87,55 +86,14 @@ class ConnectionsExtractor:
         """
         self.logger.info("Extracting all structural connections")
 
-        # Get all structural connection entities
-        connection_entities = []
-
-        # Find point connections
-        try:
-            point_connections = list(self.ifc.by_type("IfcStructuralPointConnection"))
-            connection_entities.extend(point_connections)
-            self.logger.info(f"Found {len(point_connections)} point connections")
-        except Exception as e:
-            self.logger.warning(
-                f"Error finding IfcStructuralPointConnection entities: {e}"
-            )
-
-        # Find curve connections
-        try:
-            curve_connections = list(self.ifc.by_type("IfcStructuralCurveConnection"))
-            connection_entities.extend(curve_connections)
-            self.logger.info(f"Found {len(curve_connections)} curve connections")
-        except Exception as e:
-            self.logger.warning(
-                f"Error finding IfcStructuralCurveConnection entities: {e}"
-            )
-
-        # Find surface connections
-        try:
-            surface_connections = list(
-                self.ifc.by_type("IfcStructuralSurfaceConnection")
-            )
-            connection_entities.extend(surface_connections)
-            self.logger.info(f"Found {len(surface_connections)} surface connections")
-        except Exception as e:
-            self.logger.warning(
-                f"Error finding IfcStructuralSurfaceConnection entities: {e}"
-            )
-
-        # Convert entities to domain objects
         connections = []
-        for entity in connection_entities:
-            try:
-                connection = self._create_domain_connection(entity)
-                if connection:
-                    connections.append(connection)
-                    self.logger.debug(
-                        f"Successfully extracted connection {connection.id}"
-                    )
-            except Exception as e:
-                self.logger.error(
-                    f"Error extracting connection {getattr(entity, 'GlobalId', 'unknown')}: {e}"
-                )
+        for entity_type in (
+            "IfcStructuralPointConnection",
+            "IfcStructuralCurveConnection",
+            "IfcStructuralSurfaceConnection",
+        ):
+            for entity in self.ifc.by_type(entity_type):
+                connections.append(self._create_domain_connection(entity))
 
         self.logger.info(f"Extracted {len(connections)} structural connections")
         return connections
@@ -154,37 +112,24 @@ class ConnectionsExtractor:
         """
         self.logger.info(f"Extracting structural connection with ID: {connection_id}")
 
+        for entity_type in [
+            "IfcStructuralPointConnection",
+            "IfcStructuralCurveConnection",
+            "IfcStructuralSurfaceConnection",
+        ]:
+            for entity in self.ifc.by_type(entity_type):
+                if getattr(entity, "GlobalId", None) == connection_id:
+                    return self._create_domain_connection(entity)
+
+        # Not a GlobalId: a numeric STEP id, perhaps
         try:
-            # First try to find by GlobalId
-            for entity_type in [
-                "IfcStructuralPointConnection",
-                "IfcStructuralCurveConnection",
-                "IfcStructuralSurfaceConnection",
-            ]:
-                for entity in self.ifc.by_type(entity_type):
-                    if hasattr(entity, "GlobalId") and entity.GlobalId == connection_id:
-                        return self._create_domain_connection(entity)
-
-            # If not found by GlobalId, try by numeric ID
-            try:
-                entity = self.ifc.by_id(int(connection_id))
-                return self._create_domain_connection(entity)
-            except (ValueError, TypeError):
-                # connection_id is not numeric
-                pass
-            except Exception:
-                pass
-
+            entity = self.ifc.by_id(int(connection_id))
+        except (ValueError, TypeError, RuntimeError):
             self.logger.warning(f"Connection with ID {connection_id} not found")
             return None
+        return self._create_domain_connection(entity)
 
-        except Exception as e:
-            self.logger.error(f"Error extracting connection {connection_id}: {e}")
-            return None
-
-    def _create_domain_connection(
-        self, ifc_connection
-    ) -> Optional[StructuralConnection]:
+    def _create_domain_connection(self, ifc_connection) -> StructuralConnection:
         """
         Create a domain connection object from an IFC connection entity.
 
@@ -192,174 +137,133 @@ class ConnectionsExtractor:
             ifc_connection: IFC connection entity
 
         Returns:
-            Domain connection object with stiffness properties or None if creation fails
+            Domain connection object with stiffness properties
+
+        Raises:
+            ModelExtractionError: If the connection cannot be read or is of a
+                kind the analysis does not support. A connection is never left
+                out: the structure would be a different one.
         """
+        connection_id = getattr(ifc_connection, "GlobalId", None) or "?"
         try:
-            # Extract basic connection information
-            connection_id = ifc_connection.GlobalId
-            connection_type = analyze_connection_type(ifc_connection)
+            return self._build_domain_connection(ifc_connection)
+        except ModelExtractionError as error:
+            raise ModelExtractionError(
+                f"Connection {connection_id} cannot be analysed. {error.message}"
+            ) from error
+        except Exception as error:
+            raise ModelExtractionError(
+                f"Connection {connection_id} cannot be read from the IFC file: "
+                f"{type(error).__name__}: {error}"
+            ) from error
 
-            # Extract geometry and position
-            position = self._extract_position(ifc_connection)
-
-            # Extract stiffness properties using get_connection_input
-            stiffness_props = None
-            try:
-                geometry_type = self._determine_geometry_type(ifc_connection)
-                stiffness_props = get_connection_input(
-                    ifc_connection,
-                    geometry_type,
-                    self.length_scale,
-                    self.force_scale,
-                )
-
-                if stiffness_props:
-                    self.logger.debug(
-                        f"Extracted stiffness properties for {connection_id}: {stiffness_props}"
-                    )
-
-            except Exception as e:
-                self.logger.debug(f"No stiffness properties for {connection_id}: {e}")
-
-            # CREATE CONNECTION WITHOUT VALIDATION
-            connection = None
-            # Extract IFC GUID for traceability
-            ifc_guid = (
-                ifc_connection.GlobalId if hasattr(ifc_connection, "GlobalId") else None
+    def _build_domain_connection(self, ifc_connection) -> StructuralConnection:
+        """Create the domain connection; see ``_create_domain_connection``."""
+        if not (
+            ifc_connection.is_a("IfcStructuralPointConnection")
+            or ifc_connection.is_a("IfcStructuralCurveConnection")
+        ):
+            raise ModelExtractionError(
+                f"It is an {ifc_connection.is_a()}; only point and curve "
+                "connections are supported."
             )
 
-            if ifc_connection.is_a("IfcStructuralPointConnection"):
+        # Extract basic connection information
+        connection_id = ifc_connection.GlobalId
+        connection_type = analyze_connection_type(ifc_connection)
+
+        # Extract geometry and position
+        position = self._extract_position(ifc_connection)
+
+        # Extract stiffness properties using get_connection_input
+        stiffness_props = get_connection_input(
+            ifc_connection,
+            self._determine_geometry_type(ifc_connection),
+            self.length_scale,
+            self.force_scale,
+        )
+
+        # CREATE CONNECTION WITHOUT VALIDATION
+        connection = None
+        # Extract IFC GUID for traceability
+        ifc_guid = (
+            ifc_connection.GlobalId if hasattr(ifc_connection, "GlobalId") else None
+        )
+
+        if ifc_connection.is_a("IfcStructuralPointConnection"):
+            connection = create_connection_from_stiffness(
+                connection_id, position, stiffness_props, connection_type, ifc_guid
+            )
+
+        elif ifc_connection.is_a("IfcStructuralCurveConnection"):
+            # Handle curve connections
+            representation = get_representation(ifc_connection, "Edge")
+            if representation:
+                geometry = self._extract_geometry(representation)
+                geometry = self._apply_transformations(geometry, ifc_connection)
+
+                if not (
+                    isinstance(geometry, list)
+                    and len(geometry) >= 2
+                    and all(isinstance(g, list) for g in geometry)
+                ):
+                    raise ModelExtractionError("The ends of its edge cannot be read.")
+                midpoint = [(geometry[0][i] + geometry[1][i]) / 2 for i in range(3)]
+
                 connection = create_connection_from_stiffness(
-                    connection_id, position, stiffness_props, connection_type, ifc_guid
+                    connection_id,
+                    midpoint,
+                    stiffness_props,
+                    connection_type,
+                    ifc_guid,
                 )
-
-            elif ifc_connection.is_a("IfcStructuralCurveConnection"):
-                # Handle curve connections
-                representation = get_representation(ifc_connection, "Edge")
-                if representation:
-                    geometry = self._extract_geometry(representation)
-                    geometry = self._apply_transformations(geometry, ifc_connection)
-
-                    if (
-                        isinstance(geometry, list)
-                        and len(geometry) >= 2
-                        and all(isinstance(g, list) for g in geometry)
-                    ):
-                        midpoint = [
-                            (geometry[0][i] + geometry[1][i]) / 2 for i in range(3)
-                        ]
-                    else:
-                        midpoint = position
-
-                    connection = create_connection_from_stiffness(
-                        connection_id,
-                        midpoint,
-                        stiffness_props,
-                        connection_type,
-                        ifc_guid,
-                    )
-                    # Keep the edge itself: a line support or line joint acts
-                    # along its whole length, not at its midpoint.
-                    if midpoint is not position and connection is not None:
-                        connection.edge = [
-                            [float(v) for v in geometry[0]],
-                            [float(v) for v in geometry[1]],
-                        ]
-                else:
-                    connection = create_connection_from_stiffness(
-                        connection_id,
-                        position,
-                        stiffness_props,
-                        connection_type,
-                        ifc_guid,
-                    )
-
-            elif ifc_connection.is_a("IfcStructuralSurfaceConnection"):
-                connection = create_connection_from_stiffness(
-                    connection_id, position, stiffness_props, connection_type, ifc_guid
-                )
+                # Keep the edge itself: a line support or line joint acts
+                # along its whole length, not at its midpoint.
+                connection.edge = [
+                    [float(v) for v in geometry[0]],
+                    [float(v) for v in geometry[1]],
+                ]
             else:
-                # Default fallback
-                connection = PointConnection(connection_id, position, ifc_guid)
-                if stiffness_props:
-                    connection.set_stiffness_properties(stiffness_props)
+                raise ModelExtractionError("It has no edge representation.")
 
-            if not connection:
-                self.logger.warning(
-                    f"Failed to create connection object for {connection_id}"
-                )
-                return None
+        # COLLECT ALL CONNECTED MEMBERS FIRST
+        connected_elements = find_connected_elements(ifc_connection)
 
-            # COLLECT ALL CONNECTED MEMBERS FIRST
-            connected_elements = []
-            try:
-                connected_elements = find_connected_elements(ifc_connection)
-                self.logger.debug(
-                    f"Found {len(connected_elements)} connected elements for {connection_id}"
-                )
-            except Exception as e:
-                self.logger.debug(
-                    f"No connected elements found for {connection_id}: {e}"
-                )
+        # ENSURE WE ALWAYS HAVE AT LEAST 2 MEMBERS FOR VALIDATION
+        # This is the key fix: guarantee validation success by having enough members
+        all_members = list(connected_elements)  # Start with real members
 
-            # ENSURE WE ALWAYS HAVE AT LEAST 2 MEMBERS FOR VALIDATION
-            # This is the key fix: guarantee validation success by having enough members
-            all_members = list(connected_elements)  # Start with real members
+        # Add dummy members if we don't have enough
+        while len(all_members) < 2:
+            dummy_id = f"dummy_member_{len(all_members) + 1}_{connection_id}"
+            all_members.append(dummy_id)
 
-            # Add dummy members if we don't have enough
-            while len(all_members) < 2:
-                dummy_id = f"dummy_member_{len(all_members) + 1}_{connection_id}"
-                all_members.append(dummy_id)
+        # Add all members to the connection
+        for member_id in all_members:
+            connection.connect_member(member_id)
 
-            # Add all members to the connection
-            for member_id in all_members:
-                connection.connect_member(member_id)
+        self.logger.debug(
+            f"Connection {connection_id} has {len(connection.connected_members)} members "
+            f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
+        )
 
+        connection.local_axes = self._extract_local_axes(
+            ifc_connection, getattr(connection, "edge", None)
+        )
+
+        # Extract per-member rotational end-releases from AppliedCondition
+        release_axes: dict = {}
+        end_releases = self._extract_end_releases(ifc_connection, release_axes)
+        if end_releases:
+            connection.released_dofs_by_member = end_releases
+            connection.release_axes_by_member = release_axes
             self.logger.debug(
-                f"Connection {connection_id} has {len(connection.connected_members)} members "
-                f"({len(connected_elements)} real, {len(all_members) - len(connected_elements)} dummy)"
+                f"Connection {connection_id} has end-releases: {end_releases}"
             )
 
-            connection.local_axes = self._extract_local_axes(
-                ifc_connection, getattr(connection, "edge", None)
-            )
-
-            # Extract per-member rotational end-releases from AppliedCondition
-            release_axes: dict = {}
-            end_releases = self._extract_end_releases(ifc_connection, release_axes)
-            if end_releases:
-                connection.released_dofs_by_member = end_releases
-                connection.release_axes_by_member = release_axes
-                self.logger.debug(
-                    f"Connection {connection_id} has end-releases: {end_releases}"
-                )
-
-            # NOW VALIDATION SHOULD ALWAYS SUCCEED (connection has >= 2 members)
-            try:
-                if connection.validate():
-                    return connection
-                else:
-                    # This should never happen now, but log details if it does
-                    self.logger.error(
-                        f"Connection {connection_id} unexpectedly failed validation with {len(connection.connected_members)} members"
-                    )
-                    self.logger.error(f"Members: {connection.connected_members}")
-                    self.logger.error(
-                        f"Position: {getattr(connection, 'position', 'N/A')}"
-                    )
-                    self.logger.error(
-                        f"Stiffness: {connection.has_stiffness_properties()}"
-                    )
-                    return None
-            except Exception as e:
-                self.logger.error(f"Validation error for {connection_id}: {e}")
-                return None
-
-        except Exception as e:
-            self.logger.error(
-                f"Error creating domain connection {getattr(ifc_connection, 'GlobalId', 'unknown')}: {e}"
-            )
-            return None
+        if not connection.validate():
+            raise ModelExtractionError("It does not pass validation.")
+        return connection
 
     def _extract_local_axes(
         self, ifc_connection, edge: Optional[List[List[float]]] = None
@@ -413,12 +317,12 @@ class ConnectionsExtractor:
                 return None
 
             return self._orthonormal_axes(x_axis, z_axis)
+        except ModelExtractionError:
+            raise
         except Exception as e:
-            self.logger.warning(
-                f"Could not read the local axes of connection "
-                f"{getattr(ifc_connection, 'GlobalId', '?')}: {e}"
-            )
-            return None
+            raise ModelExtractionError(
+                f"Could not read the local axes of connection {getattr(ifc_connection, 'GlobalId', '?')}: {e}"
+            ) from e
 
     @staticmethod
     def _orthonormal_axes(x_axis, z_axis) -> Optional[List[List[float]]]:
@@ -476,12 +380,12 @@ class ConnectionsExtractor:
                 geometry[0], dtype=float
             )
             return self._orthonormal_axes(x_axis, axis.DirectionRatios)
+        except ModelExtractionError:
+            raise
         except Exception as e:
-            self.logger.warning(
-                f"Could not read the axes of relation "
-                f"{getattr(relation, 'GlobalId', '?')}: {e}"
-            )
-            return None
+            raise ModelExtractionError(
+                f"Could not read the axes of relation {getattr(relation, 'GlobalId', '?')}: {e}"
+            ) from e
 
     def _extract_end_releases(
         self, ifc_connection, axes_by_member: Optional[dict] = None
@@ -572,82 +476,58 @@ class ConnectionsExtractor:
         Returns:
             [x, y, z] position coordinates in SI units
         """
-        try:
-            # Method 1: Extract from TopologyRepresentation (VertexPoint geometry)
-            # This is the primary method for structural connections
-            representation = None
-            if ifc_connection.is_a("IfcStructuralPointConnection"):
-                representation = get_representation(ifc_connection, "Vertex")
-            elif ifc_connection.is_a("IfcStructuralCurveConnection"):
-                representation = get_representation(ifc_connection, "Edge")
+        # Method 1: Extract from TopologyRepresentation (VertexPoint geometry)
+        # This is the primary method for structural connections
+        representation = None
+        if ifc_connection.is_a("IfcStructuralPointConnection"):
+            representation = get_representation(ifc_connection, "Vertex")
+        elif ifc_connection.is_a("IfcStructuralCurveConnection"):
+            representation = get_representation(ifc_connection, "Edge")
 
+        self.logger.debug(
+            f"Connection {ifc_connection.GlobalId}: representation = {representation}"
+        )
+
+        if representation and representation.Items:
+            geometry = self._extract_geometry(representation)
             self.logger.debug(
-                f"Connection {ifc_connection.GlobalId}: representation = {representation}"
+                f"Connection {ifc_connection.GlobalId}: geometry = {geometry}"
             )
 
-            if representation and representation.Items:
-                geometry = self._extract_geometry(representation)
-                self.logger.debug(
-                    f"Connection {ifc_connection.GlobalId}: geometry = {geometry}"
-                )
-
-                if isinstance(geometry, list) and len(geometry) > 0:
-                    if all(isinstance(g, list) for g in geometry):
-                        # For curves or faces, use first point and convert to SI units
-                        result = [g * self.length_scale for g in geometry[0]]
-                        self.logger.debug(
-                            f"Connection {ifc_connection.GlobalId}: Method 1 result (nested list) = {result}"
-                        )
-                        return result
-                    else:
-                        # For points, convert to SI units
-                        result = [g * self.length_scale for g in geometry]
-                        self.logger.debug(
-                            f"Connection {ifc_connection.GlobalId}: Method 1 result (flat list) = {result}"
-                        )
-                        return result
-
-            # Method 2: Fallback to ObjectPlacement if TopologyRepresentation not available
-            if (
-                hasattr(ifc_connection, "ObjectPlacement")
-                and ifc_connection.ObjectPlacement
-            ):
-                try:
-                    # Get the 4x4 transformation matrix for absolute placement
-                    matrix = ifcopenshell.util.placement.get_local_placement(
-                        ifc_connection.ObjectPlacement
-                    )
-                    # The translation is in the last column, first 3 rows
-                    coords = [matrix[0][3], matrix[1][3], matrix[2][3]]
+            if isinstance(geometry, list) and len(geometry) > 0:
+                if all(isinstance(g, list) for g in geometry):
+                    # For curves or faces, use first point and convert to SI units
+                    result = [g * self.length_scale for g in geometry[0]]
                     self.logger.debug(
-                        f"Connection {ifc_connection.GlobalId}: ObjectPlacement coords = {coords}"
+                        f"Connection {ifc_connection.GlobalId}: Method 1 result (nested list) = {result}"
                     )
-                    # Only use if non-zero (structural connections often have (0,0,0) placement)
-                    if any(c != 0.0 for c in coords):
-                        # Convert to SI units
-                        result = [
-                            coords[0] * self.length_scale,
-                            coords[1] * self.length_scale,
-                            coords[2] * self.length_scale,
-                        ]
-                        self.logger.debug(
-                            f"Connection {ifc_connection.GlobalId}: Method 2 result = {result}"
-                        )
-                        return result
-                except Exception as e:
-                    self.logger.debug(f"Could not extract from ObjectPlacement: {e}")
+                    return result
+                else:
+                    # For points, convert to SI units
+                    result = [g * self.length_scale for g in geometry]
+                    self.logger.debug(
+                        f"Connection {ifc_connection.GlobalId}: Method 1 result (flat list) = {result}"
+                    )
+                    return result
 
-            self.logger.warning(
-                f"Could not extract position for connection {ifc_connection.GlobalId}, defaulting to origin"
+        # Method 2: Fallback to ObjectPlacement if TopologyRepresentation not available
+        if (
+            hasattr(ifc_connection, "ObjectPlacement")
+            and ifc_connection.ObjectPlacement
+        ):
+            matrix = ifcopenshell.util.placement.get_local_placement(
+                ifc_connection.ObjectPlacement
             )
-            return [0.0, 0.0, 0.0]
+            coords = [matrix[0][3], matrix[1][3], matrix[2][3]]
+            # Structural connections often have a placement at the origin and
+            # their real position in the topology, so the origin tells nothing
+            if any(c != 0.0 for c in coords):
+                return [c * self.length_scale for c in coords]
 
-        except Exception as e:
-            self.logger.error(f"Error extracting connection position: {e}")
-            import traceback
-
-            self.logger.error(traceback.format_exc())
-            return [0.0, 0.0, 0.0]
+        raise ModelExtractionError(
+            "Its position cannot be found: it has no vertex or edge "
+            "representation and no placement away from the origin."
+        )
 
     def _extract_geometry(self, representation):
         """
@@ -657,10 +537,11 @@ class ConnectionsExtractor:
             representation: IFC representation
 
         Returns:
-            Geometry data (will be scaled to SI units by the calling method)
+            Geometry data (will be scaled to SI units by the calling method),
+            or None when the representation holds no point, edge or face
         """
         if not representation or not representation.Items:
-            return [0.0, 0.0, 0.0]
+            return None
 
         item = representation.Items[0]
 
@@ -694,8 +575,7 @@ class ConnectionsExtractor:
                 if coord:
                     return coord
 
-        # Default
-        return [0.0, 0.0, 0.0]
+        return None
 
     def _apply_transformations(self, geometry, ifc_connection):
         """
@@ -708,72 +588,26 @@ class ConnectionsExtractor:
         Returns:
             Transformed geometry in SI units
         """
-        try:
-            # Apply transformation if available
-            transformation = None
-            if (
-                hasattr(ifc_connection, "ObjectPlacement")
-                and ifc_connection.ObjectPlacement
-            ):
-                transformation = get_transformation(ifc_connection.ObjectPlacement)
+        # Apply transformation if available
+        transformation = None
+        if (
+            hasattr(ifc_connection, "ObjectPlacement")
+            and ifc_connection.ObjectPlacement
+        ):
+            transformation = get_transformation(ifc_connection.ObjectPlacement)
 
-            if transformation and geometry:
-                try:
-                    geometry = transform_vectors(geometry, transformation)
-                except Exception as e:
-                    self.logger.warning(f"Error applying transformation: {e}")
+        if transformation and geometry:
+            geometry = transform_vectors(geometry, transformation)
 
-            # Apply unit scale to geometry
-            if isinstance(geometry, list):
-                if all(isinstance(g, list) for g in geometry):
-                    # List of points
-                    geometry = [
-                        [c * self.length_scale for c in point] for point in geometry
-                    ]
-                else:
-                    # Single point
-                    geometry = [c * self.length_scale for c in geometry]
+        # Apply unit scale to geometry
+        if isinstance(geometry, list):
+            if all(isinstance(g, list) for g in geometry):
+                # List of points
+                geometry = [
+                    [c * self.length_scale for c in point] for point in geometry
+                ]
+            else:
+                # Single point
+                geometry = [c * self.length_scale for c in geometry]
 
-            return geometry
-
-        except Exception as e:
-            self.logger.warning(f"Error applying transformations: {e}")
-            return geometry
-
-    def _extract_rotation_axis(self, ifc_connection) -> List[float]:
-        """
-        Extract the rotation axis for a hinge connection.
-
-        RESTORED: This method was missing and causing test failures.
-
-        Args:
-            ifc_connection: IFC connection entity
-
-        Returns:
-            [x, y, z] rotation axis vector
-        """
-        try:
-            # Try to get from condition coordinate system
-            if (
-                hasattr(ifc_connection, "ConditionCoordinateSystem")
-                and ifc_connection.ConditionCoordinateSystem
-            ):
-                axes = ifc_connection.ConditionCoordinateSystem
-                if (
-                    hasattr(axes, "Axis")
-                    and axes.Axis
-                    and hasattr(axes, "RefDirection")
-                    and axes.RefDirection
-                ):
-                    zAxis = np.array(axes.Axis.DirectionRatios)
-                    zAxis = zAxis / np.linalg.norm(zAxis)
-
-                    # Return z-axis as rotation axis
-                    return zAxis.tolist()
-
-            # Default vertical rotation axis
-            return [0.0, 0.0, 1.0]
-
-        except Exception as e:
-            self.logger.error(f"Error extracting rotation axis: {e}")
-            return [0.0, 0.0, 1.0]
+        return geometry

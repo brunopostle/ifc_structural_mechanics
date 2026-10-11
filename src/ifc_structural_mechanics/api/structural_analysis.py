@@ -135,6 +135,23 @@ def analyze_ifc(
             f"Extracted structural model with {len(domain_model.members)} members"
         )
 
+        # Self-weight cannot be worked out for a material with no density
+        if gravity:
+            weightless = sorted(
+                {
+                    member.material.name
+                    for member in domain_model.members
+                    if member.material is not None and member.material.density is None
+                }
+            )
+            if weightless:
+                raise ModelExtractionError(
+                    "Self-weight was asked for (--gravity), but these materials "
+                    "have no mass density (Pset_MaterialCommon.MassDensity): "
+                    + ", ".join(weightless)
+                    + "."
+                )
+
         # Step 1b: Pre-analysis model validation
         validation_warnings = _validate_model(domain_model, gravity)
         result["warnings"].extend(validation_warnings)
@@ -166,7 +183,9 @@ def analyze_ifc(
         )
 
         logger.info(f"Generated unified CalculiX input file: {unified_inp_file}")
-        result["warnings"].extend(getattr(domain_model, "analysis_warnings", []))
+        model_warnings = getattr(domain_model, "analysis_warnings", [])
+        result["warnings"].extend(model_warnings)
+        warnings_passed_on = len(model_warnings)
 
         # Step 5: Run the CalculiX analysis
         logger.info("Running CalculiX analysis...")
@@ -230,6 +249,10 @@ def analyze_ifc(
                 )
                 parsed_results = results_parser.parse_results(calculix_output_files)
                 result["parsed_results"] = parsed_results
+                # Warnings raised while reading the results
+                result["warnings"].extend(
+                    getattr(domain_model, "analysis_warnings", [])[warnings_passed_on:]
+                )
                 logger.info("Successfully parsed analysis results")
 
                 # Export GlobalId-keyed JSON results
@@ -377,6 +400,8 @@ def extract_model(ifc_path: str) -> StructuralModel:
         model = extractor.extract_model()
 
         return model
+    except ModelExtractionError:
+        raise
     except Exception as e:
         raise ModelExtractionError(f"Failed to extract model from IFC file: {str(e)}")
 
@@ -483,9 +508,12 @@ def _validate_model(domain_model, gravity: bool) -> list:
             f"— CalculiX will reject them: {ids}{suffix}"
         )
 
-    # Check every member has a section
+    # Check every curve member has a section (a surface member has a thickness)
     members_missing_section = [
-        m for m in domain_model.members if not getattr(m, "section", None)
+        m
+        for m in domain_model.members
+        if getattr(m, "entity_type", None) == "curve"
+        and not getattr(m, "section", None)
     ]
     if members_missing_section:
         ids = ", ".join(str(m.id) for m in members_missing_section[:5])

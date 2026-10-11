@@ -183,7 +183,17 @@ class TestUnifiedCalculixWriter:
             ),  # Slab triangles
         ]
 
-        return meshio.Mesh(points=points, cells=cells)
+        # One physical group per member, as the geometry stage writes them
+        return meshio.Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"gmsh:physical": [np.array([1, 2]), np.array([3, 3, 3, 3])]},
+            field_data={
+                "column_1": np.array([1, 1]),
+                "beam_1": np.array([2, 1]),
+                "slab_1": np.array([3, 2]),
+            },
+        )
 
     def test_initialization(self):
         """Test that UnifiedCalculixWriter initializes correctly."""

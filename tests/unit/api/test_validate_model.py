@@ -62,6 +62,7 @@ from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
 def _make_member(id, *, material=None, section=None):
     m = MagicMock()
     m.id = id
+    m.entity_type = "curve"
     m.material = material
     m.section = section
     return m

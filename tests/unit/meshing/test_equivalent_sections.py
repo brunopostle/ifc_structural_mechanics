@@ -6,7 +6,11 @@ import re
 import pytest
 
 from ifc_structural_mechanics.config.analysis_config import AnalysisConfig
-from ifc_structural_mechanics.converters.section_profiles import equivalent_rectangle
+from ifc_structural_mechanics.converters.section_profiles import (
+    equivalent_rectangle,
+    equivalent_shear_moduli,
+    expanded_rectangle_torsion_stiffness,
+)
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.result import DisplacementResult, StressResult
 from ifc_structural_mechanics.domain.structural_member import CurveMember
@@ -109,6 +113,33 @@ class TestEquivalentRectangle:
             equivalent_rectangle(AREA, I_STRONG, 0.0)
 
 
+class TestShearModuli:
+    def test_isotropic_square_is_stiffer_than_saint_venant(self):
+        """One element across the section: G a^4 / 6, not 0.1406 G a^4."""
+        assert expanded_rectangle_torsion_stiffness(
+            0.3, 0.3, 1.0, 1.0
+        ) == pytest.approx(0.3**4 / 6)
+
+    def test_narrow_rectangle_tends_to_the_thin_strip(self):
+        assert expanded_rectangle_torsion_stiffness(
+            1.0, 0.01, 1.0, 1.0
+        ) == pytest.approx(1.0 * 0.01**3 / 3, rel=1e-3)
+
+    def test_shear_is_matched_without_a_torsion_constant(self):
+        g12, g13, scale = equivalent_shear_moduli(0.4, 0.2, 8e10, 0.004, 0.008)
+        assert g12 * 0.4 * 0.2 == pytest.approx(8e10 * 0.004)
+        assert g13 * 0.4 * 0.2 == pytest.approx(8e10 * 0.008)
+        assert scale == 1.0
+
+    def test_torsion_is_matched_with_one(self):
+        g12, g13, scale = equivalent_shear_moduli(0.4, 0.2, 8e10, 0.004, 0.008, 2e-4)
+        assert expanded_rectangle_torsion_stiffness(
+            0.4, 0.2, g12, g13
+        ) == pytest.approx(8e10 * 2e-4)
+        assert g12 / g13 == pytest.approx(0.5)
+        assert g12 * 0.4 * 0.2 == pytest.approx(scale * 8e10 * 0.004)
+
+
 class TestChoiceOfModel:
     def test_mixed_model_gets_equivalent_rectangles(self):
         writer = _writer()
@@ -136,7 +167,24 @@ class TestChoiceOfModel:
         assert len(messages) == 1
         assert "1 member(s) whose section is not a solid rectangle" in messages[0]
         assert "no stress is reported" in messages[0]
+        assert "1 with an open section" in messages[0]
+        assert "do not rely on results where they carry torsion" in messages[0]
+        assert "closed or round" not in messages[0]
         assert writer.domain_model.equivalent_section_members == {"beam"}
+
+    def test_user_is_told_closed_sections_trade_shear_for_torsion(self):
+        writer = _writer()
+        beam = writer.domain_model.get_member("beam")
+        beam.section = Section.create_hollow_circular_section(
+            "s", "pipe", outer_radius=0.1, thickness=0.01
+        )
+        writer.domain_model.analysis_warnings.clear()
+        writer._equivalent_sections = {}
+        writer._identify_and_retype_u1_members()
+
+        (message,) = [w["message"] for w in writer.domain_model.analysis_warnings]
+        assert "1 with a closed or round section have its torsional" in message
+        assert "open section" not in message
 
     @pytest.mark.parametrize(
         "section",
@@ -211,7 +259,7 @@ class TestWrittenInput:
         assert poisson == pytest.approx(NU)
 
     def test_shear_moduli_give_the_section_its_own_shear_stiffness(self):
-        """CalculiX's expanded rectangle shears over its whole area."""
+        """An open section: shear is matched, over the rectangle's whole area."""
         writer = _writer()
         section = writer.domain_model.get_member("beam").section
         section.shear_area_y = H * TW
@@ -227,6 +275,43 @@ class TestWrittenInput:
         assert constants[7] * a * b == pytest.approx(shear * 2 * B * TF, rel=1e-6)
         # In the plane of the cross-section the scaled material is as isotropic
         assert float(lines[2]) == pytest.approx(constants[0] / (2 * (1 + NU)))
+
+    @pytest.mark.parametrize(
+        "section",
+        [
+            Section.create_circular_section("s", "bar", radius=0.1),
+            Section.create_hollow_circular_section(
+                "s", "pipe", outer_radius=0.15, thickness=0.01
+            ),
+            Section.create_hollow_rectangular_section(
+                "s", "box", outer_width=0.2, outer_height=0.4, thickness=0.01
+            ),
+        ],
+        ids=["circular", "pipe", "box"],
+    )
+    def test_closed_and_round_sections_get_their_torsional_stiffness(self, section):
+        """Both shear moduli are scaled by one number until torsion is right."""
+        writer = _writer()
+        beam = writer.domain_model.get_member("beam")
+        beam.section = section
+        writer._equivalent_sections = {}
+        writer._identify_and_retype_u1_members()
+        out = io.StringIO()
+        writer._write_materials(out)
+
+        a, b, _ = writer._equivalent_sections["beam"]
+        lines = _block(out.getvalue(), "NAME=MAT_EQ_M1")
+        constants = [float(v) for v in lines[1].rstrip(",").split(",")]
+        shear = E / (2 * (1 + NU))
+        assert expanded_rectangle_torsion_stiffness(
+            a, b, constants[6], constants[7]
+        ) == pytest.approx(shear * section.torsional_constant, rel=1e-6)
+        scales = [
+            constants[6] * a * b / (shear * section.shear_area_y),
+            constants[7] * a * b / (shear * section.shear_area_z),
+        ]
+        assert scales[0] == pytest.approx(scales[1], rel=1e-6)
+        assert 1.0 < scales[0] < 2.0
 
     def test_without_shear_areas_the_material_is_isotropic(self):
         writer = _writer()

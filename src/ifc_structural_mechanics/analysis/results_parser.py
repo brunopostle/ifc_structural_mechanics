@@ -366,8 +366,12 @@ class ResultsParser(BaseParser):
                             logger.warning(
                                 f"Error parsing displacement line from DAT: {line}, {e}"
                             )
+        except ResultProcessingError:
+            raise
         except Exception as e:
-            logger.warning(f"Error parsing DAT file {dat_file}: {str(e)}")
+            raise ResultProcessingError(
+                f"Error parsing DAT file {dat_file}: {str(e)}"
+            ) from e
 
         return displacements
 
@@ -1134,6 +1138,7 @@ class ResultsParser(BaseParser):
             self.domain_model.results.clear()
 
             # Add all results to the domain model
+            invalid: Dict[str, int] = {}
             for result_type, result_list in results.items():
                 for result in result_list:
                     if not hasattr(result, "validate"):
@@ -1141,8 +1146,30 @@ class ResultsParser(BaseParser):
                     if result.validate():
                         self.domain_model.results.append(result)
                     else:
-                        logger.warning(f"Invalid {result_type} result skipped")
+                        invalid[result_type] = invalid.get(result_type, 0) + 1
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
-            logger.error(f"Error mapping results to domain model: {str(e)}")
-            # Log the error but don't prevent further processing
+            raise ResultProcessingError(
+                f"Error mapping results to domain model: {str(e)}"
+            ) from e
+
+        if invalid:
+            counts = ", ".join(f"{n} {kind}" for kind, n in sorted(invalid.items()))
+            message = (
+                f"Results the solver wrote that do not pass validation were "
+                f"left out: {counts}."
+            )
+            logger.warning(message)
+            if not hasattr(self.domain_model, "analysis_warnings"):
+                self.domain_model.analysis_warnings = []
+            self.domain_model.analysis_warnings.append(
+                {
+                    "message": message,
+                    "severity": "warning",
+                    "entity_type": None,
+                    "ccx_id": None,
+                    "domain_id": None,
+                }
+            )

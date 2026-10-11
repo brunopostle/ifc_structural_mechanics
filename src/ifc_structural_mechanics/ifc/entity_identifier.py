@@ -6,11 +6,12 @@ structural analysis-related IFC entities.
 """
 
 import logging
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import ifcopenshell
 import numpy as np
 
+from ..utils.error_handling import ModelExtractionError
 from ..utils.units import (
     convert_coordinates,
 )
@@ -45,9 +46,12 @@ def is_structural_member(entity: Optional[ifcopenshell.entity_instance]) -> bool
         ]
 
         return entity.is_a() in structural_member_types
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error checking if entity is structural member: {e}")
-        return False
+        raise ModelExtractionError(
+            f"Error checking if entity is structural member: {e}"
+        ) from e
 
 
 def is_structural_curve_member(entity: Optional[ifcopenshell.entity_instance]) -> bool:
@@ -69,9 +73,12 @@ def is_structural_curve_member(entity: Optional[ifcopenshell.entity_instance]) -
 
         curve_member_types = ["IfcStructuralCurveMember", "IfcBeam", "IfcColumn"]
         return entity.is_a() in curve_member_types
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error checking if entity is structural curve member: {e}")
-        return False
+        raise ModelExtractionError(
+            f"Error checking if entity is structural curve member: {e}"
+        ) from e
 
 
 def is_structural_surface_member(
@@ -95,9 +102,12 @@ def is_structural_surface_member(
 
         surface_member_types = ["IfcStructuralSurfaceMember", "IfcWall", "IfcSlab"]
         return entity.is_a() in surface_member_types
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error checking if entity is structural surface member: {e}")
-        return False
+        raise ModelExtractionError(
+            f"Error checking if entity is structural surface member: {e}"
+        ) from e
 
 
 def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> bool:
@@ -123,9 +133,12 @@ def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> 
             "IfcStructuralSurfaceConnection",
         ]
         return entity.is_a() in connection_types
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error checking if entity is structural connection: {e}")
-        return False
+        raise ModelExtractionError(
+            f"Error checking if entity is structural connection: {e}"
+        ) from e
 
 
 def is_structural_load(entity: Optional[ifcopenshell.entity_instance]) -> bool:
@@ -152,179 +165,12 @@ def is_structural_load(entity: Optional[ifcopenshell.entity_instance]) -> bool:
             "IfcStructuralLoadCase",
         ]
         return entity.is_a() in load_types
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error checking if entity is structural load: {e}")
-        return False
-
-
-def is_structural_boundary_condition(
-    entity: Optional[ifcopenshell.entity_instance],
-) -> bool:
-    """
-    Check if the given entity is a structural boundary condition.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to check
-
-    Returns:
-        bool: True if the entity is a structural boundary condition, False otherwise
-    """
-    if entity is None:
-        return False
-
-    try:
-        if not hasattr(entity, "is_a") or not callable(entity.is_a):
-            return False
-
-        boundary_condition_types = [
-            "IfcBoundaryNodeCondition",
-            "IfcBoundaryEdgeCondition",
-            "IfcBoundaryFaceCondition",
-            "IfcStructuralBoundaryCondition",
-        ]
-        return entity.is_a() in boundary_condition_types
-    except Exception as e:
-        logger.warning(
-            f"Error checking if entity is structural boundary condition: {e}"
-        )
-        return False
-
-
-def find_related_properties(
-    entity: Optional[ifcopenshell.entity_instance],
-) -> List[Any]:
-    """
-    Find property sets related to the given entity.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to find properties for
-
-    Returns:
-        List[Any]: List of related property sets
-    """
-    if entity is None:
-        return []
-
-    try:
-        property_sets = []
-
-        # Check for properties via IsDefinedBy relationship
-        if hasattr(entity, "IsDefinedBy"):
-            for rel in entity.IsDefinedBy:
-                if (
-                    hasattr(rel, "RelatingPropertyDefinition")
-                    and rel.RelatingPropertyDefinition
-                    and hasattr(rel.RelatingPropertyDefinition, "is_a")
-                    and rel.RelatingPropertyDefinition.is_a("IfcPropertySet")
-                ):
-                    property_sets.append(rel.RelatingPropertyDefinition)
-
-        # Some IFC files use HasProperties directly
-        if hasattr(entity, "HasProperties"):
-            property_sets.extend(entity.HasProperties)
-
-        return property_sets
-    except Exception as e:
-        logger.warning(f"Error finding related properties: {e}")
-        return []
-
-
-def find_related_material(
-    entity: Optional[ifcopenshell.entity_instance],
-) -> Optional[Any]:
-    """
-    Find the material associated with an entity.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to find material for
-
-    Returns:
-        Optional[Any]: Related material or None if not found
-    """
-    if entity is None:
-        return None
-
-    try:
-        # Check if entity has associations
-        if not hasattr(entity, "HasAssociations"):
-            return None
-
-        for association in entity.HasAssociations:
-            if not association.is_a("IfcRelAssociatesMaterial"):
-                continue
-
-            material = association.RelatingMaterial
-            if material.is_a("IfcMaterialProfileSet"):
-                # For now, we only deal with a single profile
-                if hasattr(material, "MaterialProfiles") and material.MaterialProfiles:
-                    return material.MaterialProfiles[0]
-
-            if material.is_a("IfcMaterialProfileSetUsage"):
-                if hasattr(material, "ForProfileSet") and material.ForProfileSet:
-                    if (
-                        hasattr(material.ForProfileSet, "MaterialProfiles")
-                        and material.ForProfileSet.MaterialProfiles
-                    ):
-                        return material.ForProfileSet.MaterialProfiles[0]
-
-            if material.is_a("IfcMaterial"):
-                return material
-
-        return None
-
-    except Exception as e:
-        logger.warning(f"Error finding related material: {e}")
-        return None
-
-
-def find_related_profile(
-    entity: Optional[ifcopenshell.entity_instance],
-) -> Optional[Any]:
-    """
-    Find profile definition for the given entity.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to find profile for
-
-    Returns:
-        Optional[Any]: Related profile definition, or None if not found
-    """
-    if entity is None:
-        return None
-
-    try:
-        # First check for material profile relationships
-        material = find_related_material(entity)
-        if material:
-            if hasattr(material, "Profile") and material.Profile:
-                return material.Profile
-
-        # Check for direct profile references in representation
-        if hasattr(entity, "Representation") and entity.Representation:
-            for rep in entity.Representation.Representations:
-                if hasattr(rep, "Items") and rep.Items:
-                    for item in rep.Items:
-                        if item.is_a("IfcExtrudedAreaSolid") and hasattr(
-                            item, "SweptArea"
-                        ):
-                            return item.SweptArea
-                        elif item.is_a("IfcSweptDiskSolid") and hasattr(item, "Radius"):
-                            # Create a pseudo-circular profile
-                            # Note: this is a simplification and may need improvement
-                            return {
-                                "type": "IfcCircleProfileDef",
-                                "radius": item.Radius,
-                                "is_a": lambda: "IfcCircleProfileDef",
-                            }
-
-        # Check for direct profile attributes (some authoring tools do this)
-        if hasattr(entity, "Profile"):
-            return entity.Profile
-
-        return None
-    except Exception as e:
-        logger.warning(f"Error finding related profile: {e}")
-        return None
+        raise ModelExtractionError(
+            f"Error checking if entity is structural load: {e}"
+        ) from e
 
 
 def get_coordinate(point, unit_scale: float = 1.0):
@@ -370,9 +216,10 @@ def get_coordinate(point, unit_scale: float = 1.0):
         )
         return None
 
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error extracting coordinates: {e}")
-        return None
+        raise ModelExtractionError(f"Error extracting coordinates: {e}") from e
 
 
 def get_representation(element, rep_type):
@@ -468,52 +315,6 @@ def get_specific_representation(representation, rep_id, rep_type):
     return None
 
 
-def find_structural_connections(
-    entity: Optional[ifcopenshell.entity_instance],
-) -> List[Any]:
-    """
-    Find structural connections related to the given entity.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to find connections for
-
-    Returns:
-        List[Any]: List of related structural connections
-    """
-    if entity is None:
-        return []
-
-    try:
-        connections = []
-
-        # Check ConnectedBy relationship for structural members
-        if hasattr(entity, "ConnectedBy"):
-            for rel in entity.ConnectedBy:
-                if (
-                    hasattr(rel, "RelatedStructuralConnection")
-                    and rel.RelatedStructuralConnection
-                    and is_structural_connection(rel.RelatedStructuralConnection)
-                ):
-                    connections.append(
-                        {
-                            "connection": rel.RelatedStructuralConnection,
-                            "relationship": rel,
-                        }
-                    )
-
-        # For test compatibility, just add the direct connections
-        if hasattr(entity, "ConnectedTo"):
-            connections.extend(entity.ConnectedTo)
-
-        if hasattr(entity, "ConnectedFrom"):
-            connections.extend(entity.ConnectedFrom)
-
-        return connections
-    except Exception as e:
-        logger.warning(f"Error finding structural connections: {e}")
-        return []
-
-
 def find_connected_elements(
     entity: Optional[ifcopenshell.entity_instance],
 ) -> List[str]:
@@ -555,37 +356,10 @@ def find_connected_elements(
                         )
 
         return connected_elements
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error finding connected elements: {e}")
-        return []
-
-
-def find_applied_loads(entity: Optional[ifcopenshell.entity_instance]) -> List[Any]:
-    """
-    Find loads applied to the given entity.
-
-    Args:
-        entity (Optional[ifcopenshell.entity_instance]): IFC entity to find loads for
-
-    Returns:
-        List[Any]: List of applied loads
-    """
-    if entity is None:
-        return []
-
-    try:
-        loads = []
-        if hasattr(entity, "HasAssignments"):
-            for assn in entity.HasAssignments:
-                if hasattr(assn, "RelatedObjects") and is_structural_load(
-                    assn.RelatedObjects
-                ):
-                    loads.append(assn.RelatedObjects)
-
-        return [load for load in loads if load]
-    except Exception as e:
-        logger.warning(f"Error finding applied loads: {e}")
-        return []
+        raise ModelExtractionError(f"Error finding connected elements: {e}") from e
 
 
 def find_member_endpoints(
@@ -601,82 +375,18 @@ def find_member_endpoints(
     Returns:
         List[List[float]]: List of endpoint coordinates in SI units
     """
-    if member is None:
+    if member is None or not is_structural_curve_member(member):
         return []
 
-    try:
-        if is_structural_curve_member(member):
-            # Get representation based on RepresentationType
-            representation = get_representation(member, "Edge")
-            if representation:
-                item = representation.Items[0]
-
-                # Extract edge points
-                if item.is_a("IfcEdge"):
-                    start = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
-                    end = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
-                    if start and end:
-                        return [start, end]
-
-        # Geometry could not be extracted
-        guid = getattr(member, "GlobalId", None) or member.id()
-        logger.warning(
-            f"Could not extract geometry for curve member {guid} — member will be skipped"
-        )
-        return []
-
-    except Exception as e:
-        guid = getattr(member, "GlobalId", None) or member.id()
-        logger.warning(f"Error finding member endpoints for {guid}: {e}")
-        return []
-
-
-def find_surface_boundaries(
-    surface_member: Optional[ifcopenshell.entity_instance], unit_scale: float = 1.0
-) -> List[List[List[float]]]:
-    """
-    Find the boundary curves of a surface member.
-
-    Args:
-        surface_member (Optional[ifcopenshell.entity_instance]): IFC surface member entity
-        unit_scale: Scale factor to convert to SI units
-
-    Returns:
-        List[List[List[float]]]: List of boundary curves in SI units, each represented as a list of 3D points
-    """
-    if surface_member is None:
-        return []
-
-    try:
-        if is_structural_surface_member(surface_member):
-            # Get representation based on RepresentationType
-            representation = get_representation(surface_member, "Face")
-            if representation:
-                item = representation.Items[0]
-
-                # Extract boundaries
-                if item.is_a("IfcFaceSurface"):
-                    edges = item.Bounds[0].Bound.EdgeList
-                    coords = []
-                    for edge in edges:
-                        coords.append(
-                            get_coordinate(
-                                edge.EdgeElement.EdgeStart.VertexGeometry, unit_scale
-                            )
-                        )
-                    return [coords]
-
-        # Geometry could not be extracted
-        guid = getattr(surface_member, "GlobalId", None) or surface_member.id()
-        logger.warning(
-            f"Could not extract geometry for surface member {guid} — member will be skipped"
-        )
-        return []
-
-    except Exception as e:
-        guid = getattr(surface_member, "GlobalId", None) or surface_member.id()
-        logger.warning(f"Error finding surface boundaries for {guid}: {e}")
-        return []
+    representation = get_representation(member, "Edge")
+    if representation and representation.Items:
+        item = representation.Items[0]
+        if item.is_a("IfcEdge"):
+            start = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
+            end = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
+            if start and end:
+                return [start, end]
+    return []
 
 
 def get_transformation(placement):
@@ -695,9 +405,19 @@ def get_transformation(placement):
     try:
         if placement.is_a("IfcLocalPlacement"):
             if placement.PlacementRelTo:
-                logger.info(
-                    "Warning! Object Placement with PlacementRelTo attribute is not supported and will be neglected"
+                # Only this placement's own axes are applied. A parent that
+                # moves or turns it would put the item somewhere else.
+                import ifcopenshell.util.placement
+
+                parent = ifcopenshell.util.placement.get_local_placement(
+                    placement.PlacementRelTo
                 )
+                if not np.allclose(parent, np.eye(4)):
+                    raise ModelExtractionError(
+                        "Its placement is relative to another placement that "
+                        "is not at the origin of the global axes "
+                        "(PlacementRelTo); nested placements are not supported."
+                    )
 
             axes = placement.RelativePlacement
             location = np.array(get_coordinate(axes.Location))
@@ -739,13 +459,14 @@ def get_transformation(placement):
                 "rotationMatrix": np.array([xAxis, yAxis, zAxis]).transpose(),
             }
         else:
-            logger.info(
-                f"Warning! Object Placement is of type {placement.is_a()}, which is not supported. Default considered"
+            raise ModelExtractionError(
+                f"Its placement is an {placement.is_a()}; only "
+                "IfcLocalPlacement is supported."
             )
-            return None
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error getting transformation: {e}")
-        return None
+        raise ModelExtractionError(f"Error getting transformation: {e}") from e
 
 
 def transform_vectors(geometry, transformation, include_translation=True):
@@ -776,9 +497,10 @@ def transform_vectors(geometry, transformation, include_translation=True):
             result.append(transformed.tolist())
         return result
 
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error transforming vectors: {e}")
-        return geometry
+        raise ModelExtractionError(f"Error transforming vectors: {e}") from e
 
 
 def get_0D_orientation(axes):
@@ -906,13 +628,19 @@ def get_1D_orientation(geometry, zAxis):
 
             return [xAxis.tolist(), yAxis.tolist(), zAxis_final.tolist()]
 
+        except ModelExtractionError:
+            raise
         except Exception as e:
-            logger.error(f"Unexpected error in cross product calculation: {e}")
-            return None
+            raise ModelExtractionError(
+                f"Unexpected error in cross product calculation: {e}"
+            ) from e
 
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.error(f"Unexpected error in 1D orientation calculation: {e}")
-        return None
+        raise ModelExtractionError(
+            f"Unexpected error in 1D orientation calculation: {e}"
+        ) from e
 
 
 def get_2D_orientation(representation):
@@ -996,9 +724,10 @@ def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) 
 
         return "point"  # Default fallback
 
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error analyzing connection type: {e}")
-        return "point"
+        raise ModelExtractionError(f"Error analyzing connection type: {e}") from e
 
 
 def _ifc_stiffness_to_float(
@@ -1185,7 +914,9 @@ def get_connection_input(
                 dz = 0.0
             return {"dx": dx, "dy": dy, "dz": dz}
 
+    except ModelExtractionError:
+        raise
     except Exception as e:
-        logger.warning(f"Error extracting connection input: {e}")
+        raise ModelExtractionError(f"Error extracting connection input: {e}") from e
 
     return None

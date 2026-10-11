@@ -128,9 +128,8 @@ def equivalent_rectangle(
 
     so ``a`` and ``b`` are the section's radii of gyration times the square
     root of twelve. Scaling the density by the same factor keeps the weight.
-    Shear is left to the material: the writer gives the rectangle shear
-    moduli that make its shear stiffness the section's. Torsion cannot be matched; a solid rectangle is much stiffer
-    in torsion than an open section.
+    Shear and torsion are left to the material, see
+    ``equivalent_shear_moduli``.
 
     Args:
         area: Cross-section area.
@@ -153,6 +152,93 @@ def equivalent_rectangle(
     a = (12.0 * inertia_1 / area) ** 0.5
     b = (12.0 * inertia_2 / area) ** 0.5
     return a, b, area / (a * b)
+
+
+#: Section types whose equivalent rectangle is given the section's torsional
+#: stiffness, at the expense of its shear stiffness: the closed and the solid
+#: ones. An open section cannot be treated this way, its torsional stiffness
+#: is tens of times lower than anything that leaves it able to carry shear.
+TORSION_MATCHED_SECTIONS = frozenset(
+    {"circular", "hollow_circular", "hollow_rectangular"}
+)
+
+
+def expanded_rectangle_torsion_stiffness(
+    a: float, b: float, modulus_12: float, modulus_13: float
+) -> float:
+    """Return the torsional stiffness CalculiX gives an ``a`` x ``b`` beam.
+
+    CalculiX expands a beam into one solid element across the section, and
+    the only warping that element can take is ``x2 * x3``. Minimising the
+    strain energy over its size gives ``4 P Q / (P + Q)``, with
+    ``P = G12 a b**3 / 12`` and ``Q = G13 b a**3 / 12``. Measured twist
+    agrees with this to three figures. It is not Saint-Venant's value: an
+    isotropic square comes out as ``G a**4 / 6``, 18.5 % above
+    ``0.1406 G a**4``, and the excess fades as the rectangle gets narrower.
+
+    Args:
+        a: Dimension along the section's 1 direction.
+        b: The other dimension.
+        modulus_12: Shear modulus of the plane of the member axis and ``a``.
+        modulus_13: Shear modulus of the plane of the member axis and ``b``.
+
+    Returns:
+        Torque per unit rate of twist.
+    """
+    p = modulus_12 * a * b**3 / 12.0
+    q = modulus_13 * b * a**3 / 12.0
+    return 4.0 * p * q / (p + q)
+
+
+def equivalent_shear_moduli(
+    a: float,
+    b: float,
+    shear_modulus: float,
+    shear_area_1: float,
+    shear_area_2: float,
+    torsion_constant: Optional[float] = None,
+) -> Tuple[float, float, float]:
+    """Return the shear moduli of an equivalent rectangle's material.
+
+    Two moduli cannot give a rectangle two shear areas and a torsion constant.
+    Without ``torsion_constant`` they match shear::
+
+        G12 * a * b = shear_modulus * shear_area_1
+        G13 * a * b = shear_modulus * shear_area_2
+
+    The rectangle's shear area is its whole area here, not 5/6 of it. That is
+    a calibration: with 5/6 the shear deflection of the I-section benchmarks
+    came out 12 to 18 % short. An isotropic rectangle in CalculiX does follow
+    5/6; these orthotropic ones do not.
+
+    With ``torsion_constant`` both are then scaled by one number so that
+    ``expanded_rectangle_torsion_stiffness`` equals ``shear_modulus *
+    torsion_constant``. Torsion is then right and shear stiffness is off by
+    that number in both directions (1.1 for a round bar, 1.4 for a typical
+    box, 1.9 for a thin tube).
+
+    Args:
+        a: Rectangle dimension along the section's 1 direction.
+        b: The other dimension.
+        shear_modulus: Shear modulus of the real material.
+        shear_area_1: Shear area for loads along the 1 direction.
+        shear_area_2: Shear area for loads along the other direction.
+        torsion_constant: The section's torsion constant, to match torsion.
+
+    Returns:
+        ``(G12, G13, scale)``; ``scale`` is the factor by which the shear
+        stiffness used exceeds the section's (1.0 when shear is matched).
+    """
+    modulus_12 = shear_modulus * shear_area_1 / (a * b)
+    modulus_13 = shear_modulus * shear_area_2 / (a * b)
+    if not torsion_constant or torsion_constant <= 0:
+        return modulus_12, modulus_13, 1.0
+    scale = (
+        shear_modulus
+        * torsion_constant
+        / expanded_rectangle_torsion_stiffness(a, b, modulus_12, modulus_13)
+    )
+    return modulus_12 * scale, modulus_13 * scale, scale
 
 
 def get_native_section(section_type: Optional[str]) -> Optional[SectionProfile]:

@@ -25,7 +25,9 @@ from ..analysis.boundary_condition_handling import (
 )
 from ..config.analysis_config import AnalysisConfig
 from ..converters.section_profiles import (
+    TORSION_MATCHED_SECTIONS,
     equivalent_rectangle,
+    equivalent_shear_moduli,
     get_native_section,
     uses_user_element,
 )
@@ -105,6 +107,8 @@ class UnifiedCalculixWriter:
         # (non-standard cross-sections: I, T, L, C, arbitrary)
         self._u1_members: set = set()  # member IDs that need U1 elements
         # Members analysed with an equivalent rectangle instead:
+        # Curve members whose section had to be oriented without an IFC Axis
+        self._members_without_axis: set = set()
         # member ID -> (a, b, factor), see equivalent_rectangle()
         self._equivalent_sections: Dict[str, Tuple[float, float, float]] = {}
         # Element set names (MEMBER_*) that contain only U1 elements.
@@ -181,7 +185,8 @@ class UnifiedCalculixWriter:
             logger.warning(f"Unexpected local_axis format: {member.local_axis}")
 
         # Fallback: compute from geometry if no local axis
-        logger.warning(f"Member {member.id} has no local_axis, computing from geometry")
+        # Counted, and reported once by _write_sections
+        self._members_without_axis.add(member.id)
 
         curve_geometry = member.geometry
 
@@ -420,9 +425,10 @@ class UnifiedCalculixWriter:
             if hasattr(mesh.cells[0], "type"):
                 return [(cell_block.type, cell_block.data) for cell_block in mesh.cells]
             return list(mesh.cells)
+        except MeshingError:
+            raise
         except Exception as e:
-            logger.warning(f"Could not extract cell blocks: {e}")
-            return []
+            raise MeshingError(f"The mesh has no readable cell blocks: {e}") from e
 
     def _map_elements_to_members(self) -> None:
         """Map mesh elements to domain model members via MeshMapper."""
@@ -495,13 +501,30 @@ class UnifiedCalculixWriter:
         if not self._equivalent_sections:
             return
         self.domain_model.equivalent_section_members = set(self._equivalent_sections)
-        self._warn_user(
-            f"{len(self._equivalent_sections)} member(s) whose section is not a "
-            "solid rectangle are analysed as rectangles of the same axial, "
-            "bending and shear stiffness and weight. Their torsional stiffness "
-            "is approximate (too high for open sections, too low for hollow "
-            "ones), and no stress is reported for them."
+        members = {member.id: member for member in self.domain_model.members}
+        matched = sum(
+            1
+            for member_id in self._equivalent_sections
+            if self._matched_torsion_constant(members[member_id]) is not None
         )
+        unmatched = len(self._equivalent_sections) - matched
+        message = (
+            f"{len(self._equivalent_sections)} member(s) whose section is not a "
+            "solid rectangle are analysed as rectangles of the same axial and "
+            "bending stiffness and weight, and no stress is reported for them."
+        )
+        if matched:
+            message += (
+                f" {matched} with a closed or round section have its torsional "
+                "stiffness, and a shear stiffness up to twice too high."
+            )
+        if unmatched:
+            message += (
+                f" {unmatched} with an open section have its shear stiffness, "
+                "and a torsional stiffness tens of times too high: do not rely "
+                "on results where they carry torsion."
+            )
+        self._warn_user(message)
 
     def _identify_and_retype_u1_members(self) -> None:
         """Mark non-standard-section beam members and retype their elements to U1.
@@ -615,6 +638,7 @@ class UnifiedCalculixWriter:
         members of the same kind (e.g. two overlapping shells).
         """
         already_claimed: set = set()
+        overlapping: List[str] = []
         for member in self.domain_model.members:
             short_id = self._get_short_id(member.id)
             member_set = f"MEMBER_{short_id}"
@@ -623,13 +647,22 @@ class UnifiedCalculixWriter:
                 continue
             remaining = [eid for eid in elem_ids if eid not in already_claimed]
             if len(remaining) != len(elem_ids):
-                logger.warning(
+                logger.info(
                     f"Member {member.id}: {len(elem_ids) - len(remaining)} "
                     f"element(s) already claimed by an earlier-processed "
                     f"overlapping member — excluded from this member's set"
                 )
+                overlapping.append(member.id)
                 self.element_sets[member_set] = remaining
             already_claimed.update(remaining)
+        if overlapping:
+            self._warn_user(
+                f"{len(overlapping)} member(s) overlap another member. Where "
+                "two overlap, the mesh has one layer of elements and it is "
+                "analysed with the material and thickness or section of the "
+                "member that comes first in the file, not with both. The first "
+                f"are {', '.join(overlapping[:5])}."
+            )
 
     def _register_node_memberships(self) -> None:
         """Record the final elements and mesh nodes of every member in the model.
@@ -673,7 +706,7 @@ class UnifiedCalculixWriter:
 
             # Pre-analysis stability check
             for warning in self._detect_mechanism_risk():
-                logger.warning(warning)
+                self._warn_user(warning)
                 f.write(f"** *** STABILITY WARNING: {warning}\n")
                 f.write("**\n")
 
@@ -1002,28 +1035,26 @@ class UnifiedCalculixWriter:
             modulus = material.elastic_modulus * factor
             poisson = material.poisson_ratio
             # Shear moduli of the planes holding the member axis (1) and the
-            # section's depth (2) or width (3), set so that the rectangle has
-            # the section's shear stiffness in each direction. They also bring
-            # its torsional stiffness down, towards that of the open section.
-            # The rectangle's shear area is taken as its whole area, not 5/6
-            # of it. That is a calibration: with 5/6 the shear deflection of
-            # the I-section benchmarks came out 12 to 18 % short. An isotropic
-            # rectangle in CalculiX does follow 5/6; these orthotropic ones,
-            # with shear moduli far below their axial modulus, do not.
+            # section's depth (2) or width (3): the section's shear stiffness
+            # in each direction, or for closed and solid sections its
+            # torsional stiffness (see equivalent_shear_moduli)
             shear = material.elastic_modulus / (2.0 * (1.0 + poisson))
-            rectangle_shear_area = depth * width
             isotropic = modulus / (2.0 * (1.0 + poisson))
-            moduli = [
-                (
-                    shear * float(area) / rectangle_shear_area
-                    if area and float(area) > 0
-                    else isotropic
-                )
-                for area in (
-                    getattr(member.section, "shear_area_y", None),
-                    getattr(member.section, "shear_area_z", None),
-                )
+            shear_areas = [
+                float(getattr(member.section, name, None) or 0.0)
+                for name in ("shear_area_y", "shear_area_z")
             ]
+            if min(shear_areas) > 0:
+                moduli = equivalent_shear_moduli(
+                    depth,
+                    width,
+                    shear,
+                    shear_areas[0],
+                    shear_areas[1],
+                    self._matched_torsion_constant(member),
+                )[:2]
+            else:
+                moduli = (isotropic, isotropic)
             file.write(f"*MATERIAL, NAME={self._equivalent_material_name(member)}\n")
             file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
             file.write(
@@ -1036,6 +1067,16 @@ class UnifiedCalculixWriter:
                 file.write("*DENSITY\n")
                 file.write(f"{material.density * factor:.6e}\n")
             file.write("\n")
+
+    @staticmethod
+    def _matched_torsion_constant(member) -> Optional[float]:
+        """Torsion constant to give a member's equivalent rectangle, if any."""
+        section = member.section
+        section_type = (getattr(section, "section_type", None) or "").lower()
+        if section_type not in TORSION_MATCHED_SECTIONS:
+            return None
+        constant = getattr(section, "torsional_constant", None)
+        return float(constant) if constant and float(constant) > 0 else None
 
     def _equivalent_material_name(self, member) -> str:
         """Name of the scaled material of a member's equivalent rectangle."""
@@ -1289,7 +1330,7 @@ class UnifiedCalculixWriter:
         section = member.section
         material = member.material
         if section is None or material is None:
-            logger.warning(
+            self._warn_user(
                 f"Member {member.id}: missing section or material, skipping U1"
             )
             return
@@ -1300,7 +1341,7 @@ class UnifiedCalculixWriter:
         shear_area = getattr(section, "shear_area_y", None)
 
         if not all([A, xi11, xi22]):
-            logger.warning(
+            self._warn_user(
                 f"Member {member.id}: incomplete section properties "
                 f"(A={A}, Iy={xi11}, Iz={xi22}), skipping U1"
             )
@@ -1383,6 +1424,7 @@ class UnifiedCalculixWriter:
         file.write("** Section Definitions\n")
 
         sections_written = 0
+        without_elements: List[str] = []
 
         # Split beam element sets by orientation
         beam_orientation_groups = self._split_beam_sets_by_orientation()
@@ -1393,7 +1435,7 @@ class UnifiedCalculixWriter:
 
             # Check if member has elements
             if member_set not in self.element_sets or not self.element_sets[member_set]:
-                logger.warning(f"No elements for member {member.id}, skipping section")
+                without_elements.append(member.id)
                 continue
 
             member_elems = self.element_sets[member_set]
@@ -1468,6 +1510,22 @@ class UnifiedCalculixWriter:
                 sections_written += 1
 
         logger.info(f"Wrote {sections_written} section definitions")
+
+        if without_elements:
+            self._warn_user(
+                f"{len(without_elements)} member(s) have no finite elements and "
+                "take no part in the analysis: their geometry is covered by a "
+                "member they overlap, whose stiffness is used there, or was "
+                f"not meshed. The first are {', '.join(without_elements[:5])}."
+            )
+        if self._members_without_axis:
+            listed = sorted(self._members_without_axis)
+            self._warn_user(
+                f"{len(listed)} curve member(s) have no Axis in the IFC file, "
+                "so the orientation of their section about the member is a "
+                "guess (depth vertical where it can be). The first are "
+                f"{', '.join(listed[:5])}."
+            )
 
     def _collect_boundary_condition_dofs(self) -> set:
         """
@@ -2401,9 +2459,9 @@ class UnifiedCalculixWriter:
                 )
                 connections_written += 1
             elif conn.entity_type == "spring":
-                logger.warning(f"Spring connections not yet implemented: {conn.id}")
+                self._warn_user(f"Spring connections not yet implemented: {conn.id}")
             else:
-                logger.warning(
+                self._warn_user(
                     f"Unknown connection type '{conn.entity_type}' for {conn.id}"
                 )
 
@@ -2444,7 +2502,7 @@ class UnifiedCalculixWriter:
                     f"Connection {conn.id}: single shared node {sole_node}, no equations needed"
                 )
             else:
-                logger.warning(f"Connection {conn.id}: Found no connection nodes")
+                self._warn_user(f"Connection {conn.id}: Found no connection nodes")
             return
 
         released = released_dofs_by_member or {}
@@ -2701,7 +2759,7 @@ class UnifiedCalculixWriter:
             member_set = f"MEMBER_{short_id}"
 
             if member_set not in self.element_sets:
-                logger.warning(
+                self._warn_user(
                     f"Connection {conn.id}: Member {member_id} has no element set {member_set}"
                 )
                 continue
@@ -2716,7 +2774,7 @@ class UnifiedCalculixWriter:
             member_nodes[member_id] = nodes
 
         if len(member_nodes) < 2:
-            logger.warning(
+            self._warn_user(
                 f"Connection {conn.id}: Could not find nodes for enough members ({len(member_nodes)} < 2)"
             )
             return []
@@ -2766,7 +2824,7 @@ class UnifiedCalculixWriter:
                 f"Connection {conn.id}: Found {len(connection_node_ids)} coincident nodes"
             )
         else:
-            logger.warning(f"Connection {conn.id}: No coincident nodes found")
+            self._warn_user(f"Connection {conn.id}: No coincident nodes found")
 
         # Wrap with None member IDs: this fallback cannot attribute nodes to members
         return [(None, nid) for nid in connection_node_ids]
@@ -2863,8 +2921,8 @@ class UnifiedCalculixWriter:
                             "Check IfcBoundaryNodeCondition drx/dry/drz entries and connection "
                             "types."
                         ]
-                except Exception:
-                    continue
+                except (AttributeError, TypeError, ValueError):
+                    continue  # a load with no vector says nothing here
 
         return []
 

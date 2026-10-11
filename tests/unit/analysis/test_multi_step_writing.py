@@ -10,6 +10,9 @@ from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 
+# A mesh for the point loads to land on; they are never sent to a default node
+NODES = {1: (0.0, 0.0, 3.0), 2: (1.0, 0.0, 3.0), 3: (0.5, 0.0, 0.0)}
+
 
 def _make_model_with_load_cases(n_cases: int = 2, gravity: bool = False):
     """Build a minimal StructuralModel with n_cases load cases, each having one PointLoad."""
@@ -67,7 +70,7 @@ class TestMultiStepWriting:
         """Each step is annotated with its load case name."""
         model = _make_model_with_load_cases(2)
         buf = io.StringIO()
-        write_analysis_steps(buf, model)
+        write_analysis_steps(buf, model, node_coords=NODES)
         text = buf.getvalue()
 
         assert "** Load Case: Case 0" in text
@@ -77,7 +80,7 @@ class TestMultiStepWriting:
         """When gravity=True and load cases exist, a third gravity step is written."""
         model = _make_model_with_load_cases(2)
         buf = io.StringIO()
-        write_analysis_steps(buf, model, gravity=True)
+        write_analysis_steps(buf, model, gravity=True, node_coords=NODES)
         text = buf.getvalue()
 
         assert text.count("*STEP") == 3
@@ -89,7 +92,7 @@ class TestMultiStepWriting:
         """The gravity step must not repeat *CLOAD loads."""
         model = _make_model_with_load_cases(1)
         buf = io.StringIO()
-        write_analysis_steps(buf, model, gravity=True)
+        write_analysis_steps(buf, model, gravity=True, node_coords=NODES)
         text = buf.getvalue()
 
         # Split on steps
@@ -106,7 +109,7 @@ class TestMultiStepWriting:
         """
         model = _make_model_with_load_cases(2)
         buf = io.StringIO()
-        write_analysis_steps(buf, model, gravity=True)
+        write_analysis_steps(buf, model, gravity=True, node_coords=NODES)
         steps = buf.getvalue().split("*END STEP")[:-1]
 
         assert len(steps) == 3
@@ -144,7 +147,7 @@ class TestMultiStepWriting:
         model.load_groups.append(sub)
 
         buf = io.StringIO()
-        write_analysis_steps(buf, model)
+        write_analysis_steps(buf, model, node_coords=NODES)
         text = buf.getvalue()
 
         assert text.count("*STEP") == 1
@@ -166,7 +169,7 @@ class TestMultiStepWriting:
         )
 
         buf = io.StringIO()
-        write_analysis_steps(buf, model, gravity=True)
+        write_analysis_steps(buf, model, gravity=True, node_coords=NODES)
         text = buf.getvalue()
 
         assert text.count("*STEP") == 1

@@ -5,11 +5,13 @@ Unit tests for the connections extractor module.
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from ifc_structural_mechanics.domain.structural_connection import (
     RigidConnection,
 )
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
+from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
 
 
 class TestConnectionsExtractor:
@@ -69,7 +71,10 @@ class TestConnectionsExtractor:
                 float(index + 3),
             ]
             relative_placement.Location = location
+            relative_placement.Axis = None
+            relative_placement.RefDirection = None
             placement.RelativePlacement = relative_placement
+            placement.PlacementRelTo = None
             connection.ObjectPlacement = placement
 
             # Coordinate system and condition with proper direction ratios
@@ -311,26 +316,6 @@ class TestConnectionsExtractor:
         assert "member1" in connection.connected_members
         assert "member2" in connection.connected_members
 
-    def test_extract_rotation_axis(self):
-        """Test extracting rotation axis from IFC entity."""
-        # Use the prepared mock connection for point connection
-        rotation_axis = self.extractor._extract_rotation_axis(self.point_connections[0])
-
-        # Verify results
-        assert rotation_axis == [0.0, 0.0, 1.0]
-
-    def test_extract_rotation_axis_defaults(self):
-        """Test extracting rotation axis defaults to [0,0,1] when not found."""
-        # Create a mock connection without coordinate system
-        connection_without_cs = MagicMock()
-        connection_without_cs.ConditionCoordinateSystem = None
-
-        # Call the method
-        rotation_axis = self.extractor._extract_rotation_axis(connection_without_cs)
-
-        # Verify default value
-        assert rotation_axis == [0.0, 0.0, 1.0]
-
     def test_error_handling(self):
         """Test error handling when extractor encounters issues."""
         # Create a new mock for IFC that raises an exception
@@ -341,8 +326,26 @@ class TestConnectionsExtractor:
         # Create a new extractor with the error mock
         error_extractor = ConnectionsExtractor(error_mock_ifc)
 
-        # Call the method - should not raise an exception
-        connections = error_extractor.extract_all_connections()
+        # A file that cannot be queried is an error, not a model with no supports
+        with pytest.raises(Exception, match="Test error"):
+            error_extractor.extract_all_connections()
 
-        # Verify empty result
-        assert connections == []
+    def test_connection_that_cannot_be_read_is_an_error(self):
+        """It is named, and never left out of the model."""
+        broken = self.point_connections[0]
+        broken.Representation = None
+        broken.ObjectPlacement = None
+        with pytest.raises(ModelExtractionError, match="po1.*position"):
+            self.extractor._create_domain_connection(broken)
+
+    def test_surface_connection_is_refused(self):
+        """It used to become a point support, at the origin if need be."""
+        surface = self.surface_connections[0]
+        # The fixture's is_a says yes to every type; this one tells the truth
+        surface.is_a = lambda *args: (
+            args[0] == "IfcStructuralSurfaceConnection"
+            if args
+            else "IfcStructuralSurfaceConnection"
+        )
+        with pytest.raises(ModelExtractionError, match="only point and curve"):
+            self.extractor._create_domain_connection(surface)

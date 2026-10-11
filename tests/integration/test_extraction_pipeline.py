@@ -175,6 +175,8 @@ def create_mock_ifc_file():
     mock_connection.Name = "Test Connection"
     mock_connection.id.return_value = "5"
     mock_connection.is_a.return_value = "IfcStructuralPointConnection"
+    mock_connection.ConditionCoordinateSystem = None
+    mock_connection.ObjectPlacement = None
 
     # Mock connection representation
     mock_conn_representation = Mock()
@@ -182,7 +184,10 @@ def create_mock_ifc_file():
     mock_conn_representation.RepresentationType = "Vertex"
 
     mock_vertex = Mock()
-    mock_vertex.is_a.return_value = "IfcVertexPoint"
+    # Answers is_a("IfcEdge") truthfully: a bare return_value says yes to all
+    mock_vertex.is_a.side_effect = lambda *args: (
+        args[0] == "IfcVertexPoint" if args else "IfcVertexPoint"
+    )
     mock_vertex_point = Mock()
     mock_vertex_point.is_a.return_value = "IfcCartesianPoint"
     mock_vertex_point.Coordinates = (1.0, 2.0, 3.0)  # Use a tuple for coordinates

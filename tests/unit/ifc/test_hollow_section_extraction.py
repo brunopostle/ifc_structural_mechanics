@@ -16,9 +16,6 @@ ifcopenshell = pytest.importorskip("ifcopenshell")
 from ifc_structural_mechanics.ifc.members_extractor import (  # noqa: E402
     MembersExtractor,
 )
-from ifc_structural_mechanics.ifc.properties_extractor import (  # noqa: E402
-    PropertiesExtractor,
-)
 
 # An entity is only valid while its file is alive
 _FILES = []
@@ -38,20 +35,7 @@ def _from_members_extractor(profile, length_scale=1.0):
     return MembersExtractor._create_section(extractor, profile)
 
 
-def _from_properties_extractor(profile, length_scale=1.0):
-    extractor = MagicMock(spec=PropertiesExtractor)
-    extractor.length_scale = length_scale
-    extractor.logger = MagicMock()
-    extractor._safe_get_attribute = lambda obj, attr, default=None: getattr(
-        obj, attr, default
-    )
-    extractor._find_related_profile = MagicMock(return_value=profile)
-    return PropertiesExtractor.extract_section(extractor, MagicMock())
-
-
-EXTRACTORS = pytest.mark.parametrize(
-    "extract", [_from_members_extractor, _from_properties_extractor]
-)
+EXTRACTORS = pytest.mark.parametrize("extract", [_from_members_extractor])
 
 
 @EXTRACTORS

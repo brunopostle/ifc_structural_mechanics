@@ -15,7 +15,6 @@ from ..domain.property import Material, Section, Thickness
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
     get_1D_orientation,
-    get_2D_orientation,
     get_coordinate,
     get_representation,
     get_transformation,
@@ -83,6 +82,10 @@ class MembersExtractor:
         self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
 
+        # What the analysis will not do exactly as the file says; the
+        # Extractor passes these on to the results
+        self.warnings: List[str] = []
+
     def extract_all_members(self) -> List[StructuralMember]:
         """
         Extract all structural members from the IFC file.
@@ -127,51 +130,16 @@ class MembersExtractor:
 
         Returns:
             List of CurveMember domain objects
+
+        Raises:
+            ModelExtractionError: If any of them cannot be analysed.
         """
-        self.logger.info("Extracting curve structural members")
-
-        curve_members = []
-
-        # Extract IfcStructuralCurveMembers
-        try:
-            for entity in self.ifc.by_type("IfcStructuralCurveMember"):
-                try:
-                    member = self._create_curve_member(entity)
-                    if member:
-                        curve_members.append(member)
-                except TypeError as e:
-                    if "unsupported operand type" in str(e):
-                        self.logger.error(
-                            f"Coordinate calculation error for curve member {entity.id()}: {e}"
-                        )
-                        # Add more debug info about the entity
-                        self.logger.error(
-                            f"Entity type: {entity.is_a() if hasattr(entity, 'is_a') else 'unknown'}"
-                        )
-                        self.logger.error(f"Has Axis: {hasattr(entity, 'Axis')}")
-                        if hasattr(entity, "Axis"):
-                            self.logger.error(f"Axis: {entity.Axis}")
-                            if entity.Axis:
-                                self.logger.error(
-                                    f"Axis DirectionRatios: {getattr(entity.Axis, 'DirectionRatios', 'No DirectionRatios')}"
-                                )
-                    else:
-                        self.logger.warning(
-                            f"Failed to extract curve member {entity.id()}: {e}"
-                        )
-                except ModelExtractionError:
-                    raise  # an unsupported profile must stop the analysis
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to extract curve member {entity.id()}: {e}"
-                    )
-        except ModelExtractionError:
-            raise
-        except Exception as e:
-            self.logger.warning(f"Error extracting IfcStructuralCurveMembers: {e}")
-
-        self.logger.info(f"Extracted {len(curve_members)} curve members")
-        return curve_members
+        members = [
+            self._create_curve_member(entity)
+            for entity in self.ifc.by_type("IfcStructuralCurveMember")
+        ]
+        self.logger.info(f"Extracted {len(members)} curve members")
+        return members
 
     def extract_surface_members(self) -> List[SurfaceMember]:
         """
@@ -179,29 +147,37 @@ class MembersExtractor:
 
         Returns:
             List of SurfaceMember domain objects
+
+        Raises:
+            ModelExtractionError: If any of them cannot be analysed.
         """
-        self.logger.info("Extracting surface structural members")
+        members = [
+            self._create_surface_member(entity)
+            for entity in self.ifc.by_type("IfcStructuralSurfaceMember")
+        ]
+        self.logger.info(f"Extracted {len(members)} surface members")
+        return members
 
-        surface_members = []
+    def _create_member(self, entity, build):
+        """Build a member, turning any failure into an error that names it.
 
-        # Extract IfcStructuralSurfaceMembers
+        A member is never left out and never given a made-up material,
+        section or thickness: the analysis would then be of another structure.
+        """
+        entity_id = getattr(entity, "GlobalId", None) or "?"
         try:
-            for entity in self.ifc.by_type("IfcStructuralSurfaceMember"):
-                try:
-                    member = self._create_surface_member(entity)
-                    if member:
-                        surface_members.append(member)
-                except Exception as e:
-                    self.logger.warning(
-                        f"Failed to extract surface member {entity.id()}: {e}"
-                    )
-        except Exception as e:
-            self.logger.warning(f"Error extracting IfcStructuralSurfaceMembers: {e}")
+            return build(entity)
+        except ModelExtractionError as error:
+            raise ModelExtractionError(
+                f"Member {entity_id} cannot be analysed. {error.message}"
+            ) from error
+        except Exception as error:
+            raise ModelExtractionError(
+                f"Member {entity_id} cannot be read from the IFC file: "
+                f"{type(error).__name__}: {error}"
+            ) from error
 
-        self.logger.info(f"Extracted {len(surface_members)} surface members")
-        return surface_members
-
-    def _create_curve_member(self, entity) -> Optional[CurveMember]:
+    def _create_curve_member(self, entity) -> CurveMember:
         """
         Create a CurveMember domain object from an IFC entity.
 
@@ -209,227 +185,15 @@ class MembersExtractor:
             entity: IFC entity representing a curve member
 
         Returns:
-            Optional[CurveMember]: The created curve member or None if creation fails
+            The curve member
+
+        Raises:
+            ModelExtractionError: If it has no usable geometry, material or
+                profile, or the profile is of a kind that is not supported.
         """
-        try:
-            entity_id = getattr(entity, "GlobalId", "unknown")
-            self.logger.debug(f"Creating curve member for entity {entity_id}")
+        return self._create_member(entity, self._build_curve_member)
 
-            # Extract representation
-            representation = get_representation(entity, "Edge")
-            if not representation:
-                self.logger.warning(f"No representation found for {entity_id}")
-                return None
-
-            # Extract material and profile
-            material_profile = self._get_material_profile(entity)
-            if not material_profile:
-                self.logger.warning(f"No material profile found for {entity_id}")
-                material = None
-                profile = None
-            else:
-                material = (
-                    material_profile.Material
-                    if hasattr(material_profile, "Material")
-                    else None
-                )
-                profile = (
-                    material_profile.Profile
-                    if hasattr(material_profile, "Profile")
-                    else None
-                )
-
-            # Extract geometry using entity_identifier get_coordinate, passing unit_scale
-            self.logger.debug(f"Extracting geometry for {entity_id}")
-            geometry = self._extract_geometry(representation, self.length_scale)
-            if not geometry:
-                self.logger.warning(f"Failed to extract geometry for {entity_id}")
-                return None
-            if any(coord is None for coord in geometry if coord is not None):
-                self.logger.warning(
-                    f"Geometry contains invalid coordinates for {entity_id}"
-                )
-                return None
-
-            self.logger.debug(
-                f"Geometry extracted successfully for {entity_id}: {geometry}"
-            )
-
-            # Get orientation - THIS IS WHERE THE ERROR LIKELY OCCURS
-            orientation = None
-            try:
-                self.logger.debug(f"Checking for Axis attribute on entity {entity_id}")
-                if hasattr(entity, "Axis"):
-                    axis_value = entity.Axis
-                    self.logger.debug(f"Entity {entity_id} has Axis: {axis_value}")
-
-                    if axis_value is not None:
-                        self.logger.debug(
-                            f"Entity {entity_id} Axis is not None, calling get_1D_orientation"
-                        )
-                        # Log more details about the axis
-                        if hasattr(axis_value, "DirectionRatios"):
-                            direction_ratios = axis_value.DirectionRatios
-                            self.logger.debug(
-                                f"Entity {entity_id} DirectionRatios: {direction_ratios}"
-                            )
-                        else:
-                            self.logger.debug(
-                                f"Entity {entity_id} Axis has no DirectionRatios attribute"
-                            )
-
-                        orientation = get_1D_orientation(geometry, axis_value)
-                        self.logger.debug(
-                            f"Entity {entity_id} orientation result: {orientation}"
-                        )
-                    else:
-                        self.logger.debug(
-                            f"Entity {entity_id} Axis is None, skipping orientation"
-                        )
-                else:
-                    self.logger.debug(f"Entity {entity_id} has no Axis attribute")
-            except Exception as e:
-                self.logger.error(f"Error getting orientation for {entity_id}: {e}")
-                self.logger.error(f"Geometry: {geometry}")
-                if hasattr(entity, "Axis"):
-                    self.logger.error(f"Axis: {entity.Axis}")
-                    if entity.Axis and hasattr(entity.Axis, "DirectionRatios"):
-                        self.logger.error(
-                            f"DirectionRatios: {entity.Axis.DirectionRatios}"
-                        )
-                # Continue without orientation
-                orientation = None
-
-            # Apply transformation if needed
-            transformation = None
-            try:
-                self.logger.debug(f"Checking for transformation on entity {entity_id}")
-                if hasattr(entity, "ObjectPlacement") and entity.ObjectPlacement:
-                    transformation = get_transformation(entity.ObjectPlacement)
-                    if transformation:
-                        self.logger.debug(
-                            f"Applying transformation to geometry for {entity_id}"
-                        )
-                        geometry = transform_vectors(geometry, transformation)
-                        if orientation:
-                            self.logger.debug(
-                                f"Applying transformation to orientation for {entity_id}"
-                            )
-                            orientation = transform_vectors(
-                                [orientation], transformation, include_translation=False
-                            )[0]
-            except Exception as e:
-                self.logger.error(f"Error applying transformation for {entity_id}: {e}")
-                # Continue with original geometry and orientation
-
-            # Create and return domain object
-            if material and profile:
-                # Create domain material and section with unit conversion
-                domain_material = self._create_material(material)
-                try:
-                    domain_section = self._create_section(profile)
-                except ModelExtractionError as error:
-                    raise ModelExtractionError(
-                        f"Member {entity_id} cannot be analysed. {error.message}"
-                    ) from error
-
-                return CurveMember(
-                    id=entity_id,
-                    geometry=geometry,
-                    material=domain_material,
-                    section=domain_section,
-                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
-                    local_axis=tuple(orientation) if orientation is not None else None,
-                )
-            else:
-                # Create with default material and section (SI units)
-                elastic_modulus = 210e9  # Pa
-                density = 7850.0  # kg/m³
-
-                default_width = 0.1  # m
-                default_height = 0.2  # m
-
-                return CurveMember(
-                    id=entity_id,
-                    geometry=geometry,
-                    material=Material(
-                        id="default_material",
-                        name="Default Material",
-                        density=density,
-                        elastic_modulus=elastic_modulus,
-                        poisson_ratio=0.3,
-                    ),
-                    section=Section.create_rectangular_section(
-                        id="default_section",
-                        name="Default Section",
-                        width=default_width,
-                        height=default_height,
-                    ),
-                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
-                    local_axis=tuple(orientation) if orientation is not None else None,
-                )
-
-        except TypeError as e:
-            if "unsupported operand type" in str(e):
-                self.logger.error(
-                    f"DETAILED ERROR for curve member {getattr(entity, 'GlobalId', 'unknown')}: {e}"
-                )
-                # Add extensive debugging info
-                self.logger.error(
-                    f"Entity type: {entity.is_a() if hasattr(entity, 'is_a') else 'unknown'}"
-                )
-                self.logger.error(f"Has Axis: {hasattr(entity, 'Axis')}")
-                if hasattr(entity, "Axis"):
-                    self.logger.error(f"Axis value: {entity.Axis}")
-                    if entity.Axis:
-                        self.logger.error(f"Axis type: {type(entity.Axis)}")
-                        self.logger.error(
-                            f"Has DirectionRatios: {hasattr(entity.Axis, 'DirectionRatios')}"
-                        )
-                        if hasattr(entity.Axis, "DirectionRatios"):
-                            self.logger.error(
-                                f"DirectionRatios value: {entity.Axis.DirectionRatios}"
-                            )
-                            self.logger.error(
-                                f"DirectionRatios type: {type(entity.Axis.DirectionRatios)}"
-                            )
-
-                # Also check geometry for None values
-                try:
-                    geometry = self._extract_geometry(
-                        get_representation(entity, "Edge"), self.length_scale
-                    )
-                    self.logger.error(f"Extracted geometry: {geometry}")
-                    if geometry:
-                        for i, point in enumerate(geometry):
-                            self.logger.error(
-                                f"Point {i}: {point} (type: {type(point)})"
-                            )
-                            if point and hasattr(point, "__iter__"):
-                                for j, coord in enumerate(point):
-                                    self.logger.error(
-                                        f"  Coord {j}: {coord} (type: {type(coord)})"
-                                    )
-                except Exception as geom_e:
-                    self.logger.error(
-                        f"Error extracting geometry for debugging: {geom_e}"
-                    )
-
-                import traceback
-
-                self.logger.error(f"Full traceback: {traceback.format_exc()}")
-            else:
-                self.logger.warning(
-                    f"Failed to extract curve member {getattr(entity, 'GlobalId', 'unknown')}: {e}"
-                )
-            return None
-        except ModelExtractionError:
-            raise  # an unsupported profile must stop the analysis
-        except Exception as e:
-            logger.error(f"Unexpected error creating curve member: {e}")
-            return None
-
-    def _create_surface_member(self, entity) -> Optional[SurfaceMember]:
+    def _create_surface_member(self, entity) -> SurfaceMember:
         """
         Create a SurfaceMember domain object from an IFC entity.
 
@@ -437,33 +201,39 @@ class MembersExtractor:
             entity: IFC entity representing a surface member
 
         Returns:
-            Optional[SurfaceMember]: The created surface member or None if creation fails
+            The surface member
+
+        Raises:
+            ModelExtractionError: If it has no usable geometry, material or
+                thickness.
         """
-        try:
-            # Extract representation
-            representation = get_representation(entity, "Face")
-            if not representation:
-                self.logger.warning(f"No representation found for {entity.GlobalId}")
-                return None
+        return self._create_member(entity, self._build_surface_member)
 
-            # Extract material
-            material = self._get_surface_material(entity)
+    def _build_curve_member(self, entity) -> CurveMember:
+        """Create a curve member; see ``_create_curve_member``."""
+        representation = get_representation(entity, "Edge")
+        if not representation:
+            raise ModelExtractionError("It has no edge representation.")
 
-            # Extract geometry with unit conversion
-            geometry = self._extract_geometry(representation, self.length_scale)
-            if not geometry:
-                self.logger.warning(f"Failed to extract geometry for {entity.GlobalId}")
-                return None
-
-            # Get orientation
-            orientation = get_2D_orientation(representation)
-
-            # Apply transformation if needed
-            transformation = (
-                get_transformation(entity.ObjectPlacement)
-                if hasattr(entity, "ObjectPlacement")
-                else None
+        material_profile = self._get_material_profile(entity)
+        material = getattr(material_profile, "Material", None)
+        profile = getattr(material_profile, "Profile", None)
+        if material is None or profile is None:
+            raise ModelExtractionError(
+                "It has no material profile (an IfcMaterialProfileSet with a "
+                "material and a profile)."
             )
+
+        geometry = self._extract_geometry(representation, self.length_scale)
+        if not geometry:
+            raise ModelExtractionError("The ends of its edge cannot be read.")
+
+        orientation = None
+        if getattr(entity, "Axis", None) is not None:
+            orientation = get_1D_orientation(geometry, entity.Axis)
+
+        if getattr(entity, "ObjectPlacement", None):
+            transformation = get_transformation(entity.ObjectPlacement)
             if transformation:
                 geometry = transform_vectors(geometry, transformation)
                 if orientation:
@@ -471,66 +241,51 @@ class MembersExtractor:
                         [orientation], transformation, include_translation=False
                     )[0]
 
-            # Get thickness and convert to SI units
-            thickness_value = entity.Thickness if hasattr(entity, "Thickness") else 0.0
-            thickness_value = convert_length(thickness_value, self.length_scale)
+        return CurveMember(
+            id=entity.GlobalId,
+            geometry=geometry,
+            material=self._create_material(material),
+            section=self._create_section(profile),
+            ifc_guid=entity.GlobalId,
+            local_axis=tuple(orientation) if orientation is not None else None,
+        )
 
-            if thickness_value <= 0:
-                logger.warning(
-                    f"Surface member {entity.GlobalId} has zero or invalid thickness ({thickness_value}). "
-                    f"Applying default thickness of 0.1m."
-                )
-                thickness_value = 0.1
+    def _build_surface_member(self, entity) -> SurfaceMember:
+        """Create a surface member; see ``_create_surface_member``."""
+        representation = get_representation(entity, "Face")
+        if not representation:
+            raise ModelExtractionError("It has no face representation.")
 
-            # Create and return domain object
-            if material:
-                # Create domain material with unit conversion
-                domain_material = self._create_material(material)
+        material = self._get_surface_material(entity)
+        if material is None:
+            raise ModelExtractionError("It has no material.")
 
-                # Create domain thickness
-                domain_thickness = Thickness(
-                    id=f"thickness_{entity.GlobalId}",
-                    name="Surface Thickness",
-                    value=thickness_value,
-                )
+        geometry = self._extract_geometry(representation, self.length_scale)
+        if not geometry:
+            raise ModelExtractionError("The outline of its face cannot be read.")
 
-                return SurfaceMember(
-                    id=entity.GlobalId,
-                    geometry=geometry,
-                    material=domain_material,
-                    thickness=domain_thickness,
-                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
-                )
-            else:
-                # Create with default material (SI units)
-                self.logger.warning(
-                    f"Surface member {entity.GlobalId} has no usable material; "
-                    "analysing it as steel (E = 210 GPa, 7850 kg/m3)."
-                )
-                elastic_modulus = 210e9  # Pa
-                density = 7850.0  # kg/m³
+        if getattr(entity, "ObjectPlacement", None):
+            transformation = get_transformation(entity.ObjectPlacement)
+            if transformation:
+                geometry = transform_vectors(geometry, transformation)
 
-                return SurfaceMember(
-                    id=entity.GlobalId,
-                    geometry=geometry,
-                    material=Material(
-                        id="default_material",
-                        name="Default Material",
-                        density=density,
-                        elastic_modulus=elastic_modulus,
-                        poisson_ratio=0.3,
-                    ),
-                    thickness=Thickness(
-                        id=f"thickness_{entity.GlobalId}",
-                        name="Surface Thickness",
-                        value=thickness_value,
-                    ),
-                    ifc_guid=entity.GlobalId if hasattr(entity, "GlobalId") else None,
-                )
+        thickness_value = convert_length(
+            getattr(entity, "Thickness", None) or 0.0, self.length_scale
+        )
+        if thickness_value <= 0:
+            raise ModelExtractionError("It has no thickness.")
 
-        except Exception as e:
-            logger.error(f"Unexpected error creating surface member: {e}")
-            return None
+        return SurfaceMember(
+            id=entity.GlobalId,
+            geometry=geometry,
+            material=self._create_material(material),
+            thickness=Thickness(
+                id=f"thickness_{entity.GlobalId}",
+                name="Surface Thickness",
+                value=thickness_value,
+            ),
+            ifc_guid=entity.GlobalId,
+        )
 
     def _extract_geometry(self, representation, unit_scale: float = 1.0):
         """
@@ -541,108 +296,45 @@ class MembersExtractor:
             unit_scale: Scale factor to convert to SI units
 
         Returns:
-            Geometry data in SI units
+            The two ends of an edge, or the corners of a face, in SI units.
+            None when the representation holds neither.
+
+        Raises:
+            ModelExtractionError: If a point of the edge or face has no
+                usable coordinates. A face is never returned with a corner
+                missing.
         """
         if not representation or not representation.Items:
-            self.logger.debug("No representation or items")
             return None
 
         item = representation.Items[0]
-        self.logger.debug(
-            f"Processing representation item type: {item.is_a() if hasattr(item, 'is_a') else 'unknown'}"
-        )
 
         if item.is_a("IfcEdge"):
-            self.logger.debug("Processing IfcEdge")
-            # Get coordinates and convert to SI units
-            try:
-                self.logger.debug("Getting start coordinate")
-                start_coord = get_coordinate(item.EdgeStart.VertexGeometry, unit_scale)
-                self.logger.debug(f"Start coordinate: {start_coord}")
+            ends = [
+                get_coordinate(vertex.VertexGeometry, unit_scale)
+                for vertex in (item.EdgeStart, item.EdgeEnd)
+            ]
+            if any(end is None for end in ends):
+                raise ModelExtractionError("An end of its edge has no coordinates.")
+            return ends
 
-                self.logger.debug("Getting end coordinate")
-                end_coord = get_coordinate(item.EdgeEnd.VertexGeometry, unit_scale)
-                self.logger.debug(f"End coordinate: {end_coord}")
+        if item.is_a("IfcFaceSurface") and item.Bounds:
+            edges = getattr(item.Bounds[0].Bound, "EdgeList", None) or []
+            corners = [
+                get_coordinate(edge.EdgeElement.EdgeStart.VertexGeometry, unit_scale)
+                for edge in edges
+            ]
+            if any(corner is None for corner in corners):
+                raise ModelExtractionError("A corner of its face has no coordinates.")
+            return corners or None
 
-                # Validate coordinates are not None
-                if start_coord is None or end_coord is None:
-                    self.logger.warning(
-                        f"Invalid coordinates found in edge geometry: start={start_coord}, end={end_coord}"
-                    )
-                    return None
-
-                # Additional validation - check for None values within coordinate lists
-                if (
-                    isinstance(start_coord, (list, tuple))
-                    and any(c is None for c in start_coord)
-                ) or (
-                    isinstance(end_coord, (list, tuple))
-                    and any(c is None for c in end_coord)
-                ):
-                    self.logger.warning(
-                        f"Coordinates contain None values: start={start_coord}, end={end_coord}"
-                    )
-                    return None
-
-                self.logger.debug(
-                    f"Returning edge geometry: [{start_coord}, {end_coord}]"
-                )
-                return [start_coord, end_coord]
-
-            except Exception as e:
-                self.logger.error(f"Error extracting edge coordinates: {e}")
-                return None
-
-        elif item.is_a("IfcFaceSurface"):
-            self.logger.debug("Processing IfcFaceSurface")
-            try:
-                if hasattr(item, "Bounds") and item.Bounds and len(item.Bounds) > 0:
-                    if hasattr(item.Bounds[0], "Bound") and hasattr(
-                        item.Bounds[0].Bound, "EdgeList"
-                    ):
-                        edges = item.Bounds[0].Bound.EdgeList
-                        coords = []
-                        for i, edge in enumerate(edges):
-                            if hasattr(edge, "EdgeElement") and hasattr(
-                                edge.EdgeElement, "EdgeStart"
-                            ):
-                                # Get coordinates and convert to SI units
-                                self.logger.debug(f"Getting coordinate for edge {i}")
-                                coord = get_coordinate(
-                                    edge.EdgeElement.EdgeStart.VertexGeometry,
-                                    unit_scale,
-                                )
-                                if coord is None:
-                                    self.logger.warning(
-                                        f"Invalid coordinate found in surface boundary at edge {i}"
-                                    )
-                                    continue  # Skip this coordinate
-
-                                # Check for None values within coordinate
-                                if isinstance(coord, (list, tuple)) and any(
-                                    c is None for c in coord
-                                ):
-                                    self.logger.warning(
-                                        f"Coordinate {i} contains None values: {coord}"
-                                    )
-                                    continue
-
-                                coords.append(coord)
-
-                        if len(coords) > 0:
-                            self.logger.debug(
-                                f"Returning surface geometry with {len(coords)} coordinates"
-                            )
-                            return coords
-                        else:
-                            self.logger.warning("No valid coordinates found in surface")
-                            return None
-            except Exception as e:
-                self.logger.error(f"Error extracting surface coordinates: {e}")
-                return None
-
-        self.logger.debug("No valid geometry found")
         return None
+
+    def _warn_once(self, message: str) -> None:
+        """Record a warning for the results, once however many members share it."""
+        if message not in self.warnings:
+            self.logger.warning(message)
+            self.warnings.append(message)
 
     def _get_surface_material(self, element):
         """Return the IfcMaterial of a surface member, or None.
@@ -747,7 +439,7 @@ class MembersExtractor:
         # Get extracted values (None if not found in IFC)
         density_raw = commonProps.get("massDensity")
         elastic_modulus_raw = mechProps.get("youngModulus")
-        poisson_ratio = mechProps.get("poissonRatio", 0.3)
+        poisson_ratio = mechProps.get("poissonRatio")
 
         # Second pass: if key properties still missing, search all psets by property name
         if elastic_modulus_raw is None or density_raw is None:
@@ -771,20 +463,34 @@ class MembersExtractor:
                         density_raw = value
                     elif (
                         "poissonratio" in lower_name or "poisson" in lower_name
-                    ) and poisson_ratio == 0.3:
+                    ) and poisson_ratio is None:
                         poisson_ratio = value
 
-        # Only convert values extracted from IFC (they're in project units).
-        # Use SI defaults directly when not found.
+        name = getattr(material, "Name", None) or "unnamed"
+        if elastic_modulus_raw is None:
+            raise ModelExtractionError(
+                f"Its material '{name}' has no Young's modulus "
+                "(Pset_MaterialMechanical.YoungModulus)."
+            )
+        elastic_modulus = elastic_modulus_raw * self.pressure_scale
+
+        # Without a density the member weighs nothing, and the user is told:
+        # that is wrong under gravity and harmless otherwise
+        density = None
         if density_raw is not None:
             density = convert_density(density_raw, self.length_scale, self.mass_scale)
         else:
-            density = 7850.0  # kg/m³, already SI
-
-        if elastic_modulus_raw is not None:
-            elastic_modulus = elastic_modulus_raw * self.pressure_scale
-        else:
-            elastic_modulus = 210e9  # Pa, already SI
+            self._warn_once(
+                f"Material '{name}' has no mass density "
+                "(Pset_MaterialCommon.MassDensity); its members are analysed "
+                "as weightless."
+            )
+        if poisson_ratio is None:
+            poisson_ratio = 0.3
+            self._warn_once(
+                f"Material '{name}' has no Poisson's ratio "
+                "(Pset_MaterialMechanical.PoissonRatio); 0.3 is assumed."
+            )
 
         # Yield stress, where the file gives one (Pset_MaterialSteel). A
         # concrete's compressive strength is not used: it is not a limit on
