@@ -709,6 +709,20 @@ rotational degrees of freedom**. This drives everything about joints:
   restraint of a beam node is approximate, and doing so moved a portal's
   moments by 3% and made them unequal. Hold rotations only at a pinned end
   or at a support, as `_hold_spinning_members()` does.
+- **Curve members that touch share a node, connection or not** (`aiz.80`).
+  `fragment()` gives a beam ending on the span of another, or two that
+  cross, one node there, and a shared node is a rigid joint. Where no
+  connection of the file joins the two
+  (`_curve_members_joined_by_the_mesh()`), one warning counts the places
+  (`building_02` has 334: its secondary beams and some columns end on girders
+  and have connections of their own that join nothing else), and
+  `_hold_spinning_members()` counts the joint as one: those beams were once
+  reported as free to spin. Rigid is the decision (2026-10-12): analysis
+  programs join members that meet, and the IFC specification, which joins
+  members through connection objects alone, says nothing of members that
+  only touch. Do not make these joints pins, and do not take them apart
+  under `--strict-connections`. `plane_structure.py` still goes by the
+  file's connections alone (`aiz.81`).
 - **A connection is a support only if it has an `AppliedCondition`**
   (`stiffness_properties` in the domain model). Without one it restrains
   nothing, however many members it joins and whatever its type.

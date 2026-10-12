@@ -958,6 +958,30 @@ The reactions add up to the loads to six figures, with 5030 and 4970 N of the 10
 the two supports. Passes on CalculiX 2.21 as well: no rotation is restrained by
 `*BOUNDARY`.
 
+**A beam ending on the span of another** (`aiz.80`,
+`TestBeamEndingOnTheSpanOfAnother`). A 3 m beam between the middles of two 4 m girders
+fixed at their ends, 10 kN at its middle, 0.25 m mesh. The file gives each end of the
+beam a connection of its own that joins nothing else, which is how `building_02`
+describes its secondary beams. Curves that touch are meshed with one node, so the beam
+is joined to the girders rigidly all the same:
+
+| Quantity | Joined by the mesh | Girders in two members, joints in the file |
+|---|---|---|
+| Deflection | 2.9607 mm | 2.9607 mm |
+| Torsion in each half of a girder | 929.3 N·m | 929.3 N·m |
+| Moment in the middle of the beam | 5641.4 N·m | 5641.4 N·m |
+
+P L / 4 is 7500 N·m, and 7500 less twice 929.3 is 5641.4: the moment at each end of the
+beam is the torsion of the two halves of the girder. Two things were wrong before. The
+beam was reported as free to spin about its own axis and "not held", since the check
+went by the file's connections alone; and the rigid joint, which the file does not
+have, was not reported. Now the check counts a shared node as the joint it is, and one
+warning gives the number of such places. `building_02` has 334 (263 of a beam on a
+beam, 71 of a column ending on a beam; every one a member ending on the span of
+another at right angles), and its 37 "free to spin" members were among them. Its
+solver input is the same to the byte as before; only the warnings changed.
+`building_01` has two such places.
+
 **A beam continuous over a pinned support** (`aiz.78`,
 `TestBeamContinuousOverASupport`). Two 4 m spans, four members, three supports that
 hold no rotation, 10 kN in the middle of each span. A support with a free rotation was
@@ -1051,9 +1075,15 @@ to a node of shells alone swings freely about their normal.
   ones are covered by the plate benchmark; local ones only by a unit test.
 - **Supports released in bending only at one end** have no benchmark.
 - **Members free to spin that are reported and left**: those with no support of their
-  own (37 members of `building_02`, all along a global axis, each joined only to two
-  connections that hold nothing and join nothing else), and those along a skew axis
-  whose supports are line supports.
+  own (no example has one now), and those along a skew axis whose supports are line
+  supports.
+- **Curve members that touch with no connection between them are joined rigidly**, by
+  the node the mesh gives them, under `--strict-connections` as well, and a warning
+  counts them (decision 2026-10-12: it is what analysis programs do with members that
+  meet). The IFC specification does not cover the case. It joins members through
+  connection objects alone (`IfcRelConnectsStructuralMember`), expects "point
+  connections at each end of the member" and topology that shares vertices, and says
+  nothing of members that only touch.
 - **Member stress** is the normal stress from axial force and bending only. Shear,
   torsion, buckling and anything specific to concrete are not checked.
 - **Shell members in membrane action**: walls are only checked through `structure_01`.

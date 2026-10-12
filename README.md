@@ -128,6 +128,10 @@ the ones a user needs to know before trusting a result.
   that used to more than double the reported deflection. A straight run of
   members joined end to end is held as one, and an inclined member is held
   about its own axis.
+- **Curve members that touch with no connection between them are joined
+  rigidly**, with a warning that counts the places: a beam ending on the
+  span of another, or two that cross, are meshed with one node there.
+  `--strict-connections` does not change this.
 - **A column meeting a slab at a point with no connection is pinned to it
   there**, with a warning, like a beam lying in a slab. `--strict-connections`
   turns both off. A line connection in the file between a beam and a slab is
