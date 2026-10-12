@@ -249,7 +249,7 @@ Command-line interface:
   - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its 17 load combinations, and 2.2 GB of memory). Skip with `-m "not slow"`.
+- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its three load cases and 17 load combinations, and 2.3 GB of memory). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -453,16 +453,24 @@ here. This section only records the constraints that shape day-to-day work.
   computed with one edge hinged; the IFC file as shipped clamps both. The
   Code_Aster runs also give their rigid eccentricity arms weight (16 N each in
   `grid_of_beams`, whose reference maximum is 0.029 mm too high for it).
-- **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
-  (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
-  otherwise.
-- **`SelfWeightCoefficients` of a load case is read and not applied**
-  (`LoadGroup.self_weight_coefficients`; `aiz.71`). `Dead` has
-  `(0, 0, -1)` in `beam_01`, `building_01` and `building_02`, where it has no
-  other load, so it has no step and every combination is without it. The
-  extractor warns. `--gravity` adds a separate `Gravity` case that no
-  combination includes. Applying the coefficients will change the `Dead`
-  results of those three models and most `beam_01` benchmarks.
+- **Self-weight is what the file says it is** (`aiz.71`, decision
+  2026-10-12). `IfcStructuralLoadCase.SelfWeightCoefficients` are the shares
+  of the members' weight a case includes along global x, y and z
+  (`LoadGroup.self_weight_coefficients`, `includes_self_weight`); the case's
+  step gets `*DLOAD GRAV` scaled and turned by them
+  (`_write_self_weight()`, with `STANDARD_GRAVITY` = 9.81 m/s², which IFC
+  does not give). A case with nothing else is still a case: select load
+  cases with `LoadGroup.has_actions`, never with `.loads`. `Dead` has
+  `(0, 0, -1)` in `beam_01`, `building_01` and `building_02`. A buckling
+  step has the weight of every case, as it has every load.
+- **`--gravity` is for files with no load case** (`cantilever_01`,
+  `slab_01`, `structure_01`, `grid_of_beams`, which have no loads otherwise,
+  and whose Code_Aster references are self-weight runs). It adds a case of
+  its own, `Gravity`, that no combination includes, and warns when a case of
+  the file already has self-weight. Do not make it change the file's cases.
+- **Benchmarks on `beam_01` variants take the weight out** (`_beam_01()` in
+  `test_pipeline_benchmarks.py`) so that one load is checked against its
+  closed form; those that run the file as shipped include it.
 - **Buckling factors** come from a single `*BUCKLE` step that contains the
   loads. CalculiX scales only loads defined inside that step; a preceding
   `*STATIC` step is a fixed preload. Validated for one Euler column only.
@@ -628,7 +636,8 @@ rotational degrees of freedom**. This drives everything about joints:
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve members only, in a plane parallel to
-  two global axes, loads and gravity in it, section axes in and across it; a
+  two global axes, loads, the self-weight of load cases and gravity in it,
+  section axes in and across it; a
   straight run takes the plane of its loads) and `out_of_plane_freedoms()`
   counts what nothing restrains, with members and joints as rigid bodies tied
   by the file's connections and supports. If any, every node gets the
@@ -689,8 +698,8 @@ reactions are worked out by the code that does it for a load case. Never add
 maxima or envelopes. One combination is held in memory at a time
 (`building_02` has 16). Results go beside each `by_load_case` as
 `by_load_combination`; `envelope` stays that of the load cases. Buckling has
-no combinations (a warning says so). A load case without loads has no step
-and adds nothing (`cases_without_loads`). `TestLoadCombinations` checks a
+no combinations (a warning says so). A load case with neither loads nor
+self-weight has no step and adds nothing (`cases_without_loads`). `TestLoadCombinations` checks a
 combination against hand values and against one case holding the factored
 loads.
 

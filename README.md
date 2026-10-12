@@ -32,15 +32,8 @@ the ones a user needs to know before trusting a result.
   solves, its reactions match the applied loads and its deflections are
   plausible, but it has no reference. `building_01` solves and its reactions
   match the applied loads to the newton, with no reference either; its
-  `Masonry` material is 202 t/m³ in the file, which dominates its self-weight.
-- **The self-weight a load case asks for is not applied.** An
-  `IfcStructuralLoadCase` can include the weight of the members through its
-  `SelfWeightCoefficients` (`Dead` does in `beam_01`, `building_01` and
-  `building_02`). That part is left out of the case and of every combination
-  that includes it, and the analysis warns. Self-weight is only analysed with
-  `--gravity`, as a load case of its own (`Gravity`) that no combination
-  includes. In `building_02` the `Dead` case is nothing but self-weight, so
-  its combinations are without their dead load.
+  `Masonry` material is 202 t/m³ in the file, which makes its `Dead` case
+  (self-weight) 48.5 MN beside 0.3 MN of live load.
 - **Reactions need CalculiX 2.23 or later to be exact.** CalculiX 2.21 (the
   version in Ubuntu 24.04) misreports the force at a support that holds a
   rotation, by anything up to the size of the load; displacements and member
@@ -58,8 +51,9 @@ the ones a user needs to know before trusting a result.
   Models that connect a slab only at its corners would otherwise leave the
   beams under its edges carrying nothing. The tie passes forces, not moments.
   `--strict-connections` analyses only the connections in the file.
-- **Large models are slow.** `building_02` takes about 280 s (100 s of it for
-  its 17 load combinations) and 2.2 GB at a 2 m mesh, and needs more than 5 GB at 1 m. Its deflections move about 7%
+- **Large models are slow.** `building_02` takes 3 to 6 minutes (measured 184 s
+  and 346 s on the same machine, the second while it was busy) and 2.3 GB at a
+  2 m mesh, with three load cases and 17 combinations, and needs more than 5 GB at 1 m. Its deflections move about 7%
   between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
@@ -159,6 +153,12 @@ the ones a user needs to know before trusting a result.
   virtual-work deflection to 0.5%; a portal gives its hand moments to 0.2%
   and its sway to 0.5%. Before, the same truss came out with 19 times its
   deflection.
+- **Self-weight where the file asks for it.** A load case includes the
+  weight of the members when its `SelfWeightCoefficients` say so: `(0, 0, -1)`
+  is the whole weight downwards, and other values scale and turn it. It is
+  part of that case and of every combination that includes it. `beam_01`
+  under its own weight gives w L in reaction to six figures and
+  w L² / 12 at its fixed ends to 0.1%.
 - **Load combinations.** Every `LOAD_COMBINATION` group of the file is
   reported with the factor of each load case in it
   (`IfcRelAssignsToGroupByFactor`), and has the results a load case has:
@@ -200,9 +200,11 @@ the ones a user needs to know before trusting a result.
 - **Distributed loads are uniform over the whole member.** A load given per
   projected length, or over part of a member, is applied as a uniform load per
   true length over all of it.
-- **Self-weight needs `--gravity`.** Models without an `IfcStructuralLoadCase`
-  (`cantilever_01`, `slab_01`, `structure_01`, `grid_of_beams`) have no loads
-  otherwise and return zero displacement.
+- **A file with no load case has no loads.** `cantilever_01`, `slab_01`,
+  `structure_01` and `grid_of_beams` return zero displacement unless
+  `--gravity` adds self-weight as a case of its own (`Gravity`). Standard
+  gravity is taken as 9.81 m/s²; IFC gives self-weight as a share of the
+  members' weight, not as an acceleration.
 - **Linear buckling** is validated for one Euler column only.
 - **Members without an IFC `Axis`** are given a default section orientation,
   which for a non-square section may not be the one intended. A warning says
@@ -250,7 +252,7 @@ ifc-analysis analyze model.ifc --output ./results
 # Specify mesh size (in metres, default: 1.0)
 ifc-analysis analyze model.ifc --output ./results --mesh-size 0.5
 
-# Include self-weight gravity loads
+# Add self-weight to a file that has no load case
 ifc-analysis analyze model.ifc --output ./results --gravity
 
 # Enable verbose output
@@ -268,7 +270,7 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--analysis-type TYPE` | `linear_static` or `linear_buckling` | `linear_static` |
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
-| `--gravity` | Include self-weight gravity loads | off |
+| `--gravity` | Add self-weight as a load case of its own, `Gravity`. For files with no load case: a load case that includes self-weight in the file has it without this | off |
 | `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |
 | `--open-sections [equivalent\|user-element]` | How sections other than solid rectangles are analysed: as a rectangle of the same stiffness, or with CalculiX U1 elements (only for models made of nothing else) | `equivalent` |
 | `--verbose` | Enable verbose logging | off |
@@ -342,18 +344,18 @@ The repository includes example IFC structural models (as a git submodule in `ex
 
 | Model | Description | `--gravity` | Max displacement | Vertical reaction | Reference | Status |
 |-------|-------------|-------------|------------------|-------------------|-----------|--------|
-| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan | No | 0.34 mm (0.35 mm at a 0.05 m mesh) | 20.0 kN | 0.35 mm by hand | Verified |
+| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan and its own weight | No | 0.41 mm (0.43 mm at a 0.05 m mesh) | 28.8 kN | 0.43 mm by hand | Verified |
 | `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 18.4 N | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
 | `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 660 N | 0.427 mm Code_Aster | Verified, within 2% |
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, distributed load | No | 4.04 mm (4.11 mm at 0.25 m) | 85.4 kN | 4.12 mm with U1 elements at 0.25 m | Runs; the two section models agree to 0.2% |
-| `building_02` | Multi-storey building, two load cases | No | 25.7 mm (Live), 15.3 mm (Extra_dead) at a 2 m mesh | 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
-| `building_01` | Small building with I-section beams and masonry walls, two load cases | No | 0.29 mm (Live), 0.10 mm (floor finishing); 0.34 and 0.11 mm at 0.5 m | 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
+| `building_02` | Multi-storey building, three load cases and 17 combinations | No | 16.8 mm (Dead, its self-weight), 25.7 mm (Live), 15.3 mm (Extra_dead), 54.4 mm (1.4D+1.6L) at a 2 m mesh | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
+| `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.78 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.90, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,
-measured on 2026-10-11. The Code_Aster references are the IfcOpenShell IFC2CA
+measured on 2026-10-11 (`beam_01` and the two buildings on 2026-10-12). The Code_Aster references are the IfcOpenShell IFC2CA
 results shipped in `examples/analysis-models/models/`. Reactions equal the
 applied loads to six figures at any mesh size; `results.json` gives both, and
 the reaction at each support (see below).

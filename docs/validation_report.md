@@ -167,8 +167,10 @@ the member's `Axis` or replacing its profile. Reference values are Timoshenko be
 U1 is a two-node element, so each B32R is replaced by two of them.
 
 `cantilever_01`: L = 3 m, fully fixed at one end, E = 210 MPa, ν = 0.2, ρ = 7.8 kg/m³,
-loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midspan,
-0.3 m square, E = 30 GPa.
+loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 0.3 m square,
+E = 30 GPa, 2500 kg/m³. As shipped its one load case has 20 kN at midspan and the
+beam's own weight (2207 N/m); the rows that name a single load are variants with the
+weight taken out of the case.
 
 | Case | Section and element | Reference | Pipeline | Error |
 |------|---------------------|-----------|----------|-------|
@@ -183,8 +185,9 @@ loaded by self-weight. `beam_01`: L = 4 m, both ends fully fixed, 20 kN at midsp
 | Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6584 mm | 0.3% |
 | Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3535 mm | 1.2% |
 | Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1793 mm | 1.2% |
-| Fixed-fixed beam, midspan | 0.3 m square, B32R | 0.3506 mm | 0.3489 mm | 0.5% |
-| Fixed-fixed beam, reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
+| Fixed-fixed beam as shipped (20 kN and its weight), midspan | 0.3 m square, B32R | 0.4280 mm | 0.4252 mm | 0.6% |
+| Fixed-fixed beam as shipped, reaction | 0.3 m square, B32R | 28.829 kN | 28.829 kN | 0.0% |
+| Fixed-fixed beam, its weight alone, midspan | 0.3 m square, B32R | 0.0774 mm | 0.0765 mm | 1.2% |
 | Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
 | Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
@@ -209,8 +212,8 @@ Section forces and member stress from `results.json`, same models (tolerance 1%)
 | Cantilever, 200 × 400 I, equivalent rectangle | Moment at the root | 3.9942 N·m | 3.994 N·m | < 0.1% |
 | Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, strong axis | 2435.9 Pa | 2435.8 Pa | < 0.1% |
 | Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, weak axis | 14961.6 Pa | 14960.8 Pa | < 0.1% |
-| Fixed-fixed beam, 20 kN at midspan | Shear | 10.000 kN | 9.9996 kN | < 0.1% |
-| Fixed-fixed beam, 20 kN at midspan | Moment at the ends | 10.000 kN·m | 10.042 kN·m | 0.4% |
+| Fixed-fixed beam as shipped (20 kN and its weight) | Shear at the ends, (P + w L) / 2 | 14.4145 kN | 14.4140 kN | < 0.1% |
+| Fixed-fixed beam as shipped | Moment at the ends, P L / 8 + w L² / 12 | 12.943 kN·m | 12.951 kN·m | 0.1% |
 
 CalculiX can write beam section forces, but only in its two-dimensional output mode,
 where shell stresses are averaged through the thickness and their bending part is lost.
@@ -229,9 +232,10 @@ I-section rows agree with hand values although no I-shaped stress field was ever
 The forces are also exported along each member with their signs
 (`section_force_diagrams`). Two cases are tested point by point at 1% of the largest
 value: the cantilever, where V = −w (L − x) and M = w (L − x)² / 2 at all 121
-cross-sections, and the fixed-fixed beam, where the shear is −P/2 up to midspan and +P/2
-after it, with both values listed at midspan, and the moment runs from +P L/8 at the
-supports to −P L/8 under the load. The solver's own stress at the loaded cross-section is
+cross-sections, and the fixed-fixed beam as shipped, where the shear steps by P at
+midspan, from −P/2 to +P/2 with both values listed there, and grows by the beam's
+weight towards each end, and the moment runs from P L/8 + w L²/12 at the supports to
+−(P L/8 + w L²/24) under the load. The solver's own stress at the loaded cross-section is
 the average of the two sides, which would give zero shear there; the step is rebuilt
 from the cross-sections at the middle of each element, which belong to one element only.
 
@@ -534,14 +538,14 @@ model.
 
 | Model | Load flag | Max displacement | Vertical reaction | Standing |
 |-------|-----------|------------------|-------------------|----------|
-| `beam_01` | — | 0.34 mm | 20.0 kN | Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 3% stiff |
+| `beam_01` | — | 0.41 mm | 28.8 kN | 20 kN and its own weight. Covered by Tier 2 at a finer mesh; the 1.0 m mesh is 3% stiff |
 | `cantilever_01` | `--gravity` | 0.28 mm | 18.4 N | Covered by Tier 2 |
 | `structure_01` | `--gravity` | 0.429 mm | 660 N | Covered by Tier 2 (Code_Aster) |
 | `slab_01` | `--gravity` | 0.173 mm | 230 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 273 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
-| `building_02` | — | 25.7 mm (Live), 15.3 mm (Extra_dead) | 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. 16.8 mm and 67.0 MN under self-weight. At 4 m: 24.1 / 14.4 / 15.7 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
-| `building_01` | — | 0.286 mm (Live), 0.10 mm (floor finishing) | 282.0 kN (Live), 13.5 kN (floor finishing) | 6.78 mm and 48.55 MN under self-weight. At 0.5 and 0.25 m: 0.338 and 0.352 mm (Live), 7.90 and 8.63 mm (self-weight). Reactions match the applied loads; deflections unchecked |
+| `building_02` | — | 16.8 mm (Dead), 25.7 mm (Live), 15.3 mm (Extra_dead) | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. `Dead` is the self-weight. At 4 m (measured before `Dead` was a case, with `--gravity`): 15.7 / 24.1 / 14.4 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
+| `building_01` | — | 6.78 mm (Dead), 0.286 mm (Live), 0.10 mm (floor finishing) | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | `Dead` is the self-weight, nearly all of it a `Masonry` of 202 t/m³. At 0.5 and 0.25 m: 7.90 and 8.63 mm (Dead), 0.338 and 0.352 mm (Live). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the
@@ -678,7 +682,7 @@ sizes of the test:
 
 | Model | Unit | Largest displacement, shipped | placed | Vertical reaction, shipped | placed |
 |---|---|---|---|---|---|
-| `beam_01` | mm | 0.3467 mm | 0.3467 mm | 20 000 N | 20 000 N |
+| `beam_01` | mm | 0.4228 mm | 0.4228 mm | 28 829 N | 28 829 N |
 | `portal_01`, gravity | inch | 105.12 mm | 105.12 mm | 4 826 215 N | 4 826 215 N |
 | `structure_01`, gravity | m | 0.4333 mm | 0.4335 mm | 660.20 N | 660.20 N |
 | `building_01`, Live (1 m, not in the suite) | mm | 0.2857 mm | 0.2857 mm | 282 000 N | 282 000 N |
@@ -724,7 +728,7 @@ of the members a support holds, moved to the support:
 | Case | Statics | Pipeline | Error |
 |---|---|---|---|
 | `cantilever_01`, root moment | 27.55 N·m | 27.51 N·m | 0.1% |
-| `beam_01`, fixed-end moments, P L / 8 | ∓10 000 N·m | ∓10 022 N·m | 0.2% |
+| `beam_01`, fixed-end moments, P L / 8 + w L² / 12 | ∓12 943 N·m | ∓12 954 N·m | 0.1% |
 | Cantilever with an arm, root: bending and torque | 3000 and 1000 N·m | 2999.98 and 999.99 N·m | < 0.01% |
 | `portal_01`, feet | equal and opposite | 11 847.29 and −11 847.05 N·m | 0.002% apart |
 
@@ -741,7 +745,7 @@ displacements in both and different reactions:
 |---|---|---|---|
 | Bar pulled with 1000 N and bent, clamped end, force along it | 1000 N | 1000.0 N | 1076.6 N |
 | `portal_01`, vertical force at the two feet | 42 703 N each | 42 703 and 42 703 N | 34 165 and 44 124 N |
-| `beam_01`, resultant force at one end | 10 000 N | 10 000 N | 11 390 N |
+| `beam_01` with its point load only, resultant force at one end | 10 000 N | 10 000 N | 11 390 N |
 | Cantilever with an arm, vertical force at the root | 1000 N | 1000 N | 444 N |
 | `structure_01`, total | 660.2 N | 660.2 N | 667.9 N |
 
@@ -764,8 +768,8 @@ forces at support nodes); the exporter then works out magnitudes, von Mises stre
 maxima, diagrams and reactions from the sum as it does for a load case.
 
 Benchmark (`TestLoadCombinations`): `beam_01`, 4 m, fixed at both ends, 0.3 m square,
-0.25 m mesh. `Dead` is 20 kN down at midspan; `Live` is a line load of 5 kN/m down and
-3 kN/m sideways. Combination `1.35 Dead + 1.5 Live`:
+0.25 m mesh, with the self-weight taken out of `Dead`. `Dead` is 20 kN down at midspan;
+`Live` is a line load of 5 kN/m down and 3 kN/m sideways. Combination `1.35 Dead + 1.5 Live`:
 
 | Quantity | By hand | Combination | One case with the factored loads |
 |---|---|---|---|
@@ -789,11 +793,14 @@ P L/8 − w L²/24 = 6 667), where the difference of the two cases' largest mome
 which are both at the supports, is 3 367.
 
 `building_02` (2 m mesh) has 17 combinations of `Dead`, `Live`, `Extra_dead`, `WIND`,
-`EQX` and `EQY`. Only `Live` and `Extra_dead` have loads; `Dead` is self-weight alone
-(see below). Reactions: `Live` 30.0166 MN, `Extra_dead` 60.2858 MN, `1.4D+1.6L`
-132.4268 MN = 1.4 × 60.2858 + 1.6 × 30.0166; largest displacement 25.7, 15.3 and
-44.5 mm. The combinations take the run from 178 s to 277 s (5.8 s each), `results.json`
-from 5.4 to 43.7 MB, and leave peak memory at 2.2 GB (one is held at a time).
+`EQX` and `EQY`. `Live` and `Extra_dead` have loads, `Dead` is the self-weight alone,
+and the other three have nothing. Reactions: `Dead` 66.9681 MN, `Live` 30.0166 MN,
+`Extra_dead` 60.2858 MN, `1.4D+1.6L` 226.1821 MN = 1.4 × (66.9681 + 60.2858) +
+1.6 × 30.0166; largest displacement 16.8, 25.7, 15.3 and 54.4 mm. Until 2026-10-12
+`Dead` was left out, and `1.4D+1.6L` came to 132.4 MN and 44.5 mm. The combinations took the run from 178 s to 277 s (5.8 s each) and `results.json`
+from 5.4 to 43.7 MB when `Dead` was not a case, and left peak memory at 2.2 GB (one
+is held at a time). With `Dead` the file is 45.9 MB and the peak 2.2 to 2.3 GB; the
+run was timed at 184 s and, on a busy machine, 346 s.
 
 What the extraction does with combinations (`tests/unit/ifc/test_load_combinations.py`,
 on the example files): a relation without a factor counts once; the combination's
@@ -801,6 +808,40 @@ on the example files): a relation without a factor counts once; the combination'
 combination that names no load case, or includes something that is not a load case, is
 left out with a warning. The old code read these silently as empty or partial, and
 kept only the last factor of a case assigned twice.
+
+## Self-weight of a load case
+
+`IfcStructuralLoadCase.SelfWeightCoefficients` gives the shares of the members' weight
+a load case includes along global x, y and z. Until 2026-10-12 it was read and not
+applied: `Dead` of `beam_01`, `building_01` and `building_02` has `(0, 0, -1)`, and
+self-weight was only analysed when asked for on the command line, as a case no
+combination included. Now the step of a case has the members' weight, scaled and
+turned by its coefficients, with the case's other loads. Standard gravity is taken
+as 9.81 m/s²; IFC does not give it.
+
+Benchmark (`TestSelfWeightOfALoadCase`): `beam_01` with its point load removed, so
+that `Dead` is its weight alone, w = 2500 × 0.09 × 9.81 = 2207.25 N/m over 4 m,
+0.05 m mesh.
+
+| Coefficients | Quantity | By hand | Pipeline | Error |
+|---|---|---|---|---|
+| (0, 0, −1) | Vertical reaction, w L | 8 829.0 N | 8 829.0 N | 0.0% |
+| (0, 0, −1) | End shear, w L / 2 | 4 414.5 N | 4 414.3 N | < 0.1% |
+| (0, 0, −1) | End moment, w L² / 12 | 2 943.0 N·m | 2 945.1 N·m | 0.1% |
+| (0, 0, −1) | Midspan deflection, bending and shear | 0.0774 mm | 0.0765 mm | 1.2% |
+| (0, 0, −0.4) | Vertical reaction | 3 531.6 N | 3 531.6 N | 0.0% |
+| (0, 0, −0.4) | Midspan deflection, 0.4 of the pipeline's 0.07649 mm | 0.03059 mm | 0.03059 mm | 0.0% |
+| (0, −1, 0) | Reaction along Y, none along Z | 8 829.0 N | 8 829.0 N | 0.0% |
+| (0, −1, 0) | End moment, sideways bending | 2 943.0 N·m | 2 944.8 N·m | 0.1% |
+
+Run with `--gravity` as well, the same file gives `Dead` and `Gravity` with the same
+reaction and deflection to nine figures, and a warning that the weight is there
+twice. `beam_01` as shipped (20 kN and its weight) gives 28 829.0 N and, for its
+combination `DCon1` = 1.5 `Dead`, 43 243.5 N = 1.5 × 28 829.0. A material with no
+density in a case that includes self-weight is refused, as with `--gravity`.
+
+Not checked against a reference: self-weight in a buckling step, where the weight of
+every case is written with every load (the input file is checked, the factor is not).
 
 ## Plane trusses and frames
 
@@ -885,9 +926,9 @@ Two things found on the way:
   Nor were the benchmark models authored in Bonsai: they are built with IfcOpenShell.
 - **A straight run of rigidly joined members that can spin, in a space structure**, is
   not detected (see Plane trusses and frames).
-- **Self-weight of a load case** (`SelfWeightCoefficients`): read, not applied, with a
-  warning. `Dead` in `beam_01`, `building_01` and `building_02` is without it, and so
-  is every combination of those files. In `building_02`, `Dead` has nothing else.
+- **Self-weight of a load case** is checked on one beam, with native elements. Not
+  checked: U1 elements (their weight is written as nodal forces), surface members
+  other than through the totals of `building_01` and `building_02`, and buckling.
 - **Load combinations** are checked on one beam. Buckling has none. A case without
   loads adds nothing and is named in `cases_without_loads`.
 - **Reactions on CalculiX 2.21 and earlier** at supports that clamp a slab edge or a
@@ -923,6 +964,6 @@ Two things found on the way:
   stiffness (1.1 to 1.9 times too high), and for solid rectangles at the cost of
   their shear stiffness across the width (17 to 45% too low). 30 times too stiff for
   the I section; see the torsion table above.
-- **`building_01`**: reactions only. Its self-weight deflection is still moving 10%
+- **`building_01`**: reactions only. Its deflection under `Dead` (self-weight) is still moving 10%
   between a 0.5 m and a 0.25 m mesh.
 - **Buckling** beyond the single Euler column.
