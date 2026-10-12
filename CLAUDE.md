@@ -702,6 +702,13 @@ rotational degrees of freedom**. This drives everything about joints:
 - **A connection is a support only if it has an `AppliedCondition`**
   (`stiffness_properties` in the domain model). Without one it restrains
   nothing, however many members it joins and whatever its type.
+- **What a connection holds says nothing about how members are joined to
+  it** (`aiz.78`). Members meeting at a pinned support with no release of
+  their own (`IfcRelConnectsStructuralMember.AppliedCondition`) are joined
+  rigidly: a beam runs on over the support. `analyze_connection_type()` once
+  called a support with a free rotation a "hinge", and the writer released
+  every member there. The writer's "hinge" type is now only for a
+  `HingeConnection` built by hand.
 - **Supports are never invented or dropped** (`aiz.59`).
   `write_boundary_conditions()` raises `AnalysisError` for a model with no
   support and for a support with no mesh node within 0.1 m; a line support
