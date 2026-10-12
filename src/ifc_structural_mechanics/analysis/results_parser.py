@@ -28,6 +28,10 @@ from .section_forces import element_section_forces
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Name of the one set of results a buckling analysis has: every load of the
+# model together, which is what the buckling factors multiply
+BUCKLING_REFERENCE_CASE = "Reference loads"
+
 # Regex for scientific notation values that may run together without spaces
 _FRD_VALUE_RE = re.compile(r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)")
 
@@ -940,6 +944,7 @@ class ResultsParser(BaseParser):
             "strain": [],
             "reaction": [],
             "buckling": [],
+            "mode_shapes": [],
             "section_forces": [],
             "support_node_forces": [],
         }
@@ -991,6 +996,8 @@ class ResultsParser(BaseParser):
                 # Parse buckling eigenvalues (non-empty only for buckling analyses)
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)
                 parsed_results["buckling"].extend(eigenvalues)
+                if eigenvalues:
+                    self._set_mode_shapes_apart(parsed_results)
 
                 # Parse beam section forces (written by *EL PRINT, SF)
                 section_forces = self.parse_beam_section_forces(dat_file)
@@ -1014,6 +1021,26 @@ class ResultsParser(BaseParser):
             raise ResultProcessingError(
                 f"Failed to parse result files: {type(e).__name__}: {e}"
             ) from e
+
+    @staticmethod
+    def _set_mode_shapes_apart(parsed_results: Dict[str, List]) -> None:
+        """Move the mode shapes of a buckling analysis out of the displacements.
+
+        The result file of a ``*BUCKLE`` step has the displacements under the
+        loads of the step first, and then one set per mode: its shape, scaled
+        to a largest value of one. Those are not displacements, and read as
+        load cases they are a structure moving by a metre.
+        """
+        displacements = parsed_results["displacement"]
+        if not displacements:
+            return
+        under_load = displacements[0].metadata.get("load_case")
+        parsed_results["displacement"] = [
+            r for r in displacements if r.metadata.get("load_case") == under_load
+        ]
+        parsed_results["mode_shapes"] = [
+            r for r in displacements if r.metadata.get("load_case") != under_load
+        ]
 
     def compute_beam_section_forces(self, stresses: List[StressResult]) -> List[Dict]:
         """Integrate section forces for every beam element with a known frame.

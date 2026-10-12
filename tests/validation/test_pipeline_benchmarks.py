@@ -3365,6 +3365,81 @@ class TestPlaneTruss:
         assert not [w for w in warnings if PLANE_WARNING in w]
 
 
+class TestBucklingResults:
+    """What a buckling analysis reports (`aiz.73`).
+
+    The result file has the displacements under the loads and then one
+    normalised shape per mode. The shapes were listed as load cases
+    ``step_2`` and so on, and each drew a warning that the model moves by
+    its own size; the factors were not in ``results.json`` at all.
+    """
+
+    HEIGHT, SIDE, LOAD = 3.0, 0.1, 10000.0
+
+    def _column(self, tmp_path, analysis_type="linear_buckling"):
+        """A pin-ended column under a load on its top."""
+        return _plane_run(
+            tmp_path,
+            mesh_size=0.25,
+            analysis_type=analysis_type,
+            nodes={"A": (0, 0), "B": (0, self.HEIGHT)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": (True, True, False, False, False, False)},
+            loads={"B": (0.0, -self.LOAD)},
+            side=self.SIDE,
+            hinged=False,
+        )
+
+    def test_first_factor_is_the_euler_load(self, tmp_path):
+        data, _ = self._column(tmp_path)
+        euler = math.pi**2 * PLANE_E * self.SIDE**4 / 12 / self.HEIGHT**2
+        modes = data["buckling"]["modes"]
+        assert data["analysis_type"] == "linear_buckling"
+        assert [mode["mode"] for mode in modes] == list(range(1, len(modes) + 1))
+        assert modes[0]["factor"] == pytest.approx(euler / self.LOAD, rel=0.02)
+
+    def test_mode_shapes_are_not_load_cases(self, tmp_path):
+        data, warnings = self._column(tmp_path)
+        (case,) = data["load_cases"]
+        assert case == data["buckling"]["reference_load_case"]
+        assert list(data["global_displacements"]["by_load_case"]) == [case]
+        for member in data["members"]:
+            assert list(member["by_load_case"]) == [case]
+        assert not [w for w in warnings if "probably" in w]
+
+    def test_the_results_are_those_of_the_loads(self, tmp_path):
+        """The one set of results is what a static analysis gives."""
+        data, _ = self._column(tmp_path)
+        (tmp_path / "static").mkdir()
+        static, _ = self._column(tmp_path / "static", "linear_static")
+        (case,) = static["load_cases"]
+        assert data["global_displacements"]["envelope"] == pytest.approx(
+            static["global_displacements"]["by_load_case"][case]
+        )
+        shortening = self.LOAD * self.HEIGHT / (PLANE_E * self.SIDE**2)
+        assert data["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
+            shortening, rel=0.05
+        )
+
+    def test_truss_draws_no_warning_about_its_size(self, tmp_path):
+        _, warnings = _plane_run(
+            tmp_path,
+            analysis_type="linear_buckling",
+            nodes=TRUSS_NODES,
+            members=TRUSS_MEMBERS,
+            supports={"A": PLANE_PIN, "C": PLANE_ROLLER},
+            loads={"B": (0.0, -TRUSS_LOAD)},
+            side=0.1,
+            hinged=False,
+        )
+        assert not [w for w in warnings if "probably" in w]
+
+    def test_static_analysis_says_what_it_is(self, tmp_path):
+        data = _run(CANTILEVER, tmp_path, gravity=True)
+        assert data["analysis_type"] == "linear_static"
+        assert "buckling" not in data
+
+
 class TestPlaneFrame:
     """A portal in the X-Z plane, 3 m high and 4 m wide, pushed sideways.
 

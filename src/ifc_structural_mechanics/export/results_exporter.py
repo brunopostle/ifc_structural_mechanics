@@ -7,10 +7,11 @@ writes a ``results.json`` file keyed to IFC GlobalIds.
 Schema (summary level)
 ----------------------
 {
-  "schema_version": "1.2",
+  "schema_version": "1.4",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m"},
   "model": {"id": "...", "name": "..."},
+  "analysis_type": "linear_static" | "linear_buckling",
   "load_cases": ["Dead", "Live"],
   "load_combinations": [
     {"name": "ULS", "ifc_guid": "...", "factors": {"Dead": 1.35, "Live": 1.5}}
@@ -67,6 +68,19 @@ Schema (summary level)
     }
   ]
 }
+
+``analysis_type`` (schema 1.4) says what was run. A buckling analysis has one
+set of results, named in ``load_cases``: the model under all of its loads
+together, every load case and its self-weight. It has no reactions or
+stresses. ``buckling`` is then present:
+
+  "buckling": {"reference_load_case": "Reference loads",
+               "modes": [{"mode": 1, "factor": 12.3}, ...]}
+
+Each ``factor`` is what those loads have to be multiplied by for the model to
+buckle in that mode, lowest first. The mode shapes are in the solver's result
+file and not here: they are scaled to a largest value of one, so they are not
+displacements.
 
 ``load_combinations`` (schema 1.2) lists the load combinations of the file,
 each with the factor of every load case in it. A combination's results are
@@ -189,6 +203,7 @@ import numpy as np
 
 from ..analysis.plausibility import BALANCE_LIMIT
 from ..analysis.superposition import combine_results
+from ..utils.error_handling import ResultProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +224,10 @@ class ResultsExporter:
         load_combinations: The ``LoadCombination`` objects to give results
             for, by adding up their load cases. Only for a linear analysis
             with a step per load case.
+        analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
     """
 
-    SCHEMA_VERSION = "1.3"
+    SCHEMA_VERSION = "1.4"
 
     def __init__(
         self,
@@ -220,8 +236,10 @@ class ResultsExporter:
         limits: Optional[Dict[str, float]] = None,
         element_nodes: Optional[Dict[int, List[int]]] = None,
         load_combinations: Optional[List] = None,
+        analysis_type: str = "linear_static",
     ):
         self.model = domain_model
+        self.analysis_type = analysis_type
         self.parsed_results = parsed_results
         self.limits = limits or {}
         self.element_nodes = element_nodes or {}
@@ -272,14 +290,33 @@ class ResultsExporter:
                 "id": self.model.id,
                 "name": self.model.name or "",
             },
+            "analysis_type": self.analysis_type,
             "load_cases": load_cases,
             "members": [self._member_entry(m) for m in self.model.members],
             "global_displacements": self._global_displacements(),
             "global_reactions": self._global_reactions(),
             "supports": self._supports(),
         }
+        if self.analysis_type == "linear_buckling":
+            data["buckling"] = self._buckling(load_cases)
         self._add_load_combinations(data)
         return data
+
+    def _buckling(self, load_cases: List[str]) -> Dict[str, Any]:
+        """Return the buckling factors, lowest first."""
+        factors = self.parsed_results.get("buckling") or []
+        if not factors:
+            raise ResultProcessingError(
+                "The buckling analysis ran but the solver reported no "
+                "buckling factors."
+            )
+        return {
+            "reference_load_case": load_cases[0] if load_cases else None,
+            "modes": [
+                {"mode": int(mode), "factor": float(factor)}
+                for mode, factor in sorted(factors)
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Load combinations

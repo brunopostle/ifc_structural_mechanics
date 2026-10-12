@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from ..analysis.calculix_runner import CalculixRunner
 from ..analysis.output_parser import OutputParser
 from ..analysis.plausibility import plausibility_warnings
-from ..analysis.results_parser import ResultsParser
+from ..analysis.results_parser import BUCKLING_REFERENCE_CASE, ResultsParser
 from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
@@ -275,6 +275,9 @@ def analyze_ifc(
                     load_case_names.append("Gravity")
                 if not load_case_names:
                     load_case_names = None
+                if analysis_type == "linear_buckling":
+                    # One step, with the loads of every case in it
+                    load_case_names = [BUCKLING_REFERENCE_CASE]
                 results_parser = ResultsParser(
                     domain_model, load_case_names=load_case_names
                 )
@@ -311,6 +314,7 @@ def analyze_ifc(
                     parsed_results,
                     element_nodes=results_parser.element_nodes,
                     load_combinations=combinations,
+                    analysis_type=analysis_type,
                 )
                 exported = exporter.export(results_json_path)
                 result["warnings"].extend(plausibility_warnings(exported, domain_model))

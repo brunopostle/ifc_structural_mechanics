@@ -13,6 +13,7 @@ from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.export.results_exporter import ResultsExporter
+from ifc_structural_mechanics.utils.error_handling import ResultProcessingError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -260,7 +261,7 @@ class TestExportWritesJson:
         assert (tmp_path / "results.json").exists()
         with open(out) as fh:
             loaded = json.load(fh)
-        assert loaded["schema_version"] == "1.3"
+        assert loaded["schema_version"] == "1.4"
         assert "units" in loaded
 
     def test_export_returns_dict(self, tmp_path):
@@ -288,7 +289,7 @@ class TestSchemaStructure:
     ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
     """
 
-    CURRENT_SCHEMA_VERSION = "1.3"
+    CURRENT_SCHEMA_VERSION = "1.4"
 
     _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
     _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}
@@ -340,3 +341,32 @@ class TestSchemaStructure:
             "global_reactions",
         }
         assert required <= set(data)
+
+
+class TestBuckling:
+    """A buckling analysis reports its factors, or fails (`aiz.73`)."""
+
+    def _exporter(self, factors):
+        model = StructuralModel(id="test")
+        return ResultsExporter(
+            domain_model=model,
+            parsed_results={"displacement": [], "buckling": factors},
+            analysis_type="linear_buckling",
+        )
+
+    def test_factors_are_listed_lowest_mode_first(self):
+        data = self._exporter([(2, 7.5), (1, 3.25)])._build()
+        assert data["analysis_type"] == "linear_buckling"
+        assert data["buckling"]["modes"] == [
+            {"mode": 1, "factor": 3.25},
+            {"mode": 2, "factor": 7.5},
+        ]
+
+    def test_no_factors_is_an_error(self):
+        with pytest.raises(ResultProcessingError, match="no buckling factors"):
+            self._exporter([])._build()
+
+    def test_static_analysis_has_no_buckling(self):
+        data = _make_exporter()._build()
+        assert data["analysis_type"] == "linear_static"
+        assert "buckling" not in data
