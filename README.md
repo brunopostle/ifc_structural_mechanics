@@ -203,7 +203,11 @@ the ones a user needs to know before trusting a result.
   `--gravity` adds self-weight as a case of its own (`Gravity`). Standard
   gravity is taken as 9.81 m/s²; IFC gives self-weight as a share of the
   members' weight, not as an acceleration.
-- **Linear buckling** is validated for one Euler column only.
+- **Linear buckling** is validated for one Euler column only. Its
+  `results.json` (schema 1.4) has the buckling factors of all the loads of
+  the model together (`buckling.modes`) and the displacements under those
+  loads; mode shapes are in the solver's result file only, and there are no
+  stresses, reactions or load combinations.
 - **Members without an IFC `Axis`** are given a default section orientation,
   which for a non-square section may not be the one intended. A warning says
   how many and names the first.

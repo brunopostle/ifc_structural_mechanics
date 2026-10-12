@@ -471,6 +471,12 @@ here. This section only records the constraints that shape day-to-day work.
 - **Buckling factors** come from a single `*BUCKLE` step that contains the
   loads. CalculiX scales only loads defined inside that step; a preceding
   `*STATIC` step is a fixed preload. Validated for one Euler column only.
+  The result file has the displacements under those loads first (the same
+  as a static run, measured) and then a shape per mode scaled to a largest
+  value of one. `ResultsParser._set_mode_shapes_apart()` moves the shapes to
+  `parsed_results["mode_shapes"]`; they are not displacements and must never
+  be listed as load cases (`aiz.73`). `results.json` has the one case
+  `Reference loads` and `buckling.modes` with the factors.
 - **FRD/DAT parsing is duplicated on purpose** between `results_parser.py` and
   `ccxquery/parsers/`; `ccxquery` is a standalone debugging tool.
 
