@@ -57,6 +57,15 @@ pytestmark = [
         not os.path.exists(CANTILEVER), reason="example models submodule missing"
     ),
 ]
+from tests.helpers import (  # noqa: E402
+    PLANE_FIXED,
+    PLANE_FIXED_2D,
+    PLANE_PIN,
+    PLANE_PIN_2D,
+    PLANE_ROLLER,
+    PLANE_ROLLER_2D,
+    plane_model,
+)
 
 G_ACCEL = 9.81
 MESH_SIZE = 0.05  # m; 60 elements on the 3 m cantilever
@@ -2921,3 +2930,324 @@ class TestLoadCombinations:
         )
         with open(os.path.join(output_dir, "results.json")) as fh:
             assert "load_combinations" not in json.load(fh)
+
+
+TRUSS_NODES = {"A": (0, 0), "B": (4, 0), "C": (8, 0), "D": (2, 3), "E": (6, 3)}
+TRUSS_MEMBERS = [
+    ("A", "B"),
+    ("B", "C"),
+    ("A", "D"),
+    ("D", "B"),
+    ("B", "E"),
+    ("E", "C"),
+    ("D", "E"),
+]
+TRUSS_LOAD = 10000.0
+PLANE_E = 2.1e11
+PLANE_WARNING = "The model is a plane structure"
+
+
+def _plane_run(tmp_path, mesh_size=0.5, analysis_type="linear_static", **model):
+    """Analyse a ``tests.helpers.plane_model``; returns results and warnings."""
+    path = plane_model(str(tmp_path / "plane.ifc"), **model)
+    output_dir = str(tmp_path / "out")
+    result = analyze_ifc(
+        ifc_path=path,
+        output_dir=output_dir,
+        mesh_size=mesh_size,
+        analysis_type=analysis_type,
+    )
+    assert result["status"] == "success", result.get("errors")
+    with open(os.path.join(output_dir, "results.json")) as fh:
+        return json.load(fh), [w["message"] for w in result["warnings"]]
+
+
+def _axial_forces(data: dict, path: str) -> dict:
+    """Axial force of each member by its name in the file, tension positive."""
+    names = {
+        member.GlobalId: member.Name
+        for member in ifcopenshell.open(path).by_type("IfcStructuralCurveMember")
+    }
+    forces = {}
+    for member in data["members"]:
+        envelope = member["envelope"]["section_forces"]
+        tension, compression = (
+            envelope["max_tension_N"],
+            envelope["max_compression_N"],
+        )
+        forces[names[member["ifc_guid"]]] = (
+            tension if tension > compression else -compression
+        )
+    return forces
+
+
+class TestPlaneTruss:
+    """A pin-jointed truss in the X-Z plane, 10 kN down at midspan.
+
+    Two panels of 4 m, 3 m high: bottom chord A-B-C, top chord D-E, four
+    diagonals. By the method of joints the reactions are P/2, the diagonals
+    carry P sqrt(13)/6, the bottom chord P/3 and the top chord 2P/3. The
+    deflection under the load is sum(F^2 L) / (P E A), by virtual work.
+
+    Supported as its picture is, in X and Z only, nothing holds it across
+    its plane and every bar can spin; it came out with 19 times its
+    deflection (0.71 mm for 0.0375). It is now held in its plane, and says so.
+    """
+
+    SIDE = 0.05  # thin bars: displacements are read on their faces
+
+    def _truss(self, tmp_path, supports, **kwargs):
+        model = dict(
+            nodes=TRUSS_NODES,
+            members=TRUSS_MEMBERS,
+            supports=supports,
+            loads={"B": (0.0, -TRUSS_LOAD)},
+            side=self.SIDE,
+        )
+        model.update(kwargs)
+        return _plane_run(tmp_path, **model)
+
+    def _expected_forces(self):
+        diagonal = TRUSS_LOAD * 13**0.5 / 6
+        return {
+            "AB": TRUSS_LOAD / 3,
+            "BC": TRUSS_LOAD / 3,
+            "AD": -diagonal,
+            "DB": diagonal,
+            "BE": diagonal,
+            "EC": -diagonal,
+            "DE": -2 * TRUSS_LOAD / 3,
+        }
+
+    def _expected_deflection(self):
+        lengths = {"AB": 4.0, "BC": 4.0, "DE": 4.0}
+        work = sum(
+            force**2 * lengths.get(name, 13**0.5)
+            for name, force in self._expected_forces().items()
+        )
+        return work / (TRUSS_LOAD * PLANE_E * self.SIDE**2)
+
+    @pytest.mark.parametrize(
+        "supports",
+        [
+            {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D},
+            {"A": PLANE_PIN, "C": PLANE_ROLLER},
+        ],
+        ids=["supported in its plane only", "supported across it too"],
+    )
+    def test_member_forces_and_deflection(self, tmp_path, supports):
+        data, warnings = self._truss(tmp_path, supports)
+        forces = _axial_forces(data, str(tmp_path / "plane.ifc"))
+        for name, expected in self._expected_forces().items():
+            assert forces[name] == pytest.approx(expected, rel=1e-3), name
+        for member in data["members"]:
+            bending = member["envelope"]["section_forces"]
+            assert bending["max_Mf1_Nm"] < 1.0 and bending["max_Mf2_Nm"] < 1.0
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(
+            self._expected_deflection(), rel=0.01
+        )
+        # Nothing leaves the plane
+        assert envelope.get("max_ty_m", 0.0) < 0.01 * envelope["max_tz_m"]
+        reaction = data["global_reactions"]["by_load_case"]["Load"]
+        assert reaction["fz_N"] == pytest.approx(TRUSS_LOAD, rel=1e-6)
+        for support in data["supports"]:
+            assert support["by_load_case"]["Load"]["fz_N"] == pytest.approx(
+                TRUSS_LOAD / 2, rel=1e-6
+            )
+
+    def test_it_says_what_it_held(self, tmp_path):
+        _, warnings = self._truss(tmp_path, {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D})
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "parallel to global X and Z" in warning
+        assert "12 movement(s) out of the plane are unrestrained" in warning
+        assert "every node is held along Y" in warning
+        assert not [w for w in warnings if "free to spin" in w and w != warning]
+
+    def test_rigid_joints_change_little(self, tmp_path):
+        """Secondary bending: the bar forces of the pinned truss, within 1 %."""
+        data, warnings = self._truss(
+            tmp_path, {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}, hinged=False
+        )
+        assert [w for w in warnings if PLANE_WARNING in w]
+        forces = _axial_forces(data, str(tmp_path / "plane.ifc"))
+        for name, expected in self._expected_forces().items():
+            assert forces[name] == pytest.approx(expected, rel=0.01), name
+        assert data["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
+            self._expected_deflection(), rel=0.01
+        )
+
+    def test_load_across_the_plane_is_left_alone(self, tmp_path):
+        """Then it is a space structure, and holding it would hide the load."""
+        _, warnings = self._truss(
+            tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER}, load_y=1.0
+        )
+        assert not [w for w in warnings if PLANE_WARNING in w]
+
+    def test_buckling_is_left_alone(self, tmp_path):
+        """Held in its plane it could not buckle out of it."""
+        _, warnings = self._truss(
+            tmp_path,
+            {"A": PLANE_PIN, "C": PLANE_ROLLER},
+            analysis_type="linear_buckling",
+            hinged=False,
+        )
+        assert not [w for w in warnings if PLANE_WARNING in w]
+
+
+class TestPlaneFrame:
+    """A portal in the X-Z plane, 3 m high and 4 m wide, pushed sideways.
+
+    Columns and beam of one section, 10 kN along X at the top of a column.
+    With k = (I_beam / L) / (I_column / h) = 0.75:
+
+    - feet pinned: P/2 shear in each column, P h / 2 at each corner;
+    - feet fixed: (P h / 2)(3k + 1)/(6k + 1) at the feet and
+      (P h / 2) 3k / (6k + 1) at the corners.
+    """
+
+    HEIGHT, WIDTH, LOAD, SIDE = 3.0, 4.0, 10000.0, 0.1
+    NODES = {"A": (0, 0), "B": (0, 3), "C": (4, 3), "D": (4, 0)}
+    MEMBERS = [("A", "B"), ("B", "C"), ("C", "D")]
+
+    def _portal(self, tmp_path, supports):
+        return _plane_run(
+            tmp_path,
+            nodes=self.NODES,
+            members=self.MEMBERS,
+            supports=supports,
+            loads={"B": (self.LOAD, 0.0)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+
+    def _moments(self, data, tmp_path):
+        names = {
+            member.GlobalId: member.Name
+            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
+                "IfcStructuralCurveMember"
+            )
+        }
+        return {
+            names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
+            for m in data["members"]
+        }
+
+    def _stiffness(self):
+        return PLANE_E * self.SIDE**4 / 12
+
+    def test_pinned_feet(self, tmp_path):
+        """Nothing stops it falling over about the line through its feet."""
+        data, warnings = self._portal(tmp_path, {"A": PLANE_PIN, "D": PLANE_PIN})
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "1 movement(s) out of the plane" in warning
+        corner = self.LOAD * self.HEIGHT / 2
+        moments = self._moments(data, tmp_path)
+        assert abs(moments["AB"][0]) < 0.001 * corner
+        assert abs(moments["AB"][-1]) == pytest.approx(corner, rel=FORCE_TOLERANCE)
+        assert abs(moments["CD"][0]) == pytest.approx(corner, rel=FORCE_TOLERANCE)
+        assert abs(moments["CD"][-1]) < 0.001 * corner
+        # Sway: each column as a cantilever from the corner, plus the
+        # rotation of the corners
+        sway = (
+            self.LOAD / 2 * self.HEIGHT**3 / (3 * self._stiffness())
+            + corner * self.WIDTH / (6 * self._stiffness()) * self.HEIGHT
+        )
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tx_m"] == pytest.approx(sway, rel=DEFLECTION_TOLERANCE)
+        assert envelope.get("max_ty_m", 0.0) < 0.001 * envelope["max_tx_m"]
+        for support in data["supports"]:
+            assert abs(support["by_load_case"]["Load"]["fx_N"]) == pytest.approx(
+                self.LOAD / 2, rel=1e-3
+            )
+            assert abs(support["by_load_case"]["Load"]["fz_N"]) == pytest.approx(
+                self.LOAD * self.HEIGHT / self.WIDTH, rel=1e-3
+            )
+
+    def test_fixed_feet_by_hand(self, tmp_path):
+        data, warnings = self._portal(
+            tmp_path, {"A": PLANE_FIXED_2D, "D": PLANE_FIXED_2D}
+        )
+        assert [w for w in warnings if PLANE_WARNING in w]
+        k = (1 / self.WIDTH) / (1 / self.HEIGHT)
+        half = self.LOAD * self.HEIGHT / 2
+        foot = half * (3 * k + 1) / (6 * k + 1)
+        corner = half * 3 * k / (6 * k + 1)
+        moments = self._moments(data, tmp_path)
+        assert abs(moments["AB"][0]) == pytest.approx(foot, rel=FORCE_TOLERANCE)
+        assert abs(moments["AB"][-1]) == pytest.approx(corner, rel=FORCE_TOLERANCE)
+        assert abs(moments["CD"][0]) == pytest.approx(corner, rel=FORCE_TOLERANCE)
+        assert abs(moments["CD"][-1]) == pytest.approx(foot, rel=FORCE_TOLERANCE)
+        sway = (
+            self.LOAD
+            * self.HEIGHT**3
+            / (12 * self._stiffness())
+            * (3 * k + 2)
+            / (6 * k + 1)
+        )
+        assert data["global_displacements"]["envelope"]["max_tx_m"] == pytest.approx(
+            sway, rel=DEFLECTION_TOLERANCE
+        )
+        # The moment each foot is held with
+        for support in data["supports"]:
+            assert support["moments"] == "member_end_forces"
+            assert abs(support["by_load_case"]["Load"]["my_Nm"]) == pytest.approx(
+                foot, rel=FORCE_TOLERANCE
+            )
+
+    def test_held_in_its_plane_it_is_the_fully_fixed_frame(self, tmp_path):
+        """What is added restrains nothing the frame does in its plane.
+
+        Feet fixed in all six directions need no help and get none; the same
+        frame with feet fixed in the plane only gives the same answer.
+        """
+        (tmp_path / "space").mkdir()
+        (tmp_path / "plane").mkdir()
+        space, space_warnings = self._portal(
+            tmp_path / "space", {"A": PLANE_FIXED, "D": PLANE_FIXED}
+        )
+        plane, plane_warnings = self._portal(
+            tmp_path / "plane", {"A": PLANE_FIXED_2D, "D": PLANE_FIXED_2D}
+        )
+        assert not [w for w in space_warnings if PLANE_WARNING in w]
+        assert [w for w in plane_warnings if PLANE_WARNING in w]
+        assert plane["global_displacements"]["envelope"]["max_tx_m"] == pytest.approx(
+            space["global_displacements"]["envelope"]["max_tx_m"], rel=1e-5
+        )
+        for held, free in zip(plane["members"], space["members"]):
+            for key, value in free["envelope"]["section_forces"].items():
+                assert held["envelope"]["section_forces"][key] == pytest.approx(
+                    value, rel=1e-4, abs=1.0
+                ), key
+
+
+class TestBeamOnTwoDimensionalSupports:
+    """A 4 m beam on a pin and a roller that hold X and Z only, 10 kN at midspan.
+
+    It can slide and swing across its plane and turn about its own axis. The
+    two members it is made of each count as held in torsion by the other, so
+    nothing was done about it and nothing was said: 8.5 mm of deflection for
+    7.6, and 5.7 mm across its plane.
+    """
+
+    def test_deflection_and_moment(self, tmp_path):
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (2, 0), "C": (4, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D},
+            loads={"B": (0.0, -10000.0)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        assert [w for w in warnings if PLANE_WARNING in w]
+        stiffness = PLANE_E * 0.1**4 / 12
+        shear = PLANE_E / 2.6 * 0.01 * 5 / 6
+        expected = 10000.0 * 4.0**3 / (48 * stiffness) + 10000.0 * 4.0 / (4 * shear)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(expected, rel=0.01)
+        assert envelope.get("max_ty_m", 0.0) < 0.001 * envelope["max_tz_m"]
+        for member in data["members"]:
+            assert member["envelope"]["section_forces"]["max_Mf2_Nm"] == pytest.approx(
+                10000.0, rel=FORCE_TOLERANCE
+            )

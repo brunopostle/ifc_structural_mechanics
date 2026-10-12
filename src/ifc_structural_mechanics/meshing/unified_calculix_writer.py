@@ -290,7 +290,10 @@ class UnifiedCalculixWriter:
             # Step 2c5: Tie beams lying in a slab or wall to it along their length
             self._build_line_bearings()
 
-            # Step 2c6: Hold members that nothing stops spinning about their axis
+            # Step 2c6: Hold a plane truss or frame that can leave its plane
+            self._hold_plane_structure()
+
+            # Step 2c7: Hold members that nothing stops spinning about their axis
             self._hold_spinning_members()
 
             # Step 2d: Register node→member memberships for result export
@@ -794,6 +797,13 @@ class UnifiedCalculixWriter:
                 self.element_sets,
                 dict(self.nodes),
             )
+            plane_holds = self._plane_hold_dofs()
+            if plane_holds:
+                f.write("** Plane structure held in its plane\n")
+                f.write("*BOUNDARY\n")
+                for node, dof in plane_holds:
+                    f.write(f"{node}, {dof}, {dof}\n")
+                f.write("\n")
             holds = self._torsion_hold_dofs()
             if holds:
                 f.write("** Members held against spinning about their own axis\n")
@@ -1660,6 +1670,7 @@ class UnifiedCalculixWriter:
                         bc_node_dofs.add((node, dof))
 
         bc_node_dofs.update(self._torsion_hold_dofs())
+        bc_node_dofs.update(self._plane_hold_dofs())
 
         logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
         if logger.isEnabledFor(logging.DEBUG):
@@ -2368,6 +2379,20 @@ class UnifiedCalculixWriter:
         )
 
         self._torsion_holds: List[Tuple[Any, str, int]] = []
+        # In a plane structure held in its plane, a member's rotations about
+        # the two axes of the plane are both zero, so both can be held where
+        # it spins: about an axis that is not a global one too. Preferably at
+        # an end where it is pinned, where no bending moment is disturbed.
+        # (Held at a node inside a member in bending, they stiffened it by
+        # 3 %: CalculiX's restraint of a beam node's rotation is approximate.)
+        plane = getattr(self, "_plane_normal", None)
+        if plane is not None:
+            from ..analysis.plane_structure import spinning_members
+
+            for conn, member_id in spinning_members(self.domain_model, plane):
+                for dof in (4 + i for i in range(3) if i != plane):
+                    self._torsion_holds.append((conn, member_id, dof))
+            return
         held, loose = [], []
         for member in self.domain_model.members:
             if not isinstance(member, CurveMember) or member.id in self._u1_members:
@@ -2425,6 +2450,71 @@ class UnifiedCalculixWriter:
                 f"an arbitrary rotation: {', '.join(loose[:5])}"
                 f"{' ...' if len(loose) > 5 else ''}"
             )
+
+    def _hold_plane_structure(self) -> None:
+        """Hold a plane truss or frame that nothing keeps in its plane.
+
+        A structure drawn and loaded in one plane is often supported as its
+        textbook picture is: in the plane only, with pinned joints. In three
+        dimensions that is a mechanism. The solver still answers, with the
+        right member forces and displacements that include whatever the
+        mechanism does (a truss supported in X and Z only came out with 19
+        times its deflection).
+
+        When the model is a plane structure (``plane_normal()``) and can move
+        out of its plane without straining (``out_of_plane_freedoms()``),
+        every node is held across the plane, and the user is told. Members
+        that could still spin about their own axis are then held by
+        ``_hold_spinning_members``. Nothing in the plane changes: a plane
+        structure loaded in its plane has no reason to leave it. Linear static
+        analysis only; holding a model in its plane would take the buckling
+        modes out of it.
+        """
+        from ..analysis.plane_structure import (
+            AXIS_NAMES,
+            out_of_plane_freedoms,
+            plane_normal,
+        )
+
+        self._plane_normal: Optional[int] = None
+        if self.analysis_config.get_analysis_type() != "linear_static":
+            return
+        if self._u1_members:
+            return
+        gravity = (
+            self.analysis_config.get_gravity_direction()
+            if self.analysis_config.get_gravity()
+            else None
+        )
+        normal = plane_normal(self.domain_model, gravity)
+        if normal is None:
+            return
+        freedoms = out_of_plane_freedoms(self.domain_model, normal)
+        if not freedoms:
+            return
+        self._plane_normal = normal
+        in_plane = [AXIS_NAMES[axis] for axis in range(3) if axis != normal]
+        self._warn_user(
+            f"The model is a plane structure: every member lies in a plane "
+            f"parallel to global {in_plane[0]} and {in_plane[1]} and every load "
+            f"acts in it. Nothing holds it there ({freedoms} movement(s) out "
+            "of the plane are unrestrained), so it is analysed as a plane "
+            f"frame: every node is held along {AXIS_NAMES[normal]}, and "
+            "members free to spin about their own axis are held against it. "
+            "Forces and displacements in the plane are not affected."
+        )
+
+    def _plane_hold_dofs(self) -> List[Tuple[int, int]]:
+        """The ``(node, dof)`` restraints decided by ``_hold_plane_structure``."""
+        normal = getattr(self, "_plane_normal", None)
+        if normal is None:
+            return []
+        nodes: set = set()
+        for element in self.elements.values():
+            nodes.update(element["nodes"])
+        for _, node_a, node_b in getattr(self, "_rigid_links", []):
+            nodes.update((node_a, node_b))
+        return [(node, normal + 1) for node in sorted(nodes)]
 
     def _torsion_hold_dofs(self) -> List[Tuple[int, int]]:
         """The ``(node, dof)`` restraints decided by ``_hold_spinning_members``."""
