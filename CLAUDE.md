@@ -167,7 +167,7 @@ without saying so in the results. Two things follow from the middle nodes:
 Runs CalculiX and processes results:
 - `calculix_runner.py`: Executes CalculiX solver
 - `results_parser.py`: Parses CalculiX result files (`.frd`, `.dat`). `parse_element_nodes()` reads the FRD element block: CalculiX reports on the nodes of the solids it expands beams and shells into, numbered by the solver, and each solid keeps the number of the input element it came from. `ResultsExporter` attributes results to a member through those (member → `analysis_element_ids` → FRD nodes), never through mesh node numbers, except for elements the FRD does not list (U1). Uses `_parse_frd_data_line()` for fixed-width FRD column parsing (node ID in chars 3-12, values in 12-char columns). Handles values that run together without spaces.
-- `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
+- `output_parser.py`: Reads what CalculiX printed (`CalculixRunner.solver_output`): `check_convergence()` for whether it finished, `solver_warnings()` for its `*WARNING` blocks, each kind once with a count, which go into `result["warnings"]`. A warning caused by something the writer does on purpose is to be removed at the source (the rigid links have `*DENSITY 0.` for that), not filtered here
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
 - `superposition.py`: Results of a load combination from those of its load cases (see Load steps)
 - `plane_structure.py`: Recognises plane trusses and frames and what holds them in their plane (see Connections)
