@@ -2640,7 +2640,9 @@ class UnifiedCalculixWriter:
         if not links:
             return
         file.write("** Rigid links bridging member ends to their joints\n")
-        file.write("*MATERIAL, NAME=MAT_RIGID_LINK\n*ELASTIC\n")
+        # Links weigh nothing. Saying so keeps CalculiX from warning, in
+        # every step with self-weight, that the material has no density
+        file.write("*MATERIAL, NAME=MAT_RIGID_LINK\n*DENSITY\n0.\n*ELASTIC\n")
         file.write(f"{self._RIGID_LINK_MODULUS:.6e}, 0.3\n\n")
         side = self._RIGID_LINK_SIDE
         for elem_id, node_a, node_b in links:

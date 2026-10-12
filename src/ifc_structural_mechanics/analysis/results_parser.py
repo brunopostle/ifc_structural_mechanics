@@ -22,7 +22,6 @@ from ..domain.result import (
 )
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
-from .base_parser import BaseParser
 from .section_forces import element_section_forces
 
 # Configure logging
@@ -52,7 +51,7 @@ def _parse_frd_data_line(raw_line):
     return node_id, values
 
 
-class ResultsParser(BaseParser):
+class ResultsParser:
     """
     Parser for CalculiX result files.
 
@@ -75,7 +74,6 @@ class ResultsParser(BaseParser):
                 one per *STEP in the FRD file. Used to tag results with their load
                 case label.
         """
-        super().__init__(mapper=None)
         self.domain_model = domain_model
         self.load_case_names: Optional[List[str]] = load_case_names
         # Node IDs of each element, and node positions, in the last FRD file
@@ -777,6 +775,19 @@ class ResultsParser(BaseParser):
                         )
 
         return reactions
+
+    @staticmethod
+    def parse_file_content(file_path: str) -> str:
+        """Return the text of a result file.
+
+        Args:
+            file_path (str): Path to the file to read.
+
+        Returns:
+            str: The content of the file.
+        """
+        with open(file_path, "r") as f:
+            return f.read()
 
     def parse_buckling_eigenvalues(self, dat_file: str) -> List[Tuple[int, float]]:
         """Parse buckling eigenvalue multipliers from a CalculiX .dat file.

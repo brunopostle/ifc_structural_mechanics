@@ -84,6 +84,13 @@ class CalculixRunner:
         self.base_name = self.input_file_path.stem
         self._process_result = None
 
+    @property
+    def solver_output(self) -> str:
+        """What CalculiX printed during the last run; empty before one."""
+        if self._process_result is None:
+            return ""
+        return self._process_result.stdout or ""
+
     def run_analysis(self, timeout: Optional[int] = None) -> Dict[str, str]:
         """
         Run the CalculiX analysis.

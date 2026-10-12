@@ -3365,6 +3365,27 @@ class TestPlaneTruss:
         assert not [w for w in warnings if PLANE_WARNING in w]
 
 
+class TestSolverWarnings:
+    """CalculiX's own warnings are in the results (`aiz.66`).
+
+    None of them used to be. The one the example models drew was about our
+    own rigid links, which are meant to weigh nothing and now say so.
+    """
+
+    def test_rigid_links_draw_none(self, tmp_path):
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=os.path.join(IFC_DIR, "grid_of_beams.ifc"),
+            output_dir=output_dir,
+            mesh_size=0.5,
+            gravity=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output_dir, "analysis.inp")) as fh:
+            assert "MAT_RIGID_LINK" in fh.read()
+        assert not [w for w in result["warnings"] if "CalculiX" in w["message"]]
+
+
 class TestBucklingResults:
     """What a buckling analysis reports (`aiz.73`).
 

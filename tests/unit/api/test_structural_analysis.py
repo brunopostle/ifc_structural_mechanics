@@ -181,7 +181,7 @@ def test_create_meshing_config():
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
 )
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
-@patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis.solver_warnings")
 @patch("ifc_structural_mechanics.api.structural_analysis.ResultsParser")
 @patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
@@ -195,7 +195,7 @@ def test_analyze_ifc_success_unified(
     mock_ensure_directory,
     mock_validate_model,
     mock_results_parser_class,
-    mock_output_parser_class,
+    mock_solver_warnings,
     mock_calculix_runner_class,
     mock_unified_workflow,
     mock_extract_model,
@@ -222,10 +222,7 @@ def test_analyze_ifc_success_unified(
     mock_calculix_runner.run_analysis.return_value = mock_output_files
 
     # Mock the output parsing
-    mock_output_parser = MagicMock()
-    mock_output_parser_class.return_value = mock_output_parser
-    mock_output_parser.parse_output.return_value = {"warnings": [], "errors": []}
-    mock_output_parser.check_convergence.return_value = (True, "Converged")
+    mock_solver_warnings.return_value = []
 
     # Mock the results parsing
     mock_results_parser = MagicMock()
@@ -278,8 +275,7 @@ def test_analyze_ifc_success_unified(
 
     # Verify CalculiX runner was called
     mock_calculix_runner.run_analysis.assert_called_once()
-    mock_output_parser.parse_output.assert_called_once()
-    mock_output_parser.check_convergence.assert_called_once()
+    mock_solver_warnings.assert_called_once_with(mock_calculix_runner.solver_output)
 
 
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
@@ -359,7 +355,7 @@ def test_analyze_ifc_analysis_error_unified(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
 )
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
-@patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis.solver_warnings")
 @patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
 @patch("os.path.exists")
@@ -369,7 +365,7 @@ def test_analyze_ifc_with_warnings_unified(
     mock_exists,
     mock_ensure_directory,
     mock_validate_model,
-    mock_output_parser_class,
+    mock_solver_warnings,
     mock_calculix_runner_class,
     mock_unified_workflow,
     mock_extract_model,
@@ -389,8 +385,6 @@ def test_analyze_ifc_with_warnings_unified(
     mock_calculix_runner.run_analysis.return_value = mock_output_files
 
     # Mock output parsing with warnings
-    mock_output_parser = MagicMock()
-    mock_output_parser_class.return_value = mock_output_parser
     mock_warnings = [
         {
             "message": "Test warning",
@@ -400,11 +394,7 @@ def test_analyze_ifc_with_warnings_unified(
             "domain_id": None,
         }
     ]
-    mock_output_parser.parse_output.return_value = {
-        "warnings": mock_warnings,
-        "errors": [],
-    }
-    mock_output_parser.check_convergence.return_value = (True, "Converged")
+    mock_solver_warnings.return_value = mock_warnings
 
     # Mock file operations to avoid file not found errors
     def mock_exists_side_effect(path):
@@ -437,7 +427,7 @@ def test_analyze_ifc_with_warnings_unified(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
 )
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
-@patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis.solver_warnings")
 @patch("ifc_structural_mechanics.api.structural_analysis._validate_model")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
 @patch("os.path.exists")
@@ -447,7 +437,7 @@ def test_validation_warnings_not_dropped_by_parse_step(
     mock_exists,
     mock_ensure_directory,
     mock_validate_model,
-    mock_output_parser_class,
+    mock_solver_warnings,
     mock_calculix_runner_class,
     mock_unified_workflow,
     mock_extract_model,
@@ -480,13 +470,7 @@ def test_validation_warnings_not_dropped_by_parse_step(
         "ccx_id": None,
         "domain_id": None,
     }
-    mock_output_parser = MagicMock()
-    mock_output_parser_class.return_value = mock_output_parser
-    mock_output_parser.parse_output.return_value = {
-        "warnings": [parse_warning],
-        "errors": [],
-    }
-    mock_output_parser.check_convergence.return_value = (True, "Converged")
+    mock_solver_warnings.return_value = [parse_warning]
 
     mock_exists.side_effect = lambda p: "analysis.msg" in p
     mock_copy.return_value = None
@@ -561,7 +545,7 @@ def test_unexpected_error_handling(
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
 )
 @patch("ifc_structural_mechanics.api.structural_analysis.CalculixRunner")
-@patch("ifc_structural_mechanics.api.structural_analysis.OutputParser")
+@patch("ifc_structural_mechanics.api.structural_analysis.solver_warnings")
 @patch("ifc_structural_mechanics.api.structural_analysis.ensure_directory")
 @patch("os.path.exists")
 @patch("os.listdir")
@@ -571,7 +555,7 @@ def test_file_organization(
     mock_listdir,
     mock_exists,
     mock_ensure_directory,
-    mock_output_parser_class,
+    mock_solver_warnings,
     mock_calculix_runner_class,
     mock_unified_workflow,
     mock_extract_model,
@@ -593,10 +577,7 @@ def test_file_organization(
     mock_calculix_runner.run_analysis.return_value = mock_output_files
 
     # Mock output parser
-    mock_output_parser = MagicMock()
-    mock_output_parser_class.return_value = mock_output_parser
-    mock_output_parser.parse_output.return_value = {"warnings": [], "errors": []}
-    mock_output_parser.check_convergence.return_value = (True, "Converged")
+    mock_solver_warnings.return_value = []
 
     # Mock file operations - control which files "exist"
     def mock_exists_side_effect(path):

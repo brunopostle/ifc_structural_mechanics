@@ -11,7 +11,7 @@ import shutil
 from typing import Any, Dict, Optional
 
 from ..analysis.calculix_runner import CalculixRunner
-from ..analysis.output_parser import OutputParser
+from ..analysis.output_parser import solver_warnings
 from ..analysis.plausibility import plausibility_warnings
 from ..analysis.results_parser import BUCKLING_REFERENCE_CASE, ResultsParser
 from ..config.analysis_config import AnalysisConfig
@@ -225,39 +225,8 @@ def analyze_ifc(
         calculix_output_files = calculix_runner.run_analysis(timeout=calculix_timeout)
         logger.info(f"CalculiX analysis completed: {calculix_output_files}")
 
-        # Step 6: Parse results and check for errors/warnings
-        logger.info("Parsing analysis results...")
-
-        # Parse output for errors and warnings
-        output_parser = OutputParser()
-
-        # Parse the output file or captured output
-        if "message" in calculix_output_files and os.path.exists(
-            calculix_output_files["message"]
-        ):
-            with open(calculix_output_files["message"], "r") as f:
-                output_text = f.read()
-            parse_result = output_parser.parse_output(output_text)
-
-            # Add warnings and errors to result (extend to preserve pre-analysis warnings)
-            result["warnings"].extend(parse_result.get("warnings", []))
-            result["errors"].extend(parse_result.get("errors", []))
-
-            # Check if analysis converged
-            converged, reason = output_parser.check_convergence(output_text)
-
-            if not converged:
-                logger.error(f"Analysis did not converge: {reason}")
-                result["errors"].append(
-                    {
-                        "message": f"Analysis did not converge: {reason}",
-                        "severity": "critical",
-                        "entity_type": None,
-                        "ccx_id": None,
-                        "domain_id": None,
-                    }
-                )
-                # Don't raise exception here - let user see the results
+        # Step 6: What the solver had to say, then its results
+        result["warnings"].extend(solver_warnings(calculix_runner.solver_output))
 
         # Parse result files for detailed results. An analysis whose results
         # cannot be read or written has not succeeded: that is an error, not
