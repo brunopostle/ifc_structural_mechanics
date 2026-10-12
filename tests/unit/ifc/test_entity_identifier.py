@@ -128,32 +128,27 @@ def test_get_coordinate():
 
 
 def test_analyze_connection_type():
-    """Test determining the type of structural connection."""
-    # Create mock connection with applied condition
+    """The type is that of the entity; what it holds has no say in it."""
     mock_connection = Mock(spec=ifcopenshell.entity_instance)
-    mock_connection.is_a.return_value = "IfcStructuralPointConnection"
+    kind = "IfcStructuralPointConnection"
+    mock_connection.is_a.side_effect = lambda name=None: (
+        kind if name is None else name == kind
+    )
 
-    # Create mock applied condition for rigid connection
-    mock_rigid_condition = Mock()
-    mock_rigid_condition.RotationalStiffnessX = Mock(wrappedValue=1.0e6)
-    mock_rigid_condition.RotationalStiffnessY = Mock(wrappedValue=1.0e6)
-    mock_rigid_condition.RotationalStiffnessZ = Mock(wrappedValue=1.0e6)
+    fixed = Mock()
+    fixed.RotationalStiffnessX = Mock(wrappedValue=1.0e6)
+    fixed.RotationalStiffnessY = Mock(wrappedValue=1.0e6)
+    fixed.RotationalStiffnessZ = Mock(wrappedValue=1.0e6)
+    mock_connection.AppliedCondition = fixed
+    assert analyze_connection_type(mock_connection) == "point"
 
-    mock_connection.AppliedCondition = mock_rigid_condition
-
-    # Test rigid connection identification
-    assert analyze_connection_type(mock_connection) == "rigid"
-
-    # Create mock applied condition for hinge connection
-    mock_hinge_condition = Mock()
-    mock_hinge_condition.RotationalStiffnessX = Mock(wrappedValue=0.0)
-    mock_hinge_condition.RotationalStiffnessY = Mock(wrappedValue=1.0e6)
-    mock_hinge_condition.RotationalStiffnessZ = Mock(wrappedValue=1.0e6)
-
-    mock_connection.AppliedCondition = mock_hinge_condition
-
-    # Test hinge connection identification
-    assert analyze_connection_type(mock_connection) == "hinge"
+    # A free rotation is a pinned support, not a hinge between the members
+    pinned = Mock()
+    pinned.RotationalStiffnessX = Mock(wrappedValue=0.0)
+    pinned.RotationalStiffnessY = Mock(wrappedValue=1.0e6)
+    pinned.RotationalStiffnessZ = Mock(wrappedValue=1.0e6)
+    mock_connection.AppliedCondition = pinned
+    assert analyze_connection_type(mock_connection) == "point"
 
     # Test default case without applied condition
     mock_connection.AppliedCondition = None

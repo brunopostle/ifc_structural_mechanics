@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from ifc_structural_mechanics.domain.structural_connection import (
-    RigidConnection,
+    PointConnection,
 )
 from ifc_structural_mechanics.ifc.connections_extractor import ConnectionsExtractor
 from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
@@ -202,9 +202,9 @@ class TestConnectionsExtractor:
 
         # Verify results
         assert connection is not None
-        # The actual type is always RigidConnection based on current implementation
+        # A point connection, whatever it holds
         assert isinstance(
-            connection, RigidConnection
+            connection, PointConnection
         ), f"Unexpected connection type: {type(connection)}"
         assert connection.id == "po1"
 
@@ -226,8 +226,7 @@ class TestConnectionsExtractor:
         assert len(connections) == 6
 
         # Verify connection types
-        # All connections are RigidConnection
-        assert all(isinstance(conn, RigidConnection) for conn in connections)
+        assert all(isinstance(conn, PointConnection) for conn in connections)
 
         # Verify IDs
         assert all(
@@ -236,7 +235,11 @@ class TestConnectionsExtractor:
         )
 
     def test_determine_connection_type(self):
-        """Test determining connection type."""
+        """What a connection holds does not change what it is.
+
+        A free rotation once made it a hinge, which released every member
+        meeting at a pinned support.
+        """
 
         # Prepare a detailed mock for connection type testing
         def test_connection_type(stiffness_values, expected_type):
@@ -258,7 +261,7 @@ class TestConnectionsExtractor:
 
                 # FIXED: Also set up rotational stiffness with numeric values
                 rot_stiffness_mock = MagicMock()
-                rot_stiffness_mock.wrappedValue = 1.0  # Set to numeric value, not mock
+                rot_stiffness_mock.wrappedValue = value
                 setattr(
                     point_connection.AppliedCondition,
                     f"RotationalStiffness{ax}",
@@ -269,19 +272,18 @@ class TestConnectionsExtractor:
             connection = self.extractor._create_domain_connection(point_connection)
 
             # Assert the expected connection type
-            assert isinstance(connection, RigidConnection), (
+            assert isinstance(connection, PointConnection), (
                 f"Failed for stiffness {stiffness_values}. "
-                f"Expected RigidConnection, got {type(connection).__name__}"
+                f"Expected PointConnection, got {type(connection).__name__}"
             )
 
         # Test scenarios
         test_cases = [
-            # All zero stiffness should also be a RigidConnection
-            ([0, 0, 0], RigidConnection),
-            # Non-zero in any axis should be a RigidConnection
-            ([1e-6, 0, 0], RigidConnection),
-            ([0, 1e-6, 0], RigidConnection),
-            ([0, 0, 1e-6], RigidConnection),
+            ([0, 0, 0], PointConnection),
+            ([1e6, 1e6, 1e6], PointConnection),
+            ([1e-6, 0, 0], PointConnection),
+            ([0, 1e-6, 0], PointConnection),
+            ([0, 0, 1e-6], PointConnection),
         ]
 
         # Run all test cases

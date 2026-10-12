@@ -586,13 +586,20 @@ def get_1D_orientation(geometry, zAxis):
 
 def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) -> str:
     """
-    Determine the type of a structural connection (rigid, hinge, etc.).
+    Determine the type of a structural connection from the kind of entity it is.
+
+    Its ``AppliedCondition`` has no say in this. That is what the connection
+    holds against the ground; how a member is joined to it is the
+    ``AppliedCondition`` of the member's ``IfcRelConnectsStructuralMember``.
+    A condition with a free rotation once made the connection a "hinge",
+    which released every member meeting at a pinned support: a beam running
+    on over it was analysed as two simply supported ones (``aiz.78``).
 
     Args:
         connection (Optional[ifcopenshell.entity_instance]): IFC connection entity
 
     Returns:
-        str: Connection type ("point", "rigid", or "hinge")
+        str: Connection type ("point" or "rigid")
     """
     if connection is None:
         return "point"
@@ -601,45 +608,14 @@ def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) 
         if not is_structural_connection(connection):
             return "point"
 
-        if hasattr(connection, "AppliedCondition") and connection.AppliedCondition:
-            condition = connection.AppliedCondition
-
-            # Check for rotational freedom to identify hinges
-            has_rotational_freedom = False
-
-            for attr_name in [
-                "RotationalStiffnessX",
-                "RotationalStiffnessY",
-                "RotationalStiffnessZ",
-            ]:
-                if hasattr(condition, attr_name):
-                    attr_value = getattr(condition, attr_name)
-                    if attr_value is not None:
-                        # Check if attribute has a numeric value attribute
-                        if hasattr(attr_value, "wrappedValue"):
-                            # A value of 0 indicates a free rotation
-                            if attr_value.wrappedValue == 0:
-                                has_rotational_freedom = True
-                                break
-                        # Sometimes the value is set directly
-                        elif attr_value == 0:
-                            has_rotational_freedom = True
-                            break
-
-            if has_rotational_freedom:
-                return "hinge"
-            else:
-                return "rigid"
-
-        # Default types based on connection entity type
         if connection.is_a("IfcStructuralPointConnection"):
             return "point"
         elif connection.is_a("IfcStructuralCurveConnection"):
-            return "rigid"  # Default for curve connections
+            return "rigid"
         elif connection.is_a("IfcStructuralSurfaceConnection"):
-            return "rigid"  # Default for surface connections
+            return "rigid"
 
-        return "point"  # Default fallback
+        return "point"
 
     except ModelExtractionError:
         raise

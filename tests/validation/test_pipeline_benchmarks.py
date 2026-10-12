@@ -3616,6 +3616,61 @@ class TestBeamOnTwoDimensionalSupports:
             )
 
 
+class TestBeamContinuousOverASupport:
+    """Two 4 m spans over three pinned supports, 10 kN in the middle of each.
+
+    The members meet at the middle support with no release, so the beam runs
+    on over it: 3 P L / 16 there, 5 P L / 32 under the loads, and 5 P / 16 and
+    11 P / 8 on the supports. A support that leaves rotations free used to
+    hinge every member meeting at it, which made this two simply supported
+    beams: no moment over the support, P L / 4 under the loads and 8.0 mm of
+    deflection for 3.4 (``aiz.78``).
+    """
+
+    LOAD, SPAN = 10000.0, 4.0
+
+    def _beam(self, tmp_path):
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0), "N": (6, 0), "C": (8, 0)},
+            members=[("A", "M"), ("M", "B"), ("B", "N"), ("N", "C")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER, "C": PLANE_ROLLER},
+            loads={"M": (0.0, -self.LOAD), "N": (0.0, -self.LOAD)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        return data
+
+    def test_moments(self, tmp_path):
+        data = self._beam(tmp_path)
+        names = {
+            member.GlobalId: member.Name
+            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
+                "IfcStructuralCurveMember"
+            )
+        }
+        moments = {
+            names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
+            for m in data["members"]
+        }
+        over_support = 3 * self.LOAD * self.SPAN / 16
+        under_load = 5 * self.LOAD * self.SPAN / 32
+        assert abs(moments["MB"][-1]) == pytest.approx(over_support, rel=0.01)
+        assert abs(moments["BN"][0]) == pytest.approx(over_support, rel=0.01)
+        assert moments["MB"][-1] * moments["MB"][0] < 0
+        assert abs(moments["AM"][-1]) == pytest.approx(under_load, rel=0.01)
+        assert abs(moments["NC"][0]) == pytest.approx(under_load, rel=0.01)
+        assert abs(moments["AM"][0]) < 0.01 * under_load
+
+    def test_reactions(self, tmp_path):
+        data = self._beam(tmp_path)
+        for x, share in ((0.0, 5 / 16), (4.0, 11 / 8), (8.0, 5 / 16)):
+            support = _support_at(data, (x, 0.0, 0.0))
+            assert support["by_load_case"]["Load"]["fz_N"] == pytest.approx(
+                share * self.LOAD, rel=0.01
+            )
+
+
 INCLINE = math.radians(30.0)
 # A support on a plane that rises along X: z is its normal, x runs up it
 ON_AN_INCLINE = (
