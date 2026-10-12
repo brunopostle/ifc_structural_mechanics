@@ -446,9 +446,6 @@ here. This section only records the constraints that shape day-to-day work.
 - **Member results are read on the faces of expanded elements.** A member's
   largest displacement in `results.json` includes what its rotation adds at
   the faces: a few percent on a slender member, more on a deep one.
-- **Skew supports are not modelled** (`aiz.35`): a support that restrains only
-  some directions in axes not parallel to the global ones is written in global
-  axes, with a warning. The same goes for a partial release in skew axes.
 - **`slab_01.rmed` is not a reference for `slab_01.ifc`** (`aiz.36`): it was
   computed with one edge hinged; the IFC file as shipped clamps both. The
   Code_Aster runs also give their rigid eccentricity arms weight (16 N each in
@@ -556,14 +553,55 @@ connection uses its `ConditionCoordinateSystem`; a curve connection has x along 
 edge, with `Axis` giving local z. The extractor stores them as
 `connection.local_axes` and `get_constrained_dofs()` permutes the flags into global
 DOF numbers, so `drx` of a line support along global Y is DOF 5, rotation about the
-edge. Only axes parallel to the global ones are handled (see Known Limitations).
+edge.
+
+**Skew supports** (`aiz.35`): axes that are not parallel to the global ones, with a
+condition that treats its translations or its rotations differently (a roller on an
+incline, a line support along a diagonal wall that holds rotation about its edge).
+`support_restraint()` gives what any support holds as direction rows in global
+coordinates; `get_constrained_dofs()` returns only those that are global DOFs, so ask
+`support_restraint()` (or `share_in_span()`) when the question is what a support holds.
+What is skew is written by `write_boundary_conditions()` from `support_equations()`:
+
+- A translation is an `*EQUATION` between the node's own global translations. The
+  reaction arrives as the solver's force at the node, as for a `*BOUNDARY` (measured,
+  with and without a load on the node).
+- A rotation is held with a stiff arm (`rotation_arm()`, built by
+  `_build_support_arms()`): a B31 link from the node along an axis the support leaves
+  free, its tip tied in the directions that stop the held rotations and no other. The
+  tip is a support node (in `ALL_BC_NODES` and `support_nodes`), since part of the
+  reaction arrives there; it is not in `BC_<id>`. When any rotation of a support is
+  skew, all of them go through the arm and none is a `*BOUNDARY`.
+- **Do not use `*TRANSFORM` for this.** It works, rotations of beam nodes included
+  (measured), but it changes the meaning of every `*CLOAD` and `*EQUATION` term on the
+  node, and distributed loads, joints, bearings and the load recorder all write those.
+- **A node of shells alone has no rotation about their normal**, and an arm fixed to
+  it swings about that axis freely: `slab_01` turned 30 degrees came out with the
+  right deflection and in-plane displacements of 800 km. `_drilling_axis()` finds
+  such nodes and `rotation_arm()` holds the tip against it too.
+- Arm tips and hinge tips are in `self._helper_nodes`. Supports and loads look for
+  their node in `_structure_nodes()`, which leaves them out; use it, not
+  `dict(self.nodes)`, for anything placed by position.
+- The first term of every such equation is in `_collect_boundary_condition_dofs()`
+  with the restrained DOFs, so no joint equation makes it depend on something else
+  as well; the plane hold skips it for the same reason.
+- No arms in a model with U1 members (no link elements next to U1): a skew rotation
+  there stops the analysis with an `AnalysisError`.
+
+`results.json` lists what a support holds along global axes in `restrained` and along
+its own in `restrained_in_axes`. `TestSkewSupports` has the incline and a clamp about a
+skew axis against statics; `TestPlacedModel.test_turned_off_the_global_axes` runs
+`slab_01` and `structure_01` turned 30 degrees about Z against the files as shipped.
 
 **Member-side releases** (`IfcRelConnectsStructuralMember.AppliedCondition`) are in
 the axes of that relation (`connection.release_axes_by_member`; the member's own axes
-when the relation has no `ConditionCoordinateSystem`). `get_released_rotations()`
-returns them as global DOFs. A support holding a single member leaves the released
-rotations free: a fully fixed support under a column released in both bending
-rotations is written as DOF 1-3 plus torsion.
+when the relation has no `ConditionCoordinateSystem`). `released_rotation_axes()`
+returns them as directions, and `get_released_rotations()` as global DOFs (None for a
+partial release in skew axes: use the directions). A support holding a single member
+leaves the released rotations free, whatever their axes: a fully fixed support under a
+column released in both bending rotations is written as DOF 1-3 plus torsion. A
+surface member is hinged along an edge when it is released about the direction of
+the edge, whichever way the edge runs.
 
 Support nodes: `find_support_nodes()` returns the single mesh node nearest the
 connection position (within 0.1 m) plus any node coincident with it (beam and

@@ -18,7 +18,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
-- **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge). Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
+- **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge), whether or not those are parallel to the global ones: a roller on an incline reacts along its normal, and a line support along a diagonal wall can hold rotation about its edge alone. Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
 
 ### Known Limitations
@@ -57,9 +57,6 @@ the ones a user needs to know before trusting a result.
   between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
   slab bending at these mesh sizes.
-- **Skew supports are not modelled.** A support that restrains only some
-  directions, in axes that are not parallel to the global ones, is analysed as
-  if its axes were global, with a warning.
 - **Sections other than solid rectangles are analysed as equivalent
   rectangles**, with a warning that says how many of each kind. Axial and
   bending stiffness and weight are those of the real section. Shear and
@@ -174,7 +171,8 @@ the ones a user needs to know before trusting a result.
 - **Support reactions.** `supports` in `results.json` (schema 1.1) gives, for
   every support and load case, the force and moment it exerts on the
   structure, at its position, in global axes and in the support's own axes
-  if it has any, keyed by the connection's GlobalId. `global_reactions` gives
+  if it has any, keyed by the connection's GlobalId, with the directions it
+  holds along each (`restrained`, and `restrained_in_axes` since schema 1.3). `global_reactions` gives
   their total, the applied load of each case and the difference between the
   two, which should be nothing. A load applied at a support node is counted
   (CalculiX leaves it out of what it reports there).

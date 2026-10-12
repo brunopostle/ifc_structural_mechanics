@@ -694,9 +694,8 @@ that also tilts: every member, connection, axis and load of five examples must b
 original moved and turned.
 
 Not covered: items of one model under different placements (the code treats each item
-by its own placement, but the tests give them all the same one), and a model turned so
-that its supports are skew to the global axes, which runs into the skew-support
-limitation below.
+by its own placement, but the tests give them all the same one). A model turned so
+that its supports are skew to the global axes is under Skew supports, below.
 
 ## Support reactions
 
@@ -919,6 +918,60 @@ Two things found on the way:
   are now found by the kinematic count (`spinning_members()`); in a space structure
   they still are not.
 
+## Skew supports
+
+A support whose axes are not parallel to the global ones, and whose condition treats
+its three translations or its three rotations differently, used to be analysed as if
+its axes were global, with a warning (`aiz.35`). It is now analysed as given.
+
+Three ways of doing it were measured first on a hand-written input (4 m beam, 0.1 m
+square, eight B32R elements, 10 kN at midspan), on CalculiX 2.23 and 2.21:
+
+| What | How | Result |
+|---|---|---|
+| Roller on a 30 degree incline | `*EQUATION` between the node's own translations | reaction (-2886.75, 0, 5000.00) N: exact |
+| | `*TRANSFORM` and `*BOUNDARY` | the same |
+| The same, with a load of (1000, 0, -2000) N on the roller node | `*EQUATION` | solver's force less the load = (-1154.7, 0, 2000.0) N: exact |
+| Rotation held about an axis at 45 degrees between Y and Z | `*TRANSFORM` and `*BOUNDARY` on DOF 4-5 | midspan (-2.173, -5.458) mm |
+| | stiff arm, tip tied | midspan (-2.176, -5.455) mm |
+| | `*EQUATION` on DOF 5 and 6 | nothing: the beam stays pinned |
+
+Equations and arms are used. `*TRANSFORM` gives the same answers but changes the
+meaning of every load and equation on the node it is applied to.
+
+Through the pipeline (`TestSkewSupports`; the same beam as two members, 0.25 m mesh):
+
+| Case | Quantity | Statics | Measured |
+|---|---|---|---|
+| Roller on a 30 degree incline | reaction along its normal | P / (2 cos 30) = 5773.5 N | 5773.5 N |
+| | reaction along the incline | 0 | 0.0 N |
+| | horizontal reaction at the pin | 2886.8 N | 2886.8 N |
+| | axial force in the beam | 2886.8 N, compression | 2887.0 N |
+| | largest moment | P L / 4 = 10 000 N·m | 9999.9 N·m |
+| Clamped about an axis at 45 degrees | reaction at the clamp, along that axis | P sin 45 / 2 = 3535.5 N | 3535.5 N |
+| | across it | 11/16 P cos 45 = 4861.4 N | 4872.1 N |
+| | moment about that axis | 3/16 P cos 45 L = 5303.3 N·m | 5346.2 N·m |
+| | moment about the free axis | 0 | 0.0 N·m |
+| | reaction at the pinned end, Y and Z | 937.5 and 4062.5 N | 945.1 and 4054.9 N |
+
+The roller gives the same figures with supports that hold nothing across the plane, as
+a textbook draws them, where the plane hold and the equation meet on one node. The
+clamp is 0.2% off in its force and 0.8% in its moment, which comes from the stresses
+at the member end. Clamped about a global axis, the hand-written beam above gives
+6901.7 N at the clamp for 11/16 P = 6875 N, 0.4% off.
+
+`TestPlacedModel.test_turned_off_the_global_axes` turns two examples 30 degrees about Z
+by their placement and runs them beside the files as shipped, under self-weight:
+
+| Model | What becomes skew | Largest displacement, shipped | turned | Reactions along the supports' axes |
+|---|---|---|---|---|
+| `slab_01`, 0.25 m | two line supports clamped about their edge | 0.18238 mm | 0.18239 mm | 114.8 N each, both |
+| `structure_01`, 0.5 m | a line support clamped about its edge, a point support holding one rotation, a slab hinged on a wall | 0.4333 mm | 0.4332 mm | (2.3, 406.7, -4.2) N at the line support, both |
+
+Before the rotation about the shell normal was held at shell nodes, the turned
+`slab_01` gave the right deflection and in-plane displacements of 800 km: an arm fixed
+to a node of shells alone swings freely about their normal.
+
 ## What is not yet validated
 
 - **Plane structures in a plane not parallel to two global axes**, and plane
@@ -956,7 +1009,12 @@ Two things found on the way:
 - **Unsupported input**: applied moments, surface connections and
   load kinds other than forces stop the analysis with an error naming the entity. A
   load that varies along its member is applied at its mean value, with a warning.
-- **Skew supports**: not modelled. Releases in skew axes between members are, but
+- **Skew supports**: validated for a point support on a beam (translation and
+  rotation) and, by turning two examples, for line supports and hinged edges of
+  slabs and walls. Not covered: a support whose translations are partly free *and*
+  whose rotations are skew (the arm's tip is then tied to the node, not to the
+  ground: measured on a hand-written input, not through the pipeline), and a support
+  tilted out of a horizontal plane on a shell. Releases in skew axes between members
   have only a unit test.
 - **Mixed U1 and native beams**: known to be wrong (joints act as pins). U1 is no
   longer used unless asked for.
