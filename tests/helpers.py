@@ -49,6 +49,7 @@ def plane_model(
     density=None,
     release=PLANE_PIN,
     load_y=0.0,
+    support_axes=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -66,6 +67,9 @@ def plane_model(
             released in (False), after three translations, in the member's
             own axes: x along it, z across the plane.
         load_y: A force across the plane added to every load.
+        support_axes: ``{name: (z axis, x axis)}``, the axes the condition of
+            a support is given in (its ``ConditionCoordinateSystem``); the
+            global ones when left out.
 
     Returns:
         *path*.
@@ -172,6 +176,17 @@ def plane_model(
             *[create("IfcBoolean", bool(f)) for f in flags],
         )
 
+    def condition_axes(name):
+        if name not in (support_axes or {}):
+            return None
+        z_axis, x_axis = support_axes[name]
+        return create(
+            "IfcAxis2Placement3D",
+            create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+            create("IfcDirection", tuple(float(v) for v in z_axis)),
+            create("IfcDirection", tuple(float(v) for v in x_axis)),
+        )
+
     products = []
     joints = {}
     for name in nodes:
@@ -186,7 +201,7 @@ def plane_model(
             placement,
             shape("Vertex", vertex(name)),
             condition(flags) if flags else None,
-            None,
+            condition_axes(name),
         )
         products.append(joints[name])
     bars = []

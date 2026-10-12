@@ -260,7 +260,7 @@ class TestExportWritesJson:
         assert (tmp_path / "results.json").exists()
         with open(out) as fh:
             loaded = json.load(fh)
-        assert loaded["schema_version"] == "1.2"
+        assert loaded["schema_version"] == "1.3"
         assert "units" in loaded
 
     def test_export_returns_dict(self, tmp_path):
@@ -288,7 +288,7 @@ class TestSchemaStructure:
     ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
     """
 
-    CURRENT_SCHEMA_VERSION = "1.2"
+    CURRENT_SCHEMA_VERSION = "1.3"
 
     _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
     _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}

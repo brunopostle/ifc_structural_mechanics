@@ -30,8 +30,9 @@ from ..domain.structural_member import CurveMember
 from ..domain.structural_model import StructuralModel
 from .boundary_condition_handling import (
     _global_force_vector,
-    get_constrained_dofs,
     get_released_rotations,
+    share_in_span,
+    support_restraint,
 )
 
 AXIS_NAMES = ("X", "Y", "Z")
@@ -60,7 +61,8 @@ def plane_normal(
       two global axes;
     - every load acts in that plane, and so does the self-weight a load case
       includes and gravity, when ``gravity_direction`` is given;
-    - every member's section has its own axes in and across the plane.
+    - every member's section has its own axes in and across the plane;
+    - so has every support: what it holds is in the plane or across it.
 
     A model that lies along a single global axis is in two such planes; it
     counts as plane when its loads all act along one of the other two axes,
@@ -131,6 +133,10 @@ def plane_normal(
         across_plane = abs(float(depth[normal]))
         if _FLAT < across_plane < 1.0 - _FLAT:
             return None
+    for connection in domain_model.connections:
+        for held in support_restraint(connection) or ():
+            if _FLAT < share_in_span(held, np.eye(3)[normal]) < 1.0 - _FLAT:
+                return None
     return normal
 
 
@@ -163,7 +169,9 @@ class _OutOfPlane:
                 continue
             point = np.array([float(v) for v in connection.position])
             joint = self._body(("joint", connection.id))
-            fixed = set(get_constrained_dofs(connection))
+            restraint = support_restraint(connection)
+            held, turning = restraint if restraint is not None else ((), ())
+            fixed = len(held) or len(turning)
             for member_id in attached:
                 index = self.bodies[("member", member_id)]
                 released = get_released_rotations(connection, member_id)
@@ -180,10 +188,11 @@ class _OutOfPlane:
                     pinned = False
                     self.rows.append([(index, self._turn(k)), (joint, self._turn(k))])
                 self.ends.append((member_id, connection, pinned, bool(fixed)))
-            if normal + 1 in fixed:
+            # A skew support in the plane holds these as a global one does
+            if share_in_span(held, np.eye(3)[normal]) > 1.0 - _FLAT:
                 self.rows.append([(joint, self._across(None))])
             for k, axis in enumerate(self.in_plane):
-                if 4 + axis in fixed:
+                if share_in_span(turning, np.eye(3)[axis]) > 1.0 - _FLAT:
                     self.rows.append([(joint, self._turn(k))])
 
     def _body(self, key) -> int:

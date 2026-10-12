@@ -2572,12 +2572,13 @@ class TestCodeAsterReferences:
         assert 600 < reaction < 700
 
 
-def _placed_variant(tmp_path, name: str) -> str:
+def _placed_variant(tmp_path, name: str, x_axis=(1.0, 0.0, 0.0)) -> str:
     """An example with every item under a placement that moves and turns it.
 
     The placement is nested: its parent is 12, -7, 3 m away and a quarter
-    turn about Z, and it adds 1.5, 2.5, -0.5 m in the parent's axes. Offsets
-    are written in the file's own length unit.
+    turn about Z, and it adds 1.5, 2.5, -0.5 m in the parent's axes, turned
+    again so that its x is along ``x_axis``. Offsets are written in the
+    file's own length unit.
     """
     import ifcopenshell
     import ifcopenshell.util.unit
@@ -2601,7 +2602,7 @@ def _placed_variant(tmp_path, name: str) -> str:
     placement = model.create_entity(
         "IfcLocalPlacement",
         PlacementRelTo=parent,
-        RelativePlacement=axes((1.5, 2.5, -0.5), (1.0, 0.0, 0.0)),
+        RelativePlacement=axes((1.5, 2.5, -0.5), x_axis),
     )
     for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
         for entity in model.by_type(kind):
@@ -2658,6 +2659,48 @@ class TestPlacedModel:
             assert reactions[case]["fz_N"] == pytest.approx(reaction["fz_N"], rel=1e-4)
             assert abs(reactions[case]["fx_N"]) < 1e-3
             assert abs(reactions[case]["fy_N"]) < 1e-3
+
+    @pytest.mark.parametrize("name", ["slab_01", "structure_01"])
+    def test_turned_off_the_global_axes(self, tmp_path, name):
+        """Turned by 30 degrees about Z, its supports and hinges are skew.
+
+        ``slab_01`` is clamped about two edges, and ``structure_01`` has a
+        line support that holds rotation about its edge, a point support
+        that holds one rotation, and a slab hinged on a wall (``aiz.35``).
+        Their axes are then no global ones, and the results are the same.
+        """
+        mesh = 0.5 if name == "structure_01" else 0.25
+        angle = math.radians(30.0)
+        runs = {
+            "shipped": os.path.join(IFC_DIR, f"{name}.ifc"),
+            "turned": _placed_variant(
+                tmp_path, name, (math.cos(angle), math.sin(angle), 0.0)
+            ),
+        }
+        shipped, turned = (
+            _run(path, tmp_path / label, mesh_size=mesh, gravity=True)
+            for label, path in runs.items()
+        )
+
+        before = shipped["global_displacements"]["envelope"]
+        after = turned["global_displacements"]["envelope"]
+        # The mesh of a surface is not the same after the move
+        for key in ("max_displacement_m", "max_tz_m"):
+            assert after[key] == pytest.approx(before[key], rel=0.002)
+
+        weight = shipped["global_reactions"]["by_load_case"]["Gravity"]["fz_N"]
+        assert len(turned["supports"]) == len(shipped["supports"])
+        for original, moved in zip(shipped["supports"], turned["supports"]):
+            # Along the support's own axes, which turn with the model
+            expected = original.get("by_load_case_in_axes", original["by_load_case"])
+            found = moved["by_load_case_in_axes"]["Gravity"]
+            assert moved["restrained_in_axes"] == original.get(
+                "restrained_in_axes", original["restrained"]
+            )
+            for key in ("fx_N", "fy_N", "fz_N"):
+                assert found[key] == pytest.approx(
+                    expected["Gravity"][key], abs=0.002 * weight
+                )
 
 
 COMBINED_DEAD, COMBINED_LIVE = 1.35, 1.5
@@ -3414,3 +3457,120 @@ class TestBeamOnTwoDimensionalSupports:
             assert member["envelope"]["section_forces"]["max_Mf2_Nm"] == pytest.approx(
                 10000.0, rel=FORCE_TOLERANCE
             )
+
+
+INCLINE = math.radians(30.0)
+# A support on a plane that rises along X: z is its normal, x runs up it
+ON_AN_INCLINE = (
+    (-math.sin(INCLINE), 0.0, math.cos(INCLINE)),
+    (math.cos(INCLINE), 0.0, math.sin(INCLINE)),
+)
+
+
+class TestSkewSupports:
+    """Supports whose axes are not the global ones (``aiz.35``).
+
+    A 4 m beam of 0.1 m square section along X, 10 kN at midspan. Such a
+    support used to be analysed as if its axes were global, with a warning.
+    """
+
+    LOAD, SPAN = 10000.0, 4.0
+
+    def _beam(self, tmp_path, supports, support_axes):
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (2, 0), "C": (4, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports=supports,
+            loads={"B": (0.0, -self.LOAD)},
+            hinged=False,
+            mesh_size=0.25,
+            support_axes=support_axes,
+        )
+        return data
+
+    @pytest.mark.parametrize(
+        "pin, roller",
+        [(PLANE_PIN, PLANE_ROLLER), (PLANE_PIN_2D, PLANE_ROLLER_2D)],
+        ids=["held across the plane", "as a textbook draws it"],
+    )
+    def test_roller_on_an_incline(self, tmp_path, pin, roller):
+        """Its reaction is normal to the incline: P / (2 cos a), by statics.
+
+        The pin takes the part of it along the beam, which is in compression.
+        """
+        data = self._beam(tmp_path, {"A": pin, "C": roller}, {"C": ON_AN_INCLINE})
+        normal = self.LOAD / (2.0 * math.cos(INCLINE))
+        along = normal * math.sin(INCLINE)
+
+        on_incline = _support_at(data, (4.0, 0.0, 0.0))
+        assert "tz" in on_incline["restrained_in_axes"]
+        assert "tx" not in on_incline["restrained_in_axes"]
+        assert "tz" not in on_incline["restrained"]
+        in_axes = on_incline["by_load_case_in_axes"]["Load"]
+        assert in_axes["fz_N"] == pytest.approx(normal, rel=1e-4)
+        assert abs(in_axes["fx_N"]) < 1e-4 * normal
+        reaction = on_incline["by_load_case"]["Load"]
+        assert reaction["fx_N"] == pytest.approx(-along, rel=1e-4)
+        assert reaction["fz_N"] == pytest.approx(self.LOAD / 2.0, rel=1e-4)
+
+        pinned = _support_at(data, (0.0, 0.0, 0.0))["by_load_case"]["Load"]
+        assert pinned["fx_N"] == pytest.approx(along, rel=1e-4)
+        assert pinned["fz_N"] == pytest.approx(self.LOAD / 2.0, rel=1e-4)
+        for member in data["members"]:
+            forces = member["envelope"]["section_forces"]
+            assert forces["max_compression_N"] == pytest.approx(
+                along, rel=FORCE_TOLERANCE
+            )
+            assert forces["max_Mf2_Nm"] == pytest.approx(
+                self.LOAD * self.SPAN / 4.0, rel=FORCE_TOLERANCE
+            )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["imbalance_N"] < 1e-6 * self.LOAD
+
+    def test_rotation_held_about_a_skew_axis(self, tmp_path):
+        """One end is clamped about an axis halfway between Y and Z.
+
+        The support's y is that axis and its z the one across it, both at 45
+        degrees to the load. Across y the beam is clamped at that end and
+        pinned at the other (a propped cantilever under P cos 45); across z
+        it is simply supported (under P sin 45). The section is square, so
+        the two do not interact.
+        """
+        half = 0.5**0.5
+        data = self._beam(
+            tmp_path,
+            {"A": (True, True, True, True, True, False), "C": PLANE_PIN},
+            {"A": ((0.0, -half, half), (1.0, 0.0, 0.0))},
+        )
+        part = self.LOAD * half
+
+        clamped = _support_at(data, (0.0, 0.0, 0.0))
+        assert clamped["restrained"] == ["tx", "ty", "tz", "rx"]
+        assert clamped["restrained_in_axes"] == ["tx", "ty", "tz", "rx", "ry"]
+        assert clamped["moments"] == "member_end_forces"
+        in_axes = clamped["by_load_case_in_axes"]["Load"]
+        assert in_axes["fy_N"] == pytest.approx(part / 2.0, rel=FORCE_TOLERANCE)
+        assert in_axes["fz_N"] == pytest.approx(part * 11.0 / 16.0, rel=0.01)
+        assert abs(in_axes["my_Nm"]) == pytest.approx(
+            part * self.SPAN * 3.0 / 16.0, rel=0.02
+        )
+        assert abs(in_axes["mz_Nm"]) < 1e-3 * abs(in_axes["my_Nm"])
+
+        # At the other end: 5/16 of one part and half of the other
+        pinned = _support_at(data, (4.0, 0.0, 0.0))["by_load_case"]["Load"]
+        assert pinned["fz_N"] == pytest.approx(
+            half * part * (5.0 / 16.0 + 0.5), rel=0.01
+        )
+        assert pinned["fy_N"] == pytest.approx(
+            half * part * (0.5 - 5.0 / 16.0), rel=0.02
+        )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["imbalance_N"] < 1e-6 * self.LOAD
+
+        stiffness = PLANE_E * 0.1**4 / 12
+        simply = self.LOAD * self.SPAN**3 / (48 * stiffness)
+        propped = 7.0 * self.LOAD * self.SPAN**3 / (768 * stiffness)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx((simply + propped) / 2, rel=0.02)
+        assert envelope["max_ty_m"] == pytest.approx((simply - propped) / 2, rel=0.05)

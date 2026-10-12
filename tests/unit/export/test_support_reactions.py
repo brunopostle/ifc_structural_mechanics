@@ -99,6 +99,25 @@ class TestForces:
         assert (reaction["fx_N"], reaction["fy_N"], reaction["fz_N"]) == (1, 2, 42)
         assert reaction["resultant_N"] == pytest.approx(np.sqrt(1 + 4 + 42**2))
 
+    def test_skew_support_names_what_it_holds_in_its_own_axes(self):
+        """A roller on a 3:4 incline holds its normal, which is no global axis."""
+        support = _support("a", (0, 0, 0))
+        support.local_axes = [[0.8, 0.0, 0.6], [0.0, 1.0, 0.0], [-0.6, 0.0, 0.8]]
+        record = {
+            "nodes": {1: (0, 0, 0)},
+            "dofs": [2],
+            "translations": [[0.0, 1.0, 0.0], [-0.75, 0.0, 1.0]],
+            "rotations": [],
+        }
+
+        (entry,) = _export(_model((support, record)), {1: [-60.0, 0.0, 80.0]})
+
+        assert entry["restrained"] == ["ty"]
+        assert entry["restrained_in_axes"] == ["ty", "tz"]
+        in_axes = entry["by_load_case_in_axes"]["Dead"]
+        assert in_axes["fz_N"] == pytest.approx(100.0)
+        assert in_axes["fx_N"] == pytest.approx(0.0)
+
     def test_load_applied_at_the_node_is_taken_off(self):
         """The solver gives the force in the structure, not the reaction.
 

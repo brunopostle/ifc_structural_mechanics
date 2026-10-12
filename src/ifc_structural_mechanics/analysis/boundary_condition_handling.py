@@ -58,52 +58,211 @@ def _global_axis_of_each_local_axis(local_axes) -> Optional[List[int]]:
     return nearest
 
 
+def _global_rows(local_axes) -> np.ndarray:
+    """Three local axes as rows in global coordinates.
+
+    Axes that are a permutation of the global ones, to the tolerance of
+    ``_global_axis_of_each_local_axis``, are returned as exactly that, so that
+    what is aligned stays a plain degree of freedom.
+    """
+    if local_axes is None:
+        return np.eye(3)
+    aligned = _global_axis_of_each_local_axis(local_axes)
+    if aligned is not None:
+        rows = np.zeros((3, 3))
+        for local, axis in enumerate(aligned):
+            rows[local, axis] = 1.0
+        return rows
+    return np.array(local_axes, dtype=float)
+
+
+def _reduce(rows) -> Tuple[np.ndarray, List[int]]:
+    """The directions spanned by *rows*, reduced so that each has a pivot.
+
+    Gauss-Jordan elimination with full pivoting: every row returned has 1 in
+    a column where all the others have 0. Written as a constraint, that
+    column is the degree of freedom the row makes depend on the rest, and no
+    row uses the dependent one of another. A row with a single entry is a
+    global direction.
+
+    Returns:
+        A ``(rank, 3)`` array and the pivot column of each of its rows.
+    """
+    work = np.array(rows, dtype=float).reshape(-1, 3).copy()
+    reduced: List[np.ndarray] = []
+    pivots: List[int] = []
+    for _ in range(3):
+        if work.size == 0:
+            break
+        i, j = np.unravel_index(int(np.argmax(np.abs(work))), work.shape)
+        if abs(work[i, j]) < 1e-9:
+            break
+        pivot = work[i] / work[i, j]
+        work = np.delete(work, i, axis=0)
+        work = work - np.outer(work[:, j], pivot)
+        reduced = [row - row[j] * pivot for row in reduced]
+        reduced.append(pivot)
+        pivots.append(int(j))
+    result = np.array(reduced, dtype=float).reshape(-1, 3)
+    result[np.abs(result) < 1e-9] = 0.0
+    return result, pivots
+
+
+def _reduced_rows(rows) -> np.ndarray:
+    """The rows of ``_reduce`` without their pivots."""
+    return _reduce(rows)[0]
+
+
+def _across(rows) -> np.ndarray:
+    """Orthonormal rows spanning the directions perpendicular to all of *rows*."""
+    rows = np.array(rows, dtype=float).reshape(-1, 3)
+    if rows.shape[0] == 0:
+        return np.eye(3)
+    _, singular, vh = np.linalg.svd(rows, full_matrices=True)
+    rank = int((singular > 1e-9).sum())
+    return vh[rank:]
+
+
+def share_in_span(rows, direction) -> float:
+    """How much of a unit *direction* lies in the span of *rows*, 0 to 1."""
+    kept = _across(_across(rows))
+    direction = np.array(direction, dtype=float)
+    size = float(np.linalg.norm(direction))
+    if kept.shape[0] == 0 or size < 1e-12:
+        return 0.0
+    return float(np.linalg.norm(kept @ (direction / size)))
+
+
+def _is_skew(rows: np.ndarray) -> bool:
+    """Whether any of some reduced rows is not a global direction."""
+    return any(int(np.count_nonzero(row)) > 1 for row in rows)
+
+
+def released_rotation_axes(connection, member_id: str) -> np.ndarray:
+    """The axes a member is free to rotate about at a connection.
+
+    The release comes from the member side of the connection
+    (``IfcRelConnectsStructuralMember.AppliedCondition``), in the axes of
+    that relation.
+
+    Returns:
+        A ``(k, 3)`` array of unit vectors in global coordinates; empty when
+        the member has no release.
+    """
+    released = (getattr(connection, "released_dofs_by_member", None) or {}).get(
+        member_id
+    )
+    rotations = sorted({dof - 4 for dof in released or [] if dof in (4, 5, 6)})
+    if not rotations:
+        return np.zeros((0, 3))
+    if len(rotations) == 3:
+        return np.eye(3)
+    axes = (getattr(connection, "release_axes_by_member", None) or {}).get(member_id)
+    return _global_rows(axes)[rotations]
+
+
+def get_released_rotations(connection, member_id: str) -> Optional[List[int]]:
+    """Return the global rotation DOFs (4-6) a member is released in at a connection.
+
+    Returns:
+        The released DOFs, empty when the member has no release, or None when
+        a partial release is given in skew axes and has no global equivalent
+        (``released_rotation_axes`` gives it as directions).
+    """
+    rows = _reduced_rows(released_rotation_axes(connection, member_id))
+    if _is_skew(rows):
+        return None
+    return sorted(int(np.flatnonzero(row)[0]) + 4 for row in rows)
+
+
+def support_restraint(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """The directions a support holds, in global coordinates.
+
+    The six flags of the support condition are in the connection's own axes
+    (``local_axes``). A support that holds a single member cannot restrain a
+    rotation that the member is released in (``released_rotation_axes``): a
+    fully fixed support under a column with both bending rotations released
+    is a pin that still resists torsion.
+
+    Returns:
+        Two arrays of reduced rows (see ``_reduced_rows``), the directions
+        held in translation and the axes held in rotation, or None for a
+        connection with no support condition. A row with one entry is a
+        global degree of freedom; any other makes the support skew.
+    """
+    fixed = _local_fixity(connection)
+    if fixed is None:
+        return None
+    axes = _global_rows(getattr(connection, "local_axes", None))
+    translations = axes[[i for i in range(3) if fixed[i]]]
+    free = axes[[i for i in range(3) if not fixed[3 + i]]]
+    members = list(getattr(connection, "connected_members", []))
+    if len(members) == 1:
+        free = np.vstack([free, released_rotation_axes(connection, members[0])])
+    return _reduced_rows(translations), _reduced_rows(_across(free))
+
+
 def support_is_skew(connection) -> bool:
-    """True when a support condition cannot be written in global axes.
+    """True when a support condition cannot be written in global axes alone.
 
     That is the case when the connection's axes are rotated away from the
     global ones and the condition treats its three translations, or its three
     rotations, differently. A condition that fixes or frees all three alike is
     the same in any axes.
     """
-    fixed = _local_fixity(connection)
-    local_axes = getattr(connection, "local_axes", None)
-    if fixed is None or _global_axis_of_each_local_axis(local_axes) is not None:
-        return False
-    return len(set(fixed[:3])) > 1 or len(set(fixed[3:])) > 1
+    restraint = support_restraint(connection)
+    return restraint is not None and (_is_skew(restraint[0]) or _is_skew(restraint[1]))
 
 
-def get_released_rotations(connection, member_id: str) -> Optional[List[int]]:
-    """Return the global rotation DOFs (4-6) a member is released in at a connection.
+def rotation_arm(
+    rotations: np.ndarray, drilling=None
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """How to hold the rotations of a skew support with a stiff arm.
 
-    The release comes from the member side of the connection
-    (``IfcRelConnectsStructuralMember.AppliedCondition``) and is stored in the
-    axes of that relation; this turns it into global DOF numbers.
+    The nodes of CalculiX beams and shells have no rotations to restrain
+    about an axis of one's choosing (``*EQUATION`` on DOF 4-6 does nothing).
+    A stiff arm fixed to the node does it with translations: the tip of an
+    arm along ``b`` moves by ``rotation x b``, so holding it along ``c``
+    stops rotation about ``b x c`` and nothing else.
+
+    A node that belongs to shells alone has no rotation about their normal:
+    turning there moves nothing of the shell, and an arm fixed to the node
+    would swing about it freely. That rotation is held along with the others
+    (it took the in-plane displacements of a slab on skew line supports to
+    hundreds of kilometres, with the right deflection).
+
+    Args:
+        rotations: The reduced rows of the axes held in rotation.
+        drilling: The normal of the shells at a node of theirs alone.
 
     Returns:
-        The released DOFs, empty when the member has no release, or None when
-        a partial release is given in skew axes and has no global equivalent.
+        The unit direction of the arm, which is an axis the support leaves
+        free, and the directions to hold its tip in, relative to the support
+        node, as rows. None when the rotations held are global ones (or
+        none, or all, with ``drilling`` or without), which ``*BOUNDARY`` does
+        by itself.
     """
-    released = (getattr(connection, "released_dofs_by_member", None) or {}).get(
-        member_id
-    )
-    if not released:
-        return []
-    if {4, 5, 6}.issubset(released):
-        return [4, 5, 6]
-    axes = (getattr(connection, "release_axes_by_member", None) or {}).get(member_id)
-    global_axis = _global_axis_of_each_local_axis(axes)
-    if global_axis is None:
+    if not _is_skew(rotations):
         return None
-    return sorted(global_axis[dof - 4] + 4 for dof in released if dof in (4, 5, 6))
+    if drilling is not None:
+        rotations = np.vstack([rotations, np.array(drilling, dtype=float)])
+    free = _across(rotations)
+    if free.shape[0] == 0:
+        return None
+    arm = free[0]
+    if free.shape[0] == 1:
+        # Two axes held: the tip may not move across the arm at all
+        return arm, _across([arm])
+    # One axis held: the tip may not move along the other free axis
+    return arm, free[1:2]
 
 
 def get_constrained_dofs(connection) -> List[int]:
     """
-    Return the CalculiX DOF numbers that should be constrained for a connection.
+    Return the CalculiX DOF numbers that are restrained outright at a support.
 
-    Reads per-DOF stiffness from the connection's stiffness_properties dict when
-    available (keys dx/dy/dz/drx/dry/drz).  A DOF is constrained when its
+    Reads per-DOF stiffness from the connection's stiffness_properties dict
+    (keys dx/dy/dz/drx/dry/drz).  A DOF is constrained when its
     stiffness >= _RIGID_STIFFNESS_THRESHOLD.  A connection with no stiffness
     properties restrains nothing, whatever its type.
 
@@ -113,34 +272,87 @@ def get_constrained_dofs(connection) -> List[int]:
         1=UX  2=UY  3=UZ  4=ROTX  5=ROTY  6=ROTZ
 
     A line support along global Y with ``drx`` fixed therefore restrains DOF 5,
-    rotation about the edge. Axes that are a permutation of the global ones are
-    mapped exactly. A skew support (see ``support_is_skew``) is written as if
-    its axes were global, and ``write_boundary_conditions`` warns about it.
-
-    A support that holds a single member cannot restrain a rotation that the
-    member is released in (``get_released_rotations``), so those DOFs are left
-    out: a fully fixed support under a column with both bending rotations
-    released is a pin that still resists torsion.
+    rotation about the edge. These are the DOFs written as ``*BOUNDARY``. A
+    skew support (see ``support_is_skew``) also holds directions that are not
+    global ones, which this leaves out: ``support_restraint`` has them all.
+    Its rotations are held together by an arm (``rotation_arm``), so none of
+    them is returned.
     """
-    fixed = _local_fixity(connection)
+    restraint = support_restraint(connection)
+    if restraint is None:
+        # No support condition, so no support: IFC expresses a support through
+        # the connection's AppliedCondition, which is where the stiffness comes
+        # from. A connection without one only joins its members.
+        return []
+    translations, rotations = restraint
+    dofs = [
+        int(np.flatnonzero(row)[0]) + 1
+        for row in translations
+        if np.count_nonzero(row) == 1
+    ]
+    if not _is_skew(rotations):
+        dofs += [int(np.flatnonzero(row)[0]) + 4 for row in rotations]
+    return sorted(dofs)
 
-    if fixed is not None:
-        global_axis = _global_axis_of_each_local_axis(
-            getattr(connection, "local_axes", None)
-        ) or [0, 1, 2]
-        dofs = set()
-        for local, is_fixed in enumerate(fixed):
-            if is_fixed:
-                dofs.add(3 * (local // 3) + global_axis[local % 3] + 1)
-        members = list(getattr(connection, "connected_members", []))
-        if len(members) == 1:
-            dofs -= set(get_released_rotations(connection, members[0]) or [])
-        return sorted(dofs)
 
-    # No support condition, so no support: IFC expresses a support through
-    # the connection's AppliedCondition, which is where the stiffness comes
-    # from. A connection without one only joins its members.
-    return []
+def support_equations(
+    connection, node: int, arm_tip: Optional[int] = None, drilling=None
+) -> List[List[Tuple[int, int, float]]]:
+    """The equations that hold the skew directions of a support at one node.
+
+    A direction that is not a global one is held by an equation between the
+    node's own global translations, which leaves the meaning of every load
+    and every other equation at the node as it is (``*TRANSFORM`` would
+    change it). The reaction comes out as the solver's force at the node,
+    like that of a ``*BOUNDARY``.
+
+    Args:
+        connection: The support.
+        node: One of its mesh nodes.
+        arm_tip: The node at the tip of the arm that holds its rotations
+            (see ``rotation_arm``), when it has skew ones.
+        drilling: The normal of the shells at a node of theirs alone.
+
+    Returns:
+        One list of ``(node, dof, coefficient)`` per equation, the dependent
+        term first. A single term is a ``*BOUNDARY``: a tip direction that is
+        a global one, on a node held in every translation, or the rotations
+        of a shell node that are all held once ``drilling`` is.
+    """
+    restraint = support_restraint(connection)
+    if restraint is None:
+        return []
+    translations, rotations = restraint
+    equations = []
+    for row, pivot in zip(*_reduce(translations)):
+        if np.count_nonzero(row) > 1:
+            equations.append(_terms(node, row, pivot))
+    arm = rotation_arm(rotations, drilling)
+    if arm is None and _is_skew(rotations):
+        equations += [[(node, dof, 1.0)] for dof in (4, 5, 6)]
+    if arm is not None and arm_tip is not None:
+        for row, pivot in zip(*_reduce(arm[1])):
+            terms = _terms(arm_tip, row, pivot)
+            if translations.shape[0] < 3:
+                terms += _terms(node, -row, pivot)
+            equations.append(terms)
+    return equations
+
+
+def _terms(node: int, row: np.ndarray, pivot: int) -> List[Tuple[int, int, float]]:
+    """A reduced row as equation terms on one node, the pivot first."""
+    order = [pivot] + [i for i in range(3) if i != pivot]
+    return [(node, i + 1, float(row[i])) for i in order if row[i] != 0.0]
+
+
+def write_equation(file: TextIO, terms: List[Tuple[int, int, float]]) -> None:
+    """Write one ``*EQUATION``; CalculiX takes at most four terms per line."""
+    file.write(f"*EQUATION\n{len(terms)}\n")
+    for start in range(0, len(terms), 4):
+        file.write(
+            ",".join(f"{n},{d},{coef:.9g}" for n, d, coef in terms[start : start + 4])
+            + "\n"
+        )
 
 
 def write_boundary_conditions(
@@ -149,7 +361,8 @@ def write_boundary_conditions(
     node_sets: Dict[str, List[int]],
     element_sets: Dict[str, List[int]],
     node_coords: Dict[int, Tuple[float, float, float]],
-) -> None:
+    rotation_arms: Optional[Dict[str, Dict[int, tuple]]] = None,
+) -> set:
     """
     Write the supports of the model to the CalculiX input file.
 
@@ -157,12 +370,25 @@ def write_boundary_conditions(
     ``*BOUNDARY`` card. The nodes of all supports are collected in
     ``ALL_BC_NODES``, which the steps use to print the reactions.
 
+    A skew support holds directions that are not global ones. Those are
+    written as equations (``support_equations``): between the translations of
+    each of its nodes, and for rotations on the tip of a stiff arm the writer
+    has fixed to the node. The tips are support nodes too, since part of the
+    reaction arrives there.
+
     Args:
         file (TextIO): The file object to write to.
         domain_model (StructuralModel): The structural domain model.
         node_sets (Dict[str, List[int]]): Dictionary of node sets.
         element_sets (Dict[str, List[int]]): Dictionary of element sets.
         node_coords (Dict[int, Tuple[float, float, float]]): Dictionary of node coordinates.
+        rotation_arms: For each support with skew rotations, the arm at each
+            of its nodes, ``{support id: {node: (tip, position, drilling)}}``
+            (see ``rotation_arm``; no tip where it needs no arm).
+
+    Returns:
+        The ``(node, dof)`` pairs the equations make depend on others, which
+        nothing else may restrain.
 
     Raises:
         AnalysisError: If a support has no mesh node to act on, or the model
@@ -173,6 +399,7 @@ def write_boundary_conditions(
 
     all_bc_nodes = set()
     unattached = []
+    dependent: set = set()
     # What each support restrains, for the reactions in the results
     domain_model.support_nodes = {}
 
@@ -180,19 +407,12 @@ def write_boundary_conditions(
         connection_id = connection.id
         set_name = f"BC_{connection_id}"
 
-        dofs_to_fix = get_constrained_dofs(connection)
+        restraint = support_restraint(connection)
 
         # A connection that restrains nothing only joins members
-        if not dofs_to_fix:
+        if restraint is None or not (len(restraint[0]) or len(restraint[1])):
             continue
-
-        if support_is_skew(connection):
-            _warn_model(
-                domain_model,
-                f"Support {connection_id} restrains only some directions, in "
-                "axes that are not parallel to the global ones. Skew supports "
-                "are not modelled: it is analysed as if its axes were global.",
-            )
+        dofs_to_fix = get_constrained_dofs(connection)
 
         bc_nodes = find_connection_support_nodes(connection, node_coords)
         if not bc_nodes and not getattr(connection, "connected_members", None):
@@ -207,29 +427,61 @@ def write_boundary_conditions(
                 "that it lies on a member."
             )
 
+        arms = (rotation_arms or {}).get(connection_id, {})
+        if _is_skew(restraint[1]) and not all(node in arms for node in bc_nodes):
+            raise AnalysisError(
+                f"Support {connection_id} cannot be applied: it restrains "
+                "rotation about an axis that is not parallel to a global one, "
+                "which takes a stiff arm at each of its nodes, and none was "
+                "built. Arms cannot be used in a model with user elements."
+            )
+        equations = []
+        tips: Dict[int, tuple] = {}
+        for node in bc_nodes:
+            tip, position, drilling = arms.get(node, (None, None, None))
+            equations += support_equations(connection, node, tip, drilling)
+            if tip is not None:
+                tips[tip] = position
+
         node_sets[set_name] = bc_nodes
         all_bc_nodes.update(bc_nodes)
+        all_bc_nodes.update(tips)
+        positions = {node: node_coords[node] for node in bc_nodes}
+        positions.update(tips)
         domain_model.support_nodes[connection_id] = {
             "nodes": {
-                int(node): tuple(float(c) for c in node_coords[node])
-                for node in bc_nodes
+                int(node): tuple(float(c) for c in xyz)
+                for node, xyz in positions.items()
             },
             "dofs": list(dofs_to_fix),
+            "translations": restraint[0].tolist(),
+            "rotations": restraint[1].tolist(),
         }
 
         file.write(f"*NSET, NSET={set_name}\n")
         for i in range(0, len(bc_nodes), 8):
             file.write(", ".join(map(str, bc_nodes[i : i + 8])) + "\n")
 
-        # One line per contiguous range of degrees of freedom
-        file.write("*BOUNDARY\n")
-        first = prev = dofs_to_fix[0]
-        for dof in dofs_to_fix[1:]:
-            if dof != prev + 1:
-                file.write(f"{set_name}, {first}, {prev}\n")
-                first = dof
-            prev = dof
-        file.write(f"{set_name}, {first}, {prev}\n\n")
+        if dofs_to_fix:
+            # One line per contiguous range of degrees of freedom
+            file.write("*BOUNDARY\n")
+            first = prev = dofs_to_fix[0]
+            for dof in dofs_to_fix[1:]:
+                if dof != prev + 1:
+                    file.write(f"{set_name}, {first}, {prev}\n")
+                    first = dof
+                prev = dof
+            file.write(f"{set_name}, {first}, {prev}\n")
+        if equations:
+            file.write("** Directions it holds that are not global ones\n")
+        for terms in equations:
+            node, dof, _ = terms[0]
+            if len(terms) == 1:
+                file.write(f"*BOUNDARY\n{node}, {dof}, {dof}\n")
+            else:
+                write_equation(file, terms)
+                dependent.add((node, dof))
+        file.write("\n")
 
     if unattached:
         _warn_model(
@@ -253,6 +505,7 @@ def write_boundary_conditions(
         file.write(", ".join(map(str, bc_nodes_list[i : i + 8])) + "\n")
     file.write("\n")
     node_sets["ALL_BC_NODES"] = bc_nodes_list
+    return dependent
 
 
 # Standard gravity, m/s². IFC gives self-weight as a share of the members'

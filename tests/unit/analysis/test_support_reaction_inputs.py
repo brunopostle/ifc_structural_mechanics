@@ -49,8 +49,14 @@ class TestSupportNodes:
     def test_writer_records_what_each_support_restrains(self):
         model = _model()
 
+        held = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         assert model.support_nodes == {
-            "support": {"nodes": {1: (0.0, 0.0, 0.0)}, "dofs": [1, 2, 3, 4, 5, 6]}
+            "support": {
+                "nodes": {1: (0.0, 0.0, 0.0)},
+                "dofs": [1, 2, 3, 4, 5, 6],
+                "translations": held,
+                "rotations": held,
+            }
         }
 
     def test_step_asks_for_the_force_on_each_support_node(self):

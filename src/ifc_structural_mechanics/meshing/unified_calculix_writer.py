@@ -22,6 +22,7 @@ import numpy as np
 from ..analysis.boundary_condition_handling import (
     write_analysis_steps,
     write_boundary_conditions,
+    write_equation,
 )
 from ..config.analysis_config import AnalysisConfig
 from ..converters.section_profiles import (
@@ -289,6 +290,9 @@ class UnifiedCalculixWriter:
 
             # Step 2c5: Tie beams lying in a slab or wall to it along their length
             self._build_line_bearings()
+
+            # Step 2c5b: Fix an arm to supports that hold skew rotations
+            self._build_support_arms()
 
             # Step 2c6: Hold a plane truss or frame that can leave its plane
             self._hold_plane_structure()
@@ -790,14 +794,19 @@ class UnifiedCalculixWriter:
             self._write_connections(f, bc_node_dofs)
 
             # Boundary conditions and loads
-            write_boundary_conditions(
+            dependent = write_boundary_conditions(
                 f,
                 self.domain_model,
                 self.node_sets,
                 self.element_sets,
-                dict(self.nodes),
+                self._structure_nodes(),
+                rotation_arms=getattr(self, "_support_arms", None),
             )
-            plane_holds = self._plane_hold_dofs()
+            # What an equation of a skew support already decides is not
+            # restrained a second time
+            plane_holds = [
+                hold for hold in self._plane_hold_dofs() if hold not in dependent
+            ]
             if plane_holds:
                 f.write("** Plane structure held in its plane\n")
                 f.write("*BOUNDARY\n")
@@ -819,7 +828,7 @@ class UnifiedCalculixWriter:
                 self.analysis_config.get_analysis_type(),
                 self.short_id_map,
                 self._load_element_sets(),
-                dict(self.nodes),
+                self._structure_nodes(),
                 gravity=self.analysis_config.get_gravity(),
                 gravity_direction=self.analysis_config.get_gravity_direction(),
                 u1_node_masses=self._u1_node_masses,
@@ -1636,28 +1645,38 @@ class UnifiedCalculixWriter:
             Set of (node_id, dof) tuples that have boundary conditions
         """
         bc_node_dofs = set()
-        node_coords = dict(self.nodes)
+        # Every direction with a share in what a support holds: a skew
+        # support holds a combination of them (see _write_line_bearings)
+        self._supported_node_dofs: set = set()
+        node_coords = self._structure_nodes()
+        arms = getattr(self, "_support_arms", {})
 
         from ..analysis.boundary_condition_handling import (
             find_connection_support_nodes,
             get_constrained_dofs,
+            support_equations,
         )
 
         for conn in self.domain_model.connections:
-            dofs = get_constrained_dofs(conn)
-            if not dofs:
-                continue
-
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
                 bc_nodes = find_connection_support_nodes(conn, node_coords)
-
-                if not bc_nodes:
-                    continue
+                dofs = get_constrained_dofs(conn)
 
                 for node in bc_nodes:
                     for dof in dofs:
                         bc_node_dofs.add((node, dof))
+                    # A skew direction is an equation, and its first term
+                    # is taken as much as a restrained DOF is
+                    tip, _, drilling = arms.get(conn.id, {}).get(
+                        node, (None, None, None)
+                    )
+                    for terms in support_equations(conn, node, tip, drilling):
+                        bc_node_dofs.add(terms[0][:2])
+                        self._supported_node_dofs.update(
+                            (n, dof) for n, dof, _ in terms
+                        )
+        self._supported_node_dofs.update(bc_node_dofs)
 
         bc_node_dofs.update(self._torsion_hold_dofs())
         bc_node_dofs.update(self._plane_hold_dofs())
@@ -1668,6 +1687,15 @@ class UnifiedCalculixWriter:
             sample = sorted(list(bc_node_dofs))[:20]
             logger.debug(f"Sample boundary condition DOFs: {sample}")
         return bc_node_dofs
+
+    def _structure_nodes(self) -> Dict[int, Tuple[float, float, float]]:
+        """The nodes of the members: not the tips of hinge and support arms.
+
+        Supports and loads are placed on the node nearest to them, which must
+        not be one of those.
+        """
+        helpers = getattr(self, "_helper_nodes", set())
+        return {n: xyz for n, xyz in self.nodes.items() if n not in helpers}
 
     # Largest gap between two nodes that are treated as the same point.
     _COINCIDENT_TOL = 1e-3
@@ -1807,7 +1835,8 @@ class UnifiedCalculixWriter:
         """
         from ..analysis.boundary_condition_handling import (
             find_nodes_on_segment,
-            get_released_rotations,
+            released_rotation_axes,
+            share_in_span,
         )
 
         self._edge_hinge_pairs: List[Tuple[int, int]] = []
@@ -1820,13 +1849,9 @@ class UnifiedCalculixWriter:
             if edge is None or len(edge) != 2 or len(members) < 2:
                 continue
 
-            direction = np.abs(np.array(edge[1], dtype=float) - np.array(edge[0]))
-            length = float(np.linalg.norm(direction))
-            if length < 1e-9:
+            direction = np.array(edge[1], dtype=float) - np.array(edge[0])
+            if float(np.linalg.norm(direction)) < 1e-9:
                 continue
-            direction = direction / length
-            along = int(np.argmax(direction))
-            edge_dof = along + 4 if direction[along] > 1.0 - 1e-6 else None
 
             hinged = []
             for member_id in members:
@@ -1834,20 +1859,9 @@ class UnifiedCalculixWriter:
                     self.domain_model.get_member(member_id), SurfaceMember
                 ):
                     continue
-                released = get_released_rotations(conn, member_id)
-                if released is None or (released and edge_dof is None):
-                    if released != [4, 5, 6]:
-                        self._warn_user(
-                            f"Connection {conn.id}: member {member_id} has a "
-                            "partial rotational release along an edge that is "
-                            "not parallel to a global axis; the release is "
-                            "ignored and the joint is analysed as rigid.",
-                            domain_id=conn.id,
-                        )
-                        continue
-                if released == [4, 5, 6] or (
-                    edge_dof is not None and edge_dof in released
-                ):
+                # Released about the edge, whichever way the edge runs
+                released = released_rotation_axes(conn, member_id)
+                if share_in_span(released, direction) > 1.0 - 1e-6:
                     hinged.append(member_id)
             if len(hinged) == len(members):
                 hinged = hinged[1:]
@@ -1919,6 +1933,7 @@ class UnifiedCalculixWriter:
         joint, since link elements cannot be mixed with them on stock CalculiX.
         """
         self._release_hinges: Dict[str, Dict[str, List[List[tuple]]]] = {}
+        helpers: set = set()
         links = list(getattr(self, "_rigid_links", []))
         next_node = max(self.nodes.keys(), default=0) + 1
         next_elem = (
@@ -2025,6 +2040,7 @@ class UnifiedCalculixWriter:
                     )
                     tip = position + self._HINGE_ARM * arm
                     member_tip, joint_tip = add_node(tip), add_node(tip)
+                    helpers.update((member_tip, joint_tip))
                     add_link(node, member_tip)
                     add_link(anchor, joint_tip)
                     used: set = set()
@@ -2046,10 +2062,109 @@ class UnifiedCalculixWriter:
 
         if self._release_hinges:
             self._rigid_links = links
+            self._helper_nodes = getattr(self, "_helper_nodes", set()) | helpers
             self._member_node_cache = {}
             logger.info(
                 f"Built release hinges at {len(self._release_hinges)} connections"
             )
+
+    def _build_support_arms(self) -> None:
+        """Fix a stiff arm to every node of a support that holds skew rotations.
+
+        A rotation about an axis that is not a global one cannot be given to
+        ``*BOUNDARY``, and the nodes of beams and shells have no rotations
+        for an equation to act on. An arm along an axis the support leaves
+        free turns the rotations it holds into translations of its tip, which
+        ``write_boundary_conditions`` ties down (``rotation_arm``).
+
+        A node of shells alone has no rotation about their normal, and that
+        one is held too (``_drilling_axis``), which can leave nothing for an
+        arm to do.
+
+        Stored in ``self._support_arms`` as
+        ``{support id: {node: (tip node, tip position, shell normal)}}``, the
+        first two None where no arm is needed. Nothing is built in a model
+        with U1 members, where link elements cannot be used on stock
+        CalculiX; ``write_boundary_conditions`` then stops the analysis.
+        """
+        from ..analysis.boundary_condition_handling import (
+            find_connection_support_nodes,
+            rotation_arm,
+            support_restraint,
+        )
+
+        self._support_arms: Dict[str, Dict[int, tuple]] = {}
+        if self._u1_members:
+            return
+        elements_at: Dict[int, List[int]] = {}
+        for elem_id, elem in self.elements.items():
+            for node in elem["nodes"]:
+                elements_at.setdefault(node, []).append(elem_id)
+        links = list(getattr(self, "_rigid_links", []))
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [elem_id for elem_id, _, _ in links]
+            )
+            + 1
+        )
+        for conn in self.domain_model.connections:
+            restraint = support_restraint(conn)
+            if restraint is None or rotation_arm(restraint[1]) is None:
+                continue
+            nodes = find_connection_support_nodes(conn, self._structure_nodes())
+            linked = {n for _, a, b in links for n in (a, b)}
+            for node in nodes:
+                drilling = (
+                    None
+                    if node in linked
+                    else self._drilling_axis(elements_at.get(node, []))
+                )
+                arm = rotation_arm(restraint[1], drilling)
+                arms = self._support_arms.setdefault(conn.id, {})
+                if arm is None:
+                    arms[node] = (None, None, drilling)
+                    continue
+                tip = tuple(
+                    float(v)
+                    for v in np.array(self.nodes[node]) + self._HINGE_ARM * arm[0]
+                )
+                self.nodes[next_node] = tip
+                helpers.add(next_node)
+                self._helper_nodes = helpers
+                links.append((next_elem, node, next_node))
+                arms[node] = (next_node, tip, drilling)
+                next_node += 1
+                next_elem += 1
+        if len(links) > len(getattr(self, "_rigid_links", [])):
+            self._rigid_links = links
+            self._member_node_cache = {}
+            logger.info(f"Built arms at {len(self._support_arms)} skew supports")
+
+    def _drilling_axis(self, element_ids: List[int]) -> Optional[np.ndarray]:
+        """The normal of the shells at a node, if it is a node of shells alone.
+
+        None for a node with a beam on it, or where shells meet at an angle:
+        every rotation is resisted there.
+        """
+        normal = None
+        for elem_id in element_ids:
+            elem = self.elements[elem_id]
+            if not str(elem.get("type", "")).startswith("S"):
+                return None
+            corners = [np.array(self.nodes[n], dtype=float) for n in elem["nodes"][:3]]
+            cross = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+            size = float(np.linalg.norm(cross))
+            if size < 1e-18:
+                continue
+            cross = cross / size
+            if normal is None:
+                normal = cross
+            elif abs(float(normal @ cross)) < 1.0 - 1e-6:
+                return None
+        return normal
 
     @staticmethod
     def _shell_shape_values(n_nodes: int, bary: np.ndarray) -> Optional[List[float]]:
@@ -2301,14 +2416,7 @@ class UnifiedCalculixWriter:
     @staticmethod
     def _write_equation(file: TextIO, terms: List[Tuple[int, int, float]]) -> None:
         """Write one ``*EQUATION``; CalculiX takes at most four terms per line."""
-        file.write(f"*EQUATION\n{len(terms)}\n")
-        for start in range(0, len(terms), 4):
-            file.write(
-                ",".join(
-                    f"{n},{d},{coef:.9g}" for n, d, coef in terms[start : start + 4]
-                )
-                + "\n"
-            )
+        write_equation(file, terms)
 
     def _note_equation_nodes(self, nodes) -> None:
         """Remember the nodes of an equation just written (see line bearings)."""
@@ -2331,6 +2439,7 @@ class UnifiedCalculixWriter:
         if not bearings:
             return
         used = getattr(self, "_equation_nodes", set())
+        supported = bc_node_dofs | getattr(self, "_supported_node_dofs", set())
         file.write("** Curve members bearing on the surface member they lie in\n")
         for node, terms in bearings:
             if node in used:
@@ -2338,7 +2447,7 @@ class UnifiedCalculixWriter:
             for dof in (1, 2, 3):
                 if (node, dof) in constrained_node_dofs:
                     continue
-                if any((n, dof) in bc_node_dofs for n, _ in terms):
+                if any((n, dof) in supported for n, _ in terms):
                     continue
                 self._write_equation(
                     file,
@@ -2364,8 +2473,9 @@ class UnifiedCalculixWriter:
         or whose axis is not along a global one, is only reported.
         """
         from ..analysis.boundary_condition_handling import (
-            get_constrained_dofs,
-            get_released_rotations,
+            released_rotation_axes,
+            share_in_span,
+            support_restraint,
         )
 
         self._torsion_holds: List[Tuple[Any, str, int]] = []
@@ -2394,9 +2504,8 @@ class UnifiedCalculixWriter:
             length = float(np.linalg.norm(axis))
             if length < 1e-12:
                 continue
-            axis = np.abs(axis / length)
-            # Global rotation DOFs with a share in rotation about the member
-            about_axis = {4 + i for i in range(3) if axis[i] > 0.5}
+            direction = axis / length
+            axis = np.abs(direction)
 
             connections = [
                 c
@@ -2409,13 +2518,23 @@ class UnifiedCalculixWriter:
             supports = []
             for conn in connections:
                 others = [m for m in conn.connected_members if m != member.id]
-                released = get_released_rotations(conn, member.id)
-                torsion_released = released is None or bool(about_axis & set(released))
-                fixed = set(get_constrained_dofs(conn))
-                if (others and not torsion_released) or (about_axis & fixed):
+                # An axis counts when it has a share in rotation about the member
+                released = released_rotation_axes(conn, member.id)
+                torsion_released = bool(
+                    len(released) and np.abs(released @ direction).max() > 0.5
+                )
+                restraint = support_restraint(conn)
+                held_here = (
+                    restraint is not None
+                    and share_in_span(restraint[1], direction) > 0.5
+                )
+                if (others and not torsion_released) or held_here:
                     restrained = True
                     break
-                if fixed and not others:
+                holds_something = restraint is not None and (
+                    len(restraint[0]) or len(restraint[1])
+                )
+                if holds_something and not others:
                     supports.append(conn)
             if restrained:
                 continue
@@ -2913,7 +3032,7 @@ class UnifiedCalculixWriter:
         converge to unrealistically large displacements.
         """
         from ifc_structural_mechanics.analysis.boundary_condition_handling import (
-            get_constrained_dofs,
+            support_restraint,
         )
 
         model = self.domain_model
@@ -2923,7 +3042,8 @@ class UnifiedCalculixWriter:
             real = list(conn.connected_members)
             if len(real) >= 2:
                 continue  # member-to-member connection
-            if any(d in {4, 5, 6} for d in get_constrained_dofs(conn)):
+            restraint = support_restraint(conn)
+            if restraint is not None and len(restraint[1]):
                 return (
                     []
                 )  # rotationally restrained support found → not a pure mechanism

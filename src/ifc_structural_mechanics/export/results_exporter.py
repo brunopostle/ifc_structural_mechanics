@@ -105,10 +105,11 @@ analysis warns when that happens.
 
 ``supports`` (schema 1.1) has the reaction at each support: what the support
 exerts on the structure, at ``position_m``, in global axes. ``restrained``
-lists the global directions the analysis held (t for translation, r for
-rotation), which for a skew support are not the ones the file asked for. The
-forces are the solver's, summed over the support's nodes. For a line support
-``position_m`` is the middle of its edge.
+lists the global directions the support holds (t for translation, r for
+rotation). A skew support holds directions that are not global ones, which
+are not in that list: ``restrained_in_axes`` (schema 1.3) has what it holds
+along its own ``axes``. The forces are the solver's, summed over the
+support's nodes. For a line support ``position_m`` is the middle of its edge.
 
 The solver gives no reaction moments, so they come from elsewhere, and
 ``moments`` says where:
@@ -117,7 +118,7 @@ The solver gives no reaction moments, so they come from elsewhere, and
   of its nodal forces about ``position_m`` (zero for a point support).
 - ``member_end_forces``: the support holds a rotation and every member it
   connects is a curve member ending there. The moments are the section forces
-  at those member ends, moved to ``position_m``, in the restrained directions.
+  at those member ends, moved to ``position_m``, about the restrained axes.
   They are integrated from stresses and are good to about 1 %.
 - ``not_computed``: the support holds a rotation and joins a surface member, a
   member that runs on past it, or one without section forces. The moment keys
@@ -132,9 +133,9 @@ not balance its loads, the support has ``member_end_forces`` (good to about
 does not balance, it has ``unreliable``: the solver's figures are given, and
 are wrong. The analysis warns in both cases.
 
-``axes`` and ``by_load_case_in_axes`` are present when the support has axes of
-its own (a ``ConditionCoordinateSystem``, or the edge of a line support) and
-give the same reactions along them.
+``axes``, ``restrained_in_axes`` and ``by_load_case_in_axes`` are present when
+the support has axes of its own (a ``ConditionCoordinateSystem``, or the edge
+of a line support); the last gives the same reactions along them.
 
 ``max_relative_displacement_m`` is how much a member distorts: the largest
 difference in displacement between two of its points in any one global
@@ -210,7 +211,7 @@ class ResultsExporter:
             with a step per load case.
     """
 
-    SCHEMA_VERSION = "1.2"
+    SCHEMA_VERSION = "1.3"
 
     def __init__(
         self,
@@ -917,7 +918,6 @@ class ResultsExporter:
     # Reactions at each support
     # ------------------------------------------------------------------
 
-    _DOF_NAMES = {1: "tx", 2: "ty", 3: "tz", 4: "rx", 5: "ry", 6: "rz"}
     # A support further than this inside a member's length is not at its end:
     # the member runs on past it, and its end forces are not the support's
     _END_TOLERANCE = 1e-3
@@ -953,15 +953,17 @@ class ResultsExporter:
         else:
             kind = "point"
             position = np.array(connection.position, dtype=float)
-        dofs = sorted(record["dofs"])
-        held_rotations = [dof - 4 for dof in dofs if dof > 3]
+        # What the support holds, as projections onto those directions
+        hold = self._projection(record, "translations", 1)
+        turn = self._projection(record, "rotations", 4)
+        held_rotations = bool(turn.any())
 
         entry: Dict[str, Any] = {
             "ifc_guid": getattr(connection, "ifc_guid", None),
             "id": connection.id,
             "type": kind,
             "position_m": [float(v) for v in position],
-            "restrained": [self._DOF_NAMES[dof] for dof in dofs],
+            "restrained": self._held_names(hold, turn, np.eye(3)),
         }
         entry["forces"] = "solver"
         ends = self._member_ends_at(connection, position) if held_rotations else {}
@@ -997,12 +999,8 @@ class ResultsExporter:
                         np.array(rec["moment"]) + np.cross(arm, np.array(rec["force"]))
                     )
                 # A support only resists what it holds
-                moment = np.array(
-                    [end_moment[i] if i in held_rotations else 0.0 for i in range(3)]
-                )
-                held_force = np.array(
-                    [end_force[i] if i + 1 in dofs else 0.0 for i in range(3)]
-                )
+                moment = turn @ end_moment
+                held_force = hold @ end_force
                 apart = float(np.linalg.norm(force - held_force))
                 size = max(np.linalg.norm(force), np.linalg.norm(held_force))
                 if (
@@ -1040,11 +1038,41 @@ class ResultsExporter:
             entry["axes"] = {
                 name: [float(v) for v in row] for name, row in zip("xyz", rotation)
             }
+            entry["restrained_in_axes"] = self._held_names(hold, turn, rotation)
             entry["by_load_case_in_axes"] = {
                 case: self._in_axes(values, rotation)
                 for case, values in by_load_case.items()
             }
         return entry
+
+    @staticmethod
+    def _projection(record: Dict, key: str, first_dof: int) -> np.ndarray:
+        """The projection onto the directions a support holds.
+
+        ``record[key]`` has them as rows; a record without it holds the
+        global directions of its ``dofs``.
+        """
+        if key in record:
+            rows = np.array(record[key], dtype=float).reshape(-1, 3)
+        else:
+            rows = np.eye(3)[
+                [d - first_dof for d in record["dofs"] if 0 <= d - first_dof < 3]
+            ]
+        if rows.shape[0] == 0:
+            return np.zeros((3, 3))
+        _, singular, vh = np.linalg.svd(rows, full_matrices=False)
+        basis = vh[singular > 1e-9]
+        return basis.T @ basis
+
+    @staticmethod
+    def _held_names(hold: np.ndarray, turn: np.ndarray, axes: np.ndarray) -> List[str]:
+        """Which of three axes a support holds outright, as tx .. rz."""
+        return [
+            kind + name
+            for kind, projection in (("t", hold), ("r", turn))
+            for name, axis in zip("xyz", axes)
+            if float(axis @ projection @ axis) > 1.0 - 1e-6
+        ]
 
     # The force at a support that holds a rotation is also known from the
     # ends of its members, to about 1 %. Further apart than this, the

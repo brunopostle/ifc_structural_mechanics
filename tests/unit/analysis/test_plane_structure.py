@@ -121,6 +121,20 @@ class TestPlaneNormal:
         )
         assert plane_normal(model) is None
 
+    def test_support_on_an_incline_in_the_plane(self, tmp_path):
+        model = _truss(tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER})
+        # A pin is the same in any axes: only the roller is turned
+        for connection in model.connections:
+            connection.local_axes = [[0.8, 0, 0.6], [0, 1, 0], [-0.6, 0, 0.8]]
+        assert plane_normal(model) == Y
+
+    def test_support_tilted_out_of_the_plane(self, tmp_path):
+        """What it holds would push the structure out of its plane."""
+        model = _truss(tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER})
+        for connection in model.connections:
+            connection.local_axes = [[0.8, 0.6, 0], [-0.6, 0.8, 0], [0, 0, 1]]
+        assert plane_normal(model) is None
+
     def test_straight_run_takes_the_plane_of_its_loads(self, tmp_path):
         supports = {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}
         model = _model(tmp_path, BEAM_NODES, BEAM_MEMBERS, supports, hinged=False)
