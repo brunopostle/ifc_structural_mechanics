@@ -760,6 +760,18 @@ member's `local_axis` first. Check any change to loads by summing the applied
 load by hand and comparing it with `global_reactions.by_load_case`
 (`applied_load_N` there is what was written to the solver, not a check on it).
 
+**A line load may vary along its member or act on part of it** (`aiz.58`). An
+`IfcStructuralCurveAction` of type LINEAR or POLYGONAL has an
+`IfcStructuralLoadConfiguration`: values with their `Locations` along the member, the
+first and last being where the load starts and ends. They become `LineLoad.samples`
+(distance from the member's start in metres, force per length);
+`_varying_line_load_to_nodal_forces()` integrates them over each element, and
+`_seed_load_points()` puts a mesh node at every sample. `portal_01` is loaded on half
+of its beam this way and was once analysed with twice its load, because the locations
+were not read. `ProjectedOrTrue` is applied in the extractor (`_per_true_length()`).
+DISCRETE, SINUS and PARABOLA actions and the varying actions of IFC2X3 raise
+`ModelExtractionError`; never read one as a constant load.
+
 **Load steps**: CalculiX keeps loads active from step to step. Every static step
 starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise
 each load case would include all the earlier ones.
@@ -790,6 +802,13 @@ component). Use them to check any change to joints, supports or shells.
 Compare the displacement field at several points and the reactions, not only
 the largest displacement: `structure_01` once matched its reference maximum to
 11% with a slab that was too stiff and a wall that was leaning over.
+
+`portal_01.ifc` holds results of its own (`IfcStructuralPointReaction` and
+`IfcStructuralCurveReaction` in an `IfcStructuralResultGroup`, in lbf and inches):
+reactions, and member end forces. `_portal_reactions_in_the_file()` reads them. They
+were computed with a shear area of about 0.79 of the section, where this library
+takes the web of an I section, so thrust and moments differ by 2 to 6%; the vertical
+reactions agree to 0.02%. Its displacements are in some other unit and are not used.
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->

@@ -109,7 +109,6 @@ the ones a user needs to know before trusting a result.
   It carries on, with a warning in the results, when
   - a material has no mass density (its members weigh nothing) or no
     Poisson's ratio (0.3 is assumed);
-  - a line load varies along its member (its mean value is applied);
   - loads of the file belong to no load group or load case (they are not
     applied);
   - a point load lands more than 0.1 m from the nearest mesh node;
@@ -357,7 +356,7 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 660 N | 0.427 mm Code_Aster | Verified, within 2% |
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
-| `portal_01` | Portal frame of I-sections, distributed load | No | 4.04 mm (4.11 mm at 0.25 m) | 85.4 kN | 4.12 mm with U1 elements at 0.25 m | Runs; the two section models agree to 0.2% |
+| `portal_01` | Portal frame of I-sections, load on half of its beam | No | 2.15 mm (2.17 mm at 0.25 m) | 42.7 kN | Reactions stored in the file: vertical to 0.02%, thrust 1.9% lower (shear area) | Verified against a plane frame with the same shear area, within 1.5% |
 | `building_02` | Multi-storey building, three load cases and 17 combinations | No | 16.8 mm (Dead, its self-weight), 25.7 mm (Live), 15.3 mm (Extra_dead), 54.4 mm (1.4D+1.6L) at a 2 m mesh | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
 | `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.78 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.90, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 

@@ -239,10 +239,11 @@ weight towards each end, and the moment runs from P L/8 + w L²/12 at the suppor
 the average of the two sides, which would give zero shear there; the step is rebuilt
 from the cross-sections at the middle of each element, which belong to one element only.
 
-Two checks without a hand value: in `portal_01` each column carries 42.70 kN, half the
-85.41 kN reaction, and the beam's end shear is the same 42.70 kN, while the column shear
-and the beam's axial force are both 12.41 kN. In `structure_01` the pin-ended column has
-an axial force and no moment.
+Two checks without a hand value: in `portal_01`, loaded on the right half of its beam,
+the columns carry 10.14 and 32.56 kN, which add up to the 42.70 kN reaction, and the
+beam's largest end shear is the same 32.56 kN, while the column shear and the beam's
+axial force are both 6.21 kN. In `structure_01` the pin-ended column has an axial force
+and no moment.
 
 Until 2026-10-11 the reaction under self-weight came out low by the load on the
 restrained node itself (a sixth of an element's weight for a quadratic element), because
@@ -277,7 +278,7 @@ What the equivalent rectangle does not have is the profile's stresses, so
 `results.json` takes them from the section forces. Nor can it have the profile's shear
 and torsional stiffness at once; see Torsion below. U1 elements with a general section remain available with
 `--open-sections user-element` for models made of such members only. On `portal_01` the
-two agree: 4.111 mm with equivalent rectangles and 4.120 mm with U1 at a 0.25 m mesh.
+two agree: 2.172 mm with equivalent rectangles and 2.181 mm with U1 at a 0.25 m mesh.
 
 **T, angle and channel**, all 200 × 400 mm, as cantilevers under self-weight about both
 axes (0.05 m mesh, tolerance 3%). The reference uses the second moments about the
@@ -479,8 +480,10 @@ member in `results.json` at a 0.5 m mesh (tested to 10%):
 beams and shells into, which lie on the faces of the member. Where a member rotates they
 move a little more than its axis does.
 
-`portal_01` also has a reference file, but it was run in inch and pound units with
-metric gravity, so it is not comparable.
+`portal_01` also has a Code_Aster file, but it was run in inch and pound units with
+metric gravity, so it is not comparable. Its IFC file holds the results of the program
+that wrote it, for its own load case, and those are compared below (A load on part of
+a member).
 
 What the comparison shows:
 
@@ -543,7 +546,7 @@ model.
 | `structure_01` | `--gravity` | 0.429 mm | 660 N | Covered by Tier 2 (Code_Aster) |
 | `slab_01` | `--gravity` | 0.173 mm | 230 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.372 mm | 273 N | Covered by Tier 2 (Code_Aster, corrected) |
-| `portal_01` | — | 4.04 mm | 85.4 kN | No reference. 4.11 mm at 0.25 m; 3.84 and 4.12 mm with U1 elements |
+| `portal_01` | — | 2.15 mm | 42.7 kN | Reactions against the results in the file (Tier 2). 2.17 mm at 0.25 m; 2.06 and 2.18 mm with U1 elements. Until 2026-10-12 it was loaded on the whole beam, twice what the file says: 4.04 mm and 85.4 kN |
 | `building_02` | — | 16.8 mm (Dead), 25.7 mm (Live), 15.3 mm (Extra_dead) | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. `Dead` is the self-weight. At 4 m (measured before `Dead` was a case, with `--gravity`): 15.7 / 24.1 / 14.4 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
 | `building_01` | — | 6.78 mm (Dead), 0.286 mm (Live), 0.10 mm (floor finishing) | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | `Dead` is the self-weight, nearly all of it a `Masonry` of 202 t/m³. At 0.5 and 0.25 m: 7.90 and 8.63 mm (Dead), 0.338 and 0.352 mm (Live). Reactions match the applied loads; deflections unchecked |
 
@@ -729,7 +732,7 @@ of the members a support holds, moved to the support:
 | `cantilever_01`, root moment | 27.55 N·m | 27.51 N·m | 0.1% |
 | `beam_01`, fixed-end moments, P L / 8 + w L² / 12 | ∓12 943 N·m | ∓12 954 N·m | 0.1% |
 | Cantilever with an arm, root: bending and torque | 3000 and 1000 N·m | 2999.98 and 999.99 N·m | < 0.01% |
-| `portal_01`, feet | equal and opposite | 11 847.29 and −11 847.05 N·m | 0.002% apart |
+| `portal_01`, feet, against a plane frame with the same shear area | 7171.8 and −4546.8 N·m | 7236.1 and −4611.1 N·m | 0.9 and 1.4% |
 
 Where this cannot be done the moment is left out, not given as zero: a support that
 clamps a slab edge (`slab_01`, the wall foot of `structure_01`), and a member that runs on
@@ -743,7 +746,7 @@ displacements in both and different reactions:
 | Case | True | 2.23 | 2.21 |
 |---|---|---|---|
 | Bar pulled with 1000 N and bent, clamped end, force along it | 1000 N | 1000.0 N | 1076.6 N |
-| `portal_01`, vertical force at the two feet | 42 703 N each | 42 703 and 42 703 N | 34 165 and 44 124 N |
+| `portal_01`, vertical force at the two feet | 10 135 and 32 568 N | 10 137 and 32 565 N | 6246 and 31 784 N |
 | `beam_01` with its point load only, resultant force at one end | 10 000 N | 10 000 N | 11 390 N |
 | Cantilever with an arm, vertical force at the root | 1000 N | 1000 N | 444 N |
 | `structure_01`, total | 660.2 N | 660.2 N | 667.9 N |
@@ -958,6 +961,50 @@ The reactions add up to the loads to six figures, with 5030 and 4970 N of the 10
 the two supports. Passes on CalculiX 2.21 as well: no rotation is restrained by
 `*BOUNDARY`.
 
+**A load on part of a member, and one that varies along it** (`aiz.58`,
+`TestPortalAgainstTheResultsInItsFile`, `TestLoadThatVariesAlongABeam`). An
+`IfcStructuralCurveAction` gives its load as values with their locations along the
+member; it is linear between them, and the first and last locations are where it
+starts and ends. The locations were not read. A load that varied was applied at its
+mean value over the whole member, with a warning; one with equal values was applied
+over the whole member with none, which is what `portal_01` has: 100 lbf/in from 96 to
+192 in along its 192 in beam. It was analysed with 19 200 lbf, shared equally by the
+feet, for the 9600 lbf the file states.
+
+Each element now takes the work-equivalent nodal forces of the part of the load on it,
+integrated exactly, and the mesh has a node wherever a load starts, ends or changes
+slope. `portal_01.ifc` also holds the results of the program that wrote it, which had
+not been compared with ours (0.25 m mesh):
+
+| `portal_01` | In the file | Plane frame, shear area of the web | Result |
+|---|---|---|---|
+| Vertical reaction, left and right | 10 135.4 and 32 567.5 N | 10 137.5 and 32 565.4 N | 10 137.5 and 32 565.5 N |
+| Thrust | 6328.4 N | 6165.5 N | 6206.0 N |
+| Moment at the left and right foot | 7535.5 and 4900.8 N·m | 7171.8 and 4546.8 N·m | 7236.1 and 4611.1 N·m |
+
+The vertical reactions are the file's to 0.02%. The thrust is 1.9% below the file's and
+the moments 4 and 6%. That is the shear area. A plane frame by the stiffness method
+with shear deformation, worked out for this comparison, gives the file's thrust for a
+shear area of 0.79 of the section (6330 N at 7.0 in² of 8.84) and 6472 N with no shear
+deformation at all; with the area of the web, which is what this library takes for an I
+section, it gives 6165.5 N, and the result is 0.7% above that, falling as the mesh is
+refined (6241, 6206 and 6187 N at 0.5, 0.25 and 0.125 m).
+
+| 4 m beam, 0.1 m square, simply supported, 0.25 m mesh | Beam theory | Result |
+|---|---|---|
+| Load rising from 0 to 3 kN/m: reactions, w L / 6 and w L / 3 | 2000 and 4000 N | to 0.01% |
+| The same: largest moment, w L² / (9 √3) | 3079.2 N·m | within 1% |
+| The same: deflection, 0.006522 w L⁴ / E I and shear | 2.867 mm | within 1% |
+| 3 kN/m from 1.9 to 3.9 m: reactions | 1650 and 4350 N | to 0.01% |
+| The same: largest moment and shear | 3588.75 N·m and 4350 N | within 1% |
+| 3 kN/m of plan on a rafter rising 3 in 4 (`PROJECTED_LENGTH`): total | 12 000 N | to 0.001% |
+
+`ProjectedOrTrue` was not read either: a load per projected length was applied per true
+length, 25% too much on that rafter. And a curve action's `PredefinedType` was not: a
+sine or parabolic half wave was applied as a constant load of its peak value, and point
+forces along a member (`DISCRETE`) as that many newtons per metre. Those two are now
+errors that name the load.
+
 **A beam ending on the span of another** (`aiz.80`,
 `TestBeamEndingOnTheSpanOfAnother`). A 3 m beam between the middles of two 4 m girders
 fixed at their ends, 10 kN at its middle, 0.25 m mesh. The file gives each end of the
@@ -1098,8 +1145,9 @@ to a node of shells alone swings freely about their normal.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
 - **Unsupported input**: applied moments, surface connections and
-  load kinds other than forces stop the analysis with an error naming the entity. A
-  load that varies along its member is applied at its mean value, with a warning.
+  load kinds other than forces stop the analysis with an error naming the entity. So do
+  curve actions given as a row of point forces (`DISCRETE`) or as a sine or parabolic
+  half wave, and the varying actions of IFC2X3.
 - **Skew supports**: validated for a point support on a beam (translation and
   rotation) and, by turning two examples, for line supports and hinged edges of
   slabs and walls. Not covered: a support whose translations are partly free *and*
