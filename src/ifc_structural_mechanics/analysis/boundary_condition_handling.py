@@ -662,14 +662,154 @@ def _distributed_load_to_nodal_forces(
     return cloads
 
 
+# Shape functions of a line element at a fraction of its length, in CalculiX
+# node order (a quadratic beam has its middle node second)
+_LINE_SHAPES = {
+    2: lambda t: (1.0 - t, t),
+    3: lambda t: (
+        (1.0 - t) * (1.0 - 2.0 * t),
+        4.0 * t * (1.0 - t),
+        t * (2.0 * t - 1.0),
+    ),
+}
+# Two-point Gauss rule on [0, 1]: exact for a quadratic shape function times a
+# load that is linear
+_GAUSS_POINTS = (0.5 - 0.5 / np.sqrt(3.0), 0.5 + 0.5 / np.sqrt(3.0))
+
+
+def _varying_line_load_to_nodal_forces(
+    element_set_name: str,
+    samples: List[Tuple[float, np.ndarray]],
+    start_position,
+    end_position,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> Dict[int, List[float]]:
+    """Turn a line load that varies along its member into nodal forces.
+
+    ``samples`` are ``(distance from start_position, force per length in
+    global axes)``: the load is linear between one and the next and there is
+    none before the first or after the last, so it may cover part of the
+    member. Each element takes the work-equivalent forces of the part of the
+    load on it, integrated exactly whether or not the load starts, ends or
+    changes slope at a node.
+
+    Returns:
+        Dict mapping node_id → [fx, fy, fz] accumulated nodal forces.
+    """
+    cloads: Dict[int, List[float]] = {}
+    origin = np.array(start_position, dtype=float)
+    axis = np.array(end_position, dtype=float) - origin
+    length = float(np.linalg.norm(axis))
+    if length < 1e-12:
+        return cloads
+    axis /= length
+
+    for elem_id in element_sets.get(element_set_name, []):
+        elem = elements_data.get(elem_id)
+        nodes = (elem or {}).get("nodes", [])
+        if len(nodes) not in _LINE_SHAPES or str(elem.get("type", "")).startswith("S"):
+            continue
+        try:
+            first = float(
+                (np.array(node_coords[nodes[0]], dtype=float) - origin) @ axis
+            )
+            last = float(
+                (np.array(node_coords[nodes[-1]], dtype=float) - origin) @ axis
+            )
+        except KeyError:
+            continue
+        if abs(last - first) < 1e-12:
+            continue
+        shapes = _LINE_SHAPES[len(nodes)]
+        low, high = min(first, last), max(first, last)
+        forces = np.zeros((len(nodes), 3))
+        for (at_a, load_a), (at_b, load_b) in zip(samples, samples[1:]):
+            lower, upper = max(low, at_a), min(high, at_b)
+            if upper - lower < 1e-12 or at_b - at_a < 1e-12:
+                continue
+            for point in _GAUSS_POINTS:
+                at = lower + point * (upper - lower)
+                load = load_a + (load_b - load_a) * (at - at_a) / (at_b - at_a)
+                weights = shapes((at - first) / (last - first))
+                forces += 0.5 * (upper - lower) * np.outer(weights, load)
+        # A node the load gives nothing gets no line of rounding error
+        forces[np.abs(forces) < 1e-12 * np.abs(forces).max(initial=0.0)] = 0.0
+        for nid, force in zip(nodes, forces):
+            if not force.any():
+                continue
+            entry = cloads.setdefault(nid, [0.0, 0.0, 0.0])
+            for i in range(3):
+                entry[i] += float(force[i])
+
+    return cloads
+
+
+def _load_to_nodal_forces(
+    load,
+    element_set_name: str,
+    domain_model: StructuralModel,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> Tuple[Dict[int, List[float]], bool]:
+    """The nodal forces of a line or area load, in global axes.
+
+    Returns:
+        The forces by node, and whether the load is in the local axes of a
+        member that has none (it is then taken as given in global axes).
+    """
+    samples = getattr(load, "samples", None)
+    if samples:
+        turned = [_to_global_axes(load, vector, domain_model) for _, vector in samples]
+        without_axes = any(vector is None for vector in turned)
+        return (
+            _varying_line_load_to_nodal_forces(
+                element_set_name,
+                [
+                    (float(at), np.array(given if vector is None else vector, float))
+                    for (at, given), vector in zip(samples, turned)
+                ],
+                load.start_position,
+                load.end_position,
+                element_sets,
+                elements_data,
+                node_coords,
+            ),
+            without_axes,
+        )
+    vector = _global_force_vector(load, domain_model)
+    return (
+        _distributed_load_to_nodal_forces(
+            element_set_name,
+            _get_validated_force_vector(load) if vector is None else vector,
+            element_sets,
+            elements_data,
+            node_coords,
+        ),
+        vector is None,
+    )
+
+
 def _global_force_vector(load, domain_model: StructuralModel) -> Optional[np.ndarray]:
     """Return a distributed load's force vector in global axes.
+
+    Returns None when the load is in the axes of a member that has none.
+    """
+    return _to_global_axes(load, _get_validated_force_vector(load), domain_model)
+
+
+def _to_global_axes(
+    load, vector, domain_model: StructuralModel
+) -> Optional[np.ndarray]:
+    """Turn a force of a distributed load to global axes.
 
     A load given in the member's own axes (``coordinate_system == "local"``,
     from IFC ``GlobalOrLocal``) is rotated with the member's ``local_axis``.
     Returns None when that is needed and the member has no axes.
     """
-    vector = np.array(_get_validated_force_vector(load), dtype=float)
+    vector = np.array(vector, dtype=float)
     if getattr(load, "coordinate_system", "global") != "local":
         return vector
     member_id = getattr(load, "member_reference", None) or getattr(
@@ -1297,22 +1437,21 @@ def _write_validated_loads_within_step(
                         )
                     elif elements_data and node_coords:
                         # Global-direction nodal forces, written after this block
-                        vector = _global_force_vector(load, domain_model)
-                        if vector is None:
+                        partial, without_axes = _load_to_nodal_forces(
+                            load,
+                            element_set_name,
+                            domain_model,
+                            element_sets or {},
+                            elements_data,
+                            node_coords,
+                        )
+                        if without_axes:
                             _warn_model(
                                 domain_model,
                                 f"Load {getattr(load, 'id', '?')} is given in the "
                                 "local axes of a member that has none; it is "
                                 "applied in global axes.",
                             )
-                            vector = _get_validated_force_vector(load)
-                        partial = _distributed_load_to_nodal_forces(
-                            element_set_name,
-                            vector,
-                            element_sets or {},
-                            elements_data,
-                            node_coords,
-                        )
                         for nid, fvec in partial.items():
                             entry = u1_extra_cloads.setdefault(nid, [0.0, 0.0, 0.0])
                             entry[0] += fvec[0]
@@ -1381,12 +1520,10 @@ def _write_validated_loads_within_step(
                 if elements_data and node_coords:
                     member_cloads: Dict[int, List[float]] = {}
                     for load in distributed_loads:
-                        vector = _global_force_vector(load, domain_model)
-                        if vector is None:
-                            vector = _get_validated_force_vector(load)
-                        partial = _distributed_load_to_nodal_forces(
+                        partial, _ = _load_to_nodal_forces(
+                            load,
                             element_set_name,
-                            vector,
+                            domain_model,
                             element_sets or {},
                             elements_data,
                             node_coords,

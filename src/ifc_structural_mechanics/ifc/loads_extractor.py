@@ -102,15 +102,23 @@ class LoadsExtractor:
         """
         self.logger.info("Extracting all structural loads")
         load_entities = []
+        listed = set()
 
-        # Get all IFC4 structural load entities
+        # Get all IFC4 structural load entities. A linear action is a curve
+        # action as well, and is listed once.
         for entity_type in [
             self.POINT_LOAD_TYPE,
             self.LINE_LOAD_TYPE,
             self.CURVE_LOAD_TYPE,
             self.AREA_LOAD_TYPE,
         ]:
-            entities = self._entities_of_type(entity_type)
+            entities = [
+                entity
+                for entity in self._entities_of_type(entity_type)
+                if getattr(entity, "GlobalId", None) not in listed
+            ]
+            listed.update(getattr(entity, "GlobalId", None) for entity in entities)
+            listed.discard(None)
             load_entities.extend(entities)
             self.logger.info(f"Found {len(entities)} {entity_type} entities")
 
@@ -393,6 +401,16 @@ class LoadsExtractor:
         applied_load = getattr(ifc_load, "AppliedLoad", None)
         if applied_load is None:
             raise ModelExtractionError("It has no AppliedLoad.")
+        for varying in (
+            "IfcStructuralLinearActionVarying",
+            "IfcStructuralPlanarActionVarying",
+        ):
+            # IFC2X3; the further values are not in AppliedLoad
+            if ifc_load.is_a(varying):
+                raise ModelExtractionError(
+                    f"It is an {varying}; the varying actions of IFC2X3 are not "
+                    "supported."
+                )
 
         # For structural point actions
         if ifc_load.is_a("IfcStructuralPointAction"):
@@ -434,21 +452,29 @@ class LoadsExtractor:
         elif ifc_load.is_a("IfcStructuralLinearAction") or ifc_load.is_a(
             "IfcStructuralCurveAction"
         ):
-            force_vector, is_per_length = self._extract_line_force_vector(applied_load)
-
-            # Apply appropriate unit scale
-            if is_per_length:
-                # Linear force (force/length): scale = force_scale / length_scale
-                scale = self.force_scale / self.length_scale
-            else:
-                # Concentrated force: scale = force_scale
-                scale = self.force_scale
-            force_vector = self._in_global_axes(
-                ifc_load, [f * scale for f in force_vector]
-            )
-
             # Extract start and end positions
             start_pos, end_pos = self._extract_load_line(ifc_load)
+            axis = np.array(end_pos, dtype=float) - np.array(start_pos, dtype=float)
+            length = float(np.linalg.norm(axis))
+
+            # Force per length: scale = force_scale / length_scale
+            scale = self.force_scale / self.length_scale
+            samples = [
+                (
+                    location * self.length_scale,
+                    self._per_true_length(
+                        ifc_load,
+                        self._in_global_axes(ifc_load, [f * scale for f in vector]),
+                        axis / length if length > 0 else axis,
+                    ),
+                )
+                for location, vector in self._extract_line_samples(
+                    ifc_load, applied_load, length / self.length_scale
+                )
+            ]
+            force_vector = [
+                float(np.mean([vector[i] for _, vector in samples])) for i in range(3)
+            ]
 
             # Calculate direction
             magnitude = np.array(force_vector, dtype=float)
@@ -468,6 +494,11 @@ class LoadsExtractor:
                 start_position=start_pos,
                 end_position=end_pos,
             )
+            if len(samples) > 1:
+                line_load.samples = [
+                    (location, np.array(vector, dtype=float))
+                    for location, vector in samples
+                ]
 
             # Extract member reference from AssignedToStructuralItem
             member_ref = self._get_member_reference(ifc_load)
@@ -576,68 +607,134 @@ class LoadsExtractor:
                         return element.GlobalId
         return None
 
-    def _extract_line_force_vector(self, applied_load) -> Tuple[List[float], bool]:
-        """
-        Extract force vector from a line load's applied load entity.
+    # Distributions of a curve action that are a list of samples
+    _SAMPLED_DISTRIBUTIONS = ("LINEAR", "POLYGONAL")
 
-        Handles multiple IFC load types:
-        - IfcStructuralLoadLinearForce: has LinearForceX/Y/Z (force per length)
-        - IfcStructuralLoadSingleForce: has ForceX/Y/Z (concentrated force)
-        - IfcStructuralLoadConfiguration: contains Values list of the above
+    def _extract_line_samples(
+        self, ifc_load, applied_load, length: float
+    ) -> List[Tuple[float, List[float]]]:
+        """The force per length of a curve action, where along its member.
+
+        A constant load is one value. A load that varies (``PredefinedType``
+        LINEAR or POLYGONAL) is an ``IfcStructuralLoadConfiguration``: values
+        with their locations, measured along the member from its start. The
+        load is linear between them and "the first and the last load item
+        define the extent of the load distribution", so it may cover part of
+        the member only.
 
         Args:
-            applied_load: IFC applied load entity
+            ifc_load: The curve action.
+            applied_load: Its ``AppliedLoad``.
+            length: Length of the member, in the file's unit.
 
         Returns:
-            Tuple of ([fx, fy, fz] in project units, is_per_length flag)
+            ``[(location, [fx, fy, fz])]`` in the file's units: one item with
+            location 0 for a load that is the same all along the member, else
+            two or more in ascending order of location.
+
+        Raises:
+            ModelExtractionError: For a distribution or a load type that is
+                not supported, and for samples that cannot be placed.
         """
-        # Handle IfcStructuralLoadConfiguration (wraps multiple load values).
-        # Average all values so that linearly-varying (trapezoidal) loads get
-        # the correct resultant rather than just using the value at one end.
-        if applied_load.is_a("IfcStructuralLoadConfiguration"):
-            values = list(getattr(applied_load, "Values", None) or [])
-            if not values:
-                raise ModelExtractionError("Its load configuration has no values.")
-            vectors = []
-            last_is_per_length = False
-            for v in values:
-                vec, ipl = self._extract_line_force_vector(v)
-                vectors.append(vec)
-                last_is_per_length = ipl
-            n = len(vectors)
-            avg = [sum(v[i] for v in vectors) / n for i in range(3)]
-            if any(not np.allclose(v, vectors[0]) for v in vectors):
-                self.warnings.append(
-                    "A load that varies along its member (an "
-                    "IfcStructuralLoadConfiguration with differing values) is "
-                    "applied as a uniform load of its mean value: the total is "
-                    "kept, its distribution is not."
+        distribution = getattr(ifc_load, "PredefinedType", None) or "CONST"
+        if not applied_load.is_a("IfcStructuralLoadConfiguration"):
+            if distribution != "CONST":
+                raise ModelExtractionError(
+                    f"Its distribution is {distribution}"
+                    + (
+                        ", which needs an IfcStructuralLoadConfiguration and has "
+                        f"an {applied_load.is_a()}."
+                        if distribution in self._SAMPLED_DISTRIBUTIONS
+                        else "; only CONST, LINEAR and POLYGONAL are supported."
+                    )
                 )
-            return avg, last_is_per_length
+            return [(0.0, self._linear_force(applied_load))]
 
-        # Handle IfcStructuralLoadLinearForce (force per unit length)
-        if hasattr(applied_load, "LinearForceX"):
-            self._refuse_moments(
-                applied_load, ("LinearMomentX", "LinearMomentY", "LinearMomentZ")
+        if distribution not in self._SAMPLED_DISTRIBUTIONS:
+            raise ModelExtractionError(
+                f"Its distribution is {distribution} with a list of values; only "
+                "LINEAR and POLYGONAL ones are supported."
             )
-            force_x = getattr(applied_load, "LinearForceX", 0.0) or 0.0
-            force_y = getattr(applied_load, "LinearForceY", 0.0) or 0.0
-            force_z = getattr(applied_load, "LinearForceZ", 0.0) or 0.0
-            return [force_x, force_y, force_z], True
+        values = list(getattr(applied_load, "Values", None) or [])
+        if len(values) < 2:
+            raise ModelExtractionError(
+                f"Its load configuration has {len(values)} value(s); a load that "
+                "varies needs two or more."
+            )
+        vectors = [self._linear_force(value) for value in values]
 
-        # Handle IfcStructuralLoadSingleForce (concentrated force)
-        if hasattr(applied_load, "ForceX"):
-            self._refuse_moments(applied_load, ("MomentX", "MomentY", "MomentZ"))
-            force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
-            force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
-            force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
-            return [force_x, force_y, force_z], False
+        locations = getattr(applied_load, "Locations", None)
+        if locations is None:
+            if len(values) != 2:
+                raise ModelExtractionError(
+                    f"Its load configuration has {len(values)} values and no "
+                    "Locations to say where along the member they are."
+                )
+            places = [0.0, length]
+        else:
+            if len(locations) != len(values) or any(len(at) != 1 for at in locations):
+                raise ModelExtractionError(
+                    "Its load configuration does not have one location along the "
+                    "member for each value."
+                )
+            places = [float(at[0]) for at in locations]
+        tolerance = 1e-6 * max(length, 1.0)
+        if any(b < a for a, b in zip(places, places[1:])):
+            raise ModelExtractionError(
+                f"The locations of its values are not in ascending order: {places}."
+            )
+        if places[0] < -tolerance or places[-1] > length + tolerance:
+            raise ModelExtractionError(
+                f"The locations of its values, {places[0]:g} to {places[-1]:g}, are "
+                f"not on its member, which is {length:g} long."
+            )
+        if places[-1] - places[0] <= tolerance:
+            raise ModelExtractionError(
+                f"Its values are all at one location, {places[0]:g}: it has no "
+                "length to act on."
+            )
 
-        raise ModelExtractionError(
-            f"Its applied load is an {applied_load.is_a()}; on a linear or curve "
-            "action only linear forces, single forces and configurations of "
-            "them are supported."
+        whole_member = places[0] <= tolerance and places[-1] >= length - tolerance
+        if whole_member and all(np.allclose(v, vectors[0]) for v in vectors):
+            return [(0.0, vectors[0])]
+        return list(zip(places, vectors))
+
+    def _linear_force(self, applied_load) -> List[float]:
+        """The three components of an ``IfcStructuralLoadLinearForce``."""
+        if not applied_load.is_a("IfcStructuralLoadLinearForce"):
+            raise ModelExtractionError(
+                f"Its applied load is an {applied_load.is_a()}; on a linear or "
+                "curve action only linear forces, and configurations of them, "
+                "are supported."
+            )
+        self._refuse_moments(
+            applied_load, ("LinearMomentX", "LinearMomentY", "LinearMomentZ")
         )
+        return [
+            float(getattr(applied_load, name, None) or 0.0)
+            for name in ("LinearForceX", "LinearForceY", "LinearForceZ")
+        ]
+
+    def _per_true_length(self, ifc_load, vector: List[float], axis) -> List[float]:
+        """Turn a load given per projected length into one per true length.
+
+        With ``ProjectedOrTrue`` PROJECTED_LENGTH (snow on a rafter) the value
+        is per length of the member as seen along the load. Only a load in
+        global directions can be given that way.
+        """
+        if getattr(ifc_load, "ProjectedOrTrue", None) != "PROJECTED_LENGTH":
+            return vector
+        if self._coordinate_system(ifc_load) == "local":
+            raise ModelExtractionError(
+                "It is given per projected length and in local coordinates; only "
+                "a load in global directions can be."
+            )
+        force = np.array(vector, dtype=float)
+        size = float(np.linalg.norm(force))
+        if size < 1e-30:
+            return vector
+        along = float(np.dot(force / size, axis))
+        return [float(v) for v in force * np.sqrt(max(0.0, 1.0 - along**2))]
 
     def _get_surface_reference(self, ifc_load) -> str:
         """

@@ -7,6 +7,7 @@ and match the IFC specification for load hierarchies.
 
 from unittest.mock import MagicMock, patch
 
+import ifcopenshell
 import numpy as np
 import pytest
 
@@ -17,6 +18,7 @@ from ifc_structural_mechanics.domain.load import (
 )
 from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
 from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
+from tests.helpers import PLANE_PIN, plane_model
 
 
 class TestLoadsExtractor:
@@ -75,13 +77,17 @@ class TestLoadsExtractor:
         self.line_load.MomentZ = 0.0
 
         # Set up AppliedLoad for the line_load to handle extraction more robustly
-        # spec: a bare mock has every attribute, LinearForceX included
-        self.line_load_applied = MagicMock(spec=["ForceX", "ForceY", "ForceZ", "is_a"])
-        self.line_load_applied.ForceX = 0.0
-        self.line_load_applied.ForceY = 0.0
-        self.line_load_applied.ForceZ = -5000.0
-        self.line_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
+        # spec: a bare mock has every attribute, the moments included
+        self.line_load_applied = MagicMock(
+            spec=["LinearForceX", "LinearForceY", "LinearForceZ", "is_a"]
+        )
+        self.line_load_applied.LinearForceX = 0.0
+        self.line_load_applied.LinearForceY = 0.0
+        self.line_load_applied.LinearForceZ = -5000.0
+        self.line_load_applied.is_a = lambda x: x == "IfcStructuralLoadLinearForce"
         self.line_load.AppliedLoad = self.line_load_applied
+        self.line_load.PredefinedType = "CONST"
+        self.line_load.ProjectedOrTrue = "TRUE_LENGTH"
 
         # Create mock area load (IFC4 style)
         self.area_load = MagicMock()
@@ -471,68 +477,151 @@ class TestGravityLoadGroupInclusion:
 
 
 # ---------------------------------------------------------------------------
-# IfcStructuralLoadConfiguration averaging
+# Loads along a member: constant, varying, on part of it
 # ---------------------------------------------------------------------------
 
 
-class TestLoadConfigurationAveraging:
-    """_extract_line_force_vector must average all Values in a Configuration."""
+class TestLoadsAlongAMember:
+    """Curve actions of a real file: a 4 m beam, and a rafter rising 3 in 4."""
 
-    def _make_extractor(self):
-        mock_ifc = MagicMock()
-        mock_ifc.by_type.return_value = []
-        return LoadsExtractor(mock_ifc)
+    def _load(self, tmp_path, nodes=None, **line_load):
+        nodes = nodes or {"A": (0, 0), "B": (4, 0)}
+        path = plane_model(
+            str(tmp_path / "model.ifc"),
+            nodes=nodes,
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_PIN},
+            loads={},
+            hinged=False,
+            line_loads={("A", "B"): line_load},
+        )
+        extractor = LoadsExtractor(ifcopenshell.open(path))
+        (load,) = extractor.extract_all_loads()
+        assert extractor.warnings == []
+        return load
 
-    def _make_linear_force(self, fx=0.0, fy=0.0, fz=0.0):
-        v = MagicMock()
-        v.is_a = lambda x: x == "IfcStructuralLoadLinearForce"
-        v.LinearForceX = fx
-        v.LinearForceY = fy
-        v.LinearForceZ = fz
-        # must NOT have ForceX so _extract_line_force_vector takes the Linear branch
-        del v.ForceX
-        return v
+    def _samples(self, load):
+        return [(at, vector.tolist()) for at, vector in load.samples]
 
-    def _make_config(self, values):
-        cfg = MagicMock()
-        cfg.is_a = lambda x: x == "IfcStructuralLoadConfiguration"
-        cfg.Values = values
-        return cfg
+    def test_constant_load_has_no_samples(self, tmp_path):
+        load = self._load(tmp_path, values=[(0.0, -1000.0)])
+        assert load.samples is None
+        assert load.magnitude.tolist() == [0.0, 0.0, -1000.0]
 
-    def test_uniform_load_unchanged(self):
-        ext = self._make_extractor()
-        v = self._make_linear_force(fz=-1000.0)
-        cfg = self._make_config([v])
-        result, is_per_length = ext._extract_line_force_vector(cfg)
-        assert is_per_length is True
-        assert abs(result[2] - (-1000.0)) < 1e-9
+    def test_load_that_varies_keeps_its_values_where_they_are(self, tmp_path):
+        load = self._load(tmp_path, values=[(0.0, 0.0), (0.0, -3000.0)])
+        assert self._samples(load) == [(0.0, [0, 0, 0]), (4.0, [0, 0, -3000.0])]
+        assert load.start_position == (0.0, 0.0, 0.0)
+        assert load.end_position == (4.0, 0.0, 0.0)
 
-    def test_trapezoidal_averages_two_ends(self):
-        ext = self._make_extractor()
-        v1 = self._make_linear_force(fz=-1000.0)
-        v2 = self._make_linear_force(fz=-2000.0)
-        cfg = self._make_config([v1, v2])
-        result, is_per_length = ext._extract_line_force_vector(cfg)
-        assert is_per_length is True
-        assert abs(result[2] - (-1500.0)) < 1e-9
-        # The distribution is lost, and the user is told so
-        assert any("varies along its member" in w for w in ext.warnings)
+    def test_load_on_part_of_the_member(self, tmp_path):
+        """The first and the last location are where the load starts and ends."""
+        load = self._load(
+            tmp_path, values=[(0.0, -1000.0), (0.0, -1000.0)], locations=[2.0, 4.0]
+        )
+        assert self._samples(load) == [
+            (2.0, [0, 0, -1000.0]),
+            (4.0, [0, 0, -1000.0]),
+        ]
 
-    def test_uniform_configuration_raises_no_warning(self):
-        ext = self._make_extractor()
-        values = [self._make_linear_force(fz=-1000.0) for _ in range(2)]
-        ext._extract_line_force_vector(self._make_config(values))
-        assert ext.warnings == []
+    def test_same_value_all_along_is_a_constant_load(self, tmp_path):
+        load = self._load(
+            tmp_path, values=[(0.0, -1000.0), (0.0, -1000.0)], locations=[0.0, 4.0]
+        )
+        assert load.samples is None
 
-    def test_empty_config_is_an_error(self):
-        ext = self._make_extractor()
-        cfg = self._make_config([])
-        with pytest.raises(ModelExtractionError, match="no values"):
-            ext._extract_line_force_vector(cfg)
+    def test_several_stretches(self, tmp_path):
+        load = self._load(
+            tmp_path,
+            values=[(0.0, 0.0), (0.0, -600.0), (500.0, 0.0)],
+            locations=[0.0, 1.0, 3.0],
+            distribution="POLYGONAL",
+        )
+        assert self._samples(load) == [
+            (0.0, [0, 0, 0]),
+            (1.0, [0, 0, -600.0]),
+            (3.0, [500.0, 0, 0]),
+        ]
 
-    def test_three_point_load_averages_correctly(self):
-        ext = self._make_extractor()
-        vals = [self._make_linear_force(fz=fz) for fz in [-0.0, -300.0, -600.0]]
-        cfg = self._make_config(vals)
-        result, _ = ext._extract_line_force_vector(cfg)
-        assert abs(result[2] - (-300.0)) < 1e-9
+    def test_load_per_projected_length(self, tmp_path):
+        """Snow on a rafter rising 3 in 4: 0.8 of the value per true length."""
+        rafter = {"A": (0, 0), "B": (4, 3)}
+        load = self._load(tmp_path, rafter, values=[(0.0, -1000.0)], projected=True)
+        assert load.magnitude.tolist() == pytest.approx([0.0, 0.0, -800.0])
+        load = self._load(tmp_path, rafter, values=[(0.0, -1000.0)])
+        assert load.magnitude.tolist() == [0.0, 0.0, -1000.0]
+
+    @pytest.mark.parametrize(
+        "line_load, message",
+        [
+            (
+                dict(values=[(0, -1), (0, -2), (0, -3)]),
+                "3 values and no Locations",
+            ),
+            (
+                dict(values=[(0, -1), (0, -2)], locations=[3.0, 1.0]),
+                "not in ascending order",
+            ),
+            (
+                dict(values=[(0, -1), (0, -2)], locations=[1.0, 5.0]),
+                "not on its member, which is 4 long",
+            ),
+            (
+                dict(values=[(0, -1), (0, -2)], locations=[2.0, 2.0]),
+                "all at one location",
+            ),
+            (
+                dict(values=[(0, -1), (0, -2)], distribution="DISCRETE"),
+                "DISCRETE with a list of values",
+            ),
+            (
+                dict(values=[(0, -1), (0, -2)], distribution="PARABOLA"),
+                "PARABOLA with a list of values",
+            ),
+            (
+                dict(values=[(0, -1)], projected=True, local=True),
+                "per projected length and in local coordinates",
+            ),
+        ],
+    )
+    def test_what_cannot_be_applied_as_given_is_an_error(
+        self, tmp_path, line_load, message
+    ):
+        with pytest.raises(ModelExtractionError, match=message):
+            self._load(tmp_path, **line_load)
+
+    def test_distribution_that_needs_one_value_and_is_not_constant(self, tmp_path):
+        """A sine half wave was once applied as a constant load of its peak."""
+        path = plane_model(
+            str(tmp_path / "model.ifc"),
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_PIN},
+            loads={},
+            hinged=False,
+            line_loads={("A", "B"): dict(values=[(0.0, -1000.0)])},
+        )
+        model = ifcopenshell.open(path)
+        (action,) = model.by_type("IfcStructuralLinearAction")
+        action.PredefinedType = "SINUS"
+        with pytest.raises(ModelExtractionError, match="Its distribution is SINUS"):
+            LoadsExtractor(model).extract_all_loads()
+
+    def test_point_force_on_a_curve_action_is_an_error(self, tmp_path):
+        """It was once applied as that many newtons per metre."""
+        path = plane_model(
+            str(tmp_path / "model.ifc"),
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_PIN},
+            loads={},
+            hinged=False,
+            line_loads={("A", "B"): dict(values=[(0.0, -1000.0)])},
+        )
+        model = ifcopenshell.open(path)
+        (action,) = model.by_type("IfcStructuralLinearAction")
+        action.AppliedLoad = model.create_entity(
+            "IfcStructuralLoadSingleForce", None, 0.0, 0.0, -1000.0
+        )
+        with pytest.raises(ModelExtractionError, match="only linear forces"):
+            LoadsExtractor(model).extract_all_loads()

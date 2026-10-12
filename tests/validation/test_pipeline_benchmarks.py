@@ -2272,19 +2272,21 @@ class TestSupportReactions:
                 summed = sum(s["by_load_case"][case][key] for s in data["supports"])
                 assert summed == pytest.approx(total[key], abs=1e-6 * scale)
 
-    def test_portal_feet_mirror_each_other(self, tmp_path):
-        """A symmetric frame under a symmetric load: equal thrusts and moments."""
+    def test_portal_feet_balance_its_load(self, tmp_path):
+        """portal_01 is loaded on the right half of its beam only.
+
+        Equal and opposite thrusts, and moments about the left foot: the
+        load acts three quarters of the way across.
+        """
         data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)
         left, right = sorted(data["supports"], key=lambda s: s["position_m"][0])
         (a,), (b,) = left["by_load_case"].values(), right["by_load_case"].values()
-        assert a["fz_N"] == pytest.approx(b["fz_N"], rel=1e-3)
         assert a["fx_N"] == pytest.approx(-b["fx_N"], rel=1e-3)
         assert a["fx_N"] > 0  # the feet are pushed inwards
-        assert a["my_Nm"] == pytest.approx(-b["my_Nm"], rel=1e-3)
-        # Moments about the left foot: the right foot's lift balances the load
+        assert b["fz_N"] > 3 * a["fz_N"]
         span = right["position_m"][0] - left["position_m"][0]
         load = a["fz_N"] + b["fz_N"]
-        assert a["my_Nm"] + b["my_Nm"] - span * b["fz_N"] + load * span / 2 == (
+        assert a["my_Nm"] + b["my_Nm"] - span * b["fz_N"] + load * 0.75 * span == (
             pytest.approx(0.0, abs=FORCE_TOLERANCE * load * span)
         )
 
@@ -2323,6 +2325,155 @@ class TestSupportReactions:
         assert globally["fz_N"] > 0.5 * data["global_reactions"]["total"]["fz_N"]
 
 
+POUND_FORCE = 4.4482216152605
+INCH = 0.0254
+
+
+def _portal_reactions_in_the_file() -> dict:
+    """The reactions portal_01.ifc holds for its own load case.
+
+    Returns:
+        ``{x of the foot in m: (fx, my, fz)}`` in N and N·m.
+    """
+    reactions = {}
+    model = ifcopenshell.open(os.path.join(IFC_DIR, "portal_01.ifc"))
+    for reaction in model.by_type("IfcStructuralPointReaction"):
+        result = reaction.AppliedLoad
+        if not result.is_a("IfcStructuralLoadSingleForce"):
+            continue  # the displacement of the same node
+        (relation,) = reaction.AssignedToStructuralItem
+        (vertex,) = relation.RelatingElement.Representation.Representations[0].Items
+        reactions[round(vertex.VertexGeometry.Coordinates[0] * INCH, 3)] = (
+            result.ForceX * POUND_FORCE,
+            result.MomentY * POUND_FORCE * INCH,
+            result.ForceZ * POUND_FORCE,
+        )
+    return reactions
+
+
+class TestPortalAgainstTheResultsInItsFile:
+    """portal_01: 100 lbf/in on the right half of the beam of a W10X30 portal.
+
+    The load is an ``IfcStructuralCurveAction`` whose two values are at 96
+    and 192 in along the 192 in beam. Their locations were ignored and the
+    load put on the whole beam: 19 200 lbf for 9600, shared equally by the
+    feet (``aiz.58``). The file also holds the results of the program that
+    wrote it, which nothing compared with ours.
+
+    Its vertical reactions are ours. Its thrust is 1422.7 lbf, which a plane
+    frame with shear deformation gives for a shear area of 0.79 of the
+    section; with the area of the web, which is what this library takes for
+    an I section, the same frame gives 1386.1 lbf, and without shear
+    deformation 1454.9.
+    """
+
+    THRUST_WITH_THE_SHEAR_AREA_OF_THE_WEB = 1386.07 * POUND_FORCE
+
+    def test_reactions(self, tmp_path):
+        _needs_solver_reactions()
+        data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)
+        expected = _portal_reactions_in_the_file()
+        assert sorted(expected) == [0.0, 4.877]
+        for x, (thrust, moment, lift) in expected.items():
+            (reaction,) = _support_at(data, (x, 0.0, 0.0))["by_load_case"].values()
+            assert reaction["fz_N"] == pytest.approx(lift, rel=1e-3)
+            sign = 1.0 if thrust > 0 else -1.0
+            assert reaction["fx_N"] == pytest.approx(
+                sign * self.THRUST_WITH_THE_SHEAR_AREA_OF_THE_WEB, rel=0.01
+            )
+            # The shear area the other program took: 2 % in the thrust, and
+            # three times that in the moment at a foot, a difference of two
+            # larger ones
+            assert reaction["fx_N"] == pytest.approx(thrust, rel=0.03)
+            assert reaction["my_Nm"] == pytest.approx(moment, rel=0.08)
+
+    def test_load_is_what_the_file_says(self, tmp_path):
+        data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)
+        (total,) = data["global_reactions"]["by_load_case"].values()
+        assert total["applied_load_N"] == pytest.approx(
+            [0.0, 0.0, -9600.0 * POUND_FORCE], abs=0.1
+        )
+
+
+class TestLoadThatVariesAlongABeam:
+    """A 4 m simply supported beam, 0.1 m square, under loads that vary.
+
+    These were applied as constant loads of their mean value over the whole
+    member, with a warning: the right total in the wrong place.
+    """
+
+    PEAK, SPAN, SIDE = 3000.0, 4.0, 0.1
+
+    def _beam(self, tmp_path, **line_load):
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={},
+            hinged=False,
+            mesh_size=0.25,
+            line_loads={("A", "B"): line_load},
+        )
+        assert not [w for w in warnings if "varies along its member" in w]
+        lifts = [
+            _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]["fz_N"]
+            for x in (0.0, self.SPAN)
+        ]
+        (member,) = data["members"]
+        return data, lifts, member["envelope"]["section_forces"]
+
+    def test_triangular_load(self, tmp_path):
+        """Nothing at A rising to w at B: w L / 6 and w L / 3 on the supports,
+        w L² / (9 √3) at L / √3, and 0.006522 w L⁴ / E I at 0.5193 L."""
+        w, span = self.PEAK, self.SPAN
+        data, lifts, forces = self._beam(tmp_path, values=[(0.0, 0.0), (0.0, -w)])
+        assert lifts == pytest.approx([w * span / 6, w * span / 3], rel=1e-4)
+        assert forces["max_Mf2_Nm"] == pytest.approx(
+            w * span**2 / (9 * math.sqrt(3)), rel=FORCE_TOLERANCE
+        )
+        stiffness = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        x = 0.5193 * span
+        moment_there = w * span * x / 6 * (1 - (x / span) ** 2)
+        expected = 0.006522 * w * span**4 / stiffness + moment_there / shear
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.01)
+
+    def test_load_on_part_of_the_beam(self, tmp_path):
+        """w from 1.9 to 3.9 m, which starts and ends inside an element.
+
+        2 w acting at 2.9 m: 0.55 w and 1.45 w on the supports. The shear
+        is zero 1.55 m from B, where the moment is 1.19625 w.
+        """
+        w = self.PEAK
+        _, lifts, forces = self._beam(
+            tmp_path, values=[(0.0, -w), (0.0, -w)], locations=[1.9, 3.9]
+        )
+        assert lifts == pytest.approx([0.55 * w, 1.45 * w], rel=1e-4)
+        assert forces["max_Mf2_Nm"] == pytest.approx(1.19625 * w, rel=FORCE_TOLERANCE)
+        assert forces["max_Vf2_N"] == pytest.approx(1.45 * w, rel=FORCE_TOLERANCE)
+
+    def test_snow_on_a_rafter(self, tmp_path):
+        """A load per projected length on a rafter rising 3 in 4.
+
+        w per metre of plan, 4 m of plan: 4 w on the supports, where a load
+        per true length would put 5 w.
+        """
+        w = self.PEAK
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 3)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={},
+            hinged=False,
+            mesh_size=0.25,
+            line_loads={("A", "B"): dict(values=[(0.0, -w)], projected=True)},
+        )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fz_N"] == pytest.approx(4 * w, rel=1e-5)
+
+
 class TestSolverReactionsAreChecked:
     """CalculiX 2.21 misreports the force at a support that holds a rotation.
 
@@ -2343,14 +2494,16 @@ class TestSolverReactionsAreChecked:
             return result, json.load(fh)
 
     def test_reactions_are_right_whatever_the_solver_says(self, tmp_path):
-        """Each foot of the portal carries half the load, to 1 %."""
+        """Each foot carries what the results in the file say, to 1 %."""
         _, data = self._portal(tmp_path)
         (total,) = data["global_reactions"]["by_load_case"].values()
         load = -total["applied_load_N"][2]
-        assert load == pytest.approx(85405.86, rel=1e-6)
+        assert load == pytest.approx(9600.0 * POUND_FORCE, rel=1e-6)
+        expected = _portal_reactions_in_the_file()
         for support in data["supports"]:
             (reaction,) = support["by_load_case"].values()
-            assert reaction["fz_N"] == pytest.approx(load / 2, rel=FORCE_TOLERANCE)
+            _, _, lift = expected[round(support["position_m"][0], 3)]
+            assert reaction["fz_N"] == pytest.approx(lift, rel=FORCE_TOLERANCE)
 
     def test_the_results_say_where_the_forces_come_from(self, tmp_path):
         result, data = self._portal(tmp_path)

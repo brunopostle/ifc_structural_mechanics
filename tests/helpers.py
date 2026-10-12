@@ -50,6 +50,7 @@ def plane_model(
     release=PLANE_PIN,
     load_y=0.0,
     support_axes=None,
+    line_loads=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -71,6 +72,15 @@ def plane_model(
         support_axes: ``{name: (z axis, x axis)}``, the axes the condition of
             a support is given in (its ``ConditionCoordinateSystem``); the
             global ones when left out.
+        line_loads: ``{(name, name): {...}}``, a load along that member, in
+            the same load case. ``values`` are ``[(fx, fz)]`` in N/m: one for a
+            constant load (an ``IfcStructuralLinearAction``), more for one
+            that varies (an ``IfcStructuralCurveAction`` with a load
+            configuration), at ``locations`` along the member from its first
+            joint, which may be left out for two values. Further keys:
+            ``distribution`` (LINEAR unless given), ``projected`` and
+            ``local`` (per projected length; in the member's own axes, the
+            values then being ``(fx, fz)`` there).
 
     Returns:
         *path*.
@@ -208,6 +218,7 @@ def plane_model(
         )
         products.append(joints[name])
     bars = []
+    bar_of = {}
     for a, b in members:
         bar = create(
             "IfcStructuralCurveMember",
@@ -236,6 +247,7 @@ def plane_model(
                 None,
             )
         bars.append(bar)
+        bar_of[(a, b)] = bar
         products.append(bar)
     create("IfcRelAssociatesMaterial", guid(), None, None, None, bars, profile_set)
     create("IfcRelAssignsToGroup", guid(), None, None, None, products, None, analysis)
@@ -284,6 +296,47 @@ def plane_model(
             None,
             None,
             joints[name],
+            action,
+        )
+        actions.append(action)
+    for ends, load in (line_loads or {}).items():
+        forces = [
+            create("IfcStructuralLoadLinearForce", None, float(fx), 0.0, float(fz))
+            for fx, fz in load["values"]
+        ]
+        varies = len(forces) > 1
+        locations = load.get("locations")
+        action = create(
+            "IfcStructuralCurveAction" if varies else "IfcStructuralLinearAction",
+            guid(),
+            None,
+            f"Q{ends[0]}{ends[1]}",
+            None,
+            None,
+            None,
+            None,
+            (
+                create(
+                    "IfcStructuralLoadConfiguration",
+                    None,
+                    forces,
+                    [[float(at)] for at in locations] if locations else None,
+                )
+                if varies
+                else forces[0]
+            ),
+            "LOCAL_COORDS" if load.get("local") else "GLOBAL_COORDS",
+            None,
+            "PROJECTED_LENGTH" if load.get("projected") else "TRUE_LENGTH",
+            load.get("distribution", "LINEAR") if varies else "CONST",
+        )
+        create(
+            "IfcRelConnectsStructuralActivity",
+            guid(),
+            None,
+            None,
+            None,
+            bar_of[ends],
             action,
         )
         actions.append(action)

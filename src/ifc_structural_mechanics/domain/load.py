@@ -5,7 +5,7 @@ This module contains the domain model classes for representing loads, load group
 and load combinations in structural analysis.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -226,6 +226,10 @@ class LineLoad(Load):
             self.end_position = end_position
 
         self.distribution = distribution
+        # A load that varies along its member, or acts on part of it:
+        # [(distance from start_position in metres, force per length)], linear
+        # between them and nothing outside. ``magnitude`` is then their mean.
+        self.samples: Optional[List[Tuple[float, np.ndarray]]] = None
         self._explicit_start_magnitude = start_magnitude is not None
         self._explicit_end_magnitude = end_magnitude is not None
 
@@ -332,6 +336,12 @@ class LineLoad(Load):
             result["end_position"] = self.end_position.tolist()
         else:
             result["end_position"] = self.end_position
+
+        if self.samples:
+            result["samples"] = [
+                [float(location), np.asarray(vector, dtype=float).tolist()]
+                for location, vector in self.samples
+            ]
 
         if self.distribution == "linear":
             if isinstance(self.start_magnitude, np.ndarray):

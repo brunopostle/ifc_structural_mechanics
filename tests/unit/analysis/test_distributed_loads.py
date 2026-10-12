@@ -8,6 +8,7 @@ import pytest
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     _distributed_load_to_nodal_forces,
     _global_force_vector,
+    _varying_line_load_to_nodal_forces,
     _write_validated_loads_within_step,
 )
 from ifc_structural_mechanics.analysis.results_parser import ResultsParser
@@ -74,6 +75,93 @@ class TestNodalShares:
 
     def test_zero_load_writes_nothing(self):
         assert _forces({"type": "B31", "nodes": [1, 2]}, vector=(0, 0, 0)) == {}
+
+
+# A 2 m beam along X: one quadratic element, or two linear ones
+QUADRATIC = {1: {"type": "B32R", "nodes": [1, 3, 2]}}
+LINEAR = {1: {"type": "B31", "nodes": [1, 3]}, 2: {"type": "B31", "nodes": [3, 2]}}
+DOWN = np.array([0.0, 0.0, -1.0])
+
+
+def _varying(samples, elements=None, start=(0.0, 0.0, 0.0), end=(2.0, 0.0, 0.0)):
+    elements = elements or QUADRATIC
+    return _varying_line_load_to_nodal_forces(
+        "SET",
+        [(at, value * DOWN) for at, value in samples],
+        start,
+        end,
+        {"SET": list(elements)},
+        elements,
+        NODES,
+    )
+
+
+def _moment_about_the_start(cloads):
+    return sum(NODES[node][0] * force[2] for node, force in cloads.items())
+
+
+class TestLoadThatVariesAlongItsMember:
+    """Nodal forces of a load given by samples: linear between, none outside."""
+
+    def test_constant_samples_are_the_uniform_load(self):
+        for elements in (QUADRATIC, LINEAR):
+            varying = _varying([(0.0, 10.0), (2.0, 10.0)], elements)
+            uniform = _distributed_load_to_nodal_forces(
+                "SET", 10.0 * DOWN, {"SET": list(elements)}, elements, NODES
+            )
+            assert varying.keys() == uniform.keys()
+            for node in uniform:
+                assert varying[node] == pytest.approx(uniform[node])
+
+    def test_triangular_load_on_a_quadratic_element(self):
+        """0 to 30 N/m over 2 m: nothing at the start, 20 and 10 N further on."""
+        cloads = _varying([(0.0, 0.0), (2.0, 30.0)])
+        assert 1 not in cloads
+        assert cloads[3][2] == pytest.approx(-20.0)
+        assert cloads[2][2] == pytest.approx(-10.0)
+
+    def test_triangular_load_on_linear_elements(self):
+        """Its total, and its moment: the resultant is two thirds along."""
+        cloads = _varying([(0.0, 0.0), (2.0, 30.0)], LINEAR)
+        assert _total(cloads)[2] == pytest.approx(-30.0)
+        assert _moment_about_the_start(cloads) == pytest.approx(-30.0 * 4 / 3)
+
+    @pytest.mark.parametrize("elements", [QUADRATIC, LINEAR])
+    def test_load_on_part_of_the_member_starting_inside_an_element(self, elements):
+        """10 N/m from 0.5 to 1.7 m: 12 N, acting at 1.1 m."""
+        cloads = _varying([(0.5, 10.0), (1.7, 10.0)], elements)
+        assert _total(cloads)[2] == pytest.approx(-12.0)
+        assert _moment_about_the_start(cloads) == pytest.approx(-12.0 * 1.1)
+
+    def test_stretches_with_a_step_between_them(self):
+        """Two samples at one place: 10 N/m up to 1 m, 40 N/m after it."""
+        cloads = _varying([(0.0, 10.0), (1.0, 10.0), (1.0, 40.0), (2.0, 40.0)], LINEAR)
+        assert cloads[1][2] == pytest.approx(-5.0)
+        assert cloads[3][2] == pytest.approx(-25.0)
+        assert cloads[2][2] == pytest.approx(-20.0)
+
+    def test_locations_are_measured_from_the_start_of_the_load_line(self):
+        """Whichever way the elements happen to run."""
+        reversed_elements = {1: {"type": "B32R", "nodes": [2, 3, 1]}}
+        cloads = _varying([(0.0, 0.0), (2.0, 30.0)], reversed_elements)
+        assert cloads[2][2] == pytest.approx(-10.0)
+        cloads = _varying(
+            [(0.0, 0.0), (2.0, 30.0)], start=(2.0, 0.0, 0.0), end=(0.0, 0.0, 0.0)
+        )
+        assert cloads[1][2] == pytest.approx(-10.0)
+        assert 2 not in cloads
+
+    def test_direction_may_change_along_the_member(self):
+        cloads = _varying_line_load_to_nodal_forces(
+            "SET",
+            [(0.0, np.array([6.0, 0.0, 0.0])), (2.0, np.array([0.0, 0.0, -6.0]))],
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            {"SET": [1]},
+            QUADRATIC,
+            NODES,
+        )
+        assert _total(cloads) == pytest.approx([6.0, 0.0, -6.0])
 
 
 def _beam_model(load):
@@ -157,6 +245,36 @@ class TestStepWriter:
         load = _line_load((0.0, 0.0, -1000.0))
         assert _global_force_vector(load, _beam_model(load)) == pytest.approx(
             [0.0, 0.0, -1000.0]
+        )
+
+    def test_load_with_samples_is_written_from_them(self):
+        load = _line_load((0.0, 0.0, -500.0))
+        load.samples = [(1.0, np.array([0.0, 0.0, -1000.0]))] * 2
+        load.samples[1] = (2.0, np.array([0.0, 0.0, -1000.0]))
+        text = _written(_beam_model(load))
+
+        cload = text.split("*CLOAD\n")[1].strip().splitlines()
+        assert sum(float(line.split(", ")[2]) for line in cload) == pytest.approx(
+            -1000.0
+        )
+
+    def test_samples_in_member_axes_are_rotated(self):
+        load = _line_load((0.0, 0.0, -500.0))
+        load.samples = [
+            (0.0, np.array([0.0, 0.0, 0.0])),
+            (2.0, np.array([0.0, 0.0, -1000.0])),
+        ]
+        load.coordinate_system = "local"
+        model = _beam_model(load)
+        model.get_member("beam").local_axis = (
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, -1.0),
+            (0.0, 1.0, 0.0),
+        )
+        cload = _written(model).split("*CLOAD\n")[1].strip().splitlines()
+        assert {line.split(", ")[1] for line in cload} == {"2"}
+        assert sum(float(line.split(", ")[2]) for line in cload) == pytest.approx(
+            -1000.0
         )
 
     def test_area_load_goes_through_the_same_path(self):

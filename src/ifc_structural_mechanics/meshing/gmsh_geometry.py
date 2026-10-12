@@ -571,6 +571,40 @@ class GmshGeometryConverter:
 
         return seeded
 
+    def _seed_load_points(self, domain_model: StructuralModel) -> List[int]:
+        """Add Gmsh points where a load along a curve member starts, ends or turns.
+
+        A line load given by samples (``LineLoad.samples``) may start part
+        of the way along its member and change slope at each sample. The
+        shear force has a kink there, which an element cannot follow inside
+        itself; with a node at each sample the nodal forces are those of a
+        load that is linear over every element.
+
+        Returns:
+            List of Gmsh point tags to pass as tools to fragment().
+        """
+        seeded: List[int] = []
+        loads = [load for group in domain_model.load_groups for load in group.loads]
+        for member in domain_model.members:
+            loads.extend(getattr(member, "loads", None) or [])
+        for load in loads:
+            samples = getattr(load, "samples", None)
+            if not samples:
+                continue
+            start = np.array(load.start_position, dtype=float)
+            end = np.array(load.end_position, dtype=float)
+            length = float(np.linalg.norm(end - start))
+            if length < 1e-9:
+                continue
+            for location, _ in samples:
+                position = start + (end - start) * float(location) / length
+                if not self._point_on_segment(position, start, end):
+                    continue  # an end of the member has its point already
+                if self._coord_key(*position) in self._curve_point_registry:
+                    continue
+                seeded.append(self._get_or_create_point(*position, dim=1))
+        return seeded
+
     @staticmethod
     def _point_in_planar_polygon(
         point: np.ndarray, polygon: np.ndarray, tol: float = 1e-4
@@ -925,6 +959,7 @@ class GmshGeometryConverter:
         # interiors so that fragment() splits the curve there and the mesher
         # places a node at the exact support location.
         support_point_tags = self._seed_support_points(domain_model)
+        support_point_tags += self._seed_load_points(domain_model)
         surface_point_tags = self._seed_surface_connection_points(domain_model)
         crossing_curve_tags, crossing_surface_tags = self._seed_crossings(domain_model)
         support_point_tags += crossing_curve_tags
