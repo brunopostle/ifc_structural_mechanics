@@ -170,6 +170,7 @@ Runs CalculiX and processes results:
 - `output_parser.py`: Parses CalculiX output for errors/warnings and convergence
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
 - `superposition.py`: Results of a load combination from those of its load cases (see Load steps)
+- `plane_structure.py`: Recognises plane trusses and frames and what holds them in their plane (see Connections)
 
 #### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
 Interactive 3D result visualization using PyVista:
@@ -622,7 +623,24 @@ rotational degrees of freedom**. This drives everything about joints:
   (`_hold_spinning_members()`): rotation about its axis is restrained at one
   of its supports, with a warning. Ball supports at both ends of a beam are
   the usual cause. Members along a skew axis, or with no support of their own,
-  are only reported.
+  are only reported. A straight run of members joined rigidly end to end is
+  not seen at all: each counts as held by the next.
+- **A plane truss or frame that can leave its plane is held in it**
+  (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
+  `plane_normal()` recognises one (curve members only, in a plane parallel to
+  two global axes, loads and gravity in it, section axes in and across it; a
+  straight run takes the plane of its loads) and `out_of_plane_freedoms()`
+  counts what nothing restrains, with members and joints as rigid bodies tied
+  by the file's connections and supports. If any, every node gets the
+  translation across the plane restrained (a `*BOUNDARY` of its own, not in
+  `ALL_BC_NODES`, so not in the reactions), `spinning_members()` says where
+  to hold what can still spin, and one warning reports it. Linear static
+  only: buckling out of the plane must stay possible. A plane model that
+  stands up (`beam_01`, `portal_01`) is untouched. **Never restrain a
+  rotation at a node inside a member in bending**: CalculiX's rotational
+  restraint of a beam node is approximate, and doing so moved a portal's
+  moments by 3% and made them unequal. Hold rotations only at a pinned end
+  or at a support, as `_hold_spinning_members()` does.
 - **A connection is a support only if it has an `AppliedCondition`**
   (`stiffness_properties` in the domain model). Without one it restrains
   nothing, however many members it joins and whatever its type.

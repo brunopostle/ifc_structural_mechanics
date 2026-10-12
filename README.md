@@ -150,6 +150,15 @@ the ones a user needs to know before trusting a result.
   about both axes; no shear, torsion or buckling). A `utilisation_ratio` is
   that stress over the yield stress, for materials whose IFC definition has a
   `YieldStress`.
+- **Plane trusses and frames.** A structure drawn and loaded in one plane
+  (parallel to two global axes) and supported as its textbook picture is, in
+  that plane only and with pinned joints, is a mechanism in three dimensions.
+  It is recognised, held in its plane and against bars spinning, and a
+  warning says so; nothing in the plane is affected. A pin-jointed truss
+  gives the bar forces of the method of joints to four figures and the
+  virtual-work deflection to 0.5%; a portal gives its hand moments to 0.2%
+  and its sway to 0.5%. Before, the same truss came out with 19 times its
+  deflection.
 - **Load combinations.** Every `LOAD_COMBINATION` group of the file is
   reported with the factor of each load case in it
   (`IfcRelAssignsToGroupByFactor`), and has the results a load case has:

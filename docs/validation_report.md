@@ -802,8 +802,89 @@ combination that names no load case, or includes something that is not a load ca
 left out with a warning. The old code read these silently as empty or partial, and
 kept only the last factor of a case assigned twice.
 
+## Plane trusses and frames
+
+A structure drawn in one plane and loaded in it is usually supported as its textbook
+picture is: in the plane, with pinned joints. In three dimensions nothing holds it
+across the plane, and every pinned bar can spin about its own axis. CalculiX solves
+such a model without complaint. Measured before this change (0.1 m square bars, 0.5 m
+mesh): member forces were right to four figures in every case, and displacements were
+not.
+
+| Model | Largest displacement by hand | Before | Out of plane, before |
+|---|---|---|---|
+| Truss, supports holding X and Z only | 0.0375 mm | 0.706 mm | 0.66 mm |
+| Truss, pin and roller that also hold Y | 0.0375 mm | 0.0546 mm | 0.030 mm |
+| Portal, feet fixed in the plane only | 9.93 mm | 13.3 mm | 9.0 mm |
+| Beam on supports holding X and Z only | 7.63 mm | 8.84 mm | 5.66 mm |
+
+The only warning was that members were free to spin, and the last two had none.
+
+`analysis/plane_structure.py` now recognises a plane structure (curve members only, in
+a plane parallel to two global axes, every load and gravity acting in it, sections
+with their axes in and across it) and counts the movements out of the plane that
+nothing restrains, treating members and joints as rigid bodies tied by the
+connections and supports of the file. If there are any, every node is held across the
+plane, and each member or straight run of members that can still spin is held against
+it at one end. One warning says so. A plane structure that stands up on its own
+(`beam_01`, `portal_01`, a portal with fully fixed feet) is left as it is, and so is
+any model in a buckling analysis.
+
+Truss (`TestPlaneTruss`): two 4 m panels 3 m high, 10 kN at the middle of the bottom
+chord, 0.05 m square bars, pinned at both ends. Identical results with supports in X
+and Z only and with supports that also hold Y.
+
+| Quantity | Method of joints / virtual work | Pipeline | Difference |
+|---|---|---|---|
+| Bottom chord | +3 333.3 N | +3 333.2 N | 0.004% |
+| Diagonals at the supports | −6 009.3 N | −6 009.3 and −6 009.1 N | 0.003% |
+| Diagonals at the load | +6 009.3 N | +6 009.1 N | 0.003% |
+| Top chord | −6 666.7 N | −6 666.4 N | 0.004% |
+| Bending moment in any bar | 0 | under 1 N·m | |
+| Deflection under the load | 0.149 99 mm | 0.150 80 mm | 0.5% |
+| Displacement across the plane | 0 | 0.000 15 mm | |
+| Reaction at each support | 5 000 N | 5 000.0 N | under 0.0001% |
+
+The 0.5% is the bars turning: displacements are read on their faces (1.7% with 0.1 m
+bars).
+
+Portal (`TestPlaneFrame`): 3 m high, 4 m wide, 0.1 m square, 10 kN sideways at the top
+of one column, 0.25 m mesh.
+
+| Case | Quantity | By hand | Pipeline | Difference |
+|---|---|---|---|---|
+| Feet pinned | Moment at each corner (P h/2) | 15 000 N·m | 15 000.8 and 14 999.0 N·m | 0.005% |
+| Feet pinned | Sway | 42.86 mm | 42.63 mm | −0.5% |
+| Feet fixed in the plane only | Moment at the feet | 8 863.6 N·m | 8 855.6 and 8 848.4 N·m | −0.1%, −0.2% |
+| Feet fixed in the plane only | Moment at the corners | 6 136.4 N·m | 6 149.4 and 6 146.4 N·m | +0.2% |
+| Feet fixed in the plane only | Sway | 9.935 mm | 9.904 mm | −0.3% |
+| Feet fixed in the plane only | Reaction moment at each foot | 8 863.6 N·m | 8 855.6 and 8 848.4 N·m | −0.1%, −0.2% |
+
+The portal held in its plane gives the figures of the same portal with feet fixed in
+all six directions, which needs no holding and gets none, to five figures in sway and
+four in every section force. That is the check that the restraints added do nothing in
+the plane.
+
+Two things found on the way:
+
+- **Restraining the rotation of a node inside a member in bending disturbs it.** The
+  first version held every member against rotation about the two in-plane axes at a
+  node in its span: the portal's foot moments became 9 087 and 8 577 N·m (+2.5% and
+  −3.2%, and no longer equal) and its sway 3.6% too small. Rotations are now held only
+  where a member can spin, at an end where it is pinned if it has one, else at a
+  support.
+- **A straight run of members joined rigidly end to end spins as one.** The existing
+  check took each to be held in torsion by its neighbour. In a plane structure they
+  are now found by the kinematic count (`spinning_members()`); in a space structure
+  they still are not.
+
 ## What is not yet validated
 
+- **Plane structures in a plane not parallel to two global axes**, and plane
+  structures with surface members (a shear wall), are not recognised and get no help.
+  Nor were the benchmark models authored in Bonsai: they are built with IfcOpenShell.
+- **A straight run of rigidly joined members that can spin, in a space structure**, is
+  not detected (see Plane trusses and frames).
 - **Self-weight of a load case** (`SelfWeightCoefficients`): read, not applied, with a
   warning. `Dead` in `beam_01`, `building_01` and `building_02` is without it, and so
   is every combination of those files. In `building_02`, `Dead` has nothing else.
