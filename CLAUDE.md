@@ -485,7 +485,12 @@ IFC maps the profile's Y dimension (depth) onto the member's local z, which
 **IFC local z** (`member.local_axis[2]`, via `_get_beam_normal()`), with
 **depth-first dimensions** and **`I11 = Iy`**. In the domain model
 `moment_of_inertia_y` is the strong-axis value for a section deeper than wide.
-A purely geometric default is used only when a member has no `local_axis`.
+A member has no `local_axis` when the file gives no usable `Axis` (IFC2X3 has
+no such attribute; one along the member is no use). Its section is then placed
+by `_default_section_direction()`, depth as near vertical as the member
+allows and along global X for a vertical member, and one warning lists the
+members for which that matters (`_section_has_a_direction()`: not a circle,
+a round tube or a square) (`pfk`).
 `tests/validation/test_pipeline_benchmarks.py` checks both axes.
 
 **Equivalent rectangles.** A section that is not a solid rectangle is written
