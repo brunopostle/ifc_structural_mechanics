@@ -80,6 +80,15 @@ class TestPlaneNormal:
         assert plane_normal(model, gravity_direction=[0.0, 0.0, -1.0]) == Y
         assert plane_normal(model, gravity_direction=[0.0, -1.0, 0.0]) is None
 
+    def test_self_weight_of_a_load_case_counts_as_a_load(self, tmp_path):
+        """It is a direction, whatever the size of the forces beside it."""
+        model = _truss(tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER})
+        (case,) = [group for group in model.load_groups if group.loads]
+        case.self_weight_coefficients = [0.0, 0.0, -1.0]
+        assert plane_normal(model) == Y
+        case.self_weight_coefficients = [0.0, -1.0, 0.0]
+        assert plane_normal(model) is None
+
     def test_member_out_of_the_plane(self, tmp_path):
         model = _truss(tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER})
         model.members[0].geometry[1][Y] = 0.5

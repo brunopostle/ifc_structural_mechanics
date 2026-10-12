@@ -81,23 +81,32 @@ class TestExampleFiles:
 
 
 class TestSelfWeightOfALoadCase:
-    """``SelfWeightCoefficients`` is read, not applied, and that is said."""
-
-    def test_case_with_self_weight_is_reported_with_its_combinations(self):
-        _, warnings = _extract(_open("beam_01"))
-        (warning,) = [w for w in warnings if "SelfWeightCoefficients" in w]
-        assert "1 load case(s) include the weight of the members" in warning
-        assert "Dead" in warning
-        assert "2 load combination(s) that include them" in warning
+    """``SelfWeightCoefficients`` makes the members' weight part of the case."""
 
     def test_coefficients_are_kept_on_the_load_case(self):
         model = Extractor(_open("beam_01")).extract_model()
         by_name = {group.name: group for group in model.load_groups}
         assert by_name["Dead"].self_weight_coefficients == [0.0, 0.0, -1.0]
+        assert by_name["Dead"].includes_self_weight
 
-    def test_case_without_self_weight_is_not_reported(self):
-        _, warnings = _extract(_open("portal_01"))
-        assert not [w for w in warnings if "SelfWeightCoefficients" in w]
+    def test_case_with_nothing_but_self_weight_is_a_load_case_of_the_model(self):
+        """It has no loads, and it loads the structure all the same."""
+        ifc = _open("beam_01")
+        for action in list(ifc.by_type("IfcStructuralAction")):
+            ifc.remove(action)
+        model = Extractor(ifc).extract_model()
+        (dead,) = [group for group in model.load_groups if group.name == "Dead"]
+        assert dead.loads == []
+        assert dead.has_actions
+
+    def test_all_zero_coefficients_are_no_self_weight(self):
+        model = Extractor(_open("beam_01")).extract_model()
+        assert [g.name for g in model.load_groups if g.includes_self_weight] == ["Dead"]
+
+    def test_nothing_is_said_about_it(self):
+        """It is applied, so there is nothing to warn about."""
+        _, warnings = _extract(_open("beam_01"))
+        assert not [w for w in warnings if "weight" in w]
 
 
 class TestFactors:

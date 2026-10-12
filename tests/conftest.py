@@ -40,7 +40,8 @@ def building_02_run(tmp_path_factory):
     """Run building_02 through the full pipeline once for the whole session.
 
     The run takes over a minute, so every slow test shares it. Returns
-    ``(result, output_dir)`` from ``analyze_ifc`` with a 2 m mesh and gravity.
+    ``(result, output_dir)`` from ``analyze_ifc`` with a 2 m mesh. The file's
+    ``Dead`` case is the self-weight; none is added.
     """
     if not BUILDING_02_IFC.exists():
         pytest.skip(f"IFC file not found: {BUILDING_02_IFC}")
@@ -54,7 +55,6 @@ def building_02_run(tmp_path_factory):
         ifc_path=str(BUILDING_02_IFC),
         output_dir=output_dir,
         mesh_size=2.0,
-        gravity=True,
     )
     return result, output_dir
 

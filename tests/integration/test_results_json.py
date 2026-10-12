@@ -87,7 +87,7 @@ class TestBeam01ResultsJson:
         assert len(guids) > 0, "No members have an ifc_guid"
 
     def test_displacement_plausible(self, tmp_path):
-        """beam_01 max displacement should be in (0, 0.01] m (analytical: ~0.26 mm)."""
+        """beam_01 max displacement should be in (0, 0.01] m (by hand: 0.43 mm)."""
         output_dir = str(tmp_path / "beam_01")
         analyze_ifc(ifc_path=_ifc("beam_01.ifc"), output_dir=output_dir, mesh_size=0.5)
         data = _load_results_json(output_dir)
@@ -265,7 +265,7 @@ class TestBuilding02ResultsJson:
         _, output_dir = building_02_run
         data = _load_results_json(output_dir)
         cases = set(data["load_cases"])
-        assert cases == {"Live", "Extra_dead", "Gravity"}
+        assert cases == {"Dead", "Live", "Extra_dead"}
         incomplete = [
             m["id"]
             for m in data["members"]
@@ -324,17 +324,24 @@ class TestBuilding02ResultsJson:
         assert size < 4e6 * states, f"results.json is {size / 1e6:.1f} MB"
 
     def test_combinations_are_the_sums_of_their_cases(self, building_02_run):
-        """Reactions add up exactly; 1.4D+1.6L is the largest of the file's."""
+        """Reactions add up exactly; 1.4D+1.6L is the largest of the file's.
+
+        ``Dead`` is the weight of the members and nothing else, and it is in
+        the sum.
+        """
         _, output_dir = building_02_run
         data = _load_results_json(output_dir)
         reactions = data["global_reactions"]
         (listed,) = [c for c in data["load_combinations"] if c["name"] == "1.4D+1.6L"]
         assert listed["factors"] == {"Dead": 1.4, "Extra_dead": 1.4, "Live": 1.6}
-        assert listed["cases_without_loads"] == ["Dead"]
+        assert "cases_without_loads" not in listed
         cases = reactions["by_load_case"]
+        assert cases["Dead"]["fz_N"] > cases["Extra_dead"]["fz_N"]
         combined = reactions["by_load_combination"]["1.4D+1.6L"]
         assert combined["fz_N"] == pytest.approx(
-            1.4 * cases["Extra_dead"]["fz_N"] + 1.6 * cases["Live"]["fz_N"], rel=1e-9
+            1.4 * (cases["Dead"]["fz_N"] + cases["Extra_dead"]["fz_N"])
+            + 1.6 * cases["Live"]["fz_N"],
+            rel=1e-9,
         )
         assert combined["imbalance_N"] < 1e-6 * combined["fz_N"]
         largest = max(

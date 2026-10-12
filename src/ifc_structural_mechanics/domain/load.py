@@ -442,6 +442,16 @@ class LoadGroup(DomainEntity):
         # members' weight the case includes along global x, y and z
         self.self_weight_coefficients: Optional[List[float]] = None
 
+    @property
+    def includes_self_weight(self) -> bool:
+        """Whether the case includes any of the weight of the members."""
+        return any(self.self_weight_coefficients or ())
+
+    @property
+    def has_actions(self) -> bool:
+        """Whether the group loads the structure: with loads or self-weight."""
+        return bool(self.loads) or self.includes_self_weight
+
     def add_load(self, load: Load) -> None:
         """Add a load to the group."""
         if load not in self.loads:

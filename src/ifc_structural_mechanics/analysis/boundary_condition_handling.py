@@ -255,28 +255,59 @@ def write_boundary_conditions(
     node_sets["ALL_BC_NODES"] = bc_nodes_list
 
 
-def _write_u1_gravity_cloads(
+# Standard gravity, m/s². IFC gives self-weight as a share of the members'
+# weight, not as an acceleration.
+STANDARD_GRAVITY = 9.81
+
+
+def _write_self_weight(
     file: TextIO,
-    u1_gravity_nodal_loads: Dict[int, List[float]],
-) -> None:
-    """Write *CLOAD entries for U1 element self-weight (gravity equivalent loads).
+    acceleration,
+    u1_node_masses: Optional[Dict[int, float]] = None,
+    has_u1_elements: bool = False,
+) -> bool:
+    """Write the weight of every member under an acceleration, in m/s².
 
-    U1 user elements do not respond to *DLOAD GRAV because CalculiX's body-force
-    routine for U1 (e_c3d_u1.f) explicitly rejects body forces.  Lumped nodal
-    forces (density × area × g × element-length / 2 per end node) are written
-    as concentrated loads instead.
+    U1 user elements take no ``*DLOAD GRAV`` (CalculiX's body-force routine
+    for them, e_c3d_u1.f, rejects it), so their weight is written as forces
+    on their nodes: half of each element's mass at either end.
 
-    DOF mapping: 1=Tx, 2=Ty, 3=Tz (only translational forces are applied).
+    Returns:
+        Whether anything was written.
     """
-    if not u1_gravity_nodal_loads:
-        return
-    file.write("** Self-weight for U1 beam elements (equivalent nodal loads)\n")
-    file.write("*CLOAD\n")
-    for node_id, forces in sorted(u1_gravity_nodal_loads.items()):
-        for dof_idx, val in enumerate(forces):
-            if abs(val) > 1e-30:
-                file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
-    file.write("\n")
+    vector = np.array([float(value) for value in acceleration])
+    size = float(np.linalg.norm(vector))
+    if size < 1e-30:
+        return False
+    if not has_u1_elements:
+        direction = vector / size
+        file.write("*DLOAD\n")
+        file.write(
+            f"EALL, GRAV, {size:.6e}, {direction[0]:.6e}, {direction[1]:.6e}, "
+            f"{direction[2]:.6e}\n\n"
+        )
+    if u1_node_masses:
+        file.write("** Self-weight for U1 beam elements (equivalent nodal loads)\n")
+        file.write("*CLOAD\n")
+        for node_id, mass in sorted(u1_node_masses.items()):
+            for dof_idx, val in enumerate(mass * vector):
+                if abs(val) > 1e-30:
+                    file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
+        file.write("\n")
+    return True
+
+
+def _self_weight_acceleration(load_case) -> np.ndarray:
+    """Acceleration of the self-weight a load case includes, in m/s².
+
+    ``IfcStructuralLoadCase.SelfWeightCoefficients`` are the shares of the
+    members' weight the case includes along global x, y and z: ``(0, 0, -1)``
+    is the whole weight, downwards.
+    """
+    coefficients = getattr(load_case, "self_weight_coefficients", None)
+    if not coefficients:
+        return np.zeros(3)
+    return STANDARD_GRAVITY * np.array([float(c) for c in coefficients])
 
 
 # Share of a uniform load carried by each node of an element, as fractions of
@@ -544,7 +575,7 @@ def write_analysis_steps(
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
     gravity: bool = False,
     gravity_direction: Optional[List[float]] = None,
-    u1_gravity_nodal_loads: Optional[Dict[int, List[float]]] = None,
+    u1_node_masses: Optional[Dict[int, float]] = None,
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
 ) -> None:
@@ -568,7 +599,7 @@ def write_analysis_steps(
         node_coords,
         gravity,
         gravity_direction,
-        u1_gravity_nodal_loads,
+        u1_node_masses,
         u1_element_sets,
         elements_data,
     )
@@ -604,7 +635,7 @@ def _write_analysis_steps(
     node_coords: Optional[Dict[int, Tuple[float, float, float]]] = None,
     gravity: bool = False,
     gravity_direction: Optional[List[float]] = None,
-    u1_gravity_nodal_loads: Optional[Dict[int, List[float]]] = None,
+    u1_node_masses: Optional[Dict[int, float]] = None,
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
 ) -> None:
@@ -638,6 +669,10 @@ def _write_analysis_steps(
     # buckling factor multiplies those loads. Loads placed in a preceding
     # *STATIC step are only a fixed preload, and a buckle step without loads of
     # its own returns meaningless factors (ifc_structural_mechanics-ziq).
+    # U1 (Timoshenko) beam elements don't support *EL FILE S, E stress output.
+    # BEAM_B31 present in element_sets (even if empty) signals that U1 elements exist.
+    has_u1_elements = "BEAM_B31" in (element_sets or {})
+
     if analysis_type == "linear_buckling":
         file.write("*STEP\n")
         file.write("*BUCKLE\n")
@@ -652,13 +687,16 @@ def _write_analysis_steps(
             u1_element_sets=u1_element_sets,
             elements_data=elements_data,
         )
+        # All the load cases act at once, and so does the weight in them
+        acceleration = sum(
+            (_self_weight_acceleration(g) for g in domain_model.load_groups),
+            np.zeros(3),
+        )
         if gravity:
-            gdir = gravity_direction or [0.0, 0.0, -1.0]
-            file.write("*DLOAD\n")
-            file.write(
-                f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
+            acceleration = acceleration + STANDARD_GRAVITY * np.array(
+                gravity_direction or [0.0, 0.0, -1.0], dtype=float
             )
-            _write_u1_gravity_cloads(file, u1_gravity_nodal_loads or {})
+        if _write_self_weight(file, acceleration, u1_node_masses, has_u1_elements):
             loads_written = True
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to buckle step\n\n")
@@ -667,12 +705,10 @@ def _write_analysis_steps(
         file.write("*END STEP\n\n")
         return
 
-    # U1 (Timoshenko) beam elements don't support *EL FILE S, E stress output.
-    # BEAM_B31 present in element_sets (even if empty) signals that U1 elements exist.
-    has_u1_elements = "BEAM_B31" in (element_sets or {})
-
     # For linear static: use one step per load case if any exist
-    load_cases = [g for g in domain_model.load_groups if g.is_load_case and g.loads]
+    load_cases = [
+        g for g in domain_model.load_groups if g.is_load_case and g.has_actions
+    ]
 
     if load_cases:
         # One step per load case
@@ -692,27 +728,35 @@ def _write_analysis_steps(
                 u1_element_sets=u1_element_sets,
                 elements_data=elements_data,
             )
+            # The weight of the members the case includes
+            if load_case.includes_self_weight:
+                file.write("** Self-weight (SelfWeightCoefficients)\n")
+                loads_written |= _write_self_weight(
+                    file,
+                    _self_weight_acceleration(load_case),
+                    u1_node_masses,
+                    has_u1_elements,
+                )
             if not loads_written:
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
                 )
             _write_step_output_requests(file, has_u1_elements=has_u1_elements)
 
-        # Gravity as a separate step (self-weight applies once, not per load case)
+        # Gravity that was asked for is a load case of its own
         if gravity:
-            gdir = gravity_direction or [0.0, 0.0, -1.0]
             file.write("*STEP\n")
             file.write("*STATIC\n")
             file.write("1.0, 1.0, 1.0e-5, 1.0\n\n")
             _write_load_reset(file)
             file.write("** Gravity (self-weight)\n")
-            if not has_u1_elements:
-                # DLOAD GRAV is rejected by e_c3d_u1; use lumped CLOAD for U1 instead
-                file.write("*DLOAD\n")
-                file.write(
-                    f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
-                )
-            _write_u1_gravity_cloads(file, u1_gravity_nodal_loads or {})
+            _write_self_weight(
+                file,
+                STANDARD_GRAVITY
+                * np.array(gravity_direction or [0.0, 0.0, -1.0], dtype=float),
+                u1_node_masses,
+                has_u1_elements,
+            )
             _write_step_output_requests(file, has_u1_elements=has_u1_elements)
     else:
         # No explicit load cases — single combined step (backward-compatible)
@@ -731,16 +775,14 @@ def _write_analysis_steps(
             elements_data=elements_data,
         )
         if gravity:
-            gdir = gravity_direction or [0.0, 0.0, -1.0]
             file.write("** Gravity (self-weight) load\n")
-            if not has_u1_elements:
-                # DLOAD GRAV is rejected by e_c3d_u1; use lumped CLOAD for U1 instead
-                file.write("*DLOAD\n")
-                file.write(
-                    f"EALL, GRAV, 9.81, {gdir[0]:.6e}, {gdir[1]:.6e}, {gdir[2]:.6e}\n\n"
-                )
-            _write_u1_gravity_cloads(file, u1_gravity_nodal_loads or {})
-            loads_written = True
+            loads_written |= _write_self_weight(
+                file,
+                STANDARD_GRAVITY
+                * np.array(gravity_direction or [0.0, 0.0, -1.0], dtype=float),
+                u1_node_masses,
+                has_u1_elements,
+            )
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")

@@ -58,8 +58,8 @@ def plane_normal(
 
     - it has curve members only, and all of them lie in one plane parallel to
       two global axes;
-    - every load acts in that plane (and so does gravity, when
-      ``gravity_direction`` is given);
+    - every load acts in that plane, and so does the self-weight a load case
+      includes and gravity, when ``gravity_direction`` is given;
     - every member's section has its own axes in and across the plane.
 
     A model that lies along a single global axis is in two such planes; it
@@ -82,21 +82,30 @@ def plane_normal(
         return None
     flat = [axis for axis in range(3) if extent[axis] <= _FLAT * size]
 
+    # Loads are forces and self-weight is a direction: each kind is judged
+    # against its own largest
     forces = []
+    weights = []
     for group in domain_model.load_groups:
+        if getattr(group, "includes_self_weight", False):
+            weights.append(
+                np.abs(np.array(group.self_weight_coefficients, dtype=float))
+            )
         for load in group.loads:
             vector = _global_force_vector(load, domain_model)
             if vector is None:
                 return None
             forces.append(np.abs(np.array(vector, dtype=float)))
     if gravity_direction is not None:
-        forces.append(np.abs(np.array(gravity_direction, dtype=float)))
-    largest = max((float(force.max()) for force in forces), default=0.0)
-    loaded = [
-        axis
-        for axis in range(3)
-        if any(force[axis] > _FLAT * largest for force in forces)
-    ]
+        weights.append(np.abs(np.array(gravity_direction, dtype=float)))
+    loaded = []
+    for vectors in (forces, weights):
+        largest = max((float(vector.max()) for vector in vectors), default=0.0)
+        loaded += [
+            axis
+            for axis in range(3)
+            if any(vector[axis] > _FLAT * largest for vector in vectors)
+        ]
 
     if len(flat) == 1:
         normal = flat[0]

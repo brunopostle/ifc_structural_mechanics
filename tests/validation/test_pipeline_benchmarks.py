@@ -98,6 +98,19 @@ I_STRONG = (I_B * I_H**3 - (I_B - I_TW) * (I_H - 2 * I_TF) ** 3) / 12
 I_WEAK = (2 * I_TF * I_B**3 + (I_H - 2 * I_TF) * I_TW**3) / 12
 
 
+def _beam_01(self_weight: bool = False):
+    """Open beam_01.ifc, by default without the self-weight in its Dead case.
+
+    The file's ``Dead`` has ``SelfWeightCoefficients`` of (0, 0, -1). Cases
+    that check one load against a closed form take it out.
+    """
+    model = ifcopenshell.open(BEAM)
+    if not self_weight:
+        for case in model.by_type("IfcStructuralLoadCase"):
+            case.SelfWeightCoefficients = None
+    return model
+
+
 def _cantilever_self_weight(area: float, inertia: float, shear_area: float) -> float:
     """Tip deflection of the example cantilever under its own weight."""
     w = CANT_RHO * area * G_ACCEL
@@ -626,7 +639,11 @@ class TestRoundAndHollowSections:
 
 
 class TestFixedFixedBeamPointLoad:
-    """beam_01: 4 m, both ends fully fixed, 20 kN at midspan, 0.3 m square."""
+    """beam_01: 4 m, both ends fully fixed, 0.3 m square, as the file has it.
+
+    Its one load case, ``Dead``, is 20 kN at midspan and the beam's own
+    weight (``SelfWeightCoefficients`` of (0, 0, -1)): P and w below.
+    """
 
     LENGTH = 4.0
     LOAD = 20000.0
@@ -634,28 +651,40 @@ class TestFixedFixedBeamPointLoad:
     NU = 0.2
     AREA = 0.3 * 0.3
     INERTIA = 0.3**4 / 12
+    DENSITY = 2500.0
+    WEIGHT = DENSITY * AREA * G_ACCEL  # per metre
 
     def test_midspan_deflection(self, tmp_path):
         data = _run(BEAM, tmp_path)
-        shear_modulus = self.E / (2 * (1 + self.NU))
-        expected = self.LOAD * self.LENGTH**3 / (
-            192 * self.E * self.INERTIA
-        ) + self.LOAD * self.LENGTH / (4 * shear_modulus * self.AREA * 5 / 6)
+        shear_stiffness = self.E / (2 * (1 + self.NU)) * self.AREA * 5 / 6
+        bending_stiffness = self.E * self.INERTIA
+        expected = (
+            self.LOAD * self.LENGTH**3 / (192 * bending_stiffness)
+            + self.LOAD * self.LENGTH / (4 * shear_stiffness)
+            + self.WEIGHT * self.LENGTH**4 / (384 * bending_stiffness)
+            + self.WEIGHT * self.LENGTH**2 / (8 * shear_stiffness)
+        )
         assert _max_vertical_deflection(data) == pytest.approx(
             expected, rel=DEFLECTION_TOLERANCE
         )
 
     def test_section_forces(self, tmp_path):
-        """Shear P / 2 throughout; moment P L / 8 at the ends and at midspan."""
+        """Largest at the ends: shear (P + w L) / 2, moment P L / 8 + w L^2 / 12."""
         data = _run(BEAM, tmp_path)
         forces = _curve_member_envelope(data)["section_forces"]
-        assert forces["max_Vf1_N"] == pytest.approx(self.LOAD / 2, rel=FORCE_TOLERANCE)
+        assert forces["max_Vf1_N"] == pytest.approx(
+            (self.LOAD + self.WEIGHT * self.LENGTH) / 2, rel=FORCE_TOLERANCE
+        )
         assert forces["max_Mf1_Nm"] == pytest.approx(
-            self.LOAD * self.LENGTH / 8, rel=FORCE_TOLERANCE
+            self.LOAD * self.LENGTH / 8 + self.WEIGHT * self.LENGTH**2 / 12,
+            rel=FORCE_TOLERANCE,
         )
 
     def test_shear_steps_under_the_load(self, tmp_path):
-        """-P/2 before midspan and +P/2 after it, both listed at midspan.
+        """The shear jumps by P at midspan, where both sides are listed.
+
+        Before it the shear is -P/2 less the weight between there and
+        midspan, and after it +P/2 plus the same.
 
         The solver's stress at the loaded cross-section is the average of the
         two sides, which would make the shear zero there.
@@ -674,19 +703,23 @@ class TestFixedFixedBeamPointLoad:
         for x, shear in zip(diagram["distance_m"], diagram["Vf1_N"]):
             sign = -1 if x < self.LENGTH / 2 else 1
             if x != pytest.approx(self.LENGTH / 2):
-                assert shear == pytest.approx(sign * half, rel=FORCE_TOLERANCE)
+                assert shear == pytest.approx(
+                    sign * half + self.WEIGHT * (x - self.LENGTH / 2),
+                    rel=FORCE_TOLERANCE,
+                )
         # Hogging at the supports, sagging under the load
-        moment = self.LOAD * self.LENGTH / 8
-        assert diagram["Mf1_Nm"][0] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        hogging = self.LOAD * self.LENGTH / 8 + self.WEIGHT * self.LENGTH**2 / 12
+        sagging = self.LOAD * self.LENGTH / 8 + self.WEIGHT * self.LENGTH**2 / 24
+        assert diagram["Mf1_Nm"][0] == pytest.approx(hogging, rel=FORCE_TOLERANCE)
         assert diagram["Mf1_Nm"][at_load[0]] == pytest.approx(
-            -moment, rel=FORCE_TOLERANCE
+            -sagging, rel=FORCE_TOLERANCE
         )
-        assert diagram["Mf1_Nm"][-1] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        assert diagram["Mf1_Nm"][-1] == pytest.approx(hogging, rel=FORCE_TOLERANCE)
 
     def test_reaction_equals_applied_load(self, tmp_path):
         data = _run(BEAM, tmp_path)
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
-            self.LOAD, rel=1e-3
+            self.LOAD + self.WEIGHT * self.LENGTH, rel=1e-6
         )
 
 
@@ -715,7 +748,7 @@ def _beam_with_line_load(tmp_path, force_per_metre, i_profile=False) -> str:
     millimetres and newtons, so it is written in N/mm. With ``i_profile`` the
     section becomes the 200 x 400 I.
     """
-    model = ifcopenshell.open(BEAM)
+    model = _beam_01()
     if i_profile:
         _give_beam_01_an_i_profile(model)
     member = model.by_type("IfcStructuralCurveMember")[0]
@@ -807,7 +840,7 @@ def _beam_on_supports(tmp_path, start, end, line_load=None, i_profile=False) -> 
     The point load stays unless ``line_load`` (N/m, along global -Z) replaces it.
     """
     if line_load is None:
-        model = ifcopenshell.open(BEAM)
+        model = _beam_01()
         if i_profile:
             _give_beam_01_an_i_profile(model)
     else:
@@ -1071,7 +1104,7 @@ class TestFixedFixedISectionBeam:
         return self.B.E * I_STRONG, shear_modulus * I_H * I_TW
 
     def test_point_load(self, tmp_path):
-        model = ifcopenshell.open(BEAM)
+        model = _beam_01()
         _give_beam_01_an_i_profile(model)
         path = str(tmp_path / "i_beam.ifc")
         model.write(path)
@@ -2091,22 +2124,24 @@ class TestSupportReactions:
             assert abs(reaction[key]) < 1e-3 * weight * CANT_L
 
     def test_fixed_fixed_beam(self, tmp_path):
-        """Half the load at each end, and P L / 8 turning opposite ways."""
+        """Half the load and weight at each end, and the fixing moments.
+
+        P L / 8 + w L^2 / 12, turning opposite ways.
+        """
         beam = TestFixedFixedBeamPointLoad
         data = _run(BEAM, tmp_path)
         left = _support_at(data, (0.0, 4.0, 4.0))
         right = _support_at(data, (beam.LENGTH, 4.0, 4.0))
         assert left["id"] != right["id"]
-        moment = beam.LOAD * beam.LENGTH / 8
+        force = (beam.LOAD + beam.WEIGHT * beam.LENGTH) / 2
+        moment = beam.LOAD * beam.LENGTH / 8 + beam.WEIGHT * beam.LENGTH**2 / 12
         for support, sign in ((left, -1.0), (right, 1.0)):
             (reaction,) = support["by_load_case"].values()
-            assert reaction["fz_N"] == pytest.approx(beam.LOAD / 2, rel=FORCE_TOLERANCE)
+            assert reaction["fz_N"] == pytest.approx(force, rel=FORCE_TOLERANCE)
             assert reaction["my_Nm"] == pytest.approx(
                 sign * moment, rel=FORCE_TOLERANCE
             )
-            assert reaction["resultant_N"] == pytest.approx(
-                beam.LOAD / 2, rel=FORCE_TOLERANCE
-            )
+            assert reaction["resultant_N"] == pytest.approx(force, rel=FORCE_TOLERANCE)
 
     def test_pin_and_roller_carry_no_bending_moment(self, tmp_path):
         """w L / 2 each. The pin's hold on the beam's own axis carries nothing."""
@@ -2639,7 +2674,7 @@ def _beam_with_two_cases(tmp_path, as_one_case: bool = False) -> str:
     With ``as_one_case`` there are no combinations, and Dead holds both
     loads multiplied by the factors of the second one.
     """
-    model = ifcopenshell.open(BEAM)
+    model = _beam_01()
     member = model.by_type("IfcStructuralCurveMember")[0]
     point_action = model.by_type("IfcStructuralPointAction")[0]
     scale = COMBINED_LIVE if as_one_case else 1.0
@@ -2945,6 +2980,134 @@ TRUSS_MEMBERS = [
 TRUSS_LOAD = 10000.0
 PLANE_E = 2.1e11
 PLANE_WARNING = "The model is a plane structure"
+
+
+def _beam_under_its_weight(tmp_path, coefficients) -> str:
+    """beam_01 with no load but the share of its weight that Dead includes."""
+    model = _beam_01(self_weight=True)
+    for action in list(model.by_type("IfcStructuralAction")):
+        for relation in model.get_inverse(action):
+            if relation.is_a("IfcRelConnectsStructuralActivity"):
+                model.remove(relation)
+        model.remove(action)
+    (dead,) = [c for c in model.by_type("IfcStructuralLoadCase") if c.Name == "Dead"]
+    dead.SelfWeightCoefficients = coefficients
+    path = str(tmp_path / "weight.ifc")
+    model.write(path)
+    return path
+
+
+class TestSelfWeightOfALoadCase:
+    """A load case includes the members' weight when the file says so (`aiz.71`).
+
+    ``IfcStructuralLoadCase.SelfWeightCoefficients`` are the shares of it
+    along global x, y and z. beam_01 is 4 m, fixed at both ends, 0.3 m
+    square, 2500 kg/m3: w = 2207.25 N/m.
+    """
+
+    B = TestFixedFixedBeamPointLoad
+
+    def test_weight_alone_by_hand(self, tmp_path):
+        """w L in all, w L^2 / 12 at the ends, w L^4 / 384 EI and shear."""
+        beam = self.B
+        data = _run(_beam_under_its_weight(tmp_path, (0.0, 0.0, -1.0)), tmp_path)
+        assert data["load_cases"] == ["Dead"]
+        total = data["global_reactions"]["by_load_case"]["Dead"]
+        assert total["fz_N"] == pytest.approx(beam.WEIGHT * beam.LENGTH, rel=1e-5)
+        assert total["applied_load_N"][2] == pytest.approx(
+            -beam.WEIGHT * beam.LENGTH, rel=1e-6
+        )
+        forces = _curve_member_envelope(data)["section_forces"]
+        assert forces["max_Vf1_N"] == pytest.approx(
+            beam.WEIGHT * beam.LENGTH / 2, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Mf1_Nm"] == pytest.approx(
+            beam.WEIGHT * beam.LENGTH**2 / 12, rel=FORCE_TOLERANCE
+        )
+        shear_stiffness = beam.E / (2 * (1 + beam.NU)) * beam.AREA * 5 / 6
+        expected = beam.WEIGHT * beam.LENGTH**4 / (
+            384 * beam.E * beam.INERTIA
+        ) + beam.WEIGHT * beam.LENGTH**2 / (8 * shear_stiffness)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_same_as_self_weight_asked_for(self, tmp_path):
+        """``Dead`` and the ``Gravity`` case of ``gravity=True`` are one load."""
+        path = _beam_under_its_weight(tmp_path, (0.0, 0.0, -1.0))
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=path, output_dir=output_dir, mesh_size=MESH_SIZE, gravity=True
+        )
+        assert result["status"] == "success", result.get("errors")
+        (warning,) = [
+            w["message"] for w in result["warnings"] if "--gravity" in w["message"]
+        ]
+        assert "1 load case(s) of the file already include it: Dead" in warning
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            data = json.load(fh)
+        assert data["load_cases"] == ["Dead", "Gravity"]
+        member = _only_curve_member(data)["by_load_case"]
+        assert member["Dead"]["max_displacement_m"] == pytest.approx(
+            member["Gravity"]["max_displacement_m"], rel=1e-9
+        )
+        reactions = data["global_reactions"]["by_load_case"]
+        assert reactions["Dead"]["fz_N"] == pytest.approx(
+            reactions["Gravity"]["fz_N"], rel=1e-9
+        )
+
+    def test_share_of_the_weight(self, tmp_path):
+        beam = self.B
+        whole = _run(_beam_under_its_weight(tmp_path, (0.0, 0.0, -1.0)), tmp_path, 0.5)
+        part = _run(_beam_under_its_weight(tmp_path, (0.0, 0.0, -0.4)), tmp_path, 0.25)
+        assert part["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            0.4 * beam.WEIGHT * beam.LENGTH, rel=1e-5
+        )
+        assert _max_vertical_deflection(part) == pytest.approx(
+            0.4 * _max_vertical_deflection(whole), rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_weight_acting_sideways(self, tmp_path):
+        """Coefficients are along the global axes: (0, -1, 0) pulls along -Y."""
+        beam = self.B
+        data = _run(_beam_under_its_weight(tmp_path, (0.0, -1.0, 0.0)), tmp_path)
+        weight = beam.WEIGHT * beam.LENGTH
+        total = data["global_reactions"]["total"]
+        assert total["applied_load_N"] == pytest.approx([0.0, -weight, 0.0], rel=1e-6)
+        moved = data["global_displacements"]["envelope"]
+        assert moved["max_ty_m"] > 100 * moved["max_tz_m"]
+        # CalculiX 2.21 reports a vertical force at these clamped supports
+        _needs_solver_reactions()
+        assert total["fy_N"] == pytest.approx(weight, rel=1e-5)
+        assert abs(total["fz_N"]) < 1e-6 * weight
+
+    def test_combination_includes_it(self, tmp_path):
+        """beam_01 as shipped: ``DCon1`` is 1.5 Dead, weight and all."""
+        beam = self.B
+        data = _run(BEAM, tmp_path)
+        total = data["global_reactions"]["by_load_combination"]["DCon1"]
+        assert total["fz_N"] == pytest.approx(
+            1.5 * (beam.LOAD + beam.WEIGHT * beam.LENGTH), rel=1e-5
+        )
+        forces = _only_curve_member(data)["by_load_combination"]["DCon1"]
+        assert forces["section_forces"]["max_Mf1_Nm"] == pytest.approx(
+            1.5 * (beam.LOAD * beam.LENGTH / 8 + beam.WEIGHT * beam.LENGTH**2 / 12),
+            rel=FORCE_TOLERANCE,
+        )
+
+    def test_weightless_material_is_refused(self, tmp_path):
+        """The weight of a member cannot be made up."""
+        model = _beam_01(self_weight=True)
+        for pset in model.by_type("IfcMaterialProperties"):
+            pset.Properties = [p for p in pset.Properties if p.Name != "MassDensity"]
+        path = str(tmp_path / "weightless.ifc")
+        model.write(path)
+        with pytest.raises(
+            ModelExtractionError, match="Load case Dead includes self-weight"
+        ):
+            analyze_ifc(
+                ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=MESH_SIZE
+            )
 
 
 def _plane_run(tmp_path, mesh_size=0.5, analysis_type="linear_static", **model):

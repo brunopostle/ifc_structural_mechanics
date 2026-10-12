@@ -82,7 +82,10 @@ def cli():
     "--gravity",
     is_flag=True,
     default=False,
-    help="Include self-weight gravity loads",
+    help=(
+        "Add self-weight as a load case of its own, Gravity. For files with no "
+        "load case: a load case that includes self-weight has it without this"
+    ),
 )
 @click.option(
     "--timeout",

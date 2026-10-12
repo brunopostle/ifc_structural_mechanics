@@ -121,8 +121,8 @@ class UnifiedCalculixWriter:
         # (U1 elements don't support *DLOAD; facial-load processing crashes).
         self._u1_element_sets: set = set()
         self._equation_nodes: set = set()
-        # Pre-computed lumped gravity nodal loads for U1 elements (node_id -> [Fx,Fy,Fz])
-        self._u1_gravity_nodal_loads: Dict[int, List[float]] = {}
+        # Mass of the U1 elements lumped at their nodes (node_id -> kg)
+        self._u1_node_masses: Dict[int, float] = {}
 
         # Working directory
         self.work_dir = create_temp_subdir(prefix="unified_calculix_")
@@ -822,7 +822,7 @@ class UnifiedCalculixWriter:
                 dict(self.nodes),
                 gravity=self.analysis_config.get_gravity(),
                 gravity_direction=self.analysis_config.get_gravity_direction(),
-                u1_gravity_nodal_loads=self._u1_gravity_nodal_loads,
+                u1_node_masses=self._u1_node_masses,
                 u1_element_sets=self._u1_element_sets,
                 elements_data=dict(self.elements),
             )
@@ -1429,8 +1429,7 @@ class UnifiedCalculixWriter:
         them.  Section properties are taken directly from the domain model.
 
         Side-effects:
-            Populates ``self._u1_gravity_nodal_loads`` when density and area
-            are available and gravity is enabled.
+            Adds the mass of the elements to ``self._u1_node_masses``.
         """
         section = member.section
         material = member.material
@@ -1491,12 +1490,9 @@ class UnifiedCalculixWriter:
             f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}," f" {beam_normal[2]:.6e}\n\n"
         )
 
-        # Accumulate lumped gravity nodal loads for U1 self-weight
-        gravity = self.analysis_config.get_gravity()
+        # Mass of the U1 elements at their nodes, for their self-weight
         density = getattr(material, "density", None)
-        if gravity and density and A:
-            gdir = self.analysis_config.get_gravity_direction() or [0.0, 0.0, -1.0]
-            g = 9.81
+        if density and A:
             mass_per_length = float(density) * float(A)
             for elem_id in elem_ids:
                 elem = self.elements.get(elem_id)
@@ -1506,17 +1502,11 @@ class UnifiedCalculixWriter:
                 n1 = np.array(self.nodes[node1_id], dtype=float)
                 n2 = np.array(self.nodes[node2_id], dtype=float)
                 L = float(np.linalg.norm(n2 - n1))
-                if L < 1e-12:
-                    continue
-                f_half = mass_per_length * g * L / 2.0
                 for node_id in (node1_id, node2_id):
-                    existing = self._u1_gravity_nodal_loads.get(
-                        node_id, [0.0, 0.0, 0.0]
+                    self._u1_node_masses[node_id] = (
+                        self._u1_node_masses.get(node_id, 0.0)
+                        + mass_per_length * L / 2.0
                     )
-                    existing[0] += f_half * gdir[0]
-                    existing[1] += f_half * gdir[1]
-                    existing[2] += f_half * gdir[2]
-                    self._u1_gravity_nodal_loads[node_id] = existing
 
     def _write_sections(self, file: TextIO) -> None:
         """Write section definitions for members.

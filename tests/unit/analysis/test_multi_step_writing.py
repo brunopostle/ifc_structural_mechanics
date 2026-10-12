@@ -2,6 +2,8 @@
 
 import io
 
+import pytest
+
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     write_analysis_steps,
 )
@@ -174,3 +176,96 @@ class TestMultiStepWriting:
 
         assert text.count("*STEP") == 1
         assert "GRAV" in text
+
+
+def _grav_lines(text: str):
+    """The ``*DLOAD`` gravity lines: [(acceleration, direction)]."""
+    lines = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) == 6 and parts[1] == "GRAV":
+            lines.append((float(parts[2]), [float(value) for value in parts[3:]]))
+    return lines
+
+
+class TestSelfWeightOfALoadCase:
+    """``SelfWeightCoefficients`` puts the members' weight in the case's own step."""
+
+    def _steps(self, model, **kwargs):
+        buf = io.StringIO()
+        write_analysis_steps(buf, model, node_coords=NODES, **kwargs)
+        return buf.getvalue().split("*END STEP")[:-1]
+
+    def test_weight_is_written_in_the_step_of_its_case_only(self):
+        model = _make_model_with_load_cases(2)
+        model.load_groups[0].self_weight_coefficients = [0.0, 0.0, -1.0]
+        first, second = self._steps(model)
+        assert _grav_lines(first) == [(9.81, [0.0, 0.0, -1.0])]
+        assert "*CLOAD\n" in first
+        assert _grav_lines(second) == []
+
+    def test_coefficients_scale_and_turn_it(self):
+        model = _make_model_with_load_cases(1)
+        model.load_groups[0].self_weight_coefficients = [0.0, -0.3, -0.4]
+        ((size, direction),) = _grav_lines(self._steps(model)[0])
+        assert size == 9.81 * 0.5
+        assert direction == [0.0, -0.6, -0.8]
+
+    def test_case_with_nothing_but_self_weight_has_a_step(self):
+        model = _make_model_with_load_cases(1)
+        only_weight = LoadGroup(id="dead", name="Dead", is_load_case=True)
+        only_weight.self_weight_coefficients = [0.0, 0.0, -1.0]
+        model.load_groups.append(only_weight)
+        steps = self._steps(model)
+        assert len(steps) == 2
+        assert "** Load Case: Dead" in steps[1]
+        assert _grav_lines(steps[1]) == [(9.81, [0.0, 0.0, -1.0])]
+        assert "WARNING: No loads written" not in steps[1]
+
+    def test_zero_coefficients_are_no_self_weight(self):
+        model = _make_model_with_load_cases(1)
+        model.load_groups[0].self_weight_coefficients = [0.0, 0.0, 0.0]
+        empty = LoadGroup(id="none", name="None", is_load_case=True)
+        empty.self_weight_coefficients = [0.0, 0.0, 0.0]
+        model.load_groups.append(empty)
+        steps = self._steps(model)
+        assert len(steps) == 1
+        assert _grav_lines(steps[0]) == []
+
+    def test_gravity_asked_for_stays_a_case_of_its_own(self):
+        model = _make_model_with_load_cases(1)
+        model.load_groups[0].self_weight_coefficients = [0.0, 0.0, -1.0]
+        steps = self._steps(model, gravity=True)
+        assert len(steps) == 2
+        assert "** Gravity (self-weight)" in steps[1]
+        assert [_grav_lines(step) for step in steps] == [[(9.81, [0.0, 0.0, -1.0])]] * 2
+
+    def test_buckling_step_has_the_weight_of_every_case(self):
+        """All the load cases act at once in a buckling step."""
+        model = _make_model_with_load_cases(2)
+        model.load_groups[0].self_weight_coefficients = [0.0, 0.0, -1.0]
+        model.load_groups[1].self_weight_coefficients = [0.0, 0.0, -0.5]
+        (step,) = self._steps(model, analysis_type="linear_buckling")
+        ((size, direction),) = _grav_lines(step)
+        assert size == 9.81 * 1.5
+        assert direction == [0.0, 0.0, -1.0]
+
+    def test_weight_on_support_nodes_is_recorded(self):
+        """The reactions need what each step puts on the support nodes."""
+        model = _make_model_with_load_cases(1)
+        model.load_groups[0].self_weight_coefficients = [0.0, 0.0, -1.0]
+        model.support_nodes = {"s": {"nodes": [1]}}
+        model.analysis_element_to_member = {1: "m1"}
+        buf = io.StringIO()
+        write_analysis_steps(
+            buf,
+            model,
+            node_coords=NODES,
+            elements_data={1: {"type": "B31", "nodes": [1, 2]}},
+        )
+        weight = 7850.0 * 0.1 * 0.2 * 9.81
+        (total,) = model.applied_load_totals
+        assert total[2] == pytest.approx(-1000.0 - weight)
+        # The point load is at node 1, with half of the one element's weight
+        (on_supports,) = model.support_node_loads
+        assert on_supports[1][2] == pytest.approx(-1000.0 - weight / 2)

@@ -137,7 +137,12 @@ def analyze_ifc(
         )
 
         # Self-weight cannot be worked out for a material with no density
-        if gravity:
+        weighed = [
+            g.name
+            for g in domain_model.load_groups
+            if g.is_load_case and g.includes_self_weight
+        ]
+        if gravity or weighed:
             weightless = sorted(
                 {
                     member.material.name
@@ -146,12 +151,32 @@ def analyze_ifc(
                 }
             )
             if weightless:
-                raise ModelExtractionError(
-                    "Self-weight was asked for (--gravity), but these materials "
-                    "have no mass density (Pset_MaterialCommon.MassDensity): "
-                    + ", ".join(weightless)
-                    + "."
+                asked = (
+                    "Load case " + ", ".join(weighed[:3]) + " includes self-weight"
+                    if weighed
+                    else "Self-weight was asked for (--gravity)"
                 )
+                raise ModelExtractionError(
+                    f"{asked}, but these materials have no mass density "
+                    "(Pset_MaterialCommon.MassDensity): " + ", ".join(weightless) + "."
+                )
+        if gravity and weighed:
+            result["warnings"].append(
+                {
+                    "message": (
+                        "Self-weight was asked for (--gravity) and "
+                        f"{len(weighed)} load case(s) of the file already include "
+                        f"it: {', '.join(weighed[:3])}"
+                        + (" ..." if len(weighed) > 3 else "")
+                        + ". It is analysed again as a load case of its own, "
+                        "Gravity, which no combination includes."
+                    ),
+                    "severity": "warning",
+                    "entity_type": None,
+                    "ccx_id": None,
+                    "domain_id": None,
+                }
+            )
 
         # Step 1b: Pre-analysis model validation
         validation_warnings = _validate_model(domain_model, gravity)
@@ -241,7 +266,9 @@ def analyze_ifc(
         if calculix_output_files:
             try:
                 load_cases = [
-                    g for g in domain_model.load_groups if g.is_load_case and g.loads
+                    g
+                    for g in domain_model.load_groups
+                    if g.is_load_case and g.has_actions
                 ]
                 load_case_names = [g.name for g in load_cases]
                 if gravity:
@@ -562,7 +589,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
 
     # Check that loads exist; warn when gravity is the likely missing ingredient
     load_groups = getattr(domain_model, "load_groups", [])
-    has_explicit_loads = any(getattr(g, "loads", []) for g in load_groups)
+    has_explicit_loads = any(
+        getattr(g, "loads", []) or getattr(g, "includes_self_weight", False) is True
+        for g in load_groups
+    )
     if not has_explicit_loads and not gravity:
         _warn(
             "No explicit loads found in the model and --gravity was not requested. "

@@ -91,8 +91,10 @@ that includes one names it in ``cases_without_loads``, and one made only of
 such cases is listed without results. Two combinations of one name have the
 GlobalId added to the name of the second. Combinations that cannot be formed
 (no load case, or something in them that is not a load case) are not listed;
-the analysis warns about them. Self-weight asked for with ``--gravity`` is a
-load case of its own, ``Gravity``, which no combination of the file includes.
+the analysis warns about them. A load case includes the weight of the members
+when the file says so (``SelfWeightCoefficients``). Self-weight asked for with
+``--gravity`` is a load case of its own, ``Gravity``, which no combination of
+the file includes.
 
 ``global_reactions`` entries also carry (schema 1.1) ``applied_load_N``, the
 whole load of the case as written to the solver ``[fx, fy, fz]``, and
