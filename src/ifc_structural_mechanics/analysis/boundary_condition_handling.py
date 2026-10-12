@@ -184,6 +184,11 @@ def support_restraint(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     fully fixed support under a column with both bending rotations released
     is a pin that still resists torsion.
 
+    A support at which the writer holds a member against spinning about a
+    skew axis (``torsion_hold_axes``, set by
+    ``UnifiedCalculixWriter._hold_spinning_members``) holds that rotation as
+    well: it is analysed, written and reported as a support that does.
+
     Returns:
         Two arrays of reduced rows (see ``_reduced_rows``), the directions
         held in translation and the axes held in rotation, or None for a
@@ -199,7 +204,11 @@ def support_restraint(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     members = list(getattr(connection, "connected_members", []))
     if len(members) == 1:
         free = np.vstack([free, released_rotation_axes(connection, members[0])])
-    return _reduced_rows(translations), _reduced_rows(_across(free))
+    rotations = _across(free)
+    held_by_the_writer = getattr(connection, "torsion_hold_axes", None)
+    if held_by_the_writer:
+        rotations = np.vstack([rotations, np.array(held_by_the_writer, dtype=float)])
+    return _reduced_rows(translations), _reduced_rows(rotations)
 
 
 def support_is_skew(connection) -> bool:

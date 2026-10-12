@@ -206,19 +206,79 @@ def test_member_across_the_run_holds_all_of_it():
     assert _messages(writer) == []
 
 
-def test_run_along_a_skew_axis_is_reported():
+def _held_axes(writer):
+    return {
+        conn.id: [tuple(round(v, 6) for v in axis) for axis in conn.torsion_hold_axes]
+        for conn in writer.domain_model.connections
+        if conn.torsion_hold_axes
+    }
+
+
+DIAGONAL = (round(0.5**0.5, 6), round(0.5**0.5, 6), 0.0)
+
+
+def test_run_along_a_skew_axis_is_held_by_its_support():
+    """No rotation of a node is about that axis: the support is given it."""
     points = [(0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (2.0, 2.0, 0.0)]
     writer = _run_of_members(points, {0: BALL, 2: BALL})
 
     assert writer._torsion_hold_dofs() == []
-    assert "2 member(s)" in _messages(writer)[0]
-    assert "could not be held automatically" in _messages(writer)[0]
+    assert _held_axes(writer) == {"joint0": [DIAGONAL]}
+    (message,) = _messages(writer)
+    assert "2 member(s) are free to spin about their own axis" in message
+    assert "held in torsion at one of its supports" in message
 
 
-def test_skew_member_is_reported_but_not_held():
+def test_support_then_holds_that_rotation_and_no_other():
+    from ifc_structural_mechanics.analysis.boundary_condition_handling import (
+        share_in_span,
+        support_restraint,
+    )
+
     writer = _writer(BALL, BALL, end_point=(3.0, 3.0, 0.0))
+    left, right = writer.domain_model.connections
 
-    assert writer._torsion_hold_dofs() == []
+    rotations = support_restraint(left)[1]
+    assert rotations.shape[0] == 1
+    assert share_in_span(rotations, DIAGONAL) > 1.0 - 1e-6
+    assert support_restraint(right)[1].shape[0] == 0
+
+
+def test_skew_member_gets_an_arm_at_its_support(tmp_path):
+    writer = _writer(BALL, BALL, end_point=(3.0, 3.0, 0.0))
+    writer._build_support_arms()
+    path = tmp_path / "out.inp"
+    writer._write_calculix_input_file(str(path))
+    text = path.read_text()
+
+    ((node, (tip, position, _)),) = writer._support_arms["left"].items()
+    assert node == 1 and tip == 3
+    # Across the member, and its tip held along the third direction
+    assert abs(position[0] * 3.0 + position[1] * 3.0) < 1e-9
+    assert "** Directions it holds that are not global ones" in text
+    assert "** Members held against spinning about their own axis" not in text
+
+
+def test_deciding_again_starts_afresh():
+    writer = _writer(BALL, BALL, end_point=(3.0, 3.0, 0.0))
+    writer._hold_spinning_members()
+
+    assert _held_axes(writer) == {"left": [DIAGONAL]}
+    assert len(_messages(writer)) == 2
+
+
+def test_skew_member_on_line_supports_is_only_reported():
+    """An arm at every node of the line would be a hold at each."""
+    model = StructuralModel(id="model")
+    model.add_member(_beam("beam", (0.0, 0.0, 0.0), (3.0, 3.0, 0.0)))
+    for name, point in (("left", (0.0, 0.0, 0.0)), ("right", (3.0, 3.0, 0.0))):
+        support = _support(name, point, BALL, "beam")
+        support.edge = [list(point), [point[0] + 1.0, point[1] - 1.0, 0.0]]
+        model.connections.append(support)
+    writer = UnifiedCalculixWriter(domain_model=model)
+    writer._hold_spinning_members()
+
+    assert _held_axes(writer) == {}
     assert "could not be held automatically" in _messages(writer)[0]
 
 

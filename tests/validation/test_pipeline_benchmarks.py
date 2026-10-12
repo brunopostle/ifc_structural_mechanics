@@ -3674,6 +3674,73 @@ class TestStraightRunFreeToSpin:
         self._check(data, warnings, members=4)
 
 
+class TestInclinedBeamFreeToSpin:
+    """A 5 m rafter rising 3 in 4, two members on ball supports.
+
+    10 kN down and 5 kN across its plane at the joint. It can turn about its
+    own axis, which is no global one, so no rotation of a node could be
+    restrained to stop it: it was reported and left, and came out with 9.79 mm
+    down for 9.54 and 7.76 mm across for 7.45. The support at its foot now
+    holds that rotation with a stiff arm (``aiz.74``).
+    """
+
+    DOWN, ACROSS, SIDE, LENGTH = 10000.0, 5000.0, 0.1, 5.0
+
+    def _deflection(self, load: float) -> float:
+        stiffness = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        return load * self.LENGTH**3 / (48 * stiffness) + load * self.LENGTH / (
+            4 * shear
+        )
+
+    def _rafter(self, tmp_path):
+        return _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (2, 1.5), "C": (4, 3)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": PLANE_PIN, "C": PLANE_PIN},
+            loads={"B": (0.0, -self.DOWN)},
+            load_y=self.ACROSS,
+            hinged=False,
+            mesh_size=0.25,
+        )
+
+    def test_deflection(self, tmp_path):
+        """The part of the load across the rafter bends it; the rest is axial."""
+        data, warnings = self._rafter(tmp_path)
+        (warning,) = [w for w in warnings if "free to spin" in w]
+        assert "2 member(s) are free to spin about their own axis" in warning
+        assert "held in torsion at one of its supports" in warning
+        across_the_rafter = self._deflection(0.8 * self.DOWN)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(0.8 * across_the_rafter, rel=0.01)
+        assert envelope["max_tx_m"] == pytest.approx(0.6 * across_the_rafter, rel=0.01)
+        assert envelope["max_ty_m"] == pytest.approx(
+            self._deflection(self.ACROSS), rel=0.01
+        )
+
+    def test_forces_and_reactions(self, tmp_path):
+        """The hold carries nothing: no torsion, and the reactions of statics."""
+        data, _ = self._rafter(tmp_path)
+        for member in data["members"]:
+            forces = member["envelope"]["section_forces"]
+            assert forces["max_T_Nm"] < 1.0
+            assert forces["max_Mf2_Nm"] == pytest.approx(
+                0.8 * self.DOWN * self.LENGTH / 4, rel=FORCE_TOLERANCE
+            )
+            assert forces["max_Mf1_Nm"] == pytest.approx(
+                self.ACROSS * self.LENGTH / 4, rel=FORCE_TOLERANCE
+            )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fz_N"] == pytest.approx(self.DOWN, rel=1e-5)
+        assert total["fy_N"] == pytest.approx(-self.ACROSS, rel=1e-5)
+        assert abs(total["fx_N"]) < 1e-5 * self.DOWN
+        for x, z in ((0.0, 0.0), (4.0, 3.0)):
+            reaction = _support_at(data, (x, 0.0, z))["by_load_case"]["Load"]
+            assert reaction["fy_N"] == pytest.approx(-self.ACROSS / 2, rel=1e-3)
+            assert reaction["fz_N"] == pytest.approx(self.DOWN / 2, rel=0.01)
+
+
 class TestBeamContinuousOverASupport:
     """Two 4 m spans over three pinned supports, 10 kN in the middle of each.
 

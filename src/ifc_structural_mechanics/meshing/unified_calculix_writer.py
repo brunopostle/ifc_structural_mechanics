@@ -297,14 +297,15 @@ class UnifiedCalculixWriter:
             # Step 2c5: Tie beams lying in a slab or wall to it along their length
             self._build_line_bearings()
 
-            # Step 2c5b: Fix an arm to supports that hold skew rotations
-            self._build_support_arms()
-
             # Step 2c6: Hold a plane truss or frame that can leave its plane
             self._hold_plane_structure()
 
             # Step 2c7: Hold members that nothing stops spinning about their axis
             self._hold_spinning_members()
+
+            # Step 2c8: Fix an arm to supports that hold skew rotations, those
+            # of step 2c7 among them
+            self._build_support_arms()
 
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
@@ -2462,8 +2463,12 @@ class UnifiedCalculixWriter:
 
         A run that is not held gets that rotation restrained at one of its
         supports, at an end of the run if it has one there, and the user is
-        told. One with no support of its own, or whose axis is not along a
-        global one, is only reported.
+        told. Along a global axis that is a ``*BOUNDARY`` on the rotation.
+        Along any other (a rafter, a brace) the support is given the rotation
+        to hold (``torsion_hold_axes``), and holds it as a skew support does,
+        with a stiff arm (``_build_support_arms``). A run with no support of
+        its own is only reported; so is a skew one whose supports are line
+        supports, or in a model with U1 members, where arms cannot be used.
         """
         from ..analysis.boundary_condition_handling import (
             released_rotation_axes,
@@ -2472,6 +2477,8 @@ class UnifiedCalculixWriter:
         )
 
         self._torsion_holds: List[Tuple[Any, str, int]] = []
+        for conn in self.domain_model.connections:
+            conn.torsion_hold_axes = []
         # In a plane structure held in its plane, a member's rotations about
         # the two axes of the plane are both zero, so both can be held where
         # it spins: about an axis that is not a global one too. Preferably at
@@ -2571,12 +2578,24 @@ class UnifiedCalculixWriter:
                         supports.append((len(attached), conn, member_id))
             axis = np.abs(directions[members[0]])
             aligned = [i for i in range(3) if axis[i] > 1.0 - 1e-6]
-            if supports and aligned:
-                _, conn, member_id = min(supports, key=lambda found: found[0])
-                self._torsion_holds.append((conn, member_id, 4 + aligned[0]))
-                held.extend(members)
-            else:
+            if not aligned:
+                # An arm at every node of a line support would be many holds
+                supports = [
+                    found
+                    for found in supports
+                    if getattr(found[1], "edge", None) is None and not self._u1_members
+                ]
+            if not supports:
                 loose.extend(members)
+                continue
+            _, conn, member_id = min(supports, key=lambda found: found[0])
+            if aligned:
+                self._torsion_holds.append((conn, member_id, 4 + aligned[0]))
+            else:
+                conn.torsion_hold_axes.append(
+                    [float(v) for v in directions[members[0]]]
+                )
+            held.extend(members)
 
         if held:
             self._warn_user(
