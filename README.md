@@ -125,7 +125,9 @@ the ones a user needs to know before trusting a result.
   one support**, with a warning. Two supports that each fix the three
   translations and no rotation, the usual description of a simply supported
   beam, leave it free to spin; the solver then returns an arbitrary rotation
-  that used to more than double the reported deflection.
+  that used to more than double the reported deflection. A straight run of
+  members joined end to end is held as one, and an inclined member is held
+  about its own axis.
 - **A column meeting a slab at a point with no connection is pinned to it
   there**, with a warning, like a beam lying in a slab. `--strict-connections`
   turns both off. A line connection in the file between a beam and a slab is

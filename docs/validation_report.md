@@ -940,6 +940,24 @@ is, and otherwise at one support:
 In the second case the hold is on a node where two members meet. It restrains their
 torsion only, and the result does not move.
 
+**A member along a skew axis that is free to spin** (`aiz.74`,
+`TestInclinedBeamFreeToSpin`). A 5 m rafter rising 3 in 4, two members on supports that
+hold translations only, 10 kN down and 5 kN across its plane at the joint. No rotation
+of a node is about its axis, so it used to be reported and left. The support at its
+foot is now given that rotation to hold, with a stiff arm as for a skew support:
+
+| Quantity | Beam theory | Before | Now |
+|---|---|---|---|
+| Deflection down | 9.536 mm | 9.789 mm | 9.542 mm |
+| Deflection along X | 7.152 mm | 7.352 mm | 7.167 mm |
+| Deflection across the plane | 7.450 mm | 7.761 mm | 7.453 mm |
+| Moments about the two section axes | 10 000 and 6250 N·m | | 9999.9 and 6250.0 N·m |
+| Torsion | 0 | | 0.0 N·m |
+
+The reactions add up to the loads to six figures, with 5030 and 4970 N of the 10 kN on
+the two supports. Passes on CalculiX 2.21 as well: no rotation is restrained by
+`*BOUNDARY`.
+
 **A beam continuous over a pinned support** (`aiz.78`,
 `TestBeamContinuousOverASupport`). Two 4 m spans, four members, three supports that
 hold no rotation, 10 kN in the middle of each span. A support with a free rotation was
@@ -1031,8 +1049,11 @@ to a node of shells alone swings freely about their normal.
 
 - **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
   ones are covered by the plate benchmark; local ones only by a unit test.
-- **Supports released in bending only at one end**, and members along a skew axis that
-  are free to spin: the first has no benchmark, the second is reported but not fixed.
+- **Supports released in bending only at one end** have no benchmark.
+- **Members free to spin that are reported and left**: those with no support of their
+  own (37 members of `building_02`, all along a global axis, each joined only to two
+  connections that hold nothing and join nothing else), and those along a skew axis
+  whose supports are line supports.
 - **Member stress** is the normal stress from axial force and bending only. Shear,
   torsion, buckling and anything specific to concrete are not checked.
 - **Shell members in membrane action**: walls are only checked through `structure_01`.

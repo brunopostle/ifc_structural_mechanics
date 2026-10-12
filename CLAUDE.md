@@ -684,8 +684,14 @@ rotational degrees of freedom**. This drives everything about joints:
   release. Members in line turn together and hold nothing for each other:
   they are one run, held once (`aiz.72`), at a support at an end of the run
   if it has one, else at a joint inside it (measured to 0.1%: only the
-  torsion of members in line is restrained there). Runs along a skew axis,
-  or with no support of their own, are only reported.
+  torsion of members in line is restrained there). Along a global axis the
+  hold is a `*BOUNDARY` on that rotation, outside the support's set. Along
+  any other (a rafter, a brace) the support is given the rotation to hold
+  (`connection.torsion_hold_axes`, `aiz.74`): `support_restraint()` returns
+  it with what the file says, so the arm, the equations and the reactions
+  are those of a skew support, and `_build_support_arms()` runs after this
+  step for that reason. Only reported: runs with no support of their own,
+  and skew ones on line supports or in a model with U1 members.
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve members only, in a plane parallel to
