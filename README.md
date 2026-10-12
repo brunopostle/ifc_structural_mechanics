@@ -95,7 +95,8 @@ the ones a user needs to know before trusting a result.
   - a member has no geometry, no material, no profile or (a slab or wall) no
     thickness, or its material has no Young's modulus;
   - a connection has no position, or is an `IfcStructuralSurfaceConnection`;
-  - a load has no position or no member, applies a moment, or is of a kind
+  - a load has no position or no member, applies a moment to a surface
+    member or one that varies along its member, or is of a kind
     other than a point, line or area force (temperature, prescribed
     displacement);
   - an item's placement is not an `IfcLocalPlacement` (a grid placement);

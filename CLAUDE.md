@@ -432,11 +432,18 @@ here. This section only records the constraints that shape day-to-day work.
   `--strict-connections` is the case it was written for. A warning here
   means look at connections and supports before anything else.
 - **Nodal stresses are averaged between elements that share nodes**, so a
-  force that jumps at a cross-section (shear under a point load) comes out as
-  the mean of the two sides. `ResultsExporter._restore_jumps()` puts the step
-  back for N, V and T from the elements' own middle cross-sections; it needs
-  four quadratic elements in the member. At a joint the nodes are separate
-  and the values are already one-sided.
+  force that jumps at a cross-section (shear under a point load, bending
+  moment under an applied moment) comes out as the mean of the two sides.
+  `ResultsExporter._restore_jumps()` puts the step back from the elements'
+  own middle cross-sections: N, V and T need four quadratic elements in the
+  member, a bending moment two (it changes by its shear per metre, so what
+  the shear does not account for is the jump). At a knot (members at an
+  angle) the nodes are separate and the values are already one-sided.
+  Members in line that are joined rigidly share nodes as two elements of
+  one member do (`_ends_shared()`), and their end cross-section gets the
+  value their own last middle leads to. The envelope in `results.json` is
+  taken from these diagrams, never from the raw cross-sections: beside a
+  jump the mean can be larger than either side's own value.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and
   13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
   in the file. `building_02` solves, its reactions match the applied loads and its
@@ -771,6 +778,30 @@ of its beam this way and was once analysed with twice its load, because the loca
 were not read. `ProjectedOrTrue` is applied in the extractor (`_per_true_length()`).
 DISCRETE, SINUS and PARABOLA actions and the varying actions of IFC2X3 raise
 `ModelExtractionError`; never read one as a constant load.
+
+**Applied moments** (`aiz.58`) are `Load.moment`: N·m on a `PointLoad`, N·m per
+metre on a `LineLoad` with one value (a moment that varies along its member raises).
+They are written as `*CLOAD` on rotations 4 to 6. CalculiX makes a beam node loaded
+that way a knot, and the moment arrives in the member (measured on hand-written input
+at a member's end, between elements and at a middle node, on 2.21 and 2.23). This is
+not the `*EQUATION` on DOF 4-6 that does nothing (see Connections). Things to keep:
+
+- A moment per length is shared out to the nodes as a force is. A couple along a beam
+  then leaves a saw tooth in the moment diagram of half of what one element carries.
+- A moment on a rotation that a support holds by `*BOUNDARY` goes straight into the
+  support. `_StepLoadRecorder` notes it and does not pass it on to the file: the
+  solver would warn for each one ("zero coefficient on the dependent side", "no MPC is
+  generated for the mean rotation").
+- `support_node_loads` has six values per node. A support's moment is its member
+  ends' less the point moments applied at its own nodes
+  (`_moments_on_support_nodes()`), not the nodal shares of a moment per length, which
+  the section forces at the end of the member include already (measured: taking them
+  off gave 2020.8 N·m for 2000).
+- A moment at a node of no curve member raises `AnalysisError`: shells alone have no
+  rotation about their normal.
+- `plane_normal()` takes a moment about the normal as a load in the plane.
+- A load case of moments alone has no force for the reactions to be compared with;
+  `BALANCE_NOISE_N` (1 mN) stops rounding from being reported as an imbalance.
 
 **Load steps**: CalculiX keeps loads active from step to step. Every static step
 starts with `*CLOAD, OP=NEW` / `*DLOAD, OP=NEW` (`_write_load_reset()`), otherwise

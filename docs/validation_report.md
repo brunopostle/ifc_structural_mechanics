@@ -1005,6 +1005,42 @@ sine or parabolic half wave was applied as a constant load of its peak value, an
 forces along a member (`DISCRETE`) as that many newtons per metre. Those two are now
 errors that name the load.
 
+**Applied moments** (`aiz.58`, `TestAppliedMoments`). They stopped the analysis. A
+moment is now written on the rotations of the node it acts at, which CalculiX turns
+into a knot. A 4 m beam, 0.1 m square, 0.25 m mesh:
+
+| Case | Beam theory | Result |
+|---|---|---|
+| 1000 N·m at the tip of a cantilever: moment along it, and at the support | 1000 N·m | 1000.0 and 999.99 N·m |
+| The same: tip deflection, M L² / 2 E I | 4.571 mm | 4.549 mm |
+| 1000 N·m of torque at the tip: torque along it, and at the support | 1000 N·m | 1000.0 and 999.99 N·m |
+| 1000 N·m in the middle of a simply supported beam: reactions, M / L | ∓250 N | to 0.01% |
+| The same: moment either side, M / 2 | ±500 N·m | ±500.0 N·m |
+| The same: deflection, M L² / (72 √3 E I) | 0.07331 mm | 0.07322 mm |
+| 1000 N·m 1.5 m along one member: moment before and after it | 375 and −625 N·m | to 0.1% |
+| With 1 kN/m on the first half and 4 kN at midspan: reactions | 3250 and 2750 N | to 0.01% |
+| The same: moment just before and just after midspan | 4500 and 5500 N·m | 4497.4 and 5500.0 N·m |
+| 500 N·m/m of torque along a cantilever: at the root, and at the support | 2000 N·m | 2000.0 and 1999.99 N·m |
+| 500 N·m/m about Y along a simply supported beam: reactions and shear | 500 N | to 0.01% and within 1% |
+| 1 kN at the tip, 500 and 300 N·m at the clamped root: support moments | 4500 and 300 N·m | within 1%, and 300.0 N·m |
+
+Three things in the results had to change for these to come out. The solver's stress
+at a cross-section two elements share is the mean of the two, so the moment diagram
+passed through nothing where the 1000 N·m is applied and the largest moment reported
+was 468.75 N·m, the value at the middle of the element beside it. A bending moment
+changes by its shear per metre, so a change the shear does not account for is now put
+back as a jump, half on each side. The same averaging happens between two members in
+line, which the member's own cross-sections cannot show; its end then gets the value
+its last own cross-section leads to. And the envelope is taken from the diagrams,
+since the mean can also be the larger: 5002.6 N·m was reported for the member that has
+4500 before the moment and 5500 after it.
+
+A load case of moments alone applies no force, and the check of the reactions against
+the applied load reported rounding (1e-6 N of 0 N) as an imbalance; it now needs a
+millinewton. A couple per length along a beam leaves a saw tooth in the moment diagram
+of half of what one element carries (62.5 N·m here, where the beam has none): it is
+applied as moments at the nodes.
+
 **A beam ending on the span of another** (`aiz.80`,
 `TestBeamEndingOnTheSpanOfAnother`). A 3 m beam between the middles of two 4 m girders
 fixed at their ends, 10 kN at its middle, 0.25 m mesh. The file gives each end of the
@@ -1144,8 +1180,9 @@ to a node of shells alone swings freely about their normal.
   between a beam and a slab is analysed as a hinge line.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
-- **Unsupported input**: applied moments, surface connections and
-  load kinds other than forces stop the analysis with an error naming the entity. So do
+- **Unsupported input**: surface connections, moments applied to surface members or
+  varying along a member, and load kinds other than forces and moments stop the
+  analysis with an error naming the entity. So do
   curve actions given as a row of point forces (`DISCRETE`) or as a sine or parabolic
   half wave, and the varying actions of IFC2X3.
 - **Skew supports**: validated for a point support on a beam (translation and
