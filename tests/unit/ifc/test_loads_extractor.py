@@ -53,6 +53,10 @@ class TestLoadsExtractor:
         self.point_load_applied.ForceX = 1000.0
         self.point_load_applied.ForceY = 0.0
         self.point_load_applied.ForceZ = -2000.0
+        # A bare mock has every attribute, and float() of one is 1.0
+        self.point_load_applied.MomentX = 0.0
+        self.point_load_applied.MomentY = 0.0
+        self.point_load_applied.MomentZ = 0.0
         self.point_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
         self.point_load.AppliedLoad = self.point_load_applied
         # A load with no position is an error, not a load at the origin
@@ -109,11 +113,13 @@ class TestLoadsExtractor:
 
         # Set up AppliedLoad for the area_load to handle extraction more robustly
         # spec: a bare mock has every attribute, LinearForceX included
-        self.area_load_applied = MagicMock(spec=["ForceX", "ForceY", "ForceZ", "is_a"])
-        self.area_load_applied.ForceX = 0.0
-        self.area_load_applied.ForceY = 0.0
-        self.area_load_applied.ForceZ = -2000.0
-        self.area_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
+        self.area_load_applied = MagicMock(
+            spec=["PlanarForceX", "PlanarForceY", "PlanarForceZ", "is_a"]
+        )
+        self.area_load_applied.PlanarForceX = 0.0
+        self.area_load_applied.PlanarForceY = 0.0
+        self.area_load_applied.PlanarForceZ = -2000.0
+        self.area_load_applied.is_a = lambda x: x == "IfcStructuralLoadPlanarForce"
         self.area_load.AppliedLoad = self.area_load_applied
         # A load on no member is an error, not a load on a default surface
         slab_relation = MagicMock()
@@ -367,10 +373,16 @@ class TestLoadsExtractor:
         with pytest.raises(ModelExtractionError, match="pl1.*position"):
             self.extractor.extract_all_loads()
 
-    def test_applied_moment_is_an_error(self):
+    def test_applied_moment_is_kept_with_its_force(self):
         self.point_load_applied.MomentY = 250.0
-        with pytest.raises(ModelExtractionError, match="pl1.*MomentY"):
-            self.extractor.extract_all_loads()
+        loads = self.extractor.extract_all_loads()
+        point_load = next(load for load in loads if load.id == "pl1")
+        assert point_load.moment.tolist() == [0.0, 250.0, 0.0]
+        assert point_load.magnitude.tolist() == [1000.0, 0.0, -2000.0]
+
+    def test_load_without_a_moment_has_none(self):
+        loads = self.extractor.extract_all_loads()
+        assert all(load.moment is None for load in loads)
 
     def test_unsupported_applied_load_is_an_error(self):
         self.point_load_applied.is_a = lambda *args: (

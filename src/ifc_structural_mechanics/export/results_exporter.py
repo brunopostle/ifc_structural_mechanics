@@ -201,7 +201,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..analysis.plausibility import BALANCE_LIMIT
+from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from ..analysis.superposition import combine_results
 from ..utils.error_handling import ResultProcessingError
 
@@ -243,6 +243,7 @@ class ResultsExporter:
         self.parsed_results = parsed_results
         self.limits = limits or {}
         self.element_nodes = element_nodes or {}
+        self._elements_at_node: Optional[Dict[int, List[int]]] = None
         self.load_combinations = list(load_combinations or [])
         # What each solver step put on the structure, in step order
         self._support_node_loads = getattr(domain_model, "support_node_loads", None)
@@ -459,7 +460,8 @@ class ResultsExporter:
         )
         disp_by_lc = self._member_displacements(node_ids)
         stress_by_lc = {} if equivalent else self._member_stresses(node_ids)
-        sf_by_lc = self._member_section_forces(elem_ids)
+        diagrams = self._member_diagrams(elem_ids)
+        sf_by_lc = self._member_section_forces(elem_ids, diagrams)
         util_by_lc = self._member_utilisation(elem_ids, member)
 
         # Merge into per-load-case dict
@@ -502,7 +504,6 @@ class ResultsExporter:
             result["envelope"] = envelope
         if by_load_case:
             result["by_load_case"] = by_load_case
-        diagrams = self._member_diagrams(elem_ids)
         if diagrams:
             axes = self._member_axes(member, elem_ids)
             if axes:
@@ -656,18 +657,26 @@ class ResultsExporter:
             self._section_force_records = index
         return self._section_force_records
 
-    def _member_section_forces(self, elem_ids: set) -> Dict[str, Dict[str, float]]:
+    def _member_section_forces(
+        self, elem_ids: set, diagrams: Optional[Dict[str, Dict]] = None
+    ) -> Dict[str, Dict[str, float]]:
         """Return per-load-case section force envelopes for the given element set.
 
         The largest magnitude of N, T, Mf1, Mf2, Vf1 and Vf2 over every
         cross-section of the member's elements, per load case, and the
         largest tension and compression. The maxima need not occur at the
-        same cross-section.
+        same cross-section. Where a load case has a diagram in ``diagrams``
+        the values are its own: where a force jumps it has the value on each
+        side, and the cross-sections have their mean (an applied moment of
+        1000 N·m in the middle of a beam is 500 on each side and nothing in
+        the mean; next to a point load the mean can be the larger).
         """
         index = self._section_force_index()
         result: Dict[str, Dict[str, float]] = {}
         for elem_id in elem_ids:
             for rec in index.get(elem_id, ()):
+                if rec.get("load_case", "_combined") in (diagrams or {}):
+                    continue
                 entry = result.setdefault(
                     rec.get("load_case", "_combined"),
                     {
@@ -679,6 +688,22 @@ class ResultsExporter:
                 for key, name in self._FORCE_KEYS:
                     entry[name] = max(entry[name], abs(rec.get(key, 0.0)))
                 axial = rec.get("N", 0.0)
+                entry["max_tension_N"] = max(entry["max_tension_N"], axial)
+                entry["max_compression_N"] = max(entry["max_compression_N"], -axial)
+        names = dict(self._DIAGRAM_KEYS)
+        for case, diagram in (diagrams or {}).items():
+            entry = result.setdefault(
+                case,
+                {
+                    **{name: 0.0 for _, name in self._FORCE_KEYS},
+                    "max_tension_N": 0.0,
+                    "max_compression_N": 0.0,
+                },
+            )
+            for key, name in self._FORCE_KEYS:
+                values = diagram.get(names.get(key, ""), ())
+                entry[name] = max([entry[name]] + [abs(v) for v in values])
+            for axial in diagram.get("N_N", ()):
                 entry["max_tension_N"] = max(entry["max_tension_N"], axial)
                 entry["max_compression_N"] = max(entry["max_compression_N"], -axial)
         return result
@@ -718,7 +743,7 @@ class ResultsExporter:
                 key: max((abs(r.get(key, 0.0)) for r in records), default=0.0)
                 for key, _ in self._DIAGRAM_KEYS
             }
-            self._restore_jumps(records, scales)
+            self._restore_jumps(records, scales, self._ends_shared(elem_ids))
             scale = max(scales.values(), default=0.0)
             kept: List[Dict] = []
             for rec in records:
@@ -743,64 +768,171 @@ class ResultsExporter:
     # member is taken to be noise and left averaged.
     _JUMP_FRACTION = 0.02
     # Forces that vary linearly along a member between loads, so that a step
-    # out of line with the others is a jump. Bending moments are left out:
-    # they are continuous unless a moment is applied.
+    # out of line with the others is a jump.
     _JUMPING_FORCES = ("N", "Vf1", "Vf2", "T")
+    # A bending moment changes by its shear force per metre, so a change that
+    # the shear does not account for is a jump: an applied moment.
+    _MOMENTS_AND_SHEARS = (("Mf1", "Vf1"), ("Mf2", "Vf2"))
 
-    def _restore_jumps(self, records: List[Dict], scales: Dict[str, float]) -> None:
+    def _ends_shared(self, elem_ids: set) -> set:
+        """Elements of a member that share nodes with an element of another.
+
+        Members in line that are joined rigidly are expanded into solids that
+        share the nodes of the cross-section between them, as two elements of
+        one member do, and the solver's stress there is the mean of the two.
+        (Members at an angle meet in a knot and keep their own nodes.)
+        """
+        if self._elements_at_node is None:
+            at_node: Dict[int, List[int]] = defaultdict(list)
+            for element, nodes in self.element_nodes.items():
+                for node in nodes:
+                    at_node[node].append(element)
+            self._elements_at_node = at_node
+        return {
+            element
+            for element in elem_ids
+            for node in self.element_nodes.get(element, ())
+            if any(other not in elem_ids for other in self._elements_at_node[node])
+        }
+
+    def _restore_jumps(
+        self,
+        records: List[Dict],
+        scales: Dict[str, float],
+        shared_ends: Optional[set] = None,
+    ) -> None:
         """Put back the jumps that nodal averaging smooths out, in place.
 
         Two elements in line share the nodes of the cross-section between
         them, and the solver reports one averaged stress there. Under a point
         load the shear is then the mean of its values on the two sides, and a
-        diagram shows a ramp where there is a step.
+        diagram shows a ramp where there is a step; under an applied moment
+        the bending moment is, and the diagram passes through nothing where
+        it should reach half the moment on each side.
 
         The middle cross-section of a quadratic element is its own. From one
         middle to the next a force normally changes by the same amount per
         metre all along the member (the distributed load), so the median of
         those slopes is the normal one, and an interface where the change is
         out of line with it by more than ``_JUMP_FRACTION`` has a jump of the
-        difference. The averaged value is replaced by one on each side, half
-        the jump apart. Needs four quadratic elements in the member; linear
-        elements have no middle cross-section and are left as they are.
+        difference. A bending moment changes by its shear force per metre,
+        which the middles on either side give. The averaged value is
+        replaced by one on each side, half the jump apart. Forces need four
+        quadratic elements in the member and moments two; linear elements
+        have no middle cross-section and are left as they are.
+
+        The end of a member that runs on into another in line
+        (``shared_ends``: the elements that share nodes with another
+        member's) is averaged with that member, which is not in ``records``.
+        It gets the value its own last middle leads to.
         """
         middles = sorted(
             (r for r in records if r["position"] == 0.0), key=lambda r: r["distance"]
         )
-        if len(middles) < 4:
+        if len(middles) < 2:
             return
         ends = {(r["element_id"], r["position"]): r for r in records}
+        pairs = [
+            (a, b, b["distance"] - a["distance"])
+            for a, b in zip(middles, middles[1:])
+            if b["distance"] - a["distance"] > 1e-12
+        ]
+
+        def interface(a: Dict, b: Dict, key: str):
+            """The records of the cross-section two elements share, if they do."""
+            left = ends.get((a["element_id"], 1.0))
+            right = ends.get((b["element_id"], -1.0))
+            if left is None or right is None:
+                return None
+            shared = (
+                abs(left["distance"] - right["distance"]) < 1e-9
+                and abs(left.get(key, 0.0) - right.get(key, 0.0)) <= 1e-9 * scales[key]
+            )
+            # Separate nodes: the values are already one-sided
+            return (left, right) if shared else None
+
+        def set_apart(left: Dict, right: Dict, key: str, jump: float) -> None:
+            if abs(jump) > self._JUMP_FRACTION * scales[key]:
+                average = left.get(key, 0.0)
+                left[key] = average - jump / 2.0
+                right[key] = average + jump / 2.0
+
+        # The outermost cross-sections, where they are shared with a member
+        # that runs on: (record, its element's own middle)
+        outer = []
+        for middle, position in ((middles[0], -1.0), (middles[-1], 1.0)):
+            record = ends.get((middle["element_id"], position))
+            if record is not None and middle["element_id"] in (shared_ends or ()):
+                outer.append((record, middle))
+
+        normal_slopes: Dict[str, float] = {}
         for key in self._JUMPING_FORCES:
-            if scales.get(key, 0.0) <= 0.0:
+            if scales.get(key, 0.0) <= 0.0 or len(middles) < 4:
                 continue
-            pairs = [
-                (a, b, b["distance"] - a["distance"])
-                for a, b in zip(middles, middles[1:])
-                if b["distance"] - a["distance"] > 1e-12
-            ]
             slopes = sorted(
                 (b.get(key, 0.0) - a.get(key, 0.0)) / gap for a, b, gap in pairs
             )
             if len(slopes) < 3:
                 continue
-            normal = slopes[len(slopes) // 2]
+            normal = normal_slopes[key] = slopes[len(slopes) // 2]
             for a, b, gap in pairs:
-                left = ends.get((a["element_id"], 1.0))
-                right = ends.get((b["element_id"], -1.0))
-                if left is None or right is None:
+                found = interface(a, b, key)
+                if found:
+                    jump = b.get(key, 0.0) - a.get(key, 0.0) - normal * gap
+                    set_apart(*found, key, jump)
+
+        # What an outer cross-section's own element leads to, kept for the
+        # moments, which need the shear there
+        led_to: Dict[int, Dict[str, float]] = {}
+        for record, middle in outer:
+            reach = record["distance"] - middle["distance"]
+            led_to[id(record)] = {
+                key: middle.get(key, 0.0) + normal_slopes.get(key, 0.0) * reach
+                for key in self._JUMPING_FORCES
+            }
+
+        for moment, shear in self._MOMENTS_AND_SHEARS:
+            if scales.get(moment, 0.0) <= 0.0:
+                continue
+            # Whether the moment rises or falls with a positive shear: as
+            # most stretches have it, since one with a jump in it says
+            # nothing
+            changes = sorted(
+                (b.get(moment, 0.0) - a.get(moment, 0.0))
+                * (a.get(shear, 0.0) + b.get(shear, 0.0))
+                for a, b, _ in pairs
+            )
+            sign = -1.0 if changes and changes[len(changes) // 2] < 0.0 else 1.0
+            for a, b, gap in pairs:
+                found = interface(a, b, moment)
+                if not found:
                     continue
-                shared = (
-                    abs(left["distance"] - right["distance"]) < 1e-9
-                    and abs(left.get(key, 0.0) - right.get(key, 0.0))
-                    <= 1e-9 * scales[key]
+                at = found[0]["distance"]
+                sheared = sign * (
+                    a.get(shear, 0.0) * (at - a["distance"])
+                    + b.get(shear, 0.0) * (b["distance"] - at)
                 )
-                if not shared:
-                    continue  # separate nodes: the values are already one-sided
-                jump = b.get(key, 0.0) - a.get(key, 0.0) - normal * gap
-                if abs(jump) > self._JUMP_FRACTION * scales[key]:
-                    average = left.get(key, 0.0)
-                    left[key] = average - jump / 2.0
-                    right[key] = average + jump / 2.0
+                jump = b.get(moment, 0.0) - a.get(moment, 0.0) - sheared
+                set_apart(*found, moment, jump)
+            for record, middle in outer:
+                reach = record["distance"] - middle["distance"]
+                mean_shear = 0.5 * (middle.get(shear, 0.0) + led_to[id(record)][shear])
+                value = middle.get(moment, 0.0) + sign * mean_shear * reach
+                if abs(value - record.get(moment, 0.0)) > (
+                    self._JUMP_FRACTION * scales[moment]
+                ):
+                    record[moment] = value
+
+        for record, _ in outer:
+            for key in self._JUMPING_FORCES:
+                if scales.get(key, 0.0) <= 0.0:
+                    continue
+                value = led_to[id(record)][key]
+                if (
+                    abs(value - record.get(key, 0.0))
+                    > self._JUMP_FRACTION * scales[key]
+                ):
+                    record[key] = value
 
     def _member_axes(self, member, elem_ids: set) -> Optional[Dict[str, List[float]]]:
         """The axes section forces are given in: ``x``, ``1`` and ``2``.
@@ -1014,6 +1146,7 @@ class ResultsExporter:
         by_load_case: Dict[str, Dict[str, float]] = {}
         for index, step in enumerate(steps):
             applied = self._loads_on_support_nodes(index)
+            applied_moments = self._moments_on_support_nodes(index)
             force = np.zeros(3)
             moment = np.zeros(3)
             for node, xyz in nodes.items():
@@ -1035,14 +1168,16 @@ class ResultsExporter:
                     end_moment += sign * (
                         np.array(rec["moment"]) + np.cross(arm, np.array(rec["force"]))
                     )
-                # A support only resists what it holds
+                # The support takes that, less a moment applied at its own
+                # node, and only resists what it holds
+                for node in nodes:
+                    end_moment -= np.array(applied_moments.get(node, (0.0, 0.0, 0.0)))
                 moment = turn @ end_moment
                 held_force = hold @ end_force
                 apart = float(np.linalg.norm(force - held_force))
                 size = max(np.linalg.norm(force), np.linalg.norm(held_force))
-                if (
-                    not self._reactions_balance(index)
-                    or apart > self._SOLVER_FORCE_TOLERANCE * size
+                if not self._reactions_balance(index) or apart > max(
+                    BALANCE_NOISE_N, self._SOLVER_FORCE_TOLERANCE * size
                 ):
                     # The solver's force here is wrong (see
                     # ``_reactions_balance``); the member ends' is not
@@ -1148,14 +1283,25 @@ class ResultsExporter:
             math.sqrt(sum(v * v for v in load)),
             math.sqrt(sum(v * v for v in reaction)),
         )
-        return imbalance <= BALANCE_LIMIT * size
+        return imbalance <= max(BALANCE_NOISE_N, BALANCE_LIMIT * size)
 
     def _loads_on_support_nodes(self, step_index: int) -> Dict[int, List[float]]:
-        """Loads applied directly at support nodes in one step, by node."""
+        """Forces applied directly at support nodes in one step, by node."""
         recorded = self._support_node_loads
         if not isinstance(recorded, list) or step_index >= len(recorded):
             return {}
-        return recorded[step_index]
+        return {node: list(load[:3]) for node, load in recorded[step_index].items()}
+
+    def _moments_on_support_nodes(self, step_index: int) -> Dict[int, List[float]]:
+        """Moments applied directly at support nodes in one step, by node."""
+        recorded = self._support_node_loads
+        if not isinstance(recorded, list) or step_index >= len(recorded):
+            return {}
+        return {
+            node: list(load[3:6])
+            for node, load in recorded[step_index].items()
+            if len(load) >= 6
+        }
 
     @staticmethod
     def _in_axes(values: Dict[str, float], rotation: np.ndarray) -> Dict[str, float]:

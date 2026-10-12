@@ -34,6 +34,9 @@ class Load(DomainEntity):
         self.direction = None
         # "global", or "local" for a load given in the axes of its member
         self.coordinate_system = "global"
+        # A moment applied with the force, in the same axes: N·m at a point,
+        # N·m per metre along a line
+        self.moment: Optional[np.ndarray] = None
 
         # Initialize base entity with ID and load type
         super().__init__(
@@ -107,6 +110,9 @@ class Load(DomainEntity):
             result["direction"] = self.direction.tolist()
         else:
             result["direction"] = self.direction
+
+        if self.moment is not None:
+            result["moment"] = np.asarray(self.moment, dtype=float).tolist()
 
         return result
 

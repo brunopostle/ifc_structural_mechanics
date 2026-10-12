@@ -16,6 +16,9 @@ MEMBER_LIMIT = 1.0 / 100.0
 MODEL_LIMIT = 0.05
 # Reactions that miss the applied load by more than this fraction of it.
 BALANCE_LIMIT = 1.0e-3
+# An imbalance smaller than this is rounding whatever the loads are: a load
+# case of applied moments alone has no force to compare it with.
+BALANCE_NOISE_N = 1.0e-3
 
 
 def _points(geometry: Any) -> List[Sequence[float]]:
@@ -88,7 +91,10 @@ def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
         if load is None or imbalance is None:
             continue
         size = math.sqrt(sum(v * v for v in load))
-        if imbalance > BALANCE_LIMIT * max(size, reaction.get("resultant_N", 0.0)):
+        if imbalance > max(
+            BALANCE_NOISE_N,
+            BALANCE_LIMIT * max(size, reaction.get("resultant_N", 0.0)),
+        ):
             unbalanced.append((case, imbalance, size))
     supports = results.get("supports", [])
     replaced = sum(1 for s in supports if s.get("forces") == "member_end_forces")

@@ -881,6 +881,10 @@ def _write_step_output_requests(
     file.write("*END STEP\n\n")
 
 
+# The comment that introduces the nodal shares of moments per length
+_DISTRIBUTED_MOMENTS = "** Distributed moments"
+
+
 class _StepLoadRecorder:
     """Passes what is written on to the input file and notes each step's loads.
 
@@ -889,40 +893,65 @@ class _StepLoadRecorder:
     missing from it, and one in a free direction appears in it. The loads on
     support nodes are needed to put that right, and reading them off what is
     written covers every path that writes one.
+
+    A moment applied to a rotation that a support holds goes straight into
+    the support. It is noted and not written: the solver has nothing to do
+    with it, and says so in a warning of its own for each one.
     """
 
-    def __init__(self, file: TextIO):
+    def __init__(self, file: TextIO, held_rotations: Optional[set] = None):
         self._file = file
         self._pending = ""
         self._block = ""
-        # One per step: {"nodal": {node: [fx, fy, fz]}, "gravity": vector}
+        self._held_rotations = held_rotations or set()
+        self._shares_follow = False
+        self._shares = False
+        # One per step: {"nodal": {node: [fx, fy, fz, mx, my, mz]},
+        # "gravity": vector}
         self.steps: List[Dict[str, Any]] = []
 
     def write(self, text: str) -> int:
         self._pending += text
         *lines, self._pending = self._pending.split("\n")
         for line in lines:
-            self._note(line.strip())
-        return self._file.write(text)
+            if self._note(line.strip()):
+                self._file.write(line + "\n")
+        return len(text)
 
-    def _note(self, line: str) -> None:
+    def finish(self) -> None:
+        """Write what has not ended in a new line yet."""
+        if self._pending:
+            if self._note(self._pending.strip()):
+                self._file.write(self._pending)
+            self._pending = ""
+
+    def _note(self, line: str) -> bool:
+        """Note what a line applies; False for a line that is not to be written."""
+        if line.startswith(_DISTRIBUTED_MOMENTS):
+            self._shares_follow = True
         if not line or line.startswith("**"):
-            return
+            return True
         if line.startswith("*"):
             self._block = line.split(",")[0].strip().upper()
+            self._shares, self._shares_follow = self._shares_follow, False
             if self._block == "*STEP":
                 self.steps.append({"nodal": {}, "gravity": None})
-            return
+            return True
         if not self.steps:
-            return
+            return True
         step = self.steps[-1]
         parts = [part.strip() for part in line.split(",")]
         if self._block == "*CLOAD":
             node, dof, value = int(parts[0]), int(parts[1]), float(parts[2])
-            if 1 <= dof <= 3:
-                step["nodal"].setdefault(node, [0.0, 0.0, 0.0])[dof - 1] += value
-        elif self._block == "*DLOAD" and len(parts) >= 6 and parts[1] == "GRAV":
+            # A node's share of a moment per length is not noted: the
+            # section forces at the end of the member have it already, as
+            # the moment of a member loaded all along has
+            if 1 <= dof <= 3 or (4 <= dof <= 6 and not self._shares):
+                step["nodal"].setdefault(node, [0.0] * 6)[dof - 1] += value
+            return (node, dof) not in self._held_rotations
+        if self._block == "*DLOAD" and len(parts) >= 6 and parts[1] == "GRAV":
             step["gravity"] = float(parts[2]) * np.array([float(v) for v in parts[3:6]])
+        return True
 
 
 def _weight_on_nodes(
@@ -986,12 +1015,23 @@ def write_analysis_steps(
 
     See ``_write_analysis_steps`` for the arguments. Afterwards
     ``domain_model.support_node_loads`` holds, for each step in order, the
-    load applied directly at each support node, ``{node: [fx, fy, fz]}``:
-    the results exporter takes it off what the solver reports there.
+    load applied directly at each support node, ``{node: [fx, fy, fz, mx,
+    my, mz]}``: the results exporter takes it off what the solver reports
+    there, and the moment off what the ends of the members give.
     ``domain_model.applied_load_totals`` holds the whole load of each step,
     ``[fx, fy, fz]``, which the reactions have to balance.
     """
-    recorder = _StepLoadRecorder(file)
+    supports = getattr(domain_model, "support_nodes", None)
+    held_rotations = set()
+    if isinstance(supports, dict):
+        held_rotations = {
+            (node, dof)
+            for record in supports.values()
+            for node in record["nodes"]
+            for dof in record.get("dofs", ())
+            if dof >= 4
+        }
+    recorder = _StepLoadRecorder(file, held_rotations)
     _write_analysis_steps(
         recorder,  # type: ignore[arg-type]
         domain_model,
@@ -1005,7 +1045,7 @@ def write_analysis_steps(
         u1_element_sets,
         elements_data,
     )
-    supports = getattr(domain_model, "support_nodes", None)
+    recorder.finish()
     if not isinstance(supports, dict):
         return
     nodes = {node for record in supports.values() for node in record["nodes"]}
@@ -1017,12 +1057,14 @@ def write_analysis_steps(
             for node, weight in _weight_on_nodes(
                 domain_model, elements_data, node_coords, None, step["gravity"]
             ).items():
-                everywhere[node] = everywhere.get(node, np.zeros(3)) + weight
+                everywhere[node] = everywhere.get(node, np.zeros(6)) + np.append(
+                    weight, np.zeros(3)
+                )
         recorded.append(
             {n: [float(v) for v in f] for n, f in everywhere.items() if n in nodes}
         )
         totals.append(
-            [float(v) for v in sum(everywhere.values(), np.zeros(3))]  # type: ignore
+            [float(v) for v in sum(everywhere.values(), np.zeros(6))[:3]]  # type: ignore
         )
     domain_model.support_node_loads = recorded
     domain_model.applied_load_totals = totals
@@ -1308,6 +1350,114 @@ def find_closest_node(
     return closest_node
 
 
+def _nodes_of_curve_members(elements_data: Optional[Dict[int, Dict]]) -> set:
+    """The nodes of beam elements: those a moment can be applied to."""
+    return {
+        node
+        for element in (elements_data or {}).values()
+        if not str(element.get("type", "")).startswith("S")
+        for node in element.get("nodes", [])
+    }
+
+
+def _point_load_lines(
+    load,
+    node_coords: Optional[Dict[int, Tuple[float, float, float]]],
+    domain_model: StructuralModel,
+    elements_data: Optional[Dict[int, Dict]],
+) -> List[str]:
+    """The ``*CLOAD`` data lines of a point load: its force and its moment.
+
+    A moment goes on rotations 4 to 6 of the node. CalculiX turns a beam
+    node loaded that way into a knot, a rigid cross-section with a rotation
+    of its own, and the moment arrives in the member as it should (measured
+    at an end, between elements and at an element's middle node). A node of
+    shells alone has no rotation about their normal.
+
+    Raises:
+        AnalysisError: For a moment at a node of no curve member.
+    """
+    node_id = _determine_load_node(
+        load, node_coords=node_coords, domain_model=domain_model
+    )
+    lines = [
+        f"{node_id}, {i + 1}, {component:.6e}\n"
+        for i, component in enumerate(_get_validated_force_vector(load))
+        if abs(component) > 1e-10
+    ]
+    moment = getattr(load, "moment", None)
+    if moment is not None and np.any(np.abs(moment) > 1e-10):
+        if elements_data and node_id not in _nodes_of_curve_members(elements_data):
+            raise AnalysisError(
+                f"Point load {getattr(load, 'id', '?')} applies a moment where "
+                "there is no curve member; moments on surface members are not "
+                "supported."
+            )
+        lines += [
+            f"{node_id}, {i + 4}, {float(component):.6e}\n"
+            for i, component in enumerate(moment)
+            if abs(component) > 1e-10
+        ]
+    return lines
+
+
+def _load_to_nodal_moments(
+    load,
+    element_set_name: str,
+    domain_model: StructuralModel,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> Dict[int, List[float]]:
+    """The nodal moments of a moment per length along a curve member.
+
+    Each node takes the share of it that it takes of a force per length.
+
+    Raises:
+        AnalysisError: If the moment is in the axes of a member that has
+            none, or on a surface member.
+    """
+    moment = getattr(load, "moment", None)
+    if moment is None or not np.any(np.abs(moment) > 1e-30):
+        return {}
+    turned = _to_global_axes(load, moment, domain_model)
+    if turned is None:
+        raise AnalysisError(
+            f"Load {getattr(load, 'id', '?')} applies a moment in the local axes "
+            "of a member that has none."
+        )
+    nodal = _distributed_load_to_nodal_forces(
+        element_set_name, turned, element_sets, elements_data, node_coords
+    )
+    if set(nodal) - _nodes_of_curve_members(elements_data):
+        raise AnalysisError(
+            f"Load {getattr(load, 'id', '?')} applies a moment along a surface "
+            "member; moments on surface members are not supported."
+        )
+    return nodal
+
+
+def _write_nodal_moments(file: TextIO, moments: Dict[int, List[float]]) -> bool:
+    """Write nodal moments as ``*CLOAD`` on rotations 4 to 6."""
+    if not moments:
+        return False
+    file.write(f"{_DISTRIBUTED_MOMENTS} (equivalent nodal moments)\n")
+    file.write("*CLOAD\n")
+    for node_id, values in sorted(moments.items()):
+        for index, value in enumerate(values):
+            if abs(value) > 1e-30:
+                file.write(f"{node_id}, {index + 4}, {value:.6e}\n")
+    file.write("\n")
+    return True
+
+
+def _add_nodal(total: Dict[int, List[float]], part: Dict[int, List[float]]) -> None:
+    for node_id, values in part.items():
+        entry = total.setdefault(node_id, [0.0, 0.0, 0.0])
+        for i in range(3):
+            entry[i] += values[i]
+
+
 def _write_validated_loads_within_step(
     file: TextIO,
     domain_model: StructuralModel,
@@ -1354,20 +1504,11 @@ def _write_validated_loads_within_step(
             file.write("*CLOAD\n")
             for load in point_loads:
                 written_load_ids.add(load.id)
-
-                # Position-based node determination
-                node_id = _determine_load_node(
-                    load, node_coords=node_coords, domain_model=domain_model
-                )
-
-                # Enhanced force vector validation
-                force_vector = _get_validated_force_vector(load)
-
-                # Write load components
-                for i, component in enumerate(force_vector):
-                    if abs(component) > 1e-10:  # Only write significant forces
-                        file.write(f"{node_id}, {i+1}, {component:.6e}\n")
-                        loads_written = True
+                for line in _point_load_lines(
+                    load, node_coords, domain_model, elements_data
+                ):
+                    file.write(line)
+                    loads_written = True
             file.write("\n")
 
         # FIXED: Process distributed loads (use *DLOAD with proper element set references)
@@ -1377,6 +1518,7 @@ def _write_validated_loads_within_step(
         if distributed_loads:
             # Accumulate equivalent CLOADs for U1 members; written after DLOAD block.
             u1_extra_cloads: Dict[int, List[float]] = {}
+            nodal_moments: Dict[int, List[float]] = {}
 
             for load in distributed_loads:
                 # FIXED: Find the appropriate element set for this load
@@ -1452,11 +1594,18 @@ def _write_validated_loads_within_step(
                                 "local axes of a member that has none; it is "
                                 "applied in global axes.",
                             )
-                        for nid, fvec in partial.items():
-                            entry = u1_extra_cloads.setdefault(nid, [0.0, 0.0, 0.0])
-                            entry[0] += fvec[0]
-                            entry[1] += fvec[1]
-                            entry[2] += fvec[2]
+                        _add_nodal(u1_extra_cloads, partial)
+                        _add_nodal(
+                            nodal_moments,
+                            _load_to_nodal_moments(
+                                load,
+                                element_set_name,
+                                domain_model,
+                                element_sets or {},
+                                elements_data,
+                                node_coords,
+                            ),
+                        )
 
             # Write the distributed loads as equivalent nodal forces
             if u1_extra_cloads:
@@ -1467,6 +1616,8 @@ def _write_validated_loads_within_step(
                         if abs(val) > 1e-30:
                             file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
                 file.write("\n")
+                loads_written = True
+            if _write_nodal_moments(file, nodal_moments):
                 loads_written = True
 
     # Process loads directly on members (same fix applies)
@@ -1485,15 +1636,11 @@ def _write_validated_loads_within_step(
             file.write("*CLOAD\n")
             for load in point_loads:
                 written_load_ids.add(load.id)
-                node_id = _determine_load_node(
-                    load, node_coords=node_coords, domain_model=domain_model
-                )
-                force_vector = _get_validated_force_vector(load)
-
-                for i, component in enumerate(force_vector):
-                    if abs(component) > 1e-10:
-                        file.write(f"{node_id}, {i+1}, {component:.6e}\n")
-                        loads_written = True
+                for line in _point_load_lines(
+                    load, node_coords, domain_model, elements_data
+                ):
+                    file.write(line)
+                    loads_written = True
             file.write("\n")
 
         # FIXED: Process distributed loads on members
@@ -1519,6 +1666,7 @@ def _write_validated_loads_within_step(
             else:
                 if elements_data and node_coords:
                     member_cloads: Dict[int, List[float]] = {}
+                    member_moments: Dict[int, List[float]] = {}
                     for load in distributed_loads:
                         partial, _ = _load_to_nodal_forces(
                             load,
@@ -1528,10 +1676,18 @@ def _write_validated_loads_within_step(
                             elements_data,
                             node_coords,
                         )
-                        for nid, fvec in partial.items():
-                            entry = member_cloads.setdefault(nid, [0.0, 0.0, 0.0])
-                            for i in range(3):
-                                entry[i] += fvec[i]
+                        _add_nodal(member_cloads, partial)
+                        _add_nodal(
+                            member_moments,
+                            _load_to_nodal_moments(
+                                load,
+                                element_set_name,
+                                domain_model,
+                                element_sets or {},
+                                elements_data,
+                                node_coords,
+                            ),
+                        )
                     if member_cloads:
                         file.write("*CLOAD\n")
                         for node_id, forces in sorted(member_cloads.items()):
@@ -1539,6 +1695,8 @@ def _write_validated_loads_within_step(
                                 if abs(val) > 1e-30:
                                     file.write(f"{node_id}, {dof_idx + 1}, {val:.6e}\n")
                         file.write("\n")
+                        loads_written = True
+                    if _write_nodal_moments(file, member_moments):
                         loads_written = True
                     continue
                 raise AnalysisError(

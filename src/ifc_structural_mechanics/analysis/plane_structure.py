@@ -30,6 +30,7 @@ from ..domain.structural_member import CurveMember
 from ..domain.structural_model import StructuralModel
 from .boundary_condition_handling import (
     _global_force_vector,
+    _to_global_axes,
     get_released_rotations,
     share_in_span,
     support_restraint,
@@ -60,7 +61,8 @@ def plane_normal(
     - it has curve members only, and all of them lie in one plane parallel to
       two global axes;
     - every load acts in that plane, and so does the self-weight a load case
-      includes and gravity, when ``gravity_direction`` is given;
+      includes and gravity, when ``gravity_direction`` is given; an applied
+      moment is about the axis across it;
     - every member's section has its own axes in and across the plane;
     - so has every support: what it holds is in the plane or across it.
 
@@ -88,6 +90,7 @@ def plane_normal(
     # against its own largest
     forces = []
     weights = []
+    moments = []
     for group in domain_model.load_groups:
         if getattr(group, "includes_self_weight", False):
             weights.append(
@@ -98,6 +101,11 @@ def plane_normal(
             if vector is None:
                 return None
             forces.append(np.abs(np.array(vector, dtype=float)))
+            if getattr(load, "moment", None) is not None:
+                moment = _to_global_axes(load, load.moment, domain_model)
+                if moment is None:
+                    return None
+                moments.append(np.abs(moment))
     if gravity_direction is not None:
         weights.append(np.abs(np.array(gravity_direction, dtype=float)))
     loaded = []
@@ -114,12 +122,30 @@ def plane_normal(
     elif len(flat) == 2:
         # Along one axis: the plane is that of the loads across it
         across = [axis for axis in flat if axis in loaded]
-        if len(across) != 1:
-            return None
-        normal = [axis for axis in flat if axis != across[0]][0]
+        if len(across) == 1:
+            normal = [axis for axis in flat if axis != across[0]][0]
+        else:
+            # Or that of its applied moments, when they are all about one
+            about = [
+                axis
+                for axis in flat
+                if any(moment[axis] > _FLAT * moment.max() for moment in moments)
+            ]
+            if across or len(about) != 1:
+                return None
+            normal = about[0]
     else:
         return None
     if normal in loaded:
+        return None
+    # A moment keeps the structure in its plane when it is about the normal
+    largest = max((float(moment.max()) for moment in moments), default=0.0)
+    if any(
+        moment[axis] > _FLAT * largest
+        for moment in moments
+        for axis in range(3)
+        if axis != normal
+    ):
         return None
 
     for member in members:

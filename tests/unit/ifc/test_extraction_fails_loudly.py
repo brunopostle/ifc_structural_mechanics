@@ -128,15 +128,34 @@ class TestLoads:
         messages = _warnings(model)
         assert any("belong to no load group" in m for m in messages)
 
-    def test_applied_moment_is_an_error(self):
-        """It used to be left out, and the force applied alone."""
+    def test_applied_moment_is_read(self):
+        """It used to be left out, and the force applied alone.
+
+        beam_01 is in newtons and millimetres: 500 N·mm is 0.5 N·m.
+        """
         model = _open("beam_01")
         action = model.by_type("IfcStructuralPointAction")[0]
         action.AppliedLoad.MomentY = 500.0
+        loads = [
+            load
+            for group in Extractor(model).extract_model().load_groups
+            for load in group.loads
+        ]
+        found = [load for load in loads if load.id == action.GlobalId]
+        assert found
+        for load in found:
+            assert load.moment.tolist() == pytest.approx([0.0, 0.5, 0.0])
+
+    def test_moment_that_varies_along_a_member_is_an_error(self):
+        model = _open("portal_01")
+        action = model.by_type("IfcStructuralCurveAction")[0]
+        action.AppliedLoad.Values[1].LinearMomentX = 5.0
         with pytest.raises(ModelExtractionError) as error:
             Extractor(model).extract_model()
         assert action.GlobalId in str(error.value)
-        assert "applied moments are not supported" in str(error.value)
+        assert "a moment (LinearMomentX) that varies along its member" in str(
+            error.value
+        )
 
     def test_load_of_an_unsupported_kind_is_an_error(self):
         """It used to be applied as a force of zero."""

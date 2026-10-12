@@ -51,6 +51,7 @@ def plane_model(
     load_y=0.0,
     support_axes=None,
     line_loads=None,
+    moments=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -80,7 +81,10 @@ def plane_model(
             joint, which may be left out for two values. Further keys:
             ``distribution`` (LINEAR unless given), ``projected`` and
             ``local`` (per projected length; in the member's own axes, the
-            values then being ``(fx, fz)`` there).
+            values then being ``(fx, fz)`` there), and ``moment``, the
+            ``(mx, my, mz)`` per length of a constant load.
+        moments: ``{name: (mx, my, mz)}`` in N·m, applied at that joint with
+            its load, or by themselves.
 
     Returns:
         *path*.
@@ -266,7 +270,11 @@ def plane_model(
         None,
     )
     actions = []
-    for name, (fx, fz) in loads.items():
+    moments = dict(moments or {})
+    point_loads = {name: (0.0, 0.0) for name in moments}
+    point_loads.update(loads)
+    for name, (fx, fz) in point_loads.items():
+        applied = name in loads
         action = create(
             "IfcStructuralPointAction",
             guid(),
@@ -280,11 +288,9 @@ def plane_model(
                 "IfcStructuralLoadSingleForce",
                 None,
                 float(fx),
-                float(load_y),
+                float(load_y) if applied else 0.0,
                 float(fz),
-                None,
-                None,
-                None,
+                *[float(m) for m in moments.get(name, (0.0, 0.0, 0.0))],
             ),
             "GLOBAL_COORDS",
             None,
@@ -301,7 +307,14 @@ def plane_model(
         actions.append(action)
     for ends, load in (line_loads or {}).items():
         forces = [
-            create("IfcStructuralLoadLinearForce", None, float(fx), 0.0, float(fz))
+            create(
+                "IfcStructuralLoadLinearForce",
+                None,
+                float(fx),
+                0.0,
+                float(fz),
+                *[float(m) for m in load.get("moment", (0.0, 0.0, 0.0))],
+            )
             for fx, fz in load["values"]
         ]
         varies = len(forces) > 1

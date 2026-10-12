@@ -381,18 +381,23 @@ class LoadsExtractor:
             ) from error
 
     @staticmethod
-    def _refuse_moments(applied_load, attributes) -> None:
-        """Raise if an applied load carries a moment; they are not analysed."""
+    def _components(applied_load, attributes) -> List[float]:
+        """Three values of an applied load; one that is not given is zero."""
+        return [float(getattr(applied_load, name, None) or 0.0) for name in attributes]
+
+    def _refuse_moments(self, applied_load, attributes, why: str) -> None:
+        """Raise if an applied load carries a moment where none can be applied."""
         present = [
             name
-            for name in attributes
-            if isinstance(getattr(applied_load, name, None), (int, float))
-            and getattr(applied_load, name) != 0
+            for name, value in zip(
+                attributes, self._components(applied_load, attributes)
+            )
+            if value != 0
         ]
         if present:
             raise ModelExtractionError(
-                f"It applies a moment ({', '.join(present)}); applied moments "
-                "are not supported."
+                f"It applies a moment ({', '.join(present)}) {why}, which is not "
+                "supported."
             )
 
     def _build_domain_load(self, ifc_load):
@@ -419,12 +424,21 @@ class LoadsExtractor:
                     f"Its applied load is an {applied_load.is_a()}; on a point "
                     "action only IfcStructuralLoadSingleForce is supported."
                 )
-            self._refuse_moments(applied_load, ("MomentX", "MomentY", "MomentZ"))
             force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
             force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
             force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
             force_vector = self._in_global_axes(
                 ifc_load, [f * self.force_scale for f in (force_x, force_y, force_z)]
+            )
+            # A moment is a force times a length
+            moment = self._in_global_axes(
+                ifc_load,
+                [
+                    m * self.force_scale * self.length_scale
+                    for m in self._components(
+                        applied_load, ("MomentX", "MomentY", "MomentZ")
+                    )
+                ],
             )
 
             # Extract position
@@ -441,12 +455,15 @@ class LoadsExtractor:
                 direction = np.array([0.0, 0.0, -1.0], dtype=float)
 
             # Create the point load
-            return PointLoad(
+            point_load = PointLoad(
                 id=load_id,
                 magnitude=magnitude,
                 direction=direction,
                 position=position,
             )
+            if any(moment):
+                point_load.moment = np.array(moment, dtype=float)
+            return point_load
 
         # For line loads (IfcStructuralLinearAction or IfcStructuralCurveAction)
         elif ifc_load.is_a("IfcStructuralLinearAction") or ifc_load.is_a(
@@ -499,6 +516,22 @@ class LoadsExtractor:
                     (location, np.array(vector, dtype=float))
                     for location, vector in samples
                 ]
+            else:
+                # Moment per length: a force times a length, per length
+                moment = self._in_global_axes(
+                    ifc_load,
+                    [
+                        m * self.force_scale
+                        for m in self._components(applied_load, self._LINEAR_MOMENTS)
+                    ],
+                )
+                if any(moment):
+                    if getattr(ifc_load, "ProjectedOrTrue", None) == "PROJECTED_LENGTH":
+                        raise ModelExtractionError(
+                            "It applies a moment per projected length, which is "
+                            "not supported."
+                        )
+                    line_load.moment = np.array(moment, dtype=float)
 
             # Extract member reference from AssignedToStructuralItem
             member_ref = self._get_member_reference(ifc_load)
@@ -520,15 +553,6 @@ class LoadsExtractor:
                 # Planar force is force/area: scale = force_scale / length_scale^2
                 area_scale = self.force_scale / (self.length_scale**2)
                 force_vector = [f * area_scale for f in force_vector]
-            elif hasattr(applied_load, "ForceX"):
-                # Fallback: IfcStructuralLoadSingleForce uses ForceX/Y/Z
-                force_x = getattr(applied_load, "ForceX", 0.0) or 0.0
-                force_y = getattr(applied_load, "ForceY", 0.0) or 0.0
-                force_z = getattr(applied_load, "ForceZ", 0.0) or 0.0
-                force_vector = [force_x, force_y, force_z]
-
-                # Apply force scale
-                force_vector = [f * self.force_scale for f in force_vector]
             else:
                 raise ModelExtractionError(
                     f"Its applied load is an {applied_load.is_a()}; on a planar "
@@ -609,6 +633,7 @@ class LoadsExtractor:
 
     # Distributions of a curve action that are a list of samples
     _SAMPLED_DISTRIBUTIONS = ("LINEAR", "POLYGONAL")
+    _LINEAR_MOMENTS = ("LinearMomentX", "LinearMomentY", "LinearMomentZ")
 
     def _extract_line_samples(
         self, ifc_load, applied_load, length: float
@@ -662,6 +687,10 @@ class LoadsExtractor:
                 "varies needs two or more."
             )
         vectors = [self._linear_force(value) for value in values]
+        for value in values:
+            self._refuse_moments(
+                value, self._LINEAR_MOMENTS, "that varies along its member"
+            )
 
         locations = getattr(applied_load, "Locations", None)
         if locations is None:
@@ -707,13 +736,9 @@ class LoadsExtractor:
                 "curve action only linear forces, and configurations of them, "
                 "are supported."
             )
-        self._refuse_moments(
-            applied_load, ("LinearMomentX", "LinearMomentY", "LinearMomentZ")
+        return self._components(
+            applied_load, ("LinearForceX", "LinearForceY", "LinearForceZ")
         )
-        return [
-            float(getattr(applied_load, name, None) or 0.0)
-            for name in ("LinearForceX", "LinearForceY", "LinearForceZ")
-        ]
 
     def _per_true_length(self, ifc_load, vector: List[float], axis) -> List[float]:
         """Turn a load given per projected length into one per true length.

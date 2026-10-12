@@ -8,15 +8,23 @@ import pytest
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     _distributed_load_to_nodal_forces,
     _global_force_vector,
+    _load_to_nodal_moments,
+    _point_load_lines,
     _varying_line_load_to_nodal_forces,
     _write_validated_loads_within_step,
 )
 from ifc_structural_mechanics.analysis.results_parser import ResultsParser
-from ifc_structural_mechanics.domain.load import AreaLoad, LineLoad, LoadGroup
+from ifc_structural_mechanics.domain.load import (
+    AreaLoad,
+    LineLoad,
+    LoadGroup,
+    PointLoad,
+)
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.export.results_exporter import ResultsExporter
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
 
 NODES = {
     1: (0.0, 0.0, 0.0),
@@ -316,6 +324,66 @@ DAT = """
 
         3.203054E-05 -9.716333E-06  6.028327E+07
 """
+
+
+class TestAppliedMoments:
+    """A moment goes on rotations 4 to 6 of the nodes of a curve member."""
+
+    BEAM = {1: {"type": "B32R", "nodes": [1, 3, 2]}}
+    SLAB = {2: {"type": "S6", "nodes": [1, 2, 4, 3, 6, 9]}}
+
+    def _point(self, position, moment, force=(0.0, 0.0, 0.0)):
+        load = PointLoad("p", list(force), [0.0, 0.0, -1.0], list(position))
+        load.moment = np.array(moment, dtype=float)
+        return load
+
+    def test_point_moment_is_written_beside_its_force(self):
+        load = self._point((2.0, 0.0, 0.0), (0.0, 250.0, -40.0), (0.0, 0.0, -10.0))
+        lines = _point_load_lines(load, NODES, StructuralModel(id="m"), self.BEAM)
+        assert lines == [
+            "2, 3, -1.000000e+01\n",
+            "2, 5, 2.500000e+02\n",
+            "2, 6, -4.000000e+01\n",
+        ]
+
+    def test_point_moment_on_a_surface_member_is_an_error(self):
+        """A node of shells alone has no rotation about their normal."""
+        load = self._point((2.0, 2.0, 0.0), (0.0, 250.0, 0.0))
+        elements = {**self.BEAM, **self.SLAB}
+        with pytest.raises(AnalysisError, match="p applies a moment where there is"):
+            _point_load_lines(load, NODES, StructuralModel(id="m"), elements)
+
+    def test_moment_per_length_is_shared_out_as_a_force_is(self):
+        load = _line_load((0.0, 0.0, 0.0))
+        load.moment = np.array([30.0, 0.0, 0.0])
+        model = _beam_model(load)
+        moments = _load_to_nodal_moments(
+            load, "SET", model, {"SET": [1]}, self.BEAM, NODES
+        )
+        assert moments[3] == pytest.approx([40.0, 0.0, 0.0])
+        assert moments[1] == pytest.approx([10.0, 0.0, 0.0])
+        text = _written(model)
+        assert "** Distributed moments (equivalent nodal moments)" in text
+        assert "3, 4, 4.000000e+01" in text
+
+    def test_moment_per_length_in_member_axes_is_rotated(self):
+        load = _line_load((0.0, 0.0, 0.0))
+        load.moment = np.array([0.0, 0.0, 30.0])
+        load.coordinate_system = "local"
+        model = _beam_model(load)
+        model.get_member("beam").local_axis = (
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, -1.0),
+            (0.0, 1.0, 0.0),
+        )
+        moments = _load_to_nodal_moments(
+            load, "SET", model, {"SET": [1]}, self.BEAM, NODES
+        )
+        assert _total(moments) == pytest.approx([0.0, 60.0, 0.0])
+
+    def test_load_without_a_moment_writes_none(self):
+        load = _line_load((0.0, 0.0, -1000.0))
+        assert "Distributed moments" not in _written(_beam_model(load))
 
 
 class TestReactionsPerLoadCase:

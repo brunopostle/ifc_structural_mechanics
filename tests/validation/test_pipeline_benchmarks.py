@@ -2474,6 +2474,194 @@ class TestLoadThatVariesAlongABeam:
         assert total["fz_N"] == pytest.approx(4 * w, rel=1e-5)
 
 
+class TestAppliedMoments:
+    """Moments applied to a 4 m beam, 0.1 m square (``aiz.58``).
+
+    They stopped the analysis. CalculiX takes a moment on a rotation of a
+    beam node and makes the node a knot; measured on hand-written input at
+    the end of a member, between two elements and at an element's middle
+    node, on 2.21 and 2.23.
+    """
+
+    MOMENT, SPAN, SIDE = 1000.0, 4.0, 0.1
+    ENDS = {"A": (0, 0), "B": (4, 0)}
+
+    def _run(self, tmp_path, **model):
+        model.setdefault("loads", {})
+        data, warnings = _plane_run(tmp_path, hinged=False, mesh_size=0.25, **model)
+        assert not [w for w in warnings if w.startswith("CalculiX")]
+        if _solver_reports_clamped_reactions():
+            assert not [w for w in warnings if "solver reported" in w]
+        forces = [m["envelope"]["section_forces"] for m in data["members"]]
+        return data, forces
+
+    def _stiffness(self) -> float:
+        return PLANE_E * self.SIDE**4 / 12
+
+    def test_at_the_end_of_a_cantilever(self, tmp_path):
+        """The same moment all along, M L² / 2 E I at the tip."""
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes=self.ENDS,
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            moments={"B": (0.0, self.MOMENT, 0.0)},
+        )
+        assert forces["max_Mf2_Nm"] == pytest.approx(self.MOMENT, rel=1e-3)
+        assert forces["max_Vf2_N"] < 1e-3 * self.MOMENT
+        (reaction,) = data["supports"][0]["by_load_case"].values()
+        assert reaction["my_Nm"] == pytest.approx(-self.MOMENT, rel=1e-3)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self.MOMENT * self.SPAN**2 / (2 * self._stiffness()), rel=0.01
+        )
+
+    def test_torque_at_the_end_of_a_cantilever(self, tmp_path):
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes=self.ENDS,
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            moments={"B": (self.MOMENT, 0.0, 0.0)},
+        )
+        assert forces["max_T_Nm"] == pytest.approx(self.MOMENT, rel=1e-3)
+        assert forces["max_Mf2_Nm"] < 1e-3 * self.MOMENT
+        (reaction,) = data["supports"][0]["by_load_case"].values()
+        assert reaction["mx_Nm"] == pytest.approx(-self.MOMENT, rel=1e-3)
+
+    def test_where_two_members_meet(self, tmp_path):
+        """In the middle of a simply supported beam: M / L on the supports,
+        M / 2 either side of it, and M L² / (72 √3 E I) of deflection.
+
+        The solver's stress at the joint is the mean of the two sides,
+        which is nothing: the diagrams have what each member's own
+        cross-sections lead to.
+        """
+        data, forces = self._run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            moments={"M": (0.0, self.MOMENT, 0.0)},
+        )
+        lifts = [
+            _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]["fz_N"]
+            for x in (0.0, self.SPAN)
+        ]
+        assert lifts == pytest.approx(
+            [-self.MOMENT / self.SPAN, self.MOMENT / self.SPAN], rel=1e-4
+        )
+        for member in forces:
+            assert member["max_Mf2_Nm"] == pytest.approx(self.MOMENT / 2, rel=1e-3)
+        before, after = [
+            m["section_force_diagrams"]["Load"]["Mf2_Nm"] for m in data["members"]
+        ]
+        assert before[-1] == pytest.approx(-after[0], rel=1e-3)
+        assert abs(before[-1]) == pytest.approx(self.MOMENT / 2, rel=1e-3)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self.MOMENT * self.SPAN**2 / (72 * math.sqrt(3) * self._stiffness()),
+            rel=0.01,
+        )
+
+    def test_inside_a_member(self, tmp_path):
+        """1.5 m along one member: M a / L before it and M b / L after."""
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (1.5, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            moments={"M": (0.0, self.MOMENT, 0.0)},
+        )
+        assert forces["max_Mf2_Nm"] == pytest.approx(self.MOMENT * 2.5 / 4, rel=1e-3)
+        diagram = data["members"][0]["section_force_diagrams"]["Load"]
+        there = [
+            moment
+            for distance, moment in zip(diagram["distance_m"], diagram["Mf2_Nm"])
+            if abs(distance - 1.5) < 1e-6
+        ]
+        assert sorted(abs(moment) for moment in there) == pytest.approx(
+            [self.MOMENT * 1.5 / 4, self.MOMENT * 2.5 / 4], rel=1e-3
+        )
+        assert there[0] * there[1] < 0
+
+    def test_with_loads_beside_it(self, tmp_path):
+        """1 kN/m on the first half, 4 kN and the moment at midspan.
+
+        3250 and 2750 N on the supports; 4500 N·m just before midspan and
+        5500 just after, where the mean of the two is 5000.
+        """
+        data, forces = self._run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={"M": (0.0, -4000.0)},
+            moments={"M": (0.0, self.MOMENT, 0.0)},
+            line_loads={("A", "M"): dict(values=[(0.0, -1000.0)])},
+        )
+        lifts = [
+            _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]["fz_N"]
+            for x in (0.0, self.SPAN)
+        ]
+        assert lifts == pytest.approx([3250.0, 2750.0], rel=1e-4)
+        assert forces[0]["max_Mf2_Nm"] == pytest.approx(4500.0, rel=FORCE_TOLERANCE)
+        assert forces[1]["max_Mf2_Nm"] == pytest.approx(5500.0, rel=FORCE_TOLERANCE)
+
+    def test_torque_along_a_cantilever(self, tmp_path):
+        """500 N·m per metre: 2000 N·m at the root, and on the support."""
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes=self.ENDS,
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            line_loads={("A", "B"): dict(values=[(0, 0)], moment=(500.0, 0, 0))},
+        )
+        assert forces["max_T_Nm"] == pytest.approx(2000.0, rel=1e-3)
+        (reaction,) = data["supports"][0]["by_load_case"].values()
+        assert reaction["mx_Nm"] == pytest.approx(-2000.0, rel=1e-3)
+
+    def test_couple_along_a_beam(self, tmp_path):
+        """500 N·m per metre about Y on a simply supported beam.
+
+        The supports take 500 N each way and the shear is 500 N all along.
+        The beam has no moment; the nodal moments leave a saw tooth of
+        half of what one element carries.
+        """
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes=self.ENDS,
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            line_loads={("A", "B"): dict(values=[(0, 0)], moment=(0, 500.0, 0))},
+        )
+        lifts = [
+            _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]["fz_N"]
+            for x in (0.0, self.SPAN)
+        ]
+        assert lifts == pytest.approx([-500.0, 500.0], rel=1e-4)
+        assert forces["max_Vf2_N"] == pytest.approx(500.0, rel=FORCE_TOLERANCE)
+        assert forces["max_Mf2_Nm"] <= 500.0 * 0.25 / 2 * 1.01
+
+    def test_at_a_clamped_support(self, tmp_path):
+        """It goes into the support, with what the member brings.
+
+        1 kN down at the tip and 500 N·m about Y, 300 about X at the root:
+        the support resists 4500 and 300 N·m.
+        """
+        data, (forces,) = self._run(
+            tmp_path,
+            nodes=self.ENDS,
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            loads={"B": (0.0, -1000.0)},
+            moments={"A": (300.0, 500.0, 0.0)},
+        )
+        assert forces["max_Mf2_Nm"] == pytest.approx(4000.0, rel=FORCE_TOLERANCE)
+        assert forces["max_T_Nm"] < 1.0
+        (reaction,) = data["supports"][0]["by_load_case"].values()
+        assert reaction["my_Nm"] == pytest.approx(-4500.0, rel=FORCE_TOLERANCE)
+        assert reaction["mx_Nm"] == pytest.approx(-300.0, rel=1e-6)
+
+
 class TestSolverReactionsAreChecked:
     """CalculiX 2.21 misreports the force at a support that holds a rotation.
 

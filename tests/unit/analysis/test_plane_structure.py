@@ -147,6 +147,37 @@ class TestPlaneNormal:
         )
         assert plane_normal(model) is None
 
+    def test_moment_about_the_normal_keeps_it_plane(self, tmp_path):
+        model = _portal(
+            tmp_path,
+            {"A": PLANE_FIXED_2D, "D": PLANE_FIXED_2D},
+            moments={"B": (0.0, 500.0, 0.0)},
+        )
+        assert plane_normal(model) == Y
+
+    def test_moment_about_an_axis_of_the_plane_does_not(self, tmp_path):
+        for moment in ((500.0, 0.0, 0.0), (0.0, 0.0, 500.0)):
+            model = _portal(
+                tmp_path,
+                {"A": PLANE_FIXED_2D, "D": PLANE_FIXED_2D},
+                moments={"B": moment},
+            )
+            assert plane_normal(model) is None
+
+    def test_straight_run_takes_the_plane_of_its_moments(self, tmp_path):
+        """With no force to say which of the two planes it is in."""
+        supports = {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}
+        model = _model(
+            tmp_path,
+            BEAM_NODES,
+            BEAM_MEMBERS,
+            supports,
+            loads={},
+            moments={"B": (0.0, 500.0, 0.0)},
+            hinged=False,
+        )
+        assert plane_normal(model) == Y
+
     def test_straight_run_loaded_along_itself_only(self, tmp_path):
         supports = {"A": PLANE_PIN, "C": PLANE_ROLLER}
         model = _model(
