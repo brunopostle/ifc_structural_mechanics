@@ -297,6 +297,9 @@ class UnifiedCalculixWriter:
             # Step 2c5: Tie beams lying in a slab or wall to it along their length
             self._build_line_bearings()
 
+            # Step 2c5b: Report curve members joined by nothing but the mesh
+            self._report_joints_made_by_the_mesh()
+
             # Step 2c6: Hold a plane truss or frame that can leave its plane
             self._hold_plane_structure()
 
@@ -2443,6 +2446,74 @@ class UnifiedCalculixWriter:
                 constrained_node_dofs.add((node, dof))
         file.write("**\n")
 
+    def _curve_members_joined_by_the_mesh(self) -> Dict[Tuple[str, str], int]:
+        """Curve members that share a node where no connection joins them.
+
+        Curves that touch are meshed with one node at that point (a beam
+        ending on the span of another, two that cross), and a shared node is
+        a rigid joint. Where a connection of the file joins the two, it says
+        how; where none does, the joint is the mesh's alone.
+
+        Returns:
+            ``{(member id, member id): node}``, each pair once with its ids
+            in order, and the first node the two share.
+        """
+        joined_by_the_file = set()
+        for conn in self.domain_model.connections:
+            attached = list(conn.connected_members or [])
+            joined_by_the_file.update((a, b) for a in attached for b in attached)
+
+        members_at: Dict[int, List[str]] = {}
+        for member in self.domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            nodes = {
+                node
+                for element in self.element_sets.get(member_set, [])
+                if element in self.elements
+                for node in self.elements[element]["nodes"]
+            }
+            for node in nodes:
+                members_at.setdefault(node, []).append(member.id)
+
+        pairs: Dict[Tuple[str, str], int] = {}
+        for node in sorted(members_at):
+            sharing = sorted(members_at[node])
+            for i, a in enumerate(sharing):
+                for b in sharing[i + 1 :]:
+                    if (a, b) not in joined_by_the_file:
+                        pairs.setdefault((a, b), node)
+        return pairs
+
+    def _report_joints_made_by_the_mesh(self) -> None:
+        """Say where curve members are joined with no connection in the file."""
+        pairs = self._curve_members_joined_by_the_mesh()
+        if not pairs:
+            return
+        # Name the member that ends there, which is the one to look at
+        named: List[str] = []
+        for (a, b), node in pairs.items():
+            point = np.array(self.nodes[node], dtype=float)
+            ending = []
+            for member_id in (a, b):
+                endpoints = self._get_member_endpoints(member_id)
+                if endpoints is not None and any(
+                    float(np.linalg.norm(point - end)) <= self._COINCIDENT_TOL
+                    for end in endpoints
+                ):
+                    ending.append(member_id)
+            for member_id in ending or [a, b]:
+                if member_id not in named:
+                    named.append(member_id)
+        self._warn_user(
+            f"Curve members touch at {len(pairs)} place(s) where the model has no "
+            "connection between them (a member ending on the span of another, "
+            "or two that cross). They are meshed with one node there, which "
+            "joins them rigidly, with strict connections as well: "
+            f"{', '.join(named[:5])}{' ...' if len(named) > 5 else ''}"
+        )
+
     def _hold_spinning_members(self) -> None:
         """Hold in torsion the members nothing stops spinning about their axis.
 
@@ -2455,7 +2526,11 @@ class UnifiedCalculixWriter:
 
         A member counts as held when a support restrains rotation about its
         axis, or when it joins a member that is not in line with it without a
-        torsional release: turning it would bend that one. A member in line
+        torsional release: turning it would bend that one. So does one that
+        shares a mesh node with such a member where no connection joins them
+        (``_curve_members_joined_by_the_mesh``; the secondary beams of
+        ``building_02`` end on the spans of its girders, were reported as
+        free to spin, and are not). A member in line
         with it holds nothing by itself. The two turn together, so members
         joined end to end in a straight line are one run, held when any of
         them is (two members on ball supports once each counted as held by
@@ -2553,6 +2628,16 @@ class UnifiedCalculixWriter:
                         restrained.add(member_id)
                     elif turns_with(conn, other):
                         run_of[run(other)] = run(member_id)
+
+        # Members the mesh joins where the file has no connection share a
+        # node, which passes torsion on as a rigid joint of the file does
+        for a, b in self._curve_members_joined_by_the_mesh():
+            if a not in directions or b not in directions:
+                continue
+            if abs(float(directions[a] @ directions[b])) > 1.0 - 1e-6:
+                run_of[run(a)] = run(b)
+            else:
+                restrained.update((a, b))
 
         runs: Dict[str, List[str]] = {}
         for member_id in directions:

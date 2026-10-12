@@ -3741,6 +3741,82 @@ class TestInclinedBeamFreeToSpin:
             assert reaction["fz_N"] == pytest.approx(self.DOWN / 2, rel=0.01)
 
 
+class TestBeamEndingOnTheSpanOfAnother:
+    """A 3 m beam between the middles of two fixed 4 m girders, 10 kN on it.
+
+    The file gives the ends of the beam connections of their own, which join
+    nothing else, as ``building_02`` does for its secondary beams. The mesh
+    has one node where the beam meets a girder, so they are joined rigidly:
+    the beam twists the girders and is held by them. It was reported as free
+    to spin about its own axis, which it is not (``aiz.80``), and the joint
+    the file does not have was not reported at all.
+    """
+
+    LOAD, SPAN = 10000.0, 3.0
+    GIRDERS = {"A": (0, 0, 0), "B": (4, 0, 0), "C": (0, 3, 0), "D": (4, 3, 0)}
+    BEAM = {"S": (2, 0, 0), "M": (2, 1.5, 0), "T": (2, 3, 0)}
+
+    def _run(self, tmp_path, girders):
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={**self.GIRDERS, **self.BEAM},
+            members=girders + [("S", "M"), ("M", "T")],
+            supports={name: PLANE_FIXED for name in self.GIRDERS},
+            loads={"M": (0.0, -self.LOAD)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        names = {
+            member.GlobalId: member.Name
+            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
+                "IfcStructuralCurveMember"
+            )
+        }
+        forces = {
+            names[member["ifc_guid"]]: member["envelope"]["section_forces"]
+            for member in data["members"]
+        }
+        return data, warnings, forces
+
+    def test_joined_rigidly_and_said_so(self, tmp_path):
+        """The moment at the ends of the beam is the torsion of the girders."""
+        _, warnings, forces = self._run(tmp_path, [("A", "B"), ("C", "D")])
+        (warning,) = [w for w in warnings if "no connection between them" in w]
+        assert "Curve members touch at 2 place(s)" in warning
+        assert not [w for w in warnings if "free to spin" in w]
+
+        torsion = forces["AB"]["max_T_Nm"]
+        assert torsion > 0.1 * self.LOAD * self.SPAN / 4
+        assert forces["CD"]["max_T_Nm"] == pytest.approx(torsion, rel=1e-3)
+        for name in ("SM", "MT"):
+            bending = max(forces[name]["max_Mf1_Nm"], forces[name]["max_Mf2_Nm"])
+            assert bending == pytest.approx(
+                self.LOAD * self.SPAN / 4 - 2 * torsion, rel=FORCE_TOLERANCE
+            )
+            assert forces[name]["max_T_Nm"] < 1.0
+
+    def test_as_with_the_joints_in_the_file(self, tmp_path):
+        """Girders made of two members each, joined to the beam where it ends."""
+        (tmp_path / "mesh").mkdir()
+        (tmp_path / "file").mkdir()
+        mesh, _, mesh_forces = self._run(tmp_path / "mesh", [("A", "B"), ("C", "D")])
+        file, warnings, file_forces = self._run(
+            tmp_path / "file", [("A", "S"), ("S", "B"), ("C", "T"), ("T", "D")]
+        )
+        assert not [w for w in warnings if "no connection between them" in w]
+        assert not [w for w in warnings if "free to spin" in w]
+        assert mesh["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
+            file["global_displacements"]["envelope"]["max_tz_m"], rel=1e-4
+        )
+        assert mesh_forces["AB"]["max_T_Nm"] == pytest.approx(
+            file_forces["AS"]["max_T_Nm"], rel=1e-3
+        )
+        for key in ("max_Mf1_Nm", "max_Mf2_Nm"):
+            assert mesh_forces["SM"][key] == pytest.approx(
+                file_forces["SM"][key], rel=1e-3, abs=1.0
+            )
+
+
 class TestBeamContinuousOverASupport:
     """Two 4 m spans over three pinned supports, 10 kN in the middle of each.
 

@@ -292,3 +292,73 @@ def test_hold_is_written_as_a_boundary_condition(tmp_path):
     block = text.split("** Members held against spinning about their own axis")[1]
     assert block.splitlines()[1:3] == ["*BOUNDARY", "1, 4, 4"]
     assert io.StringIO(text).readline().startswith("**")
+
+
+def _beam_on_a_girder(shared_node=True):
+    """A beam along Y ending on the middle of a fixed girder along X.
+
+    Its ends have connections of their own that join nothing else, as the
+    secondary beams of ``building_02`` do; only the mesh joins it to the
+    girder, by sharing node 2.
+    """
+    model = StructuralModel(id="model")
+    model.add_member(_beam("girder", (0.0, 0.0, 0.0), (4.0, 0.0, 0.0)))
+    model.add_member(_beam("beam", (2.0, 0.0, 0.0), (2.0, 3.0, 0.0)))
+    model.connections.append(_support("left", (0.0, 0.0, 0.0), FIXED, "girder"))
+    model.connections.append(_support("right", (4.0, 0.0, 0.0), FIXED, "girder"))
+    for name, point in (("near", (2.0, 0.0, 0.0)), ("far", (2.0, 3.0, 0.0))):
+        end = PointConnection(name, list(point))
+        end.connect_member("beam")
+        model.connections.append(end)
+
+    writer = UnifiedCalculixWriter(domain_model=model)
+    writer.nodes = {
+        1: (0.0, 0.0, 0.0),
+        2: (2.0, 0.0, 0.0),
+        3: (4.0, 0.0, 0.0),
+        4: (2.0, 3.0, 0.0),
+        5: (2.0, 0.0, 0.0),
+    }
+    writer.elements = {
+        1: {"type": "B31", "nodes": [1, 2]},
+        2: {"type": "B31", "nodes": [2, 3]},
+        3: {"type": "B31", "nodes": [2 if shared_node else 5, 4]},
+    }
+    writer.short_id_map = {"girder": "M1", "beam": "M2"}
+    writer.element_sets = {"MEMBER_M1": [1, 2], "MEMBER_M2": [3]}
+    return writer
+
+
+def test_member_sharing_a_node_with_one_across_it_is_held():
+    """The file has no connection between them, and the mesh one node."""
+    writer = _beam_on_a_girder()
+    writer._hold_spinning_members()
+
+    assert writer._torsion_hold_dofs() == []
+    assert _messages(writer) == []
+
+
+def test_member_with_a_node_of_its_own_there_is_not():
+    writer = _beam_on_a_girder(shared_node=False)
+    writer._hold_spinning_members()
+
+    (message,) = _messages(writer)
+    assert "could not be held automatically" in message
+
+
+def test_joint_made_by_the_mesh_is_reported():
+    writer = _beam_on_a_girder()
+
+    assert writer._curve_members_joined_by_the_mesh() == {("beam", "girder"): 2}
+    writer._report_joints_made_by_the_mesh()
+    (message,) = _messages(writer)
+    assert "touch at 1 place(s) where the model has no connection" in message
+    assert message.endswith("joins them rigidly, with strict connections as well: beam")
+
+
+def test_joint_the_file_makes_is_not_reported():
+    writer = _writer(BALL, BALL, second_member=True)
+    writer._report_joints_made_by_the_mesh()
+
+    assert writer._curve_members_joined_by_the_mesh() == {}
+    assert not [m for m in _messages(writer) if "touch at" in m]

@@ -55,7 +55,8 @@ def plane_model(
 
     Args:
         path: Where to write the IFC4 file.
-        nodes: ``{name: (x, z)}``; each becomes a point connection.
+        nodes: ``{name: (x, z)}``, or ``(x, y, z)`` for a structure that leaves
+            the plane; each becomes a point connection.
         members: ``[(name, name)]``, the two joints of each curve member.
         supports: ``{name: (dx, dy, dz, drx, dry, drz)}``, True where held.
         loads: ``{name: (fx, fz)}`` in newtons, in one load case, ``Load``.
@@ -158,9 +159,11 @@ def plane_model(
     )
 
     def vertex(name):
-        x, z = nodes[name]
+        point = nodes[name]
+        x, y, z = point if len(point) == 3 else (point[0], 0.0, point[1])
         return create(
-            "IfcVertexPoint", create("IfcCartesianPoint", (float(x), 0.0, float(z)))
+            "IfcVertexPoint",
+            create("IfcCartesianPoint", (float(x), float(y), float(z))),
         )
 
     def shape(kind, item):
