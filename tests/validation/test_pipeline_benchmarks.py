@@ -3616,6 +3616,64 @@ class TestBeamOnTwoDimensionalSupports:
             )
 
 
+class TestStraightRunFreeToSpin:
+    """A 4 m beam of two members on ball supports, loaded down and across.
+
+    Not a plane structure, since it is loaded both ways. Nothing holds it
+    against turning about its own axis, and each member used to count as held
+    in torsion by the other: 13.0 mm of deflection for 7.6 and 9.2 mm across
+    for 3.8, with no warning (``aiz.72``).
+    """
+
+    DOWN, ACROSS, SIDE = 10000.0, 5000.0, 0.1
+
+    def _deflection(self, load: float, span: float = 4.0) -> float:
+        stiffness = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        return load * span**3 / (48 * stiffness) + load * span / (4 * shear)
+
+    def _check(self, data, warnings, members: int) -> None:
+        (warning,) = [w for w in warnings if "free to spin" in w]
+        assert f"{members} member(s) are free to spin about their own axis" in warning
+        assert "held in torsion at one of its supports" in warning
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(
+            self._deflection(self.DOWN), rel=0.01
+        )
+        assert envelope["max_ty_m"] == pytest.approx(
+            self._deflection(self.ACROSS), rel=0.01
+        )
+        for member in data["members"]:
+            assert member["envelope"]["section_forces"]["max_T_Nm"] < 1.0
+
+    def test_supports_at_its_ends(self, tmp_path):
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (2, 0), "C": (4, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": PLANE_PIN, "C": PLANE_ROLLER},
+            loads={"B": (0.0, -self.DOWN)},
+            load_y=self.ACROSS,
+            hinged=False,
+            mesh_size=0.25,
+        )
+        self._check(data, warnings, members=2)
+
+    def test_supports_at_joints_inside_it(self, tmp_path):
+        """With a metre overhanging each support: held where two members meet."""
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (1, 0), "M": (3, 0), "C": (5, 0), "D": (6, 0)},
+            members=[("A", "B"), ("B", "M"), ("M", "C"), ("C", "D")],
+            supports={"B": PLANE_PIN, "C": PLANE_ROLLER},
+            loads={"M": (0.0, -self.DOWN)},
+            load_y=self.ACROSS,
+            hinged=False,
+            mesh_size=0.25,
+        )
+        self._check(data, warnings, members=4)
+
+
 class TestBeamContinuousOverASupport:
     """Two 4 m spans over three pinned supports, 10 kN in the middle of each.
 

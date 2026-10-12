@@ -2453,10 +2453,17 @@ class UnifiedCalculixWriter:
         than twice its deflection).
 
         A member counts as held when a support restrains rotation about its
-        axis, or when it joins another member without a torsional release.
-        One that is not held gets that rotation restrained at one of its
-        supports, and the user is told. A member with no support of its own,
-        or whose axis is not along a global one, is only reported.
+        axis, or when it joins a member that is not in line with it without a
+        torsional release: turning it would bend that one. A member in line
+        with it holds nothing by itself. The two turn together, so members
+        joined end to end in a straight line are one run, held when any of
+        them is (two members on ball supports once each counted as held by
+        the other: 13 mm of deflection for 7.6, and nothing said).
+
+        A run that is not held gets that rotation restrained at one of its
+        supports, at an end of the run if it has one there, and the user is
+        told. One with no support of its own, or whose axis is not along a
+        global one, is only reported.
         """
         from ..analysis.boundary_condition_handling import (
             released_rotation_axes,
@@ -2479,7 +2486,8 @@ class UnifiedCalculixWriter:
                 for dof in (4 + i for i in range(3) if i != plane):
                     self._torsion_holds.append((conn, member_id, dof))
             return
-        held, loose = [], []
+
+        directions: Dict[str, np.ndarray] = {}
         for member in self.domain_model.members:
             if not isinstance(member, CurveMember) or member.id in self._u1_members:
                 continue
@@ -2490,52 +2498,92 @@ class UnifiedCalculixWriter:
             length = float(np.linalg.norm(axis))
             if length < 1e-12:
                 continue
-            direction = axis / length
-            axis = np.abs(direction)
+            directions[member.id] = axis / length
 
-            connections = [
-                c
-                for c in self.domain_model.connections
-                if member.id in (c.connected_members or [])
-            ]
-            if not connections:
-                continue
-            restrained = False
-            supports = []
-            for conn in connections:
-                others = [m for m in conn.connected_members if m != member.id]
-                # An axis counts when it has a share in rotation about the member
-                released = released_rotation_axes(conn, member.id)
-                torsion_released = bool(
-                    len(released) and np.abs(released @ direction).max() > 0.5
-                )
-                restraint = support_restraint(conn)
-                held_here = (
+        def turns_with(conn, member_id: str) -> bool:
+            """Whether the member passes torsion on to what it joins there."""
+            if conn.entity_type == "hinge" and len(conn.connected_members) > 1:
+                return False
+            released = released_rotation_axes(conn, member_id)
+            # An axis counts when it has a share in rotation about the member
+            return not (
+                len(released) and np.abs(released @ directions[member_id]).max() > 0.5
+            )
+
+        # The run each member belongs to, and the runs something holds
+        run_of = {member_id: member_id for member_id in directions}
+
+        def run(member_id: str) -> str:
+            while run_of[member_id] != member_id:
+                member_id = run_of[member_id]
+            return member_id
+
+        connections_of: Dict[str, list] = {member_id: [] for member_id in directions}
+        restrained = set()
+        for conn in self.domain_model.connections:
+            attached = list(conn.connected_members or [])
+            restraint = support_restraint(conn)
+            for member_id in attached:
+                if member_id not in directions:
+                    continue
+                connections_of[member_id].append(conn)
+                if not turns_with(conn, member_id):
+                    continue
+                direction = directions[member_id]
+                if (
                     restraint is not None
                     and share_in_span(restraint[1], direction) > 0.5
-                )
-                if (others and not torsion_released) or held_here:
-                    restrained = True
-                    break
-                holds_something = restraint is not None and (
-                    len(restraint[0]) or len(restraint[1])
-                )
-                if holds_something and not others:
-                    supports.append(conn)
-            if restrained:
+                ):
+                    restrained.add(member_id)
+                for other in attached:
+                    if other == member_id:
+                        continue
+                    in_line = (
+                        other in directions
+                        and abs(float(directions[other] @ direction)) > 1.0 - 1e-6
+                    )
+                    if not in_line:
+                        restrained.add(member_id)
+                    elif turns_with(conn, other):
+                        run_of[run(other)] = run(member_id)
+
+        runs: Dict[str, List[str]] = {}
+        for member_id in directions:
+            if connections_of[member_id]:
+                runs.setdefault(run(member_id), []).append(member_id)
+
+        held, loose = [], []
+        for members in runs.values():
+            if restrained.intersection(members):
                 continue
+            # A support that holds nothing but members of the run, an end of
+            # the run before a joint inside it
+            supports = []
+            for member_id in members:
+                for conn in connections_of[member_id]:
+                    restraint = support_restraint(conn)
+                    if restraint is None or not (
+                        len(restraint[0]) or len(restraint[1])
+                    ):
+                        continue
+                    attached = list(conn.connected_members or [])
+                    if set(attached) <= set(members):
+                        supports.append((len(attached), conn, member_id))
+            axis = np.abs(directions[members[0]])
             aligned = [i for i in range(3) if axis[i] > 1.0 - 1e-6]
             if supports and aligned:
-                self._torsion_holds.append((supports[0], member.id, 4 + aligned[0]))
-                held.append(member.id)
+                _, conn, member_id = min(supports, key=lambda found: found[0])
+                self._torsion_holds.append((conn, member_id, 4 + aligned[0]))
+                held.extend(members)
             else:
-                loose.append(member.id)
+                loose.extend(members)
 
         if held:
             self._warn_user(
                 f"{len(held)} member(s) are free to spin about their own axis: no "
-                "support or joint restrains that rotation. Each is held in "
-                "torsion at one of its supports so that the results are "
+                "support or joint restrains that rotation. Each, or the straight "
+                "run of members it is part of, is held in torsion at one of its "
+                "supports so that the results are "
                 f"defined: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''}"
             )
         if loose:
