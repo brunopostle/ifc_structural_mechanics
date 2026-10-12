@@ -916,7 +916,46 @@ Two things found on the way:
 - **A straight run of members joined rigidly end to end spins as one.** The existing
   check took each to be held in torsion by its neighbour. In a plane structure they
   are now found by the kinematic count (`spinning_members()`); in a space structure
-  they still are not.
+  they were not until `aiz.72` (next section).
+
+## Members in line, and beams over a support
+
+Two errors with one cause in common: taking what happens at a joint from the wrong
+place. Both gave answers with no warning. The models are 0.1 m square bars built with
+`tests.helpers.plane_model`, at a 0.25 m mesh.
+
+**A straight run of members free to spin** (`aiz.72`, `TestStraightRunFreeToSpin`). A
+4 m beam of two members on supports that hold translations only, with 10 kN down and
+5 kN across at the joint, so that it is not a plane structure. Each member counted as
+held in torsion by the other. Members in line are now one run, held when any of them
+is, and otherwise at one support:
+
+| Case | Quantity | Beam theory | Before | Now |
+|---|---|---|---|---|
+| Supports at the ends | deflection down | 7.634 mm | 12.97 mm | 7.638 mm |
+| | deflection across | 3.817 mm | 9.15 mm | 3.820 mm |
+| Supports at joints inside the run, 1 m overhanging each | deflection down | 7.634 mm | | 7.638 mm |
+| | deflection across | 3.817 mm | | 3.820 mm |
+
+In the second case the hold is on a node where two members meet. It restrains their
+torsion only, and the result does not move.
+
+**A beam continuous over a pinned support** (`aiz.78`,
+`TestBeamContinuousOverASupport`). Two 4 m spans, four members, three supports that
+hold no rotation, 10 kN in the middle of each span. A support with a free rotation was
+classified as a hinge and every member meeting at it was released, so the beam was
+analysed as two simply supported ones:
+
+| Quantity | Statics | Before | Now |
+|---|---|---|---|
+| Moment over the middle support | 3 P L / 16 = 7500 N·m | 0 | 7496 N·m |
+| Moment under the loads | 5 P L / 32 = 6250 N·m | 10 000 N·m | 6252 N·m |
+| Reaction at an end | 5 P / 16 = 3125 N | | 3126 N |
+| Largest deflection | | 8.00 mm | 3.42 mm |
+
+No example model has a support with a free rotation that joins two members, so none
+of their results changed. The first case with supports at inner joints could not be
+run before the second fix: its overhangs came out detached.
 
 ## Skew supports
 
@@ -977,8 +1016,9 @@ to a node of shells alone swings freely about their normal.
 - **Plane structures in a plane not parallel to two global axes**, and plane
   structures with surface members (a shear wall), are not recognised and get no help.
   Nor were the benchmark models authored in Bonsai: they are built with IfcOpenShell.
-- **A straight run of rigidly joined members that can spin, in a space structure**, is
-  not detected (see Plane trusses and frames).
+- **Members that can spin in a space structure** are found one member or one straight
+  run at a time. A member is taken to be held by any member across it that it joins
+  without a torsional release; whether that one can itself give way is not checked.
 - **Self-weight of a load case** is checked on one beam, with native elements. Not
   checked: U1 elements (their weight is written as nodal forces), surface members
   other than through the totals of `building_01` and `building_02`, and buckling.

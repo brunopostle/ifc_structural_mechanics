@@ -679,9 +679,13 @@ rotational degrees of freedom**. This drives everything about joints:
 - **A member nothing stops spinning about its own axis is held**
   (`_hold_spinning_members()`): rotation about its axis is restrained at one
   of its supports, with a warning. Ball supports at both ends of a beam are
-  the usual cause. Members along a skew axis, or with no support of their own,
-  are only reported. A straight run of members joined rigidly end to end is
-  not seen at all: each counts as held by the next.
+  the usual cause. A member is held by a support that restrains that
+  rotation or by a member across it that it joins without a torsional
+  release. Members in line turn together and hold nothing for each other:
+  they are one run, held once (`aiz.72`), at a support at an end of the run
+  if it has one, else at a joint inside it (measured to 0.1%: only the
+  torsion of members in line is restrained there). Runs along a skew axis,
+  or with no support of their own, are only reported.
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve members only, in a plane parallel to
