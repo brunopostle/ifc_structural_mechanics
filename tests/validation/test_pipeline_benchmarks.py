@@ -572,6 +572,70 @@ class TestMaterialWithoutDensity:
             )
 
 
+class TestMemberWithoutAxis:
+    """cantilever_01 with nothing to say which way its section is turned.
+
+    ``Axis`` is missing (IFC2X3 has no such attribute) or runs along the
+    member. The section is then placed with its depth as near vertical as the
+    member allows, and for a section that is not the same both ways the
+    result has to say so.
+    """
+
+    MESSAGE = "orientation of their section"
+
+    def _variant(self, tmp_path, axis, circle=False) -> str:
+        model = ifcopenshell.open(CANTILEVER)
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        if axis is None:
+            member.Axis = None
+        else:
+            member.Axis.DirectionRatios = axis
+        if circle:
+            model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+                "IfcCircleProfileDef",
+                ProfileType="AREA",
+                ProfileName="benchmark",
+                Radius=0.15,
+            )
+        path = str(tmp_path / "variant.ifc")
+        model.write(path)
+        return path
+
+    def _warnings(self, ifc_path, tmp_path):
+        result = analyze_ifc(
+            ifc_path=ifc_path,
+            output_dir=str(tmp_path / "out"),
+            mesh_size=MESH_SIZE,
+            gravity=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        return [
+            w["message"] for w in result["warnings"] if self.MESSAGE in w["message"]
+        ]
+
+    @pytest.mark.parametrize("axis", [None, (1.0, 0.0, 0.0)])
+    def test_rectangle_is_reported(self, tmp_path, axis):
+        path = self._variant(tmp_path, axis)
+        guid = ifcopenshell.open(path).by_type("IfcStructuralCurveMember")[0].GlobalId
+        (message,) = self._warnings(path, tmp_path)
+        assert guid in message
+
+    def test_rectangle_is_analysed_with_its_depth_vertical(self, tmp_path):
+        data = _run(self._variant(tmp_path, None), tmp_path, gravity=True)
+        expected = _cantilever_self_weight(
+            0.2 * 0.4, 0.2 * 0.4**3 / 12, 0.2 * 0.4 * 5 / 6
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(
+            expected, rel=DEFLECTION_TOLERANCE
+        )
+
+    def test_circle_is_not_reported(self, tmp_path):
+        assert not self._warnings(self._variant(tmp_path, None, circle=True), tmp_path)
+
+    def test_member_with_an_axis_is_not_reported(self, tmp_path):
+        assert not self._warnings(CANTILEVER, tmp_path)
+
+
 class TestRoundAndHollowSections:
     """cantilever_01 with a bar, a tube and a box, as equivalent rectangles.
 

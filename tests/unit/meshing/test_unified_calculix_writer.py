@@ -915,6 +915,40 @@ class TestGetBeamNormal:
             n0, n90
         ), "Rotating section 90° must change the beam normal"
 
+    @pytest.mark.parametrize(
+        "end, expected",
+        [
+            ((6, 0, 0), (0, 0, 1)),
+            ((0, 6, 0), (0, 0, 1)),
+            ((3, 4, 0), (0, 0, 1)),
+            ((0, 4, 3), (0, -0.6, 0.8)),
+            ((0, 0, 6), (1, 0, 0)),
+            ((0, 0, -6), (1, 0, 0)),
+        ],
+    )
+    def test_without_axes_the_depth_is_as_near_vertical_as_can_be(self, end, expected):
+        """A beam along global Y used to get its depth laid flat (pfk)."""
+        member = self._make_member(geometry=((0, 0, 0), end), local_axis=None)
+        writer = self._make_writer(member)
+
+        assert writer._get_beam_normal(member) == pytest.approx(expected)
+        assert member.id in writer._members_without_axis
+
+    def test_sections_that_are_the_same_both_ways(self):
+        """Only a section with a strong and a weak axis needs its orientation."""
+        has_direction = UnifiedCalculixWriter._section_has_a_direction
+        rectangle = Section.create_rectangular_section("r", "r", width=0.3, height=0.6)
+        square = Section.create_rectangular_section("s", "s", width=0.3, height=0.3)
+        circle = Section.create_circular_section("c", "c", radius=0.1)
+        i_section = Section.create_i_section(
+            "i", "i", width=0.2, height=0.2, web_thickness=0.01, flange_thickness=0.01
+        )
+
+        assert has_direction(rectangle)
+        assert has_direction(i_section)
+        assert not has_direction(square)
+        assert not has_direction(circle)
+
 
 if __name__ == "__main__":
     # Run tests with verbose output

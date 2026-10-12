@@ -12,6 +12,7 @@ responsible for writing elements to CalculiX input files.
 """
 
 import logging
+import math
 import os
 from typing import Any, Dict, List, Optional, TextIO, Tuple
 
@@ -190,57 +191,62 @@ class UnifiedCalculixWriter:
                     return tuple(float(v) for v in z_axis)
             logger.warning(f"Unexpected local_axis format: {member.local_axis}")
 
-        # Fallback: compute from geometry if no local axis
-        # Counted, and reported once by _write_sections
+        # No orientation in the file: reported once by _write_sections
         self._members_without_axis.add(member.id)
 
         curve_geometry = member.geometry
-
-        # Extract start and end points
-        if isinstance(curve_geometry, tuple) and len(curve_geometry) == 2:
-            start_point = np.array(curve_geometry[0], dtype=float)
-            end_point = np.array(curve_geometry[1], dtype=float)
-        elif isinstance(curve_geometry, list) and len(curve_geometry) >= 2:
+        if isinstance(curve_geometry, (tuple, list)) and len(curve_geometry) >= 2:
             start_point = np.array(curve_geometry[0], dtype=float)
             end_point = np.array(curve_geometry[-1], dtype=float)
         else:
-            logger.warning(
-                "Unable to extract beam geometry points, using default normal"
+            raise AnalysisError(
+                f"Member {member.id} has no end points to place its section by."
             )
-            return (0.0, 1.0, 0.0)
+        return self._default_section_direction(end_point - start_point)
 
-        # Compute beam axis direction
-        beam_axis = end_point - start_point
-        beam_length = np.linalg.norm(beam_axis)
+    @staticmethod
+    def _default_section_direction(axis) -> Tuple[float, float, float]:
+        """Return the section 1 direction of a member the file gives no axes for.
 
-        if beam_length < 1e-10:
-            logger.warning("Beam has zero length, using default normal")
-            return (0.0, 1.0, 0.0)
+        The depth of the section is put as near vertical as the member
+        allows: global Z less its part along the member. A vertical member
+        gets global X.
 
-        # Normalize beam axis
-        beam_axis_normalized = beam_axis / beam_length
+        Args:
+            axis: Direction of the member (any length).
 
-        # Find a perpendicular vector
-        candidate_vectors = [
-            np.array([0.0, 1.0, 0.0]),  # Global Y
-            np.array([0.0, 0.0, 1.0]),  # Global Z
-            np.array([1.0, 0.0, 0.0]),  # Global X
-        ]
+        Returns:
+            Tuple[float, float, float]: Unit vector across the member.
+        """
+        axis = np.array(axis, dtype=float)
+        length = np.linalg.norm(axis)
+        if length < 1e-10:
+            raise AnalysisError("A member of no length has no section direction.")
+        axis = axis / length
+        for candidate in (np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])):
+            direction = candidate - np.dot(candidate, axis) * axis
+            size = np.linalg.norm(direction)
+            if size > 1e-6:
+                direction = direction / size
+                break
+        return (float(direction[0]), float(direction[1]), float(direction[2]))
 
-        for candidate in candidate_vectors:
-            normal = np.cross(beam_axis_normalized, candidate)
-            normal_length = np.linalg.norm(normal)
+    @staticmethod
+    def _section_has_a_direction(section) -> bool:
+        """Whether turning a section about its member changes the analysis.
 
-            if normal_length > 1e-6:
-                normal_normalized = normal / normal_length
-                return (
-                    float(normal_normalized[0]),
-                    float(normal_normalized[1]),
-                    float(normal_normalized[2]),
-                )
-
-        logger.warning("Could not compute perpendicular normal, using default")
-        return (0.0, 1.0, 0.0)
+        It does not for a circle or a round tube, nor for a square or a
+        square tube, whose bending stiffness is the same about every axis.
+        """
+        kind = getattr(section, "section_type", None)
+        if kind in ("circular", "hollow_circular"):
+            return False
+        if kind in ("rectangular", "hollow_rectangular"):
+            iy = getattr(section, "moment_of_inertia_y", None)
+            iz = getattr(section, "moment_of_inertia_z", None)
+            if iy and iz:
+                return not math.isclose(iy, iz, rel_tol=1e-6)
+        return True
 
     def write_calculix_input_from_mesh(
         self,
@@ -1382,35 +1388,9 @@ class UnifiedCalculixWriter:
         node1 = np.array(self.nodes[node1_id])
         node2 = np.array(self.nodes[node2_id])
 
-        # Compute element axis
-        element_axis = node2 - node1
-        element_length = np.linalg.norm(element_axis)
-
-        if element_length < 1e-10:
+        if np.linalg.norm(node2 - node1) < 1e-10:
             return (0.0, 1.0, 0.0)
-
-        element_axis_normalized = element_axis / element_length
-
-        # Find perpendicular vector
-        candidates = [
-            np.array([0.0, 1.0, 0.0]),
-            np.array([0.0, 0.0, 1.0]),
-            np.array([1.0, 0.0, 0.0]),
-        ]
-
-        for candidate in candidates:
-            normal = np.cross(element_axis_normalized, candidate)
-            normal_length = np.linalg.norm(normal)
-
-            if normal_length > 1e-6:
-                normal_normalized = normal / normal_length
-                return (
-                    float(normal_normalized[0]),
-                    float(normal_normalized[1]),
-                    float(normal_normalized[2]),
-                )
-
-        return (0.0, 1.0, 0.0)
+        return self._default_section_direction(node2 - node1)
 
     def _write_user_element_definition(self, file: TextIO) -> None:
         """Write the *USER ELEMENT type declaration (written once per model).
@@ -1622,13 +1602,19 @@ class UnifiedCalculixWriter:
                 "member they overlap, whose stiffness is used there, or was "
                 f"not meshed. The first are {', '.join(without_elements[:5])}."
             )
-        if self._members_without_axis:
-            listed = sorted(self._members_without_axis)
+        listed = sorted(
+            member.id
+            for member in self.domain_model.members
+            if member.id in self._members_without_axis
+            and self._section_has_a_direction(getattr(member, "section", None))
+        )
+        if listed:
             self._warn_user(
-                f"{len(listed)} curve member(s) have no Axis in the IFC file, "
-                "so the orientation of their section about the member is a "
-                "guess (depth vertical where it can be). The first are "
-                f"{', '.join(listed[:5])}."
+                f"{len(listed)} curve member(s) have no usable Axis in the IFC "
+                "file, so the orientation of their section about the member "
+                "is a guess: its depth as near vertical as the member allows, "
+                "and along global X for a vertical member. Strong and weak "
+                f"axis may be interchanged. The first are {', '.join(listed[:5])}."
             )
 
     def _collect_boundary_condition_dofs(self) -> set:
@@ -3105,6 +3091,8 @@ class UnifiedCalculixWriter:
             # the purely geometric default is only for members without one.
             has_ifc_axis = getattr(member, "local_axis", None) is not None
             section_direction = self._get_beam_normal(member) if has_ifc_axis else None
+            if not has_ifc_axis:
+                self._members_without_axis.add(member.id)
             groups = {}
             for elem_id in self.element_sets[member_set]:
                 if section_direction is not None:
