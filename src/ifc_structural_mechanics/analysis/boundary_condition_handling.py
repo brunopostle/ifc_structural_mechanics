@@ -907,20 +907,28 @@ def _global_force_vector(load, domain_model: StructuralModel) -> Optional[np.nda
 def _to_global_axes(
     load, vector, domain_model: StructuralModel
 ) -> Optional[np.ndarray]:
-    """Turn a force of a distributed load to global axes.
+    """Turn a force or moment of a load to global axes.
 
-    A load given in the member's own axes (``coordinate_system == "local"``,
-    from IFC ``GlobalOrLocal``) is rotated with the member's ``local_axis``.
-    Returns None when that is needed and the member has no axes.
+    A load given in local axes (``coordinate_system == "local"``, from IFC
+    ``GlobalOrLocal``) is in those of the item it is assigned to: a member's
+    ``local_axis``, or for a point load on a connection the connection's
+    ``local_axes``, which for a point connection with no system of its own
+    are the global ones. Returns None when the item has no axes.
     """
     vector = np.array(vector, dtype=float)
     if getattr(load, "coordinate_system", "global") != "local":
         return vector
-    member_id = getattr(load, "member_reference", None) or getattr(
+    item_id = getattr(load, "member_reference", None) or getattr(
         load, "surface_reference", None
     )
-    member = domain_model.get_member(member_id) if member_id else None
+    member = domain_model.get_member(item_id) if item_id else None
     axes = getattr(member, "local_axis", None)
+    if member is None and item_id:
+        connection = domain_model.get_connection(item_id)
+        if connection is not None:
+            axes = getattr(connection, "local_axes", None)
+            if axes is None and getattr(connection, "edge", None) is None:
+                return vector
     try:
         axes = np.array(axes, dtype=float)
     except (TypeError, ValueError):
@@ -1486,13 +1494,13 @@ def _point_load_lines(
     )
     force = _get_validated_force_vector(load)
     moment = getattr(load, "moment", None)
-    # One of a series of forces along a member, given in the member's axes
+    # In LOCAL_COORDS it is in the axes of the item it is assigned to
     turned = _to_global_axes(load, force, domain_model)
     if turned is None:
         _warn_model(
             domain_model,
-            f"Load {getattr(load, 'id', '?')} is given in the local axes of a "
-            "member that has none; it is applied in global axes.",
+            f"Load {getattr(load, 'id', '?')} is given in the local axes of an "
+            "item that has none; it is applied in global axes.",
         )
     else:
         force = turned

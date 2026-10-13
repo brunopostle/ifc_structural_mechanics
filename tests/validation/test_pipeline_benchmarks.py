@@ -2577,6 +2577,58 @@ class TestLoadThatVariesAlongABeam:
         assert total["fx_N"] == pytest.approx(-0.8 * force, rel=1e-5)
         assert total["fz_N"] == pytest.approx(-0.6 * force, rel=1e-5)
 
+    def test_point_action_in_the_axes_of_its_member(self, tmp_path):
+        """P and a moment on a rafter rising 3 in 4, in the rafter's own axes
+        (`aiz.85`): 0.8 P and 0.6 P for the supports to hold. It was applied
+        along global X."""
+        force = self.PEAK
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (2, 1.5), "B": (4, 3)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={"M": (force, 0.0)},
+            local_loads={"M": ("A", "M")},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        assert not [w for w in warnings if "local axes" in w]
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fx_N"] == pytest.approx(-0.8 * force, rel=1e-5)
+        assert total["fz_N"] == pytest.approx(-0.6 * force, rel=1e-5)
+
+    def test_point_action_in_the_axes_of_its_connection(self, tmp_path):
+        """P on a joint of a level beam, along the x axis of the joint's own
+        system, which rises 3 in 4 (`aiz.85`). Along the z axis of a joint
+        with no system of its own it is a load along global Z."""
+        force = self.PEAK
+        model = dict(
+            nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            local_loads={"M": None},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        data, warnings = _plane_run(
+            tmp_path / "turned",
+            loads={"M": (force, 0.0)},
+            support_axes={"M": ((-0.6, 0.0, 0.8), (0.8, 0.0, 0.6))},
+            **model,
+        )
+        assert not [w for w in warnings if "local axes" in w]
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fx_N"] == pytest.approx(-0.8 * force, rel=1e-5)
+        assert total["fz_N"] == pytest.approx(-0.6 * force, rel=1e-5)
+
+        data, warnings = _plane_run(
+            tmp_path / "level", loads={"M": (0.0, force)}, **model
+        )
+        assert not [w for w in warnings if "local axes" in w]
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fx_N"] == pytest.approx(0.0, abs=1e-5 * force)
+        assert total["fz_N"] == pytest.approx(-force, rel=1e-5)
+
     def test_snow_on_a_rafter(self, tmp_path):
         """A load per projected length on a rafter rising 3 in 4.
 

@@ -631,7 +631,37 @@ class LoadsExtractor:
         )
         if any(moment):
             point_load.moment = np.array(moment, dtype=float)
+        point_load.coordinate_system = self._coordinate_system(ifc_load)
+        if point_load.coordinate_system == "local":
+            point_load.member_reference = self._item_with_local_axes(ifc_load)
         return point_load
+
+    @staticmethod
+    def _item_with_local_axes(ifc_load) -> str:
+        """GlobalId of the item whose axes a point load in LOCAL_COORDS is in.
+
+        They are those of the item the action is assigned to: a member's, or
+        a connection's (the ``ConditionCoordinateSystem`` of a point
+        connection). The load is turned with them when it is written.
+
+        Raises:
+            ModelExtractionError: If the action is assigned to no item, or to
+                a surface connection.
+        """
+        for relation in getattr(ifc_load, "AssignedToStructuralItem", None) or []:
+            item = getattr(relation, "RelatingElement", None)
+            if item is None:
+                continue
+            if item.is_a("IfcStructuralSurfaceConnection"):
+                raise ModelExtractionError(
+                    "It is given in the local axes of a surface connection, "
+                    "which is not supported."
+                )
+            return item.GlobalId
+        raise ModelExtractionError(
+            "It is given in LOCAL_COORDS and is assigned to no item, whose "
+            "axes those would be."
+        )
 
     def _point_loads_along(
         self, ifc_load, applied_load, load_id: str, start, axis, length: float
@@ -680,8 +710,6 @@ class LoadsExtractor:
                 [float(c) for c in position],
             )
             load.action_id = load_id
-            # In LOCAL_COORDS the forces are in the axes of the member
-            load.coordinate_system = self._coordinate_system(ifc_load)
             load.member_reference = self._get_member_reference(ifc_load)
             loads.append(load)
         return loads
@@ -732,8 +760,8 @@ class LoadsExtractor:
         """Turn a force given in "global" coordinates to the global axes.
 
         IFC's GLOBAL_COORDS are the axes of the action's ObjectPlacement,
-        which need not be the global ones. A load in LOCAL_COORDS is in its
-        member's axes and is turned when it is written.
+        which need not be the global ones. A load in LOCAL_COORDS is in the
+        axes of the item it is assigned to and is turned when it is written.
         """
         if self._coordinate_system(ifc_load) == "local":
             return force_vector

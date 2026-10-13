@@ -146,6 +146,33 @@ class TestLoads:
         for load in found:
             assert load.moment.tolist() == pytest.approx([0.0, 0.5, 0.0])
 
+    def test_local_point_action_names_the_item_whose_axes_it_is_in(self):
+        """It used to be applied in global axes (`aiz.85`)."""
+        model = _open("beam_01")
+        action = model.by_type("IfcStructuralPointAction")[0]
+        action.GlobalOrLocal = "LOCAL_COORDS"
+        member = action.AssignedToStructuralItem[0].RelatingElement
+        loads = [
+            load
+            for group in Extractor(model).extract_model().load_groups
+            for load in group.loads
+            if load.id == action.GlobalId
+        ]
+        assert loads
+        for load in loads:
+            assert load.coordinate_system == "local"
+            assert load.member_reference == member.GlobalId
+
+    def test_local_point_action_on_no_item_is_an_error(self):
+        model = _open("beam_01")
+        action = model.by_type("IfcStructuralPointAction")[0]
+        action.GlobalOrLocal = "LOCAL_COORDS"
+        model.remove(action.AssignedToStructuralItem[0])
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert action.GlobalId in str(error.value)
+        assert "assigned to no item" in str(error.value)
+
     def test_moment_that_varies_along_a_member_is_an_error(self):
         model = _open("portal_01")
         action = model.by_type("IfcStructuralCurveAction")[0]

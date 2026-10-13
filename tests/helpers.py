@@ -52,6 +52,7 @@ def plane_model(
     support_axes=None,
     line_loads=None,
     moments=None,
+    local_loads=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -87,6 +88,9 @@ def plane_model(
             load or the moment of every force of a DISCRETE one.
         moments: ``{name: (mx, my, mz)}`` in N·m, applied at that joint with
             its load, or by themselves.
+        local_loads: ``{name: None or (name, name)}``, the loads that are in
+            LOCAL_COORDS: in the axes of their joint (``support_axes``), or
+            in those of that member, to which the action is then assigned.
 
     Returns:
         *path*.
@@ -273,6 +277,7 @@ def plane_model(
     )
     actions = []
     moments = dict(moments or {})
+    local_loads = dict(local_loads or {})
     point_loads = {name: (0.0, 0.0) for name in moments}
     point_loads.update(loads)
     for name, (fx, fz) in point_loads.items():
@@ -294,7 +299,7 @@ def plane_model(
                 float(fz),
                 *[float(m) for m in moments.get(name, (0.0, 0.0, 0.0))],
             ),
-            "GLOBAL_COORDS",
+            "LOCAL_COORDS" if name in local_loads else "GLOBAL_COORDS",
             None,
         )
         create(
@@ -303,7 +308,7 @@ def plane_model(
             None,
             None,
             None,
-            joints[name],
+            bar_of[local_loads[name]] if local_loads.get(name) else joints[name],
             action,
         )
         actions.append(action)
