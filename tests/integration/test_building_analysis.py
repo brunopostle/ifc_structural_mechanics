@@ -113,6 +113,66 @@ def _nodes_and_rigid_links(inp_path: str):
     return nodes, links
 
 
+def _eccentric_ends(ifc_path: str, inp_path: str):
+    """Whether the rigid links join every eccentric member end to its joint.
+
+    Returns the number of `IfcRelConnectsWithEccentricity` in the file, the
+    (member, connection) names of the ends that are not joined, and the names
+    of the connections that no member reaches. Such a connection has no node:
+    the links run from the nearest of its member ends to the others, one
+    fewer than there are ends, and they are as rigid a joint as links to a
+    node at the connection would be.
+    """
+    nodes, links = _nodes_and_rigid_links(inp_path)
+
+    def key(point):
+        return tuple(round(c, 5) for c in point)
+
+    group = {}
+
+    def find(point):
+        while group.get(point, point) != point:
+            point = group[point]
+        return point
+
+    for first, second in links:
+        group[find(key(nodes[first]))] = find(key(nodes[second]))
+    in_mesh = {key(position) for position in nodes.values()}
+
+    def metres(vertex):
+        return tuple(c / 1000.0 for c in vertex.VertexGeometry.Coordinates)
+
+    ends_at = {}
+    relations = ifcopenshell.open(ifc_path).by_type("IfcRelConnectsWithEccentricity")
+    for relation in relations:
+        member = relation.RelatingStructuralMember
+        connection = relation.RelatedStructuralConnection
+        edge = member.Representation.Representations[0].Items[0]
+        joint = metres(connection.Representation.Representations[0].Items[0])
+        end = min(
+            (metres(edge.EdgeStart), metres(edge.EdgeEnd)),
+            key=lambda point: math.dist(point, joint),
+        )
+        assert 0.1 < math.dist(end, joint) < 1.0
+        ends_at.setdefault((connection.Name, key(joint)), []).append(
+            (member.Name, key(end))
+        )
+
+    unjoined, hubs = [], []
+    for (connection, joint), ends in ends_at.items():
+        if joint in in_mesh:
+            target = find(joint)
+        else:
+            hubs.append(connection)
+            target = find(ends[0][1])
+            if len(ends) < 2:
+                unjoined.append((ends[0][0], connection))
+        for member, end in ends:
+            if end not in in_mesh or find(end) != target:
+                unjoined.append((member, connection))
+    return len(relations), unjoined, sorted(hubs)
+
+
 @pytest.mark.skipif(not CCX_AVAILABLE, reason="CalculiX (ccx) not installed")
 class TestBuilding01Joints:
     """building_01 has rigid end zones: members that stop short of their joint.
@@ -129,37 +189,13 @@ class TestBuilding01Joints:
         result = analyze_ifc(ifc_path, output_dir, mesh_size=1.0)
         assert result["status"] == "success", result.get("errors")
 
-        nodes, links = _nodes_and_rigid_links(os.path.join(output_dir, "analysis.inp"))
-        linked = {frozenset((nodes[first], nodes[second])) for first, second in links}
-
-        def metres(vertex):
-            return tuple(c / 1000.0 for c in vertex.VertexGeometry.Coordinates)
-
-        def is_linked(end, joint):
-            return any(
-                all(min(math.dist(p, q) for q in pair) < 1e-6 for p in (end, joint))
-                for pair in linked
-            )
-
-        relations = ifcopenshell.open(ifc_path).by_type(
-            "IfcRelConnectsWithEccentricity"
-        )
-        assert len(relations) == 48
-        unjoined = []
-        for relation in relations:
-            member = relation.RelatingStructuralMember
-            connection = relation.RelatedStructuralConnection
-            edge = member.Representation.Representations[0].Items[0]
-            joint = metres(connection.Representation.Representations[0].Items[0])
-            end = min(
-                (metres(edge.EdgeStart), metres(edge.EdgeEnd)),
-                key=lambda point: math.dist(point, joint),
-            )
-            assert 0.2 < math.dist(end, joint) < 0.7
-            if not is_linked(end, joint):
-                unjoined.append((member.Name, connection.Name))
+        inp_path = os.path.join(output_dir, "analysis.inp")
+        relations, unjoined, hubs = _eccentric_ends(ifc_path, inp_path)
+        assert relations == 48
         assert not unjoined
-        assert len(links) == 48
+        # Every joint has a member that reaches it: a link for each end
+        assert not hubs
+        assert len(_nodes_and_rigid_links(inp_path)[1]) == 48
 
 
 @pytest.mark.slow
@@ -172,6 +208,23 @@ class TestBuildingAnalysis:
         assert (
             result["status"] == "success"
         ), f"Analysis failed: {result.get('errors', [])}"
+
+    def test_every_member_end_is_joined_to_its_connection(self, building_02_run):
+        """Its 117 eccentric ends are all joined, with 115 links (`aiz.88`).
+
+        Connections 48 and 49 have four members each and none reaches them:
+        the end of a beam 150 mm away is the joint, and the other three are
+        linked to it.
+        """
+        _, output_dir = building_02_run
+        inp_path = os.path.join(output_dir, "analysis.inp")
+        relations, unjoined, hubs = _eccentric_ends(
+            _get_ifc_path(BUILDING_02), inp_path
+        )
+        assert relations == 117
+        assert not unjoined
+        assert hubs == ["48", "49"]
+        assert len(_nodes_and_rigid_links(inp_path)[1]) == 115
 
     def test_building_displacement_reasonable(self, building_02_run):
         """building_02 max displacement should be < 1.0m (not kilometres)."""
