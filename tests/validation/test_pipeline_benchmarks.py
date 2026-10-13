@@ -2416,6 +2416,7 @@ class TestLoadThatVariesAlongABeam:
             line_loads={("A", "B"): line_load},
         )
         assert not [w for w in warnings if "varies along its member" in w]
+        assert not [w for w in warnings if "nearest mesh node" in w]
         lifts = [
             _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]["fz_N"]
             for x in (0.0, self.SPAN)
@@ -2452,6 +2453,97 @@ class TestLoadThatVariesAlongABeam:
         assert lifts == pytest.approx([0.55 * w, 1.45 * w], rel=1e-4)
         assert forces["max_Mf2_Nm"] == pytest.approx(1.19625 * w, rel=FORCE_TOLERANCE)
         assert forces["max_Vf2_N"] == pytest.approx(1.45 * w, rel=FORCE_TOLERANCE)
+
+    def _deflection(self, bending: float, moment_at_the_middle: float) -> float:
+        """Midspan deflection: ``bending`` times w L⁴ / E I, plus shear."""
+        stiffness = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        return (
+            bending * self.PEAK * self.SPAN**4 / stiffness
+            + moment_at_the_middle / shear
+        )
+
+    def test_sine_half_wave(self, tmp_path):
+        """w at the middle: w L / π on each support, w L² / π² at midspan
+        and w L⁴ / π⁴ E I, the one load a beam answers in its own shape."""
+        w, span = self.PEAK, self.SPAN
+        data, lifts, forces = self._beam(
+            tmp_path, values=[(0.0, -w)], distribution="SINUS"
+        )
+        assert lifts == pytest.approx([w * span / math.pi] * 2, rel=1e-6)
+        moment = w * span**2 / math.pi**2
+        assert forces["max_Mf2_Nm"] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._deflection(1 / math.pi**4, moment), rel=0.01
+        )
+
+    def test_parabolic_half_wave(self, tmp_path):
+        """w at the middle: w L / 3 on each support, 5 w L² / 48 at midspan
+        and 61 w L⁴ / 5760 E I."""
+        w, span = self.PEAK, self.SPAN
+        data, lifts, forces = self._beam(
+            tmp_path, values=[(0.0, -w)], distribution="PARABOLA"
+        )
+        assert lifts == pytest.approx([w * span / 3] * 2, rel=1e-6)
+        moment = 5 * w * span**2 / 48
+        assert forces["max_Mf2_Nm"] == pytest.approx(moment, rel=FORCE_TOLERANCE)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            self._deflection(61 / 5760, moment), rel=0.01
+        )
+
+    def test_series_of_point_forces(self, tmp_path):
+        """P at 1.3 m and 2 P at 2.9 m, neither where a node would be.
+
+        1.225 P and 1.775 P on the supports; the shear is 1.225 P, 0.225 P
+        and 1.775 P, and the moment 1.5925 P at the first force and
+        1.9525 P at the second.
+        """
+        force = self.PEAK
+        data, lifts, forces = self._beam(
+            tmp_path,
+            values=[(0.0, -force), (0.0, -2 * force)],
+            locations=[1.3, 2.9],
+            distribution="DISCRETE",
+        )
+        assert lifts == pytest.approx([1.225 * force, 1.775 * force], rel=1e-6)
+        assert forces["max_Mf2_Nm"] == pytest.approx(
+            1.9525 * force, rel=FORCE_TOLERANCE
+        )
+        assert forces["max_Vf2_N"] == pytest.approx(1.775 * force, rel=FORCE_TOLERANCE)
+        (member,) = data["members"]
+        diagram = member["section_force_diagrams"]["Load"]
+        between = [
+            abs(shear)
+            for at, shear in zip(diagram["distance_m"], diagram["Vf2_N"])
+            if 1.5 < at < 2.7
+        ]
+        assert between
+        assert between == pytest.approx([0.225 * force] * len(between), rel=0.02)
+
+    def test_point_forces_along_a_rafter(self, tmp_path):
+        """P along a rafter rising 3 in 4, given in the rafter's own axes:
+        0.8 P and 0.6 P for the supports to hold."""
+        force = self.PEAK
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 3)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={},
+            hinged=False,
+            mesh_size=0.25,
+            line_loads={
+                ("A", "B"): dict(
+                    values=[(force, 0.0)],
+                    locations=[1.7],
+                    distribution="DISCRETE",
+                    local=True,
+                )
+            },
+        )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["fx_N"] == pytest.approx(-0.8 * force, rel=1e-5)
+        assert total["fz_N"] == pytest.approx(-0.6 * force, rel=1e-5)
 
     def test_snow_on_a_rafter(self, tmp_path):
         """A load per projected length on a rafter rising 3 in 4.

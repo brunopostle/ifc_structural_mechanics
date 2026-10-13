@@ -17,6 +17,7 @@ import gmsh
 import numpy as np
 
 from ..config.meshing_config import MeshingConfig
+from ..domain.load import PointLoad
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import MeshingError
@@ -572,13 +573,16 @@ class GmshGeometryConverter:
         return seeded
 
     def _seed_load_points(self, domain_model: StructuralModel) -> List[int]:
-        """Add Gmsh points where a load along a curve member starts, ends or turns.
+        """Add Gmsh points where a load along a curve member starts, ends or turns,
+        and where a point load acts on the span of one.
 
         A line load given by samples (``LineLoad.samples``) may start part
         of the way along its member and change slope at each sample. The
         shear force has a kink there, which an element cannot follow inside
         itself; with a node at each sample the nodal forces are those of a
-        load that is linear over every element.
+        load that is linear over every element. A point load (one of the
+        forces of a DISCRETE curve action, say) would go to the nearest node,
+        which is not where it acts.
 
         Returns:
             List of Gmsh point tags to pass as tools to fragment().
@@ -588,6 +592,9 @@ class GmshGeometryConverter:
         for member in domain_model.members:
             loads.extend(getattr(member, "loads", None) or [])
         for load in loads:
+            if isinstance(load, PointLoad):
+                seeded.extend(self._seed_point_on_curve_members(load, domain_model))
+                continue
             samples = getattr(load, "samples", None)
             if not samples:
                 continue
@@ -604,6 +611,35 @@ class GmshGeometryConverter:
                     continue
                 seeded.append(self._get_or_create_point(*position, dim=1))
         return seeded
+
+    def _seed_point_on_curve_members(
+        self, load: PointLoad, domain_model: StructuralModel
+    ) -> List[int]:
+        """A Gmsh point at a point load that acts inside a curve member, if any."""
+        try:
+            position = np.array([float(v) for v in load.position], dtype=float)
+        except (TypeError, ValueError):
+            return []
+        if position.shape != (3,):
+            return []
+        if self._coord_key(*position) in self._curve_point_registry:
+            return []
+        for member in domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+            geometry = member.geometry
+            if not geometry or len(geometry) < 2:
+                continue
+            for a, b in zip(geometry[:-1], geometry[1:]):
+                try:
+                    a, b = np.array(a, dtype=float), np.array(b, dtype=float)
+                except (TypeError, ValueError):
+                    continue
+                if a.shape == b.shape == (3,) and self._point_on_segment(
+                    position, a, b
+                ):
+                    return [self._get_or_create_point(*position, dim=1)]
+        return []
 
     @staticmethod
     def _point_in_planar_polygon(

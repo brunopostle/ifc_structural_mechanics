@@ -8,6 +8,7 @@ import pytest
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
     _distributed_load_to_nodal_forces,
     _global_force_vector,
+    _half_wave_load_to_nodal_forces,
     _load_to_nodal_moments,
     _point_load_lines,
     _varying_line_load_to_nodal_forces,
@@ -170,6 +171,46 @@ class TestLoadThatVariesAlongItsMember:
             NODES,
         )
         assert _total(cloads) == pytest.approx([6.0, 0.0, -6.0])
+
+
+class TestHalfWaveLoad:
+    """Nodal forces of a load that rises to a peak at the middle of its member."""
+
+    @pytest.mark.parametrize("elements", [QUADRATIC, LINEAR])
+    @pytest.mark.parametrize(
+        "half_wave, mean", [("sinus", 2 / np.pi), ("parabola", 2 / 3)]
+    )
+    def test_total_and_symmetry(self, elements, half_wave, mean):
+        """30 N/m at the middle of 2 m; a single element is enough."""
+        cloads = _half_wave_load_to_nodal_forces(
+            "SET",
+            half_wave,
+            30.0 * DOWN,
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            {"SET": list(elements)},
+            elements,
+            NODES,
+        )
+        assert _total(cloads)[2] == pytest.approx(-60.0 * mean, rel=1e-6)
+        assert cloads[1][2] == pytest.approx(cloads[2][2])
+        assert abs(cloads[3][2]) > abs(cloads[1][2])
+
+    def test_parabola_on_a_quadratic_element(self):
+        """w L / 15 at each end and 8 w L / 15 at the middle."""
+        cloads = _half_wave_load_to_nodal_forces(
+            "SET",
+            "parabola",
+            30.0 * DOWN,
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            {"SET": [1]},
+            QUADRATIC,
+            NODES,
+        )
+        assert [cloads[node][2] for node in (1, 3, 2)] == pytest.approx(
+            [-4.0, -32.0, -4.0]
+        )
 
 
 def _beam_model(load):

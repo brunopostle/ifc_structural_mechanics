@@ -16,6 +16,7 @@ from ifc_structural_mechanics.domain.load import (
     LineLoad,
     PointLoad,
 )
+from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor
 from ifc_structural_mechanics.utils.error_handling import ModelExtractionError
 from tests.helpers import PLANE_PIN, plane_model
@@ -57,6 +58,7 @@ class TestLoadsExtractor:
         self.point_load_applied.MomentX = 0.0
         self.point_load_applied.MomentY = 0.0
         self.point_load_applied.MomentZ = 0.0
+        self.point_load_applied.WarpingMoment = None
         self.point_load_applied.is_a = lambda x: x == "IfcStructuralLoadSingleForce"
         self.point_load.AppliedLoad = self.point_load_applied
         # A load with no position is an error, not a load at the origin
@@ -583,8 +585,28 @@ class TestLoadsAlongAMember:
                 "all at one location",
             ),
             (
+                dict(values=[(0, -1), (0, -2)], distribution="EQUIDISTANT"),
+                "EQUIDISTANT with a list of values",
+            ),
+            (
+                dict(values=[(0, -1)], distribution="USERDEFINED"),
+                "Its distribution is USERDEFINED; only CONST",
+            ),
+            (
                 dict(values=[(0, -1), (0, -2)], distribution="DISCRETE"),
-                "DISCRETE with a list of values",
+                "2 point force.s. and no Locations",
+            ),
+            (
+                dict(
+                    values=[(0, -1), (0, -2)],
+                    locations=[1.0, 4.5],
+                    distribution="DISCRETE",
+                ),
+                "not on its member, which is 4 long",
+            ),
+            (
+                dict(values=[(0, -1)], distribution="SINUS", moment=(0, 5.0, 0)),
+                "a moment .LinearMomentY. that varies along its member",
             ),
             (
                 dict(values=[(0, -1), (0, -2)], distribution="PARABOLA"),
@@ -602,22 +624,120 @@ class TestLoadsAlongAMember:
         with pytest.raises(ModelExtractionError, match=message):
             self._load(tmp_path, **line_load)
 
-    def test_distribution_that_needs_one_value_and_is_not_constant(self, tmp_path):
+    @pytest.mark.parametrize(
+        "distribution, mean", [("SINUS", 2 / np.pi), ("PARABOLA", 2 / 3)]
+    )
+    def test_half_wave_keeps_its_peak(self, tmp_path, distribution, mean):
         """A sine half wave was once applied as a constant load of its peak."""
+        load = self._load(tmp_path, values=[(0.0, -1000.0)], distribution=distribution)
+        assert load.half_wave == distribution.lower()
+        assert load.peak.tolist() == [0.0, 0.0, -1000.0]
+        assert load.magnitude.tolist() == pytest.approx([0.0, 0.0, -1000.0 * mean])
+        assert load.samples is None
+
+    def test_half_wave_per_projected_length(self, tmp_path):
+        rafter = {"A": (0, 0), "B": (4, 3)}
+        load = self._load(
+            tmp_path,
+            rafter,
+            values=[(0.0, -1000.0)],
+            distribution="PARABOLA",
+            projected=True,
+        )
+        assert load.peak.tolist() == pytest.approx([0.0, 0.0, -800.0])
+
+    def _point_loads(self, tmp_path, nodes=None, **line_load):
         path = plane_model(
             str(tmp_path / "model.ifc"),
-            nodes={"A": (0, 0), "B": (4, 0)},
+            nodes=nodes or {"A": (0, 0), "B": (4, 0)},
             members=[("A", "B")],
             supports={"A": PLANE_PIN, "B": PLANE_PIN},
             loads={},
             hinged=False,
-            line_loads={("A", "B"): dict(values=[(0.0, -1000.0)])},
+            line_loads={("A", "B"): dict(distribution="DISCRETE", **line_load)},
         )
         model = ifcopenshell.open(path)
-        (action,) = model.by_type("IfcStructuralLinearAction")
-        action.PredefinedType = "SINUS"
-        with pytest.raises(ModelExtractionError, match="Its distribution is SINUS"):
+        (action,) = model.by_type("IfcStructuralCurveAction")
+        # The file must outlive its entities
+        return model, action, LoadsExtractor(model).extract_all_loads()
+
+    def test_series_of_point_forces(self, tmp_path):
+        """One point load for each, where it is along the member."""
+        _, action, loads = self._point_loads(
+            tmp_path,
+            {"A": (0, 0), "B": (4, 3)},
+            values=[(0.0, -1000.0), (200.0, -3000.0)],
+            locations=[1.25, 5.0],
+            moment=(0.0, 50.0, 0.0),
+        )
+        assert [type(load).__name__ for load in loads] == ["PointLoad"] * 2
+        assert [load.id for load in loads] == [
+            f"{action.GlobalId}#1",
+            f"{action.GlobalId}#2",
+        ]
+        assert {load.action_id for load in loads} == {action.GlobalId}
+        assert [list(load.position) for load in loads] == [
+            pytest.approx([1.0, 0.0, 0.75]),
+            pytest.approx([4.0, 0.0, 3.0]),
+        ]
+        assert [load.magnitude.tolist() for load in loads] == [
+            [0.0, 0.0, -1000.0],
+            [200.0, 0.0, -3000.0],
+        ]
+        assert [load.moment.tolist() for load in loads] == [[0.0, 50.0, 0.0]] * 2
+        assert {load.coordinate_system for load in loads} == {"global"}
+
+    def test_point_forces_in_the_axes_of_their_member(self, tmp_path):
+        model, action, loads = self._point_loads(
+            tmp_path, values=[(0.0, -1000.0)], locations=[1.0], local=True
+        )
+        (load,) = loads
+        assert load.coordinate_system == "local"
+        (member,) = model.by_type("IfcStructuralCurveMember")
+        assert load.member_reference == member.GlobalId
+
+    def test_forces_per_length_are_not_point_forces(self, tmp_path):
+        model, action, _ = self._point_loads(
+            tmp_path, values=[(0.0, -1.0)], locations=[1.0]
+        )
+        action.AppliedLoad.Values = [
+            model.create_entity("IfcStructuralLoadLinearForce", None, 0.0, 0.0, -1.0)
+        ]
+        with pytest.raises(
+            ModelExtractionError, match="as a point force on a curve action"
+        ):
             LoadsExtractor(model).extract_all_loads()
+
+    def test_warping_moment_is_an_error(self, tmp_path):
+        model, action, _ = self._point_loads(
+            tmp_path, values=[(0.0, -1.0)], locations=[1.0]
+        )
+        action.AppliedLoad.Values = [
+            model.create_entity(
+                "IfcStructuralLoadSingleForceWarping",
+                None,
+                0.0,
+                0.0,
+                -1.0,
+                WarpingMoment=2.0,
+            )
+        ]
+        with pytest.raises(ModelExtractionError, match="warping moment"):
+            LoadsExtractor(model).extract_all_loads()
+
+    def test_point_forces_belong_to_the_load_case_of_their_action(self, tmp_path):
+        """And the action is not reported as one in no load case."""
+        model, action, _ = self._point_loads(
+            tmp_path, values=[(0.0, -1.0), (0.0, -2.0)], locations=[1.0, 2.0]
+        )
+        path = str(tmp_path / "model.ifc")
+        domain = Extractor(path).extract_model()
+        (case,) = domain.load_groups
+        assert [load.id for load in case.loads] == [
+            f"{action.GlobalId}#1",
+            f"{action.GlobalId}#2",
+        ]
+        assert not [w for w in domain.analysis_warnings if "no load group" in str(w)]
 
     def test_point_force_on_a_curve_action_is_an_error(self, tmp_path):
         """It was once applied as that many newtons per metre."""

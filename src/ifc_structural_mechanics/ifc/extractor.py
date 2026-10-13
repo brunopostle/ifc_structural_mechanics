@@ -288,7 +288,9 @@ class Extractor:
             if group.has_actions:
                 model.add_load_group(group)
 
-        grouped = {load.id for group in load_groups for load in group.loads}
+        grouped = {
+            load.action_id or load.id for group in load_groups for load in group.loads
+        }
         loose = [
             action
             for action in self.ifc.by_type("IfcStructuralAction")

@@ -79,10 +79,12 @@ def plane_model(
             that varies (an ``IfcStructuralCurveAction`` with a load
             configuration), at ``locations`` along the member from its first
             joint, which may be left out for two values. Further keys:
-            ``distribution`` (LINEAR unless given), ``projected`` and
-            ``local`` (per projected length; in the member's own axes, the
-            values then being ``(fx, fz)`` there), and ``moment``, the
-            ``(mx, my, mz)`` per length of a constant load.
+            ``distribution`` (LINEAR unless given; SINUS or PARABOLA with one
+            value, its peak; DISCRETE with ``values`` that are point forces in
+            newtons), ``projected`` and ``local`` (per projected length; in
+            the member's own axes, the values then being ``(fx, fz)`` there),
+            and ``moment``, the ``(mx, my, mz)`` per length of a constant
+            load or the moment of every force of a DISCRETE one.
         moments: ``{name: (mx, my, mz)}`` in N·m, applied at that joint with
             its load, or by themselves.
 
@@ -306,9 +308,14 @@ def plane_model(
         )
         actions.append(action)
     for ends, load in (line_loads or {}).items():
+        distribution = load.get("distribution")
         forces = [
             create(
-                "IfcStructuralLoadLinearForce",
+                (
+                    "IfcStructuralLoadSingleForce"
+                    if distribution == "DISCRETE"
+                    else "IfcStructuralLoadLinearForce"
+                ),
                 None,
                 float(fx),
                 0.0,
@@ -317,10 +324,14 @@ def plane_model(
             )
             for fx, fz in load["values"]
         ]
-        varies = len(forces) > 1
+        varies = len(forces) > 1 or distribution == "DISCRETE"
         locations = load.get("locations")
         action = create(
-            "IfcStructuralCurveAction" if varies else "IfcStructuralLinearAction",
+            (
+                "IfcStructuralCurveAction"
+                if varies or distribution
+                else "IfcStructuralLinearAction"
+            ),
             guid(),
             None,
             f"Q{ends[0]}{ends[1]}",
@@ -341,7 +352,7 @@ def plane_model(
             "LOCAL_COORDS" if load.get("local") else "GLOBAL_COORDS",
             None,
             "PROJECTED_LENGTH" if load.get("projected") else "TRUE_LENGTH",
-            load.get("distribution", "LINEAR") if varies else "CONST",
+            distribution or ("LINEAR" if varies else "CONST"),
         )
         create(
             "IfcRelConnectsStructuralActivity",

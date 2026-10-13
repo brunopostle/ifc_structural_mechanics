@@ -13,6 +13,15 @@ from ifc_structural_mechanics.domain.base_entity import (
     DomainEntity,
 )
 
+# Distributions of a line load that are a half wave over the whole member:
+# the share of the peak value at a fraction of the member's length
+HALF_WAVES = {
+    "sinus": lambda t: np.sin(np.pi * t),
+    "parabola": lambda t: 4.0 * t * (1.0 - t),
+}
+# Their mean value, as a share of the peak
+HALF_WAVE_MEANS = {"sinus": 2.0 / np.pi, "parabola": 2.0 / 3.0}
+
 
 class Load(DomainEntity):
     """Base class for all structural loads."""
@@ -37,6 +46,9 @@ class Load(DomainEntity):
         # A moment applied with the force, in the same axes: N·m at a point,
         # N·m per metre along a line
         self.moment: Optional[np.ndarray] = None
+        # GlobalId of the IFC action, where one action gives several loads
+        # (point forces along a member) and so is not the id
+        self.action_id: Optional[str] = None
 
         # Initialize base entity with ID and load type
         super().__init__(
@@ -236,6 +248,11 @@ class LineLoad(Load):
         # [(distance from start_position in metres, force per length)], linear
         # between them and nothing outside. ``magnitude`` is then their mean.
         self.samples: Optional[List[Tuple[float, np.ndarray]]] = None
+        # A load that is a half wave over the whole member: a key of
+        # ``HALF_WAVES`` and the force per length at the middle.
+        # ``magnitude`` is then the mean value.
+        self.half_wave: Optional[str] = None
+        self.peak: Optional[np.ndarray] = None
         self._explicit_start_magnitude = start_magnitude is not None
         self._explicit_end_magnitude = end_magnitude is not None
 
@@ -348,6 +365,10 @@ class LineLoad(Load):
                 [float(location), np.asarray(vector, dtype=float).tolist()]
                 for location, vector in self.samples
             ]
+
+        if self.half_wave:
+            result["half_wave"] = self.half_wave
+            result["peak"] = np.asarray(self.peak, dtype=float).tolist()
 
         if self.distribution == "linear":
             if isinstance(self.start_magnitude, np.ndarray):

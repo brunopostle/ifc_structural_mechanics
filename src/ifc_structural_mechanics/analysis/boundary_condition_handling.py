@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 
-from ..domain.load import PointLoad
+from ..domain.load import HALF_WAVES, PointLoad
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError
 
@@ -677,6 +677,70 @@ _LINE_SHAPES = {
 _GAUSS_POINTS = (0.5 - 0.5 / np.sqrt(3.0), 0.5 + 0.5 / np.sqrt(3.0))
 
 
+# Five-point rule on [0, 1] for a load that is a half wave: exact for a
+# parabola, and a sine wave on a single element across the whole member comes
+# out right to seven figures
+_WAVE_GAUSS = tuple(
+    (0.5 + 0.5 * float(point), 0.5 * float(weight))
+    for point, weight in zip(*np.polynomial.legendre.leggauss(5))
+)
+
+
+def _line_elements_along(
+    element_set_name: str,
+    start_position,
+    end_position,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+):
+    """The line elements of a set, placed along the line of their member.
+
+    Yields:
+        ``(nodes, first, last)`` for each: its nodes in CalculiX order, and
+        the distance of its first and of its last node from
+        ``start_position`` towards ``end_position``.
+    """
+    origin = np.array(start_position, dtype=float)
+    axis = np.array(end_position, dtype=float) - origin
+    length = float(np.linalg.norm(axis))
+    if length < 1e-12:
+        return
+    axis /= length
+
+    for elem_id in element_sets.get(element_set_name, []):
+        elem = elements_data.get(elem_id)
+        nodes = (elem or {}).get("nodes", [])
+        if len(nodes) not in _LINE_SHAPES or str(elem.get("type", "")).startswith("S"):
+            continue
+        try:
+            first = float(
+                (np.array(node_coords[nodes[0]], dtype=float) - origin) @ axis
+            )
+            last = float(
+                (np.array(node_coords[nodes[-1]], dtype=float) - origin) @ axis
+            )
+        except KeyError:
+            continue
+        if abs(last - first) < 1e-12:
+            continue
+        yield nodes, first, last
+
+
+def _add_element_forces(
+    cloads: Dict[int, List[float]], nodes: List[int], forces: np.ndarray
+) -> None:
+    """Add the forces an element's nodes take of a load to those by node."""
+    # A node the load gives nothing gets no line of rounding error
+    forces[np.abs(forces) < 1e-12 * np.abs(forces).max(initial=0.0)] = 0.0
+    for nid, force in zip(nodes, forces):
+        if not force.any():
+            continue
+        entry = cloads.setdefault(nid, [0.0, 0.0, 0.0])
+        for i in range(3):
+            entry[i] += float(force[i])
+
+
 def _varying_line_load_to_nodal_forces(
     element_set_name: str,
     samples: List[Tuple[float, np.ndarray]],
@@ -699,29 +763,14 @@ def _varying_line_load_to_nodal_forces(
         Dict mapping node_id → [fx, fy, fz] accumulated nodal forces.
     """
     cloads: Dict[int, List[float]] = {}
-    origin = np.array(start_position, dtype=float)
-    axis = np.array(end_position, dtype=float) - origin
-    length = float(np.linalg.norm(axis))
-    if length < 1e-12:
-        return cloads
-    axis /= length
-
-    for elem_id in element_sets.get(element_set_name, []):
-        elem = elements_data.get(elem_id)
-        nodes = (elem or {}).get("nodes", [])
-        if len(nodes) not in _LINE_SHAPES or str(elem.get("type", "")).startswith("S"):
-            continue
-        try:
-            first = float(
-                (np.array(node_coords[nodes[0]], dtype=float) - origin) @ axis
-            )
-            last = float(
-                (np.array(node_coords[nodes[-1]], dtype=float) - origin) @ axis
-            )
-        except KeyError:
-            continue
-        if abs(last - first) < 1e-12:
-            continue
+    for nodes, first, last in _line_elements_along(
+        element_set_name,
+        start_position,
+        end_position,
+        element_sets,
+        elements_data,
+        node_coords,
+    ):
         shapes = _LINE_SHAPES[len(nodes)]
         low, high = min(first, last), max(first, last)
         forces = np.zeros((len(nodes), 3))
@@ -734,14 +783,53 @@ def _varying_line_load_to_nodal_forces(
                 load = load_a + (load_b - load_a) * (at - at_a) / (at_b - at_a)
                 weights = shapes((at - first) / (last - first))
                 forces += 0.5 * (upper - lower) * np.outer(weights, load)
-        # A node the load gives nothing gets no line of rounding error
-        forces[np.abs(forces) < 1e-12 * np.abs(forces).max(initial=0.0)] = 0.0
-        for nid, force in zip(nodes, forces):
-            if not force.any():
-                continue
-            entry = cloads.setdefault(nid, [0.0, 0.0, 0.0])
-            for i in range(3):
-                entry[i] += float(force[i])
+        _add_element_forces(cloads, nodes, forces)
+
+    return cloads
+
+
+def _half_wave_load_to_nodal_forces(
+    element_set_name: str,
+    half_wave: str,
+    peak: np.ndarray,
+    start_position,
+    end_position,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> Dict[int, List[float]]:
+    """Turn a line load that is a half wave over its member into nodal forces.
+
+    ``half_wave`` is a key of ``HALF_WAVES`` (IFC's SINUS and PARABOLA) and
+    ``peak`` the force per length at the middle of the member, in global
+    axes; there is none at its ends. Each element takes the work-equivalent
+    forces of the part of the wave on it.
+
+    Returns:
+        Dict mapping node_id → [fx, fy, fz] accumulated nodal forces.
+    """
+    cloads: Dict[int, List[float]] = {}
+    wave = HALF_WAVES[half_wave]
+    length = float(
+        np.linalg.norm(
+            np.array(end_position, dtype=float) - np.array(start_position, dtype=float)
+        )
+    )
+    for nodes, first, last in _line_elements_along(
+        element_set_name,
+        start_position,
+        end_position,
+        element_sets,
+        elements_data,
+        node_coords,
+    ):
+        shapes = _LINE_SHAPES[len(nodes)]
+        forces = np.zeros((len(nodes), 3))
+        for point, weight in _WAVE_GAUSS:
+            at = min(max(first + point * (last - first), 0.0), length)
+            load = float(wave(at / length)) * peak
+            forces += weight * abs(last - first) * np.outer(shapes(point), load)
+        _add_element_forces(cloads, nodes, forces)
 
     return cloads
 
@@ -760,6 +848,22 @@ def _load_to_nodal_forces(
         The forces by node, and whether the load is in the local axes of a
         member that has none (it is then taken as given in global axes).
     """
+    half_wave = getattr(load, "half_wave", None)
+    if half_wave:
+        peak = _to_global_axes(load, load.peak, domain_model)
+        return (
+            _half_wave_load_to_nodal_forces(
+                element_set_name,
+                half_wave,
+                np.array(load.peak if peak is None else peak, dtype=float),
+                load.start_position,
+                load.end_position,
+                element_sets,
+                elements_data,
+                node_coords,
+            ),
+            peak is None,
+        )
     samples = getattr(load, "samples", None)
     if samples:
         turned = [_to_global_axes(load, vector, domain_model) for _, vector in samples]
@@ -1380,12 +1484,25 @@ def _point_load_lines(
     node_id = _determine_load_node(
         load, node_coords=node_coords, domain_model=domain_model
     )
+    force = _get_validated_force_vector(load)
+    moment = getattr(load, "moment", None)
+    # One of a series of forces along a member, given in the member's axes
+    turned = _to_global_axes(load, force, domain_model)
+    if turned is None:
+        _warn_model(
+            domain_model,
+            f"Load {getattr(load, 'id', '?')} is given in the local axes of a "
+            "member that has none; it is applied in global axes.",
+        )
+    else:
+        force = turned
+        if moment is not None:
+            moment = _to_global_axes(load, moment, domain_model)
     lines = [
         f"{node_id}, {i + 1}, {component:.6e}\n"
-        for i, component in enumerate(_get_validated_force_vector(load))
+        for i, component in enumerate(force)
         if abs(component) > 1e-10
     ]
-    moment = getattr(load, "moment", None)
     if moment is not None and np.any(np.abs(moment) > 1e-10):
         if elements_data and node_id not in _nodes_of_curve_members(elements_data):
             raise AnalysisError(
