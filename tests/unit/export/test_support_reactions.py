@@ -54,19 +54,18 @@ def _record(element_id, distance, centre, force, moment, case="Dead"):
     }
 
 
-def _export(model, node_forces, section_forces=(), case="Dead"):
+def _export(model, node_forces, section_forces=(), case="Dead", node_moments=None):
     steps = [{"load_case": case, "forces": node_forces}]
-    exporter = ResultsExporter(
-        model,
-        {
-            "displacement": [],
-            "stress": [],
-            "reaction": [],
-            "section_forces": list(section_forces),
-            "support_node_forces": steps,
-        },
-    )
-    return exporter._supports()
+    results = {
+        "displacement": [],
+        "stress": [],
+        "reaction": [],
+        "section_forces": list(section_forces),
+        "support_node_forces": steps,
+    }
+    if node_moments is not None:
+        results["support_node_moments"] = [{"load_case": case, "moments": node_moments}]
+    return ResultsExporter(model, results)._supports()
 
 
 def _model(*supports, members=None):
@@ -210,7 +209,7 @@ class TestLineSupport:
 
 
 class TestMoments:
-    """The solver has no reaction moments; member end forces stand in."""
+    """The solver's forces on the expanded nodes, or else member end forces."""
 
     FIXED = {"nodes": {1: (0, 0, 0)}, "dofs": [1, 2, 3, 4, 5, 6]}
 
@@ -347,6 +346,101 @@ class TestMoments:
     def test_support_that_names_no_member(self):
         support = _support("a", (0, 0, 0), members=())
         self._not_computed(_model((support, self.FIXED)))
+
+    def test_solver_forces_at_the_node_need_no_member(self):
+        """A slab edge, or a member running on: the node's own forces say."""
+        support = _support("a", (0, 0, 0), members=())
+        model = _model((support, self.FIXED))
+
+        (entry,) = _export(
+            model, {1: [0.0, 0.0, 9.0]}, node_moments={1: [0.0, -40.0, 2.0]}
+        )
+
+        assert entry["moments"] == "solver"
+        reaction = entry["by_load_case"]["Dead"]
+        assert (reaction["mx_Nm"], reaction["my_Nm"], reaction["mz_Nm"]) == (
+            0.0,
+            -40.0,
+            2.0,
+        )
+
+    def test_solver_forces_are_preferred_to_member_ends(self):
+        """They are exact; the member ends are integrated stresses."""
+        beam, support = self._cantilever()
+        model = _model((support, self.FIXED), members=[beam])
+        records = [
+            _record(1, 0.0, (0, 0, 0), (0, 0, -100.0), (0, 497.0, 0)),
+            _record(2, LENGTH, (LENGTH, 0, 0), (0, 0, -100.0), (0, 0, 0)),
+        ]
+
+        (entry,) = _export(
+            model, {1: [0.0, 0.0, 100.0]}, records, node_moments={1: [0, -500.0, 0]}
+        )
+
+        assert entry["moments"] == "solver"
+        assert entry["by_load_case"]["Dead"]["my_Nm"] == -500.0
+
+    def test_member_ends_where_the_solver_force_is_wrong(self):
+        """Its moment is then wrong with it (CalculiX 2.21)."""
+        beam, support = self._cantilever()
+        model = _model((support, self.FIXED), members=[beam])
+        records = [
+            _record(1, 0.0, (0, 0, 0), (0, 0, -100.0), (0, 500.0, 0)),
+            _record(2, LENGTH, (LENGTH, 0, 0), (0, 0, -100.0), (0, 0, 0)),
+        ]
+
+        (entry,) = _export(
+            model, {1: [60.0, 0.0, 100.0]}, records, node_moments={1: [0, -470.0, 0]}
+        )
+
+        assert entry["forces"] == entry["moments"] == "member_end_forces"
+        assert entry["by_load_case"]["Dead"]["my_Nm"] == pytest.approx(-500.0)
+
+    def test_every_node_of_the_support_has_to_have_a_moment(self):
+        support = _support("a", (0, 0, 0), members=())
+        record = {"nodes": {1: (0, 0, 0), 2: (0, 0, 0)}, "dofs": [1, 2, 3, 4, 5, 6]}
+        model = _model((support, record))
+
+        (entry,) = _export(
+            model,
+            {1: [0.0, 0.0, 9.0], 2: [0.0, 0.0, 1.0]},
+            node_moments={1: [0.0, -40.0, 0.0]},
+        )
+
+        assert entry["moments"] == "not_computed"
+        assert "my_Nm" not in entry["by_load_case"]["Dead"]
+
+    def test_line_support_adds_the_lever_arms_of_its_forces(self):
+        """A clamped edge along y: its moment is about the middle of the edge."""
+        support = _support("line", (0, 0, 0), members=())
+        support.edge = [[0.0, 0.0, 0.0], [0.0, 4.0, 0.0]]
+        record = {
+            "nodes": {1: (0.0, 0.0, 0.0), 2: (0.0, 4.0, 0.0)},
+            "dofs": [1, 2, 3, 5],
+        }
+        model = _model((support, record))
+
+        (entry,) = _export(
+            model,
+            {1: [0.0, 0.0, 10.0], 2: [0.0, 0.0, 30.0]},
+            node_moments={1: [0.0, -5.0, 0.0], 2: [0.0, -7.0, 0.0]},
+        )
+
+        reaction = entry["by_load_case"]["Dead"]
+        assert reaction["mx_Nm"] == pytest.approx(2.0 * 30.0 - 2.0 * 10.0)
+        assert reaction["my_Nm"] == pytest.approx(-12.0)
+
+    def test_moments_applied_at_the_node_are_taken_off(self):
+        """A point moment and the node's share of a moment per length."""
+        support = _support("a", (0, 0, 0), members=())
+        model = _model((support, self.FIXED))
+        model.support_node_loads = [{1: [0, 0, 0, 0, 30.0, 0, 0, 4.0, 0]}]
+
+        (entry,) = _export(
+            model, {1: [0.0, 0.0, 9.0]}, node_moments={1: [0.0, -40.0, 0.0]}
+        )
+
+        assert entry["by_load_case"]["Dead"]["my_Nm"] == pytest.approx(-74.0)
 
     def test_no_rotation_held_needs_no_member(self):
         support = _support("a", (0, 0, 0), members=())

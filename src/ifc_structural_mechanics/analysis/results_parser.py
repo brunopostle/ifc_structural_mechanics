@@ -644,6 +644,130 @@ class ResultsParser:
                     )
         return steps
 
+    # The forces of a support node's expanded nodes have to add up to the
+    # force printed for the node itself, to this share of the largest force
+    # in the step or of the forces added, which are a large couple where the
+    # node takes a moment (the result file has six figures)
+    _NODE_FORCE_TOLERANCE = 1e-4
+
+    def parse_support_node_moments(
+        self, frd_file: str, node_forces: Optional[List[Dict]] = None
+    ) -> List[Dict]:
+        """The moment each support node takes, per step, from an FRD file.
+
+        CalculiX gives a beam or shell node no moment. With ``RF`` under
+        ``*NODE FILE`` it does write the force on every node of the solids it
+        expands the elements into, and the forces on the ones that belong to
+        a support node, taken about that node, are the moment the support
+        takes there: a clamped end, a clamped slab edge and a support that a
+        member runs on past alike. An expanded node belongs to the node of
+        its element that it is nearest to.
+
+        CalculiX 2.21 and earlier misreport these forces at a clamped member
+        end, as they do the force printed for the node; whoever uses the
+        moments has to check the forces first.
+
+        Args:
+            frd_file (str): Path to the FRD file.
+            node_forces: What ``parse_node_forces`` returned. A node whose
+                expanded nodes do not add up to its printed force was not
+                attributed correctly and gets no moment.
+
+        Returns:
+            List[Dict]: One record per step, in step order, with ``load_case``
+            and ``moments``, a dict of node number to ``[mx, my, mz]`` about
+            the node. A node with an element the result file does not list (a
+            user element) is left out. Empty if the model records no support
+            node elements or the file has no forces.
+        """
+        recorded = getattr(self.domain_model, "support_node_elements", None)
+        if not isinstance(recorded, dict) or not recorded:
+            return []
+        if not os.path.exists(frd_file) or not self.element_nodes:
+            return []
+        arms: Dict[int, Dict[int, np.ndarray]] = {}
+        for node, (position, elements) in recorded.items():
+            if not elements or any(e not in self.element_nodes for e in elements):
+                continue
+            own = np.array(position, dtype=float)
+            expanded: Dict[int, np.ndarray] = {}
+            for elem_id, others in elements.items():
+                rest = np.array(others, dtype=float).reshape(-1, 3)
+                for result_node in self.element_nodes[elem_id]:
+                    point = self.node_coordinates.get(result_node)
+                    if point is None:
+                        continue
+                    arm = np.array(point, dtype=float) - own
+                    reach = np.linalg.norm(rest - np.array(point), axis=1)
+                    if not len(reach) or np.linalg.norm(arm) < reach.min():
+                        expanded[result_node] = arm
+            arms[node] = expanded
+        wanted = {n for expanded in arms.values() for n in expanded}
+
+        blocks: List[Dict[int, List[float]]] = []
+        current: Optional[Dict[int, List[float]]] = None
+        with open(frd_file, "r") as fh:
+            for line in fh:
+                if line.startswith(" -4"):
+                    current = {} if line[5:13].strip() == "FORC" else None
+                    if current is not None:
+                        blocks.append(current)
+                elif current is None:
+                    continue
+                elif line.startswith(" -1"):
+                    result_node = int(line[3:13])
+                    if result_node in wanted:
+                        current[result_node] = _parse_frd_data_line(line)[1][:3]
+                elif line.startswith(" -3"):
+                    current = None
+
+        names = self.load_case_names or []
+        steps: List[Dict] = []
+        for index, block in enumerate(blocks):
+            printed = (
+                node_forces[index]["forces"]
+                if node_forces and index < len(node_forces)
+                else None
+            )
+            largest = max(
+                (float(np.linalg.norm(f)) for f in (printed or {}).values()),
+                default=0.0,
+            )
+            moments: Dict[int, List[float]] = {}
+            for node, expanded in arms.items():
+                if any(n not in block for n in expanded):
+                    continue
+                force = np.zeros(3)
+                moment = np.zeros(3)
+                added = 0.0
+                for result_node, arm in expanded.items():
+                    nodal = np.array(block[result_node], dtype=float)
+                    force += nodal
+                    moment += np.cross(arm, nodal)
+                    added += float(np.linalg.norm(nodal))
+                if printed is not None:
+                    if node not in printed:
+                        continue
+                    apart = float(np.linalg.norm(force - np.array(printed[node])))
+                    if apart > self._NODE_FORCE_TOLERANCE * max(largest, added):
+                        logger.warning(
+                            f"The forces on the expanded nodes of support node "
+                            f"{node} add up to {force.tolist()}, not to the "
+                            f"{printed[node]} printed for it: no moment is "
+                            "taken from them."
+                        )
+                        continue
+                moments[node] = [float(v) for v in moment]
+            steps.append(
+                {
+                    "load_case": (
+                        names[index] if index < len(names) else f"step_{index + 1}"
+                    ),
+                    "moments": moments,
+                }
+            )
+        return steps
+
     def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
         """
         Parse total reaction forces from CalculiX TOTALS=ONLY format.
@@ -958,6 +1082,7 @@ class ResultsParser:
             "mode_shapes": [],
             "section_forces": [],
             "support_node_forces": [],
+            "support_node_moments": [],
         }
 
         try:
@@ -1003,6 +1128,13 @@ class ResultsParser:
                 reactions = self.parse_reactions(dat_file)
                 parsed_results["reaction"].extend(reactions)
                 parsed_results["support_node_forces"] = self.parse_node_forces(dat_file)
+                if "results" in result_files:
+                    parsed_results["support_node_moments"] = (
+                        self.parse_support_node_moments(
+                            result_files["results"],
+                            parsed_results["support_node_forces"],
+                        )
+                    )
 
                 # Parse buckling eigenvalues (non-empty only for buckling analyses)
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)

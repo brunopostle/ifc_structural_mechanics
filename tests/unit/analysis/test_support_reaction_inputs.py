@@ -79,7 +79,10 @@ class TestStepLoadRecorder:
 
         assert out.getvalue() == text
         assert recorder.steps == [
-            {"nodal": {4: [0.0, 0.0, -150.0, 0.0, 0.0, 0.0]}, "gravity": None}
+            {
+                "nodal": {4: [0.0, 0.0, -150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+                "gravity": None,
+            }
         ]
 
     def test_text_that_does_not_end_a_line_is_written_at_the_end(self):
@@ -102,7 +105,7 @@ class TestStepLoadRecorder:
 
         first, second = recorder.steps
         assert first == {
-            "nodal": {4: [7.0, 0.0, -150.0, 0.0, 0.0, 0.0]},
+            "nodal": {4: [7.0, 0.0, -150.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
             "gravity": None,
         }
         assert second["nodal"] == {}
@@ -112,7 +115,7 @@ class TestStepLoadRecorder:
         recorder = _StepLoadRecorder(io.StringIO())
         recorder.write("*STEP\n*CLOAD\n4, 5, 30.\n4, 3, -2.\n*END STEP\n")
 
-        assert recorder.steps[0]["nodal"] == {4: [0.0, 0.0, -2.0, 0.0, 30.0, 0.0]}
+        assert recorder.steps[0]["nodal"] == {4: [0, 0, -2.0, 0, 30.0, 0, 0, 0, 0]}
 
     def test_moment_on_a_rotation_a_support_holds_is_noted_and_not_written(self):
         """It goes straight into the support; the solver would only warn."""
@@ -121,10 +124,14 @@ class TestStepLoadRecorder:
         recorder.write("*STEP\n*CLOAD\n4, 5, 30.\n4, 4, 10.\n9, 5, 7.\n*END STEP\n")
 
         assert out.getvalue() == "*STEP\n*CLOAD\n4, 4, 10.\n9, 5, 7.\n*END STEP\n"
-        assert recorder.steps[0]["nodal"][4] == [0.0, 0.0, 0.0, 10.0, 30.0, 0.0]
+        assert recorder.steps[0]["nodal"][4] == [0, 0, 0, 10.0, 30.0, 0, 0, 0, 0]
 
-    def test_shares_of_a_moment_per_length_are_not_noted(self):
-        """The section forces at the end of the member include them."""
+    def test_shares_of_a_moment_per_length_are_noted_apart(self):
+        """The section forces at the end of the member include them.
+
+        The solver's forces at the node do not, so they are kept, after the
+        point moments.
+        """
         out = io.StringIO()
         recorder = _StepLoadRecorder(out, held_rotations={(4, 4)})
         recorder.write(
@@ -134,7 +141,10 @@ class TestStepLoadRecorder:
 
         assert "4, 4, 20." not in out.getvalue()
         assert "5, 4, 40." in out.getvalue()
-        assert recorder.steps[0]["nodal"] == {5: [0.0, 0.0, 0.0, 0.0, 3.0, 0.0]}
+        assert recorder.steps[0]["nodal"] == {
+            4: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0],
+            5: [0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 40.0, 0.0, 0.0],
+        }
 
 
 class TestLoadsOnSupportNodes:
@@ -154,7 +164,7 @@ class TestLoadsOnSupportNodes:
         )
 
         assert model.support_node_loads == [
-            {1: [0.0, 0.0, -100.0, 0.0, 0.0, 0.0]},
+            {1: [0.0, 0.0, -100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
             {},
         ]
 
@@ -176,7 +186,7 @@ class TestLoadsOnSupportNodes:
 
         (loads,) = model.support_node_loads
         weight = DENSITY * WIDTH * DEPTH * 9.81 * 2.0
-        assert loads[1] == pytest.approx([0.0, 0.0, -weight / 6, 0.0, 0.0, 0.0])
+        assert loads[1] == pytest.approx([0.0, 0.0, -weight / 6] + [0.0] * 6)
 
     def test_weight_shares_of_linear_and_quadratic_beams(self):
         model = _model()

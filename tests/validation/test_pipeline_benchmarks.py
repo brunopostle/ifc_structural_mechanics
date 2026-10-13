@@ -2184,6 +2184,12 @@ def _needs_solver_reactions() -> None:
         )
 
 
+# Where the moments of a support that holds a rotation come from: the
+# solver's forces on the nodes it was expanded into, or, where the solver got
+# those wrong at a clamped member end (CalculiX 2.21), the ends of its members
+MOMENT_SOURCES = ("solver", "member_end_forces")
+
+
 def _support_at(data: dict, position) -> dict:
     """The support of a results file nearest a point."""
     return min(
@@ -2195,8 +2201,10 @@ def _support_at(data: dict, position) -> dict:
 class TestSupportReactions:
     """The reaction at each support, against statics (`94g.1`).
 
-    Forces are the solver's. It gives no moments, so those are the section
-    forces at the ends of the members a support holds.
+    Forces are the solver's. It gives a node no moment: those are the
+    moments of its forces on the nodes the support's own were expanded into
+    (`94g.8`), or the section forces at the ends of the members a support
+    holds where the solver got its forces wrong.
     """
 
     def test_cantilever_root(self, tmp_path):
@@ -2206,11 +2214,13 @@ class TestSupportReactions:
         weight = CANT_RHO * G_ACCEL * 0.2 * 0.4 * CANT_L
         assert support["type"] == "point"
         assert support["restrained"] == ["tx", "ty", "tz", "rx", "ry", "rz"]
-        assert support["moments"] == "member_end_forces"
+        exact = _solver_reports_clamped_reactions()
+        assert support["moments"] == ("solver" if exact else "member_end_forces")
         reaction = support["by_load_case"]["Gravity"]
         assert reaction["fz_N"] == pytest.approx(weight, rel=FORCE_TOLERANCE)
+        # The solver's forces are in equilibrium; integrated stresses are near
         assert reaction["my_Nm"] == pytest.approx(
-            -weight * CANT_L / 2, rel=FORCE_TOLERANCE
+            -weight * CANT_L / 2, rel=1e-4 if exact else FORCE_TOLERANCE
         )
         for key in ("fx_N", "fy_N"):
             assert abs(reaction[key]) < 1e-3 * weight
@@ -2323,21 +2333,87 @@ class TestSupportReactions:
             pytest.approx(0.0, abs=FORCE_TOLERANCE * load * span)
         )
 
-    def test_moment_is_left_out_where_it_cannot_be_had(self, tmp_path):
+    def test_members_that_run_on_past_their_supports(self, tmp_path):
         """grid_of_beams: the main beams run 0.1 m past their supports.
 
-        A member's end forces are then not the support's, and the solver has
-        none to give. The keys are absent, not zero.
+        A member's end forces are then not the support's, and the moments
+        were once left out. The grid is the same seen from either side, so
+        the four supports hold the same moments, turning opposite ways.
         """
         data = _run(
             os.path.join(IFC_DIR, "grid_of_beams.ifc"), tmp_path, 0.25, gravity=True
         )
         assert len(data["supports"]) == 4
+        first = data["supports"][0]["by_load_case"]["Gravity"]
+        assert abs(first["my_Nm"]) > 0.5 * first["fz_N"]
         for support in data["supports"]:
-            assert support["moments"] == "not_computed"
+            assert support["moments"] == "solver"
             reaction = support["by_load_case"]["Gravity"]
-            assert "mx_Nm" not in reaction
             assert reaction["fz_N"] > 0
+            for key in ("mx_Nm", "my_Nm", "mz_Nm"):
+                assert abs(reaction[key]) == pytest.approx(abs(first[key]), rel=1e-3)
+        for key in ("mx_Nm", "my_Nm", "mz_Nm"):
+            total = sum(s["by_load_case"]["Gravity"][key] for s in data["supports"])
+            assert abs(total) < 1e-3 * abs(first["my_Nm"])
+
+    def test_member_clamped_along_its_span(self, tmp_path):
+        """A bar held at one point, 1 m from one end and 2 m from the other.
+
+        It runs on past the support both ways, so no member ends there.
+        Statics gives the reaction: the loads at the two ends, and their
+        moments about the support.
+        """
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (1, 0), "C": (3, 0)},
+            members=[("A", "C")],
+            supports={"B": PLANE_FIXED},
+            loads={"A": (0.0, -1000.0), "C": (500.0, -3000.0)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        (support,) = data["supports"]
+        assert support["moments"] == "solver"
+        reaction = support["by_load_case"]["Load"]
+        assert reaction["fx_N"] == pytest.approx(-500.0, rel=1e-4)
+        assert reaction["fz_N"] == pytest.approx(4000.0, rel=1e-4)
+        assert reaction["my_Nm"] == pytest.approx(1000.0 - 2 * 3000.0, rel=1e-4)
+        for key in ("mx_Nm", "mz_Nm"):
+            assert abs(reaction[key]) < 1e-3 * abs(reaction["my_Nm"])
+
+    @pytest.mark.parametrize("mesh_size", [1.0, 0.5])
+    def test_slab_clamped_along_one_edge(self, tmp_path, mesh_size):
+        """slab_01 as a cantilever, 5 m out from its edge at x = 0, 3 m wide.
+
+        Under 2 kN/m2 the edge takes the load and its moment about itself,
+        q b a^2 / 2, at any mesh size: these are the solver's own forces. At
+        1 m they are couples of 50 kN through the thickness at each node,
+        written with six figures, and still have to be recognised as adding
+        up to the node's force.
+        """
+        pressure, a, b = 2000.0, 5.0, 3.0
+        path = _slab_variant(
+            tmp_path,
+            edge_conditions=(
+                (True, True, True, True, False, False),
+                (False, False, False, False, False, False),
+            ),
+            area_load=(0.0, 0.0, -pressure),
+        )
+        data = _run(path, tmp_path, mesh_size=mesh_size)
+        (support,) = data["supports"]
+        assert support["type"] == "line"
+        assert support["restrained"] == ["tx", "ty", "tz", "ry"]
+        assert support["moments"] == "solver"
+        reaction = support["by_load_case"]["Imposed"]
+        load = pressure * a * b
+        assert reaction["fz_N"] == pytest.approx(load, rel=1e-4)
+        assert reaction["my_Nm"] == pytest.approx(-load * a / 2, rel=1e-4)
+        for key in ("mx_Nm", "mz_Nm"):
+            assert abs(reaction[key]) < 1e-3 * abs(reaction["my_Nm"])
+        assert support["by_load_case_in_axes"]["Imposed"]["mx_Nm"] == pytest.approx(
+            -load * a / 2, rel=1e-4
+        )
 
     def test_line_support_in_its_own_axes(self, tmp_path):
         """structure_01's wall foot: x along the edge, the lift along its y."""
@@ -3501,7 +3577,7 @@ class TestLoadCombinations:
             - COMBINED_LIVE * LIVE_LINE_LOAD[2] * length**2 / 12
         )
         for support in data["supports"]:
-            assert support["moments"] == "member_end_forces"
+            assert support["moments"] in MOMENT_SOURCES
             values = support["by_load_combination"][self.NAME]
             cases = support["by_load_case"]
             assert abs(values["my_Nm"]) == pytest.approx(moment, rel=FORCE_TOLERANCE)
@@ -4104,7 +4180,7 @@ class TestPlaneFrame:
         )
         # The moment each foot is held with
         for support in data["supports"]:
-            assert support["moments"] == "member_end_forces"
+            assert support["moments"] in MOMENT_SOURCES
             assert abs(support["by_load_case"]["Load"]["my_Nm"]) == pytest.approx(
                 foot, rel=FORCE_TOLERANCE
             )
@@ -4512,7 +4588,7 @@ class TestSkewSupports:
         clamped = _support_at(data, (0.0, 0.0, 0.0))
         assert clamped["restrained"] == ["tx", "ty", "tz", "rx"]
         assert clamped["restrained_in_axes"] == ["tx", "ty", "tz", "rx", "ry"]
-        assert clamped["moments"] == "member_end_forces"
+        assert clamped["moments"] in MOMENT_SOURCES
         in_axes = clamped["by_load_case_in_axes"]["Load"]
         assert in_axes["fy_N"] == pytest.approx(part / 2.0, rel=FORCE_TOLERANCE)
         assert in_axes["fz_N"] == pytest.approx(part * 11.0 / 16.0, rel=0.01)

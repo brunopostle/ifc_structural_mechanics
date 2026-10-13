@@ -982,8 +982,10 @@ def _write_step_output_requests(
             beam elements do not support stress/strain output and CalculiX will
             segfault if it is requested on them.
     """
+    # RF in the result file is the force on every node of the solids that
+    # beams and shells are expanded into: a support's moment is in those
     file.write("*NODE FILE\n")
-    file.write("U\n")
+    file.write("U, RF\n")
     # The force on each support node, and their total
     file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=YES\n")
     file.write("RF\n")
@@ -1018,8 +1020,9 @@ class _StepLoadRecorder:
         self._held_rotations = held_rotations or set()
         self._shares_follow = False
         self._shares = False
-        # One per step: {"nodal": {node: [fx, fy, fz, mx, my, mz]},
-        # "gravity": vector}
+        # One per step: {"nodal": {node: [fx, fy, fz, mx, my, mz, sx, sy,
+        # sz]}, "gravity": vector}; s is the node's share of moments per
+        # length
         self.steps: List[Dict[str, Any]] = []
 
     def write(self, text: str) -> int:
@@ -1055,11 +1058,13 @@ class _StepLoadRecorder:
         parts = [part.strip() for part in line.split(",")]
         if self._block == "*CLOAD":
             node, dof, value = int(parts[0]), int(parts[1]), float(parts[2])
-            # A node's share of a moment per length is not noted: the
+            # A node's share of a moment per length is noted apart: the
             # section forces at the end of the member have it already, as
-            # the moment of a member loaded all along has
-            if 1 <= dof <= 3 or (4 <= dof <= 6 and not self._shares):
-                step["nodal"].setdefault(node, [0.0] * 6)[dof - 1] += value
+            # the moment of a member loaded all along has, and the solver's
+            # forces at the node do not
+            if 1 <= dof <= 6:
+                slot = dof + 2 if dof >= 4 and self._shares else dof - 1
+                step["nodal"].setdefault(node, [0.0] * 9)[slot] += value
             return (node, dof) not in self._held_rotations
         if self._block == "*DLOAD" and len(parts) >= 6 and parts[1] == "GRAV":
             step["gravity"] = float(parts[2]) * np.array([float(v) for v in parts[3:6]])
@@ -1128,8 +1133,10 @@ def write_analysis_steps(
     See ``_write_analysis_steps`` for the arguments. Afterwards
     ``domain_model.support_node_loads`` holds, for each step in order, the
     load applied directly at each support node, ``{node: [fx, fy, fz, mx,
-    my, mz]}``: the results exporter takes it off what the solver reports
-    there, and the moment off what the ends of the members give.
+    my, mz, sx, sy, sz]}``: the results exporter takes it off what the solver
+    reports there, and the moment off what the ends of the members give. The
+    last three are the node's share of moments per length, which the ends of
+    the members include and the solver's forces at the node do not.
     ``domain_model.applied_load_totals`` holds the whole load of each step,
     ``[fx, fy, fz]``, which the reactions have to balance.
     """
@@ -1169,14 +1176,14 @@ def write_analysis_steps(
             for node, weight in _weight_on_nodes(
                 domain_model, elements_data, node_coords, None, step["gravity"]
             ).items():
-                everywhere[node] = everywhere.get(node, np.zeros(6)) + np.append(
-                    weight, np.zeros(3)
+                everywhere[node] = everywhere.get(node, np.zeros(9)) + np.append(
+                    weight, np.zeros(6)
                 )
         recorded.append(
             {n: [float(v) for v in f] for n, f in everywhere.items() if n in nodes}
         )
         totals.append(
-            [float(v) for v in sum(everywhere.values(), np.zeros(6))[:3]]  # type: ignore
+            [float(v) for v in sum(everywhere.values(), np.zeros(9))[:3]]  # type: ignore
         )
     domain_model.support_node_loads = recorded
     domain_model.applied_load_totals = totals

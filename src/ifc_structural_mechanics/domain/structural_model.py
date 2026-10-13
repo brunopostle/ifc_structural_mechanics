@@ -73,8 +73,13 @@ class StructuralModel:
         # connection.id → {"nodes": {node: (x, y, z)}, "dofs": [1..6]} for
         # every support, as written to the solver; set by the input writer
         self.support_nodes: Dict[str, Dict] = {}
+        # support node → (its position, {analysis element ID: positions of
+        # the element's other nodes}) for every element at the node, links
+        # included; set by the input writer
+        self.support_node_elements: Dict[int, tuple] = {}
         # Per analysis step, the load applied directly at each support node,
-        # {node: [fx, fy, fz]}; set by the input writer
+        # {node: [fx, fy, fz, mx, my, mz, sx, sy, sz]}, the last three being
+        # its share of moments per length; set by the input writer
         self.support_node_loads: List[Dict[int, List[float]]] = []
         # Per analysis step, the whole applied load [fx, fy, fz]; set by the
         # input writer

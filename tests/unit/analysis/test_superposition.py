@@ -143,6 +143,31 @@ class TestLinearResults:
         assert node_loads == [{1: pytest.approx([0.0, 0.0, -1.35])}]
         assert totals == [pytest.approx([3.0, 0.0, -19.5])]
 
+    def test_moments_at_support_nodes(self):
+        results = _results()
+        results["support_node_moments"] = [
+            {"load_case": "Dead", "moments": {1: [0.0, 10.0, 0.0], 2: [1.0, 0.0, 0.0]}},
+            {"load_case": "Live", "moments": {1: [4.0, -2.0, 0.0]}},
+        ]
+
+        combined, _, _ = combine_results(results, FACTORS, "ULS")
+
+        (step,) = combined["support_node_moments"]
+        assert step["load_case"] == "ULS"
+        # Node 2 has no moment in one of the cases, so it has none here
+        assert list(step["moments"]) == [1]
+        assert step["moments"][1] == pytest.approx([6.0, 10.5, 0.0])
+
+    def test_no_moments_when_a_case_has_none(self):
+        results = _results()
+        results["support_node_moments"] = [
+            {"load_case": "Dead", "moments": {1: [0.0, 10.0, 0.0]}}
+        ]
+
+        combined, _, _ = combine_results(results, FACTORS, "ULS")
+
+        assert combined["support_node_moments"] == []
+
     def test_negative_factor(self):
         combined, _, _ = combine_results(
             _results(), {"Dead": 1.0, "Live": -1.0}, "difference"

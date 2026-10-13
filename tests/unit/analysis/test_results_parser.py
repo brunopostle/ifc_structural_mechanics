@@ -340,3 +340,127 @@ class TestStressLoadCases:
         stresses = ResultsParser().parse_stresses(str(frd))
 
         assert [s.metadata["load_case"] for s in stresses] == ["step_1", "step_2"]
+
+
+FRD_WITH_FORCES = """    1C
+    2C                             8                                     1
+ -1        11 0.00000E+00-1.00000E-01-1.00000E-01
+ -1        12 0.00000E+00 1.00000E-01-1.00000E-01
+ -1        13 0.00000E+00 1.00000E-01 1.00000E-01
+ -1        14 0.00000E+00-1.00000E-01 1.00000E-01
+ -1        21 1.00000E+00-1.00000E-01-1.00000E-01
+ -1        22 1.00000E+00 1.00000E-01-1.00000E-01
+ -1        23 1.00000E+00 1.00000E-01 1.00000E-01
+ -1        24 1.00000E+00-1.00000E-01 1.00000E-01
+ -3
+    3C                             1                                     1
+ -1         5    1    0    1
+ -2        11        12        13        14        21        22        23        24
+ -3
+    1PSTEP                         1           1           1
+  100CL  101 1.000000000           8                     0    1           1
+ -4  FORC        4    1
+ -5  F1          1    2    1    0
+ -5  F2          1    2    2    0
+ -5  F3          1    2    3    0
+ -5  ALL         1    2    0    0    1ALL
+ -1        11-1.00000E+02 0.00000E+00 3.00000E+01
+ -1        12-1.00000E+02 0.00000E+00 3.00000E+01
+ -1        13 1.00000E+02 0.00000E+00 3.00000E+01
+ -1        14 1.00000E+02 0.00000E+00 3.00000E+01
+ -1        21 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        22 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        23 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        24 0.00000E+00 0.00000E+00 0.00000E+00
+ -3
+    1PSTEP                         2           1           2
+  100CL  102 1.000000000           8                     0    2           1
+ -4  FORC        4    1
+ -5  F1          1    2    1    0
+ -5  F2          1    2    2    0
+ -5  F3          1    2    3    0
+ -5  ALL         1    2    0    0    1ALL
+ -1        11-2.00000E+02 0.00000E+00 6.00000E+01
+ -1        12-2.00000E+02 0.00000E+00 6.00000E+01
+ -1        13 2.00000E+02 0.00000E+00 6.00000E+01
+ -1        14 2.00000E+02 0.00000E+00 6.00000E+01
+ -1        21 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        22 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        23 0.00000E+00 0.00000E+00 0.00000E+00
+ -1        24 0.00000E+00 0.00000E+00 0.00000E+00
+ -3
+ 9999
+"""
+
+
+class TestSupportNodeMoments:
+    """The moment a support node takes, from the forces on its expanded nodes.
+
+    One element along x from node 1 at the origin to node 2, expanded into a
+    solid 0.2 m square: result nodes 11 to 14 at its root and 21 to 24 at its
+    far end. At the root 30 N up on each node, and 100 N along x on the upper
+    two against 100 N on the lower two.
+    """
+
+    def _parser(self, tmp_path, elements=None):
+        model = StructuralModel(id="m")
+        model.support_node_elements = {
+            1: ((0.0, 0.0, 0.0), elements or {5: [(1.0, 0.0, 0.0)]})
+        }
+        parser = ResultsParser(domain_model=model, load_case_names=["Dead"])
+        frd = tmp_path / "a.frd"
+        frd.write_text(FRD_WITH_FORCES)
+        parser.element_nodes = parser.parse_element_nodes(str(frd))
+        parser.node_coordinates = parser.parse_node_coordinates(str(frd))
+        return parser, str(frd)
+
+    def test_forces_on_the_nodes_nearest_the_support_node(self, tmp_path):
+        parser, frd = self._parser(tmp_path)
+
+        first, second = parser.parse_support_node_moments(frd)
+
+        assert first["load_case"] == "Dead" and second["load_case"] == "step_2"
+        assert first["moments"] == {1: pytest.approx([0.0, 40.0, 0.0])}
+        assert second["moments"] == {1: pytest.approx([0.0, 80.0, 0.0])}
+
+    def test_forces_that_do_not_add_up_to_the_printed_one(self, tmp_path):
+        """The expanded nodes were then not all found: no moment."""
+        parser, frd = self._parser(tmp_path)
+        printed = [
+            {"load_case": "Dead", "forces": {1: [0.0, 0.0, 120.0]}},
+            {"load_case": "step_2", "forces": {1: [0.0, 0.0, 200.0]}},
+        ]
+
+        first, second = parser.parse_support_node_moments(frd, printed)
+
+        assert first["moments"] == {1: pytest.approx([0.0, 40.0, 0.0])}
+        assert second["moments"] == {}
+
+    def test_rounding_of_a_large_couple_is_not_a_force_that_does_not_add_up(
+        self, tmp_path
+    ):
+        """Six figures of 100 N each leave more than six of their sum."""
+        parser, frd = self._parser(tmp_path)
+        printed = [
+            {"load_case": "Dead", "forces": {1: [0.01, 0.0, 120.0]}},
+            {"load_case": "step_2", "forces": {1: [0.0, 0.0, 240.0]}},
+        ]
+
+        first, _ = parser.parse_support_node_moments(frd, printed)
+
+        assert first["moments"] == {1: pytest.approx([0.0, 40.0, 0.0])}
+
+    def test_node_with_an_element_the_result_file_does_not_list(self, tmp_path):
+        """A user element is not expanded, so its forces are not there."""
+        others = [(1.0, 0.0, 0.0)]
+        parser, frd = self._parser(tmp_path, {5: others, 6: others})
+
+        first, _ = parser.parse_support_node_moments(frd)
+
+        assert first["moments"] == {}
+
+    def test_model_that_records_no_support_elements(self, tmp_path):
+        parser, frd = self._parser(tmp_path)
+        parser.domain_model.support_node_elements = {}
+
+        assert parser.parse_support_node_moments(frd) == []

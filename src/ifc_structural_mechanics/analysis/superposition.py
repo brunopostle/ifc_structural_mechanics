@@ -61,6 +61,7 @@ def combine_results(
         "section_forces": _combine_section_forces(parsed_results, factors, name),
         "reaction": [],
         "support_node_forces": [],
+        "support_node_moments": [],
     }
 
     totals = [
@@ -100,6 +101,29 @@ def combine_results(
             {
                 "load_case": name,
                 "forces": {n: [float(v) for v in f] for n, f in forces.items()},
+            }
+        ]
+
+    # A node that lacks a moment in one case has none in the combination
+    moment_steps = {
+        step["load_case"]: step["moments"]
+        for step in parsed_results.get("support_node_moments") or []
+    }
+    if factors and all(case in moment_steps for case in factors):
+        shared = set.intersection(*(set(moment_steps[case]) for case in factors))
+        combined["support_node_moments"] = [
+            {
+                "load_case": name,
+                "moments": {
+                    node: [
+                        float(v)
+                        for v in sum(
+                            factor * np.array(moment_steps[case][node])
+                            for case, factor in factors.items()
+                        )
+                    ]
+                    for node in shared
+                },
             }
         ]
 

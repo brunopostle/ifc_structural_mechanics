@@ -846,6 +846,7 @@ class UnifiedCalculixWriter:
                 self._structure_nodes(),
                 rotation_arms=getattr(self, "_support_arms", None),
             )
+            self._record_support_node_elements()
             # What an equation of a skew support already decides is not
             # restrained a second time
             plane_holds = [
@@ -1711,6 +1712,38 @@ class UnifiedCalculixWriter:
             sample = sorted(list(bc_node_dofs))[:20]
             logger.debug(f"Sample boundary condition DOFs: {sample}")
         return bc_node_dofs
+
+    def _record_support_node_elements(self) -> None:
+        """Note the elements at every support node, for the reaction moments.
+
+        CalculiX gives the force on each node of the solids it expands beams
+        and shells into. Those at a support node, taken about it, are the
+        moment the support takes there, and the results parser finds them
+        through the elements that have the node: every one of them, links
+        and arms included, since the forces between the elements at a node
+        only cancel when all are added.
+
+        ``domain_model.support_node_elements`` gets ``{node: (position,
+        {element: positions of the element's other nodes})}``.
+        """
+        supports = getattr(self.domain_model, "support_nodes", None) or {}
+        wanted = {node for record in supports.values() for node in record["nodes"]}
+        recorded: Dict[int, tuple] = {
+            node: (tuple(float(c) for c in self.nodes[node]), {})
+            for node in wanted
+            if node in self.nodes
+        }
+        connectivity = [(e, elem["nodes"]) for e, elem in self.elements.items()]
+        connectivity += [(e, [a, b]) for e, a, b in getattr(self, "_rigid_links", [])]
+        for elem_id, elem_nodes in connectivity:
+            for node in elem_nodes:
+                if node in recorded:
+                    recorded[node][1][int(elem_id)] = [
+                        tuple(float(c) for c in self.nodes[other])
+                        for other in elem_nodes
+                        if other != node
+                    ]
+        self.domain_model.support_node_elements = recorded
 
     def _structure_nodes(self) -> Dict[int, Tuple[float, float, float]]:
         """The nodes of the members: not the tips of hinge and support arms.
