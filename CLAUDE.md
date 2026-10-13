@@ -158,7 +158,8 @@ without saying so in the results. Two things follow from the middle nodes:
 
 **Element-to-Member Mapping** (`unified_calculix_writer.py`):
 - Uses `cell_data['gmsh:physical']` from meshio to correctly assign mesh elements to their parent structural members via `_map_elements_via_physical_groups()`
-- Falls back to spatial centroid matching for members whose geometry was merged during fragment (overlapping members)
+- **Members that overlap** (a short beam lying inside a longer one, a landing in a floor slab; `building_01` has both) share geometry entities after `fragment()`, over the whole of both or a part. `_create_physical_groups()` groups entities by the set of members they belong to and names the group `A||B`; `MeshMapper` gives the elements to each, and `_resolve_overlapping_element_sets()` keeps them for the first in the file, with a warning. `_geometry_element_sets` remembers what lies in each member's geometry: `_find_connection_nodes_at_location()` goes by it, so a member with no elements of its own is still joined where it ends
+- **A member is never given elements by how near they are** (`aiz.87`). A fallback once gave an overlapped member every element within a ball around its middle: in `building_01` that took the last element of four beams framing in beside it, and their ends were left out of their joints without a word. A member with no elements in the mesh raises `MeshingError`, and so does a curve member with no node at one of its connections (`_check_members_reach_their_connections()`)
 - **Important**: a mesh with no physical groups can only be attributed when the model has one member of each kind; with more, `MeshMapper` raises `MeshingError`. The old round-robin assignment dealt elements out wherever they were; do not bring it back
 
 **Note**: The workflow uses Gmsh's `.msh` mesh format exclusively. `.geo` geometry script files are not used in production as they may have XAO dependencies in newer Gmsh versions.
