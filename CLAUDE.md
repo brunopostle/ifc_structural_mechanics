@@ -435,13 +435,29 @@ here. This section only records the constraints that shape day-to-day work.
   force that jumps at a cross-section (shear under a point load, bending
   moment under an applied moment) comes out as the mean of the two sides.
   `ResultsExporter._restore_jumps()` puts the step back from the elements'
-  own middle cross-sections: N, V and T need four quadratic elements in the
-  member, a bending moment two (it changes by its shear per metre, so what
-  the shear does not account for is the jump). At a knot (members at an
-  angle) the nodes are separate and the values are already one-sided.
-  Members in line that are joined rigidly share nodes as two elements of
-  one member do (`_ends_shared()`), and their end cross-section gets the
-  value their own last middle leads to. The envelope in `results.json` is
+  own middle cross-sections. A force at the middle of a quadratic element is
+  the mean of the element's own two ends, less what the load does by varying
+  along it, so a middle that is not the mean of the solver's two end values
+  says the jumps at the ends differ, by four times as much. `_jumps_between()`
+  adds those up along the member; a cross-section with a jump is off the line
+  that most of the seven around it are on (`_lines_most_are_on()`), and where
+  no line has more than half of them no jump is given (a member tied to a
+  slab at every node). Two elements are enough. **Nothing is assumed of the
+  load**: the slopes between middles were once compared with their median,
+  which put a step of 5 to 14% at every element end under a load that varied
+  or covered part of the member (`aiz.84`). Do not go back to slopes between
+  middles. Tried and dropped on the way: solving for the jumps from pairs of
+  neighbours (one element with senseless values, and `building_01` has them,
+  grew into steps of ten times the force along the whole member) and a
+  repeated-median fit (it missed the steps where cross beams frame into
+  `grid_of_beams`, three jumps in seven cross-sections). A bending moment
+  changes by its shear per metre, so what the shear on each side does not
+  account for is its jump. At a knot (members at an angle) the nodes are
+  separate and the values are already one-sided. Members in line that are
+  joined rigidly share nodes as two elements of one member do
+  (`_ends_shared()`), and their end cross-section is one more with a jump to
+  find, of which the member has its half; its moment gets the value the
+  member's own last middle leads to. The envelope in `results.json` is
   taken from these diagrams, never from the raw cross-sections: beside a
   jump the mean can be larger than either side's own value.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and

@@ -1020,6 +1020,47 @@ its own: neither 1.3 m nor 2.9 m is a node of a 0.25 m mesh, and a point load us
 to the nearest one. A warping moment (`IfcStructuralLoadSingleForceWarping`), which was
 ignored, is an error.
 
+The shear diagram under a load that varied had steps at the element ends that were not
+there (`aiz.84`): 5% of the shear either way under the sine wave at this mesh, 14% near
+midspan, 8% under the triangular load, and as much wherever a load covered part of a
+member. The steps a point load leaves were found by comparing the change of the force
+from the middle of one element to the next with the median of those changes along the
+member, which is the usual one only under a uniform load. They are now found from each
+element by itself: the force at its middle is the mean of its own two ends, so a middle
+that is not the mean of the solver's two end values gives the difference between the
+jumps at its ends, and those are added up along the member. The same beam, with the
+largest difference from the closed form anywhere along the diagram as a share of the
+largest shear:
+
+| Load | 0.25 m mesh | 0.5 m | 1 m |
+|---|---|---|---|
+| Uniform | 0.00% | 0.00% | 0.00% |
+| On part of the beam, 1.9 to 3.9 m | 0.00% | 0.00% | 0.00% |
+| Triangular | 0.10% | 0.39% | 1.57% |
+| Sine half wave | 0.32% | 1.26% | 4.83% |
+| Parabolic half wave | 0.37% | 1.40% | 5.00% |
+
+None has a step in its shear at 0.25 or 0.5 m. What is left is in the solver's own
+values at the element ends, where the load varies within an element: the largest
+shear reported under the sine wave is 3831.8 N for 3819.7 at 0.25 m and 4004.0 N with
+four elements. `TestLoadThatVariesAlongABeam` checks the four diagrams at 0.5% and that
+no distance is listed twice. With elements of 1 m the sine wave leaves one step of
+103 N at 3 m, and the moment under the load on part of the beam one of 250 N·m at
+each end of the load, in 3135: the moment at the middle of an element under a load
+given at its nodes is out by w l² / 24.
+
+A cross-section with a jump is told from the others by being off the line that most
+of the seven around it are on, and where no line has more than half of them the
+solver's values are left as they are. `portal_01` loses the eight steps it had in the
+shear along its beam, four on each half, and one in the moment where the load starts;
+`grid_of_beams` loses four in an axial force of nothing, and keeps those where its
+cross beams frame in; `beam_01` keeps its one. Their largest forces do not change. In
+`building_01` a force of 12 of the 32 curve members changes by more than 2% of the
+member's largest. 22 of them are tied to a wall or a slab along their length and
+seven overlap another member; the forces in those that change go up and down from one
+cross-section to the next, and there is no reference to say which reading is right
+(`aiz.86`).
+
 **Applied moments** (`aiz.58`, `TestAppliedMoments`). They stopped the analysis. A
 moment is now written on the rotations of the node it acts at, which CalculiX turns
 into a knot. A 4 m beam, 0.1 m square, 0.25 m mesh:
