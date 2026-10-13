@@ -387,10 +387,35 @@ here. This section only records the constraints that shape day-to-day work.
   `ResultsExporter` takes it off. Reactions then equal the applied loads to
   six figures at any mesh size; `global_reactions` carries `applied_load_N`
   and `imbalance_N`.
-- **CalculiX gives no reaction moments.** `supports[].moments` in
-  `results.json` are the section forces at the ends of the curve members a
-  support holds (`_member_ends_at()`), moved to its position; absent, not
-  zero, where a member runs on past the support or a surface is clamped.
+- **CalculiX gives a node no reaction moment; its forces on the expanded
+  nodes have it** (`94g.8`). `*NODE FILE` asks for `RF`, which puts the
+  force on every node of the expanded solids in the FRD. The writer records
+  every element at each support node, links and arms included
+  (`_record_support_node_elements()`: the forces between the elements at a
+  node only cancel when all are added); `parse_support_node_moments()` takes
+  an expanded node for the node of its element it is nearest to and gives
+  the moment of those forces about each support node; `_support_entry()`
+  adds the lever arms of the nodal forces and takes off every moment
+  applied at the node, shares of a moment per length too
+  (`support_node_loads` has nine values per node for that). Measured: a
+  cantilever root, a slab clamped along one edge and a bar clamped along
+  its span give statics to five figures at any mesh size, where member ends
+  gave 0.1%. In a statically indeterminate model they are the mesh's own
+  answer: `beam_01`'s fixing moment is 0.4% above beam theory at 0.5 m and
+  0.1% at 0.1 m, and the section forces at that end differ from it by
+  w h²/12, the error of stresses taken to an element's end under a load
+  along it. CalculiX 2.21 has these forces wrong at a clamped member end
+  only (the same as 2.23 on the slab edges, the wall foot and the grid),
+  with the printed force wrong by as much, so the check on the forces
+  covers the moments.
+  `supports[].moments` is `"solver"` then. The section forces at the ends
+  of the members (`_member_ends_at()`) remain the check on the solver's
+  forces and the source (`"member_end_forces"`) where it got them wrong, or
+  a node has a user element; `"not_computed"`, with the keys absent, only
+  where neither can be had. A node whose expanded forces do not add up to
+  the force printed for it gets no moment (the tolerance allows for six
+  figures of a couple through a slab's thickness, which at a coarse mesh
+  is far larger than the node's force).
 - **CalculiX 2.21, Ubuntu 24.04's, misreports `RF` at a support that holds
   a rotation** (2.23 is right, stock as well as the Copr build;
   displacements are identical). The errors of two

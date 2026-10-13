@@ -724,20 +724,35 @@ The 2.5 kPa plate went from 34.8 to 37.50 kN, and a pin-ended beam under 5 kN/m 
 each case and what is left when the two are added: under 3 parts in ten million on every
 example, `building_02` included (30.017, 60.286 and 66.968 MN).
 
-**CalculiX has no reaction moments.** They are taken from the section forces at the ends
-of the members a support holds, moved to the support:
+**CalculiX gives a node no reaction moment.** With `RF` under `*NODE FILE` it does write
+the force on every node of the solids it expands beams and shells into. The forces on the
+nodes a support's own were expanded into, taken about the support, are its moment
+(`94g.8`): at the end of a member, along a clamped slab edge and where a member runs on
+past its support. Like the forces they balance the loads, so where statics decides the
+moment it is met at any mesh size:
 
 | Case | Statics | Pipeline | Error |
 |---|---|---|---|
-| `cantilever_01`, root moment | 27.55 N·m | 27.51 N·m | 0.1% |
-| `beam_01`, fixed-end moments, P L / 8 + w L² / 12 | ∓12 943 N·m | ∓12 954 N·m | 0.1% |
-| Cantilever with an arm, root: bending and torque | 3000 and 1000 N·m | 2999.98 and 999.99 N·m | < 0.01% |
-| `portal_01`, feet, against a plane frame with the same shear area | 7171.8 and −4546.8 N·m | 7236.1 and −4611.1 N·m | 0.9 and 1.4% |
+| `cantilever_01`, root moment | 27.546 N·m | 27.546 N·m | none in five figures |
+| Cantilever with an arm, root: bending and torque | 3000 and 1000 N·m | 3000.0 and 1000.0 N·m | none in six figures |
+| `slab_01` clamped along one edge only, 2 kN/m², moment about the edge, 2 / 1 / 0.5 m mesh | 75 000 N·m | 75 000.0 / 75 000.0 / 75 000.0 N·m | under 1 in a million |
+| Bar clamped 1 m from one end and 2 m from the other, loads at both ends | −5000 N·m | −5000.0 N·m | none in six figures |
+| `beam_01`, fixed-end moments, P L / 8 + w L² / 12, 0.5 / 0.25 / 0.1 / 0.05 m mesh | ∓12 943 N·m | ∓12 997 / 12 971 / 12 958 / 12 954 N·m | 0.4 / 0.2 / 0.1 / 0.1% |
+| `portal_01`, feet, against a plane frame with the same shear area, 0.25 m mesh | 7171.8 and −4546.8 N·m | 7236.1 and −4611.1 N·m | 0.9 and 1.4% |
 
-Where this cannot be done the moment is left out, not given as zero: a support that
-clamps a slab edge (`slab_01`, the wall foot of `structure_01`), and a member that runs on
-past its support (`grid_of_beams`, whose main beams overhang by 0.1 m). In `building_02`
-that is 23 of 51 supports.
+Where statics does not decide it (`beam_01`, the portal) the moment is the mesh's own: it
+converges as the displacements do. The section forces at the same member end, which is
+where these moments came from before, are integrated from stresses taken to the end of an
+element, and differ from the support's moment by w h² / 12 under a load of w along an
+element of length h (measured on `beam_01`: 46.1, 11.5 and 1.9 N·m at 0.5, 0.25 and
+0.1 m; they gave the cantilever's root 0.1% low at 0.25 m).
+
+Supports that had no moment before have one now: the clamped edges of `slab_01`
+(∓96.1 N·m under its weight, w L² / 12 being 95.6), the wall foot of `structure_01`, the
+four supports of `grid_of_beams`, whose main beams overhang by 0.1 m (58.1 N·m each), and
+all 49 supports of `building_02` that hold a rotation, 23 of which had none. The moment is
+still left out, not given as zero, where the solver's forces are wrong (below) and no
+member ends there, or where a node has a user element.
 
 **CalculiX 2.21 misreports the force at a support that holds a rotation.** CI installs
 2.21 (Ubuntu 24.04); development was on 2.23. The same input file gives the same
@@ -755,6 +770,11 @@ In `beam_01` the errors of the two ends cancel in the total, so checking the tot
 against the load is not enough. Each support that holds a rotation is compared with the
 forces at the ends of its members: more than 3% apart, or a total that does not balance,
 and the member ends' forces are used (good to about 1%; `"forces": "member_end_forces"`).
+The moments go the same way: on 2.21 the forces on the expanded nodes are wrong where the
+printed force is (`cantilever_01`: 25.28 N·m for 27.55 at the root, with 11.3 N along the
+member that is not there) and the same as 2.23's elsewhere (the edges of `slab_01`, the
+wall foot of `structure_01`, the supports of `grid_of_beams`), so a support whose forces
+come from its member ends has its moments from there too.
 A support with no member ends to use is marked `"unreliable"` and the analysis warns in
 either case. The whole fast suite was run against 2.21 in a container: it passes, with
 the nine tests of the solver's own reactions at clamped supports skipped. Against

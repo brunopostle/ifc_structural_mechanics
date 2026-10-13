@@ -42,10 +42,13 @@ the ones a user needs to know before trusting a result.
   good to about 1%; where that is not possible (a clamped slab edge, a beam
   running on past its support) the support is marked `"unreliable"` in
   `results.json`. The total reaction is the solver's and is then wrong too.
-- **Reaction moments are not from the solver**, which has none to give. They
-  are the section forces at the ends of the members a support holds, good to
-  about 1%, and are left out (not given as zero) at a support that clamps a
-  slab or a member that runs on past it.
+- **Reaction moments** come from the forces the solver gives on the nodes of
+  the solids it expands beams and shells into, taken about the support: a
+  member end, a clamped slab edge and a support a member runs on past alike
+  (`"moments": "solver"` in `results.json`). They balance the loads as the
+  forces do. Where CalculiX 2.21 got those forces wrong they are the section
+  forces at the ends of the members the support holds, good to about 1%, and
+  where that is not possible either they are left out, not given as zero.
 - **A beam lying in a slab or wall is tied to it along its length**, whether or
   not the IFC file connects them there, and the analysis warns that it did so.
   Models that connect a slab only at its corners would otherwise leave the
