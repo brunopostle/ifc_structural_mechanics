@@ -813,7 +813,12 @@ The other distributions (`aiz.58`):
   silently if that was within 0.1 m.
 - EQUIDISTANT and USERDEFINED actions, the varying actions of IFC2X3 and a warping
   moment raise `ModelExtractionError`; never read one as a constant load.
-- A point action in LOCAL_COORDS is still applied in global axes (`aiz.85`).
+- **A point action in LOCAL_COORDS is in the axes of the item it is assigned to**
+  (`aiz.85`): a member's, or a connection's `local_axes` (the
+  `ConditionCoordinateSystem` of a point connection, the global axes when it has
+  none). `_point_load()` sets `coordinate_system` and puts the item's GlobalId in
+  `member_reference`, a connection's as well; `_to_global_axes()` turns force and
+  moment. Assigned to no item, or to a surface connection, it raises.
 
 **Applied moments** (`aiz.58`) are `Load.moment`: N·m on a `PointLoad`, N·m per
 metre on a `LineLoad` with one value (a moment that varies along its member raises).
