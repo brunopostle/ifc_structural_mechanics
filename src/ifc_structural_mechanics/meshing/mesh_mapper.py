@@ -1,11 +1,15 @@
 """Element-to-member mapping strategies for mesh post-processing.
 
-MeshMapper owns the three strategies used to assign mesh elements to their
+MeshMapper owns the two strategies used to assign mesh elements to their
 parent structural members after Gmsh meshing:
 
   1. Physical-group mapping  — primary, uses Gmsh physical group tags
-  2. Spatial fallback        — for members that get no physical-group elements
-  3. Naive fallback          — last resort when no physical group data exists
+  2. Naive fallback          — for a mesh with no physical group data, which
+     can only be attributed when there is one member of each kind
+
+A member is never given elements by how near they are: members that overlap
+are named together in their physical group, and a member the mesh has nothing
+for stops the analysis.
 
 Using a dedicated class separates the mapping logic from INP file generation,
 makes each strategy independently testable, and provides a clear data contract:
@@ -29,7 +33,7 @@ SHELL_ELEMENT_TYPES = frozenset({"S3", "S4", "S6", "S8", "S9"})
 
 
 class MeshMapper:
-    """Assigns mesh elements to structural members using three strategies."""
+    """Assigns mesh elements to structural members by their physical groups."""
 
     def __init__(
         self,
@@ -81,7 +85,6 @@ class MeshMapper:
         Members with no physical-group elements fall back to spatial assignment.
         """
         member_elements: Dict[str, List[int]] = {}
-        assigned_elements: Set[int] = set()
         mapped = 0
         unmapped = 0
 
@@ -92,7 +95,6 @@ class MeshMapper:
                 if group_name:
                     for member_id in group_name.split("||"):
                         member_elements.setdefault(member_id, []).append(elem_id)
-                    assigned_elements.add(elem_id)
                     mapped += 1
                     continue
             unmapped += 1
@@ -105,131 +107,21 @@ class MeshMapper:
         for member in self._domain_model.members:
             elems = member_elements.get(member.id, [])
             if not elems:
-                unmapped_members.append(member)
+                unmapped_members.append(member.id)
                 continue
             self._register(member, elems)
 
         if unmapped_members:
-            logger.info(
-                f"{len(unmapped_members)} members have no physical group elements — "
-                f"using spatial fallback"
+            raise MeshingError(
+                f"{len(unmapped_members)} member(s) have no elements in the "
+                "mesh, so the model cannot be analysed as given. The first are "
+                f"{', '.join(unmapped_members[:5])}."
             )
-            self._assign_spatially(unmapped_members, assigned_elements)
 
-        # Second-chance pass: allow sharing for members still without elements.
-        still_empty = [
-            m
-            for m in self._domain_model.members
-            if f"MEMBER_{self._get_short_id(m.id)}" not in self.element_sets
-        ]
-        if still_empty:
-            logger.warning(
-                f"{len(still_empty)} members still have no elements after spatial "
-                f"fallback; attempting shared-element assignment"
-            )
-            self._assign_spatially(still_empty, assigned_elements, allow_sharing=True)
-
-        total = sum(
-            1
-            for m in self._domain_model.members
-            if f"MEMBER_{self._get_short_id(m.id)}" in self.element_sets
-        )
-        logger.info(f"Mapped elements to {total} members total")
+        logger.info(f"Mapped elements to {len(self.element_sets)} members total")
 
     # ------------------------------------------------------------------
-    # Strategy 2: spatial proximity
-    # ------------------------------------------------------------------
-
-    def _assign_spatially(
-        self,
-        members: List,
-        assigned_elements: Set[int],
-        allow_sharing: bool = False,
-    ) -> None:
-        """Assign elements to members by spatial centroid proximity.
-
-        For each unmapped member, compute its geometry centroid, then find
-        elements of matching type whose centroids are closest.
-
-        Args:
-            members: Members that need element assignment.
-            assigned_elements: Elements already assigned.  When allow_sharing
-                is False, only elements NOT in this set are considered.
-            allow_sharing: When True all elements are candidates (last resort
-                for overlapping geometry).
-        """
-        for member in members:
-            geom = member.geometry
-            if not geom or not isinstance(geom, list):
-                continue
-            try:
-                pts = np.array(geom, dtype=float)
-                centroid = pts.mean(axis=0)
-            except (ValueError, TypeError):
-                # No usable points: the member gets no elements, which the
-                # writer reports
-                continue
-
-            is_surface = member.entity_type == "surface"
-            target_types = SHELL_ELEMENT_TYPES if is_surface else BEAM_ELEMENT_TYPES
-
-            best_elems = []
-            for elem_id, elem_data in self._elements.items():
-                if not allow_sharing and elem_id in assigned_elements:
-                    continue
-                if elem_data["type"] not in target_types:
-                    continue
-                try:
-                    node_coords = [
-                        self._nodes[nid]
-                        for nid in elem_data["nodes"]
-                        if nid in self._nodes
-                    ]
-                    if not node_coords:
-                        continue
-                    elem_centroid = np.mean(node_coords, axis=0)
-                    dist = float(np.linalg.norm(elem_centroid - centroid))
-                    best_elems.append((dist, elem_id))
-                except (ValueError, TypeError):
-                    continue
-
-            if not best_elems:
-                logger.warning(
-                    f"No {'candidate' if allow_sharing else 'unassigned'} "
-                    f"elements found for member {member.id}"
-                )
-                continue
-
-            bbox_size = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
-            threshold = max(bbox_size * 0.6, 0.5)
-            best_elems.sort()
-
-            member_elems: List[int] = []
-            for dist, eid in best_elems:
-                if dist <= threshold:
-                    member_elems.append(eid)
-                    if not allow_sharing:
-                        assigned_elements.add(eid)
-
-            if allow_sharing and member_elems:
-                logger.warning(
-                    f"Member {member.id}: sharing {len(member_elems)} elements "
-                    f"with another member (overlapping geometry)"
-                )
-
-            if member_elems:
-                self._register(member, member_elems)
-                logger.info(
-                    f"Spatially assigned {len(member_elems)} elements to member {member.id}"
-                )
-            else:
-                logger.warning(
-                    f"Could not spatially assign elements to member {member.id} "
-                    f"(centroid={centroid.tolist()}, bbox_size={bbox_size:.2f}m)"
-                )
-
-    # ------------------------------------------------------------------
-    # Strategy 3: naive round-robin (last resort)
+    # Strategy 2: a mesh with no physical groups
     # ------------------------------------------------------------------
 
     def _map_naive(self) -> None:

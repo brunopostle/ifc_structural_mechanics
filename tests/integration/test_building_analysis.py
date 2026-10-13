@@ -9,9 +9,11 @@ Also includes a faster slab_01 test for use without the @slow marker.
 """
 
 import logging
+import math
 import os
 import shutil
 
+import ifcopenshell
 import numpy as np
 import pytest
 
@@ -24,6 +26,7 @@ IFC_MODELS_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 CCX_AVAILABLE = shutil.which("ccx") is not None
 
 SLAB_01 = os.path.join(IFC_MODELS_DIR, "slab_01.ifc")
+BUILDING_01 = os.path.join(IFC_MODELS_DIR, "building_01.ifc")
 BUILDING_02 = os.path.join(IFC_MODELS_DIR, "building_02.ifc")
 
 
@@ -85,6 +88,78 @@ class TestSlabAnalysis:
         weight = 5.0 * 3.0 * 0.2 * 7.8 * 9.81
         assert 0.85 * weight < total[2] <= 1.001 * weight
         assert abs(total[0]) < 1.0 and abs(total[1]) < 1.0
+
+
+def _nodes_and_rigid_links(inp_path: str):
+    """Node positions and the node pairs of the rigid links of an input file."""
+    nodes, links, block = {}, [], None
+    with open(inp_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith("*"):
+                keyword = line.upper()
+                if keyword == "*NODE" or keyword.startswith("*NODE,"):
+                    block = "nodes"
+                elif keyword.startswith("*ELEMENT") and "RIGID_LINK" in keyword:
+                    block = "links"
+                else:
+                    block = None
+            elif block == "nodes" and line:
+                number, *position = line.split(",")
+                nodes[int(number)] = tuple(float(v) for v in position[:3])
+            elif block == "links" and line:
+                _, first, second = (int(v) for v in line.split(",")[:3])
+                links.append((first, second))
+    return nodes, links
+
+
+@pytest.mark.skipif(not CCX_AVAILABLE, reason="CalculiX (ccx) not installed")
+class TestBuilding01Joints:
+    """building_01 has rigid end zones: members that stop short of their joint.
+
+    Its columns end 450 or 600 mm below the joint and its beams 225 mm from
+    the column axis, each with an `IfcRelConnectsWithEccentricity`. Two beams
+    lie wholly inside longer ones, which once cost the four beams framing in
+    beside them their end element, and with it their joint (`aiz.87`).
+    """
+
+    def test_every_member_end_is_joined_to_its_connection(self, tmp_path):
+        ifc_path = _get_ifc_path(BUILDING_01)
+        output_dir = str(tmp_path / "building_01")
+        result = analyze_ifc(ifc_path, output_dir, mesh_size=1.0)
+        assert result["status"] == "success", result.get("errors")
+
+        nodes, links = _nodes_and_rigid_links(os.path.join(output_dir, "analysis.inp"))
+        linked = {frozenset((nodes[first], nodes[second])) for first, second in links}
+
+        def metres(vertex):
+            return tuple(c / 1000.0 for c in vertex.VertexGeometry.Coordinates)
+
+        def is_linked(end, joint):
+            return any(
+                all(min(math.dist(p, q) for q in pair) < 1e-6 for p in (end, joint))
+                for pair in linked
+            )
+
+        relations = ifcopenshell.open(ifc_path).by_type(
+            "IfcRelConnectsWithEccentricity"
+        )
+        assert len(relations) == 48
+        unjoined = []
+        for relation in relations:
+            member = relation.RelatingStructuralMember
+            connection = relation.RelatedStructuralConnection
+            edge = member.Representation.Representations[0].Items[0]
+            joint = metres(connection.Representation.Representations[0].Items[0])
+            end = min(
+                (metres(edge.EdgeStart), metres(edge.EdgeEnd)),
+                key=lambda point: math.dist(point, joint),
+            )
+            assert 0.2 < math.dist(end, joint) < 0.7
+            if not is_linked(end, joint):
+                unjoined.append((member.Name, connection.Name))
+        assert not unjoined
+        assert len(links) == 48
 
 
 @pytest.mark.slow

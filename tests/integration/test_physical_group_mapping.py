@@ -14,19 +14,24 @@ import os
 
 import gmsh
 import meshio
+import numpy as np
 import pytest
 
 from ifc_structural_mechanics.config.meshing_config import MeshingConfig
+from ifc_structural_mechanics.domain.property import Material, Section
+from ifc_structural_mechanics.domain.structural_member import CurveMember
+from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.meshing.gmsh_geometry import GmshGeometryConverter
 from ifc_structural_mechanics.meshing.gmsh_runner import GmshRunner
+from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper
 
 logger = logging.getLogger(__name__)
 
 IFC_MODELS_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 
 SLAB_01 = os.path.join(IFC_MODELS_DIR, "slab_01.ifc")
-BUILDING_01A = os.path.join(IFC_MODELS_DIR, "building_01a.ifc")
+BUILDING_01 = os.path.join(IFC_MODELS_DIR, "building_01.ifc")
 
 
 def _get_ifc_path(relative_path: str) -> str:
@@ -126,8 +131,6 @@ class TestPhysicalGroupMapping:
         assert phys is not None, "No 'gmsh:physical' in cell_data"
 
         # At least some elements should have non-zero physical group tags
-        import numpy as np
-
         all_tags = np.concatenate(phys)
         nonzero = np.count_nonzero(all_tags)
         assert nonzero > 0, "All physical group tags are zero"
@@ -153,3 +156,117 @@ class TestPhysicalGroupMapping:
         # Tags should also be unique
         tags = list(pgmap.keys())
         assert len(tags) == len(set(tags)), "Duplicate tags in physical_group_map"
+
+    def test_overlapping_members_are_named_together(self):
+        """building_01 has beams lying inside longer ones (`aiz.87`).
+
+        A mesh element has one physical group, so every geometry entity is
+        in one group, named with all the members it belongs to, and every
+        member is named in a group.
+        """
+        ifc_path = _get_ifc_path(BUILDING_01)
+        model = Extractor(ifc_path).extract_model()
+
+        config = MeshingConfig()
+        converter = GmshGeometryConverter(meshing_config=config, domain_model=model)
+        converter._we_initialized_gmsh = False
+        converter.convert_model(model)
+
+        named = set()
+        shared = []
+        seen = set()
+        for dim, tag in gmsh.model.getPhysicalGroups():
+            members = gmsh.model.getPhysicalName(dim, tag).split("||")
+            named.update(members)
+            if len(members) > 1:
+                shared.append(members)
+            for entity in gmsh.model.getEntitiesForPhysicalGroup(dim, tag):
+                assert (dim, entity) not in seen
+                seen.add((dim, entity))
+
+        assert named == {m.id for m in model.members}
+        # Beams 42 and 29 inside 2 and 6, a landing in a floor slab, and one
+        # more pair of slabs
+        assert len(shared) == 4
+
+    def test_beam_inside_a_longer_one_gets_the_elements_on_its_own_line(self):
+        """Not those of a beam that frames in beside its end (`aiz.87`).
+
+        A beam along x from 0 to 4, a short one inside it from 1 to 3, and a
+        third at right angles ending near the short one's end.
+        """
+        material = Material(
+            id="m",
+            name="Steel",
+            elastic_modulus=210e9,
+            poisson_ratio=0.3,
+            density=7850,
+        )
+        section = Section.create_rectangular_section(
+            id="s", name="R", width=0.1, height=0.2
+        )
+        lines = {
+            "long": ([0.0, 0.0, 0.0], [4.0, 0.0, 0.0]),
+            "short": ([1.0, 0.0, 0.0], [3.0, 0.0, 0.0]),
+            "across": ([3.0, 0.2, 0.0], [3.0, 2.0, 0.0]),
+        }
+        model = StructuralModel(id="overlap")
+        for name, (start, end) in lines.items():
+            model.add_member(
+                CurveMember(
+                    id=name, geometry=[start, end], material=material, section=section
+                )
+            )
+
+        config = MeshingConfig()
+        converter = GmshGeometryConverter(meshing_config=config, domain_model=model)
+        converter._we_initialized_gmsh = False
+        converter.convert_model(model)
+        runner = GmshRunner(meshing_config=config)
+        runner._we_initialized_gmsh = False
+        assert runner.run_meshing()
+        mesh_file = str(self.tmp_path / "overlap.msh")
+        runner.generate_mesh_file(mesh_file)
+
+        mesh = meshio.read(mesh_file)
+        names = {int(tag): name for name, (tag, _) in mesh.field_data.items()}
+        elements, groups = {}, {}
+        for block, tags in zip(mesh.cells, mesh.cell_data["gmsh:physical"]):
+            if not block.type.startswith("line"):
+                continue
+            for nodes, tag in zip(block.data, tags):
+                elements[len(elements) + 1] = {
+                    "type": "B32R",
+                    "nodes": [int(n) + 1 for n in nodes],
+                }
+                groups[len(elements)] = int(tag)
+        mapper = MeshMapper(
+            elements=elements,
+            nodes={i + 1: p for i, p in enumerate(mesh.points)},
+            domain_model=model,
+            element_physical_group=groups,
+            physical_group_names=names,
+            get_short_id=lambda member_id: member_id,
+        )
+        mapper.map()
+
+        def extent(member_id):
+            points = np.array(
+                [
+                    mesh.points[node - 1]
+                    for element in mapper.element_sets[f"MEMBER_{member_id}"]
+                    for node in elements[element]["nodes"]
+                ]
+            )
+            return points.min(axis=0), points.max(axis=0)
+
+        for name, (start, end) in lines.items():
+            low, high = extent(name)
+            assert low == pytest.approx(np.minimum(start, end), abs=1e-9), name
+            assert high == pytest.approx(np.maximum(start, end), abs=1e-9), name
+        assert set(mapper.element_sets["MEMBER_short"]) < set(
+            mapper.element_sets["MEMBER_long"]
+        )
+        assert not set(mapper.element_sets["MEMBER_across"]) & set(
+            mapper.element_sets["MEMBER_long"]
+        )

@@ -1,4 +1,4 @@
-"""Tests for overlapping-member spatial fallback and section deduplication."""
+"""Tests for which of two overlapping members keeps the elements they share."""
 
 import logging
 import sys
@@ -6,6 +6,7 @@ import types
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 
 def _stub(name, **attrs):
@@ -30,14 +31,17 @@ if "ifc_structural_mechanics.meshing.gmsh_runner" not in sys.modules:
     _stub("ifc_structural_mechanics.meshing.gmsh_runner", GmshRunner=MagicMock())
 
 from ifc_structural_mechanics.domain.property import Material, Section  # noqa: E402
+from ifc_structural_mechanics.domain.structural_connection import (  # noqa: E402
+    RigidConnection,
+)
 from ifc_structural_mechanics.domain.structural_member import CurveMember  # noqa: E402
 from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
     StructuralModel,
 )
-from ifc_structural_mechanics.meshing.mesh_mapper import MeshMapper  # noqa: E402
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
+from ifc_structural_mechanics.utils.error_handling import MeshingError  # noqa: E402
 
 _NODES = {
     1: np.array([0.0, 0.0, 0.0]),
@@ -64,77 +68,6 @@ def _make_curve_member(id_, start, end, mat=None, sec=None):
             id="sec1", name="R", width=0.1, height=0.2
         )
     return CurveMember(id=id_, geometry=[start, end], material=mat, section=sec)
-
-
-def _make_mapper_with_two_members(member_a, member_b):
-    """Build a MeshMapper with two members and a minimal mesh."""
-    model = StructuralModel(id="test")
-    model.add_member(member_a)
-    model.add_member(member_b)
-    model.register_analysis_elements = MagicMock()
-
-    def get_short_id(mid):
-        return mid[:8].replace("-", "")
-
-    return MeshMapper(
-        elements=dict(_ELEMENTS),
-        nodes=dict(_NODES),
-        domain_model=model,
-        element_physical_group={},
-        physical_group_names={},
-        get_short_id=get_short_id,
-    )
-
-
-class TestSpatialFallback:
-    """MeshMapper._assign_spatially() with allow_sharing flag."""
-
-    def test_no_sharing_leaves_empty_member(self):
-        """Without sharing, a member whose elements are all assigned stays empty."""
-        ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mb = _make_curve_member(
-            "member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]
-        )  # overlapping
-        mapper = _make_mapper_with_two_members(ma, mb)
-
-        # Assign all elements to member_a first
-        assigned = {10, 11}
-        mapper.element_sets["MEMBER_member_a"] = [10, 11]
-        mapper.defined_element_sets.add("MEMBER_member_a")
-
-        mapper._assign_spatially([mb], assigned, allow_sharing=False)
-
-        assert "MEMBER_member_b" not in mapper.element_sets
-
-    def test_sharing_gives_overlapping_member_elements(self):
-        """With sharing, an overlapping member gets the same elements."""
-        ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mb = _make_curve_member("member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mapper = _make_mapper_with_two_members(ma, mb)
-
-        assigned = {10, 11}
-        mapper.element_sets["MEMBER_member_a"] = [10, 11]
-        mapper.defined_element_sets.add("MEMBER_member_a")
-
-        mapper._assign_spatially([mb], assigned, allow_sharing=True)
-
-        assert "MEMBER_member_b" in mapper.element_sets
-        assert len(mapper.element_sets["MEMBER_member_b"]) > 0
-
-    def test_sharing_logs_warning(self, caplog):
-        """allow_sharing=True logs a warning about shared elements."""
-        ma = _make_curve_member("member_a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mb = _make_curve_member("member_b", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])
-        mapper = _make_mapper_with_two_members(ma, mb)
-
-        assigned = {10, 11}
-        mapper.element_sets["MEMBER_member_a"] = [10, 11]
-        mapper.defined_element_sets.add("MEMBER_member_a")
-
-        with caplog.at_level(logging.WARNING):
-            mapper._assign_spatially([mb], assigned, allow_sharing=True)
-
-        assert any("sharing" in r.message.lower() for r in caplog.records)
 
 
 class TestResolveOverlappingElementSets:
@@ -261,12 +194,62 @@ class TestResolveOverlappingElementSets:
         assert writer.element_sets["MEMBER_mb"] == [12, 13]
 
 
+def _joint_of_two_beams():
+    """Beams along x from 0 to 1 and from 1 to 2, joined at x = 1."""
+    model = StructuralModel(id="test")
+    model.add_member(_make_curve_member("ma", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]))
+    model.add_member(_make_curve_member("mb", [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]))
+    joint = RigidConnection("joint", [1.0, 0.0, 0.0])
+    joint.connect_member("ma")
+    joint.connect_member("mb")
+    model.add_connection(joint)
+
+    writer = UnifiedCalculixWriter(domain_model=model)
+    writer.nodes = {1: (0.0, 0.0, 0.0), 2: (1.0, 0.0, 0.0), 3: (2.0, 0.0, 0.0)}
+    writer.elements = {
+        10: {"type": "B31", "nodes": [1, 2]},
+        11: {"type": "B31", "nodes": [2, 3]},
+    }
+    short = {m: writer._get_short_id(m) for m in ("ma", "mb")}
+    writer.element_sets = {
+        f"MEMBER_{short['ma']}": [10],
+        f"MEMBER_{short['mb']}": [11],
+    }
+    return writer, joint, short
+
+
+class TestMembersReachTheirConnections:
+    """A member is joined at the node it has at its connection (`aiz.87`)."""
+
+    def test_members_with_a_node_at_the_joint_pass(self):
+        writer, _, _ = _joint_of_two_beams()
+        writer._check_members_reach_their_connections()
+
+    def test_member_with_no_node_at_the_joint_stops_the_analysis(self):
+        """Its last element was given to another member: 0.4 m is missing."""
+        writer, _, short = _joint_of_two_beams()
+        writer.nodes[4] = (1.4, 0.0, 0.0)
+        writer.elements[11]["nodes"] = [4, 3]
+        with pytest.raises(MeshingError, match="mb at joint"):
+            writer._check_members_reach_their_connections()
+
+    def test_overlapped_member_is_found_by_the_elements_in_its_geometry(self):
+        """The elements of `mb` are analysed as another member's."""
+        writer, joint, short = _joint_of_two_beams()
+        writer._geometry_element_sets = {
+            name: list(elements) for name, elements in writer.element_sets.items()
+        }
+        writer.element_sets[f"MEMBER_{short['mb']}"] = []
+        assert writer._find_connection_nodes_at_location(joint, ["mb"]) == [("mb", 2)]
+        writer._check_members_reach_their_connections()
+
+
 class TestU1RetypeStripsSharedElements:
     """_identify_and_retype_u1_members() must not leave elements it retyped to
     U1 dangling in an overlapping non-U1 member's element_sets entry.
 
     Regression for beads issue 51j: a RECT member sharing mesh elements with
-    an I-section (U1) member — via MeshMapper's overlapping-geometry fallback
+    an I-section (U1) member — where the two overlap
     — kept those elements in its own *BEAM SECTION ELSET even after they were
     retyped to U1. Since _write_elements() never writes U1-typed elements
     (they're written only inside _write_sections() for the U1 owner), and the
@@ -308,7 +291,7 @@ class TestU1RetypeStripsSharedElements:
             11: {"type": "B31", "nodes": [2, 3]},
         }
         # Elements 10 and 11 are shared between both members, as produced by
-        # MeshMapper's shared-element-assignment overlap fallback.
+        # MeshMapper gives the elements of a shared physical group to both.
         writer.element_sets = {
             "MEMBER_native": [10, 11],
             "MEMBER_u1": [10, 11],

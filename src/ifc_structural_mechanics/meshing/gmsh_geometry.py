@@ -848,23 +848,22 @@ class GmshGeometryConverter:
         group, which meshio reads as cell_data['gmsh:physical']. The writer
         uses this to map elements to domain members.
 
-        When two members have *identical* post-fragment geometry tag sets (exact
-        overlap after fragment()), a single physical group is created for them
-        with a pipe-separated name ("MemberA||MemberB").  The writer parses this
-        combined name and assigns elements to all listed members, avoiding the
-        situation where only one group "wins" in the .msh file.
+        A mesh element carries one physical group, so a geometry entity must
+        be in one group only. Where members overlap, fragment() gives them the
+        same entities: over the whole of both (two identical members) or over
+        a part (a short beam lying inside a longer one). Entities are
+        therefore grouped by the set of members they belong to, and the group
+        is named with all of them ("MemberA||MemberB"), which the writer
+        splits to give the elements to each. A member that overlaps another
+        over a part has a group of its own for the rest.
 
         Stores mapping in self.physical_group_map: {phys_tag: member_id}
         (last member in an overlapping group; use physical group name to get all).
         """
         self.physical_group_map: Dict[int, str] = {}
 
-        # Group members by their exact post-fragment tag frozenset.
-        # Members with identical tag sets share the same physical group.
-        tag_key_to_entries: Dict[frozenset, List[Tuple[str, List[int], int]]] = (
-            {}
-        )  # frozenset((dim, tag)) -> [(member_id, tags, dim), ...]
-
+        # (dim, tag) -> the members it belongs to, in the order of the model
+        owners: Dict[Tuple[int, int], List[str]] = {}
         for member in domain_model.members:
             mid = member.id
             if isinstance(member, CurveMember):
@@ -875,27 +874,24 @@ class GmshGeometryConverter:
                 dim = 2
             else:
                 continue
+            for tag in tags:
+                entity_owners = owners.setdefault((dim, tag), [])
+                if mid not in entity_owners:
+                    entity_owners.append(mid)
 
-            if not tags:
-                continue
-
-            key = frozenset((dim, t) for t in tags)
-            if key not in tag_key_to_entries:
-                tag_key_to_entries[key] = []
-            tag_key_to_entries[key].append((mid, tags, dim))
+        # (dim, members) -> tags
+        groups: Dict[Tuple[int, Tuple[str, ...]], List[int]] = {}
+        for (dim, tag), member_ids in owners.items():
+            groups.setdefault((dim, tuple(member_ids)), []).append(tag)
 
         phys_tag = 1
-        for key, entries in tag_key_to_entries.items():
-            member_ids = [e[0] for e in entries]
-            tags = entries[0][1]
-            dim = entries[0][2]
-
+        for (dim, member_ids), tags in groups.items():
             # Combine names for overlapping members so the writer can assign
             # elements to all of them from a single physical group.
             group_name = "||".join(member_ids)
             if len(member_ids) > 1:
                 logger.info(
-                    f"Exact geometry overlap detected: {member_ids} share "
+                    f"Geometry overlap detected: {list(member_ids)} share "
                     f"{len(tags)} entity tag(s) — combined into one physical group"
                 )
 
@@ -909,7 +905,7 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Could not create physical group for {member_ids}: {e}"
+                    f"Could not create physical group for {list(member_ids)}: {e}"
                 ) from e
 
         logger.info(f"Created {phys_tag - 1} physical groups")

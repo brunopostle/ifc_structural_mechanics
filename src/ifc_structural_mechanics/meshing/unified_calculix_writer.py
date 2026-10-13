@@ -284,6 +284,7 @@ class UnifiedCalculixWriter:
 
             # Step 2c: Resolve remaining overlapping-geometry element ownership
             self._resolve_overlapping_element_sets()
+            self._check_members_reach_their_connections()
 
             # Step 2c2: Give members hinged along an edge their own edge nodes
             self._release_hinged_edges()
@@ -462,6 +463,13 @@ class UnifiedCalculixWriter:
         mapper.map()
         self.element_sets = mapper.element_sets
         self.defined_element_sets = mapper.defined_element_sets
+        # The elements lying in each member's geometry, whoever is analysed
+        # there: where members overlap, element_sets keeps each element for
+        # one of them, and the others still end and are joined where the
+        # file says.
+        self._geometry_element_sets = {
+            name: list(elems) for name, elems in self.element_sets.items()
+        }
 
     @staticmethod
     def _needs_user_element(member) -> bool:
@@ -736,6 +744,32 @@ class UnifiedCalculixWriter:
                 "analysed with the material and thickness or section of the "
                 "member that comes first in the file, not with both. The first "
                 f"are {', '.join(overlapping[:5])}."
+            )
+
+    def _check_members_reach_their_connections(self) -> None:
+        """Stop when the mesh has no node for a curve member at a connection.
+
+        Every joint and support is made at the node a member has at its
+        connection: its end, or the point of its span nearest to it. A member
+        with no node there would be left out of the joint without a word,
+        and the structure analysed would be another one.
+
+        Raises:
+            MeshingError: If a curve member has no node at one of its
+                connections.
+        """
+        missing: List[str] = []
+        for conn in self.domain_model.connections:
+            for member_id in conn.connected_members:
+                if self._get_member_endpoints(member_id) is None:
+                    continue
+                if not self._find_connection_nodes_at_location(conn, [member_id]):
+                    missing.append(f"{member_id} at {conn.id}")
+        if missing:
+            raise MeshingError(
+                f"The mesh has no node for {len(missing)} member end(s) at "
+                "their connection, so they cannot be joined as the model "
+                f"says. The first are {', '.join(missing[:5])}."
             )
 
     def _register_node_memberships(self) -> None:
@@ -1603,8 +1637,8 @@ class UnifiedCalculixWriter:
             self._warn_user(
                 f"{len(without_elements)} member(s) have no finite elements and "
                 "take no part in the analysis: their geometry is covered by a "
-                "member they overlap, whose stiffness is used there, or was "
-                f"not meshed. The first are {', '.join(without_elements[:5])}."
+                "member they overlap, whose stiffness is used there. The first "
+                f"are {', '.join(without_elements[:5])}."
             )
         listed = sorted(
             member.id
@@ -3089,13 +3123,18 @@ class UnifiedCalculixWriter:
         for member_id in member_ids:
             short_id = self._get_short_id(member_id)
             member_set = f"MEMBER_{short_id}"
-            if member_set not in self.element_sets:
+            # A member overlapped by another has no elements of its own
+            # there, and is found by those in its geometry
+            member_elements = getattr(self, "_geometry_element_sets", {}).get(
+                member_set
+            ) or self.element_sets.get(member_set)
+            if not member_elements:
                 continue
 
             # Get or build node set for this member
             if member_set not in self._member_node_cache:
                 node_set = set()
-                for elem_id in self.element_sets[member_set]:
+                for elem_id in member_elements:
                     if elem_id in self.elements:
                         node_set.update(self.elements[elem_id]["nodes"])
                 self._member_node_cache[member_set] = node_set
