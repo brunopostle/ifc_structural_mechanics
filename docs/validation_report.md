@@ -998,12 +998,27 @@ refined (6241, 6206 and 6187 N at 0.5, 0.25 and 0.125 m).
 | 3 kN/m from 1.9 to 3.9 m: reactions | 1650 and 4350 N | to 0.01% |
 | The same: largest moment and shear | 3588.75 N·m and 4350 N | within 1% |
 | 3 kN/m of plan on a rafter rising 3 in 4 (`PROJECTED_LENGTH`): total | 12 000 N | to 0.001% |
+| Sine half wave (`SINUS`), 3 kN/m at midspan: reactions, w L / π | 3819.7 N each | to 0.00001% |
+| The same: moment at midspan, w L² / π² | 4863.4 N·m | 4878.9 N·m |
+| The same: deflection, w L⁴ / π⁴ E I and shear | 4.513 mm | 4.515 mm |
+| Parabolic half wave (`PARABOLA`), 3 kN/m at midspan: reactions, w L / 3 | 4000 N each | to 0.00002% |
+| The same: moment at midspan, 5 w L² / 48 | 5000 N·m | 5015.5 N·m |
+| The same: deflection, 61 w L⁴ / 5760 E I and shear | 4.655 mm | 4.657 mm |
+| Point forces (`DISCRETE`), 3 kN at 1.3 m and 6 kN at 2.9 m: reactions | 3675 and 5325 N | 3675.0 and 5325.0 N |
+| The same: largest moment, under the second force | 5857.5 N·m | 5857.5 N·m |
+| 3 kN along a rafter rising 3 in 4, in the rafter's axes (`LOCAL_COORDS`): reactions | 2400 and 1800 N | to 0.001% |
 
 `ProjectedOrTrue` was not read either: a load per projected length was applied per true
 length, 25% too much on that rafter. And a curve action's `PredefinedType` was not: a
 sine or parabolic half wave was applied as a constant load of its peak value, and point
-forces along a member (`DISCRETE`) as that many newtons per metre. Those two are now
-errors that name the load.
+forces along a member (`DISCRETE`) as that many newtons per metre. Those two were made
+errors first and are now applied as given. A half wave is `LineLoad.half_wave` with its
+peak, integrated over each element with a five-point Gauss rule (exact for the parabola;
+a sine wave over a single element is right to seven figures). The forces of a `DISCRETE`
+action become point loads at their locations along the member, each with a mesh node of
+its own: neither 1.3 m nor 2.9 m is a node of a 0.25 m mesh, and a point load used to go
+to the nearest one. A warping moment (`IfcStructuralLoadSingleForceWarping`), which was
+ignored, is an error.
 
 **Applied moments** (`aiz.58`, `TestAppliedMoments`). They stopped the analysis. A
 moment is now written on the rotations of the node it acts at, which CalculiX turns
@@ -1182,9 +1197,8 @@ to a node of shells alone swings freely about their normal.
   is compared with a reference.
 - **Unsupported input**: surface connections, moments applied to surface members or
   varying along a member, and load kinds other than forces and moments stop the
-  analysis with an error naming the entity. So do
-  curve actions given as a row of point forces (`DISCRETE`) or as a sine or parabolic
-  half wave, and the varying actions of IFC2X3.
+  analysis with an error naming the entity. So do the varying actions of IFC2X3 and
+  curve actions of type `EQUIDISTANT` or `USERDEFINED`.
 - **Skew supports**: validated for a point support on a beam (translation and
   rotation) and, by turning two examples, for line supports and hinged edges of
   slabs and walls. Not covered: a support whose translations are partly free *and*

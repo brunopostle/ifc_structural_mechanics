@@ -211,7 +211,7 @@ Command-line interface:
 5. **Error Handling**: Custom exceptions in `utils/error_handling.py` (`StructuralAnalysisError`, `ModelExtractionError`, `MeshingError`, `AnalysisError`) maintain context through the pipeline.
 
 6. **Nothing is made up, and nothing is dropped quietly** (`aiz.12`, 2026-10-11). The risk in this tool is a wrong answer that looks right, so:
-   - **Never substitute a default for something the file should give** (material, section, thickness, position, load value, load target). Raise the stage's error, with a message that names the entity and says what is missing. `MembersExtractor._create_member()`, `ConnectionsExtractor._create_domain_connection()` and `LoadsExtractor._create_domain_load()` wrap every failure as "Member/Connection/Load <GlobalId> cannot be analysed. <reason>".
+   - **Never substitute a default for something the file should give** (material, section, thickness, position, load value, load target). Raise the stage's error, with a message that names the entity and says what is missing. `MembersExtractor._create_member()`, `ConnectionsExtractor._create_domain_connection()` and `LoadsExtractor._create_domain_loads()` wrap every failure as "Member/Connection/Load <GlobalId> cannot be analysed. <reason>".
    - **Never leave an entity out and carry on.** A model with a member, support or load missing is another structure.
    - **`except Exception` may only re-raise as a typed error.** Put `except <TypedError>: raise` in front of it so an inner message is not wrapped twice. The only exceptions are cleanup (`gmsh.finalize()`, temp files, `__del__`). Results that cannot be read or exported fail the analysis (`ResultProcessingError`).
    - **An approximation the user did not ask for is a warning in the results**, not a log line: `_warn_user()` in the writer, `_warn_model()` in the load writer, `self.warnings` in the extractors (`Extractor._pass_on_warnings()` moves them to `model.analysis_warnings`). One warning for the whole model with a count and the first few ids, never one per member.
@@ -776,8 +776,24 @@ first and last being where the load starts and ends. They become `LineLoad.sampl
 `_seed_load_points()` puts a mesh node at every sample. `portal_01` is loaded on half
 of its beam this way and was once analysed with twice its load, because the locations
 were not read. `ProjectedOrTrue` is applied in the extractor (`_per_true_length()`).
-DISCRETE, SINUS and PARABOLA actions and the varying actions of IFC2X3 raise
-`ModelExtractionError`; never read one as a constant load.
+The other distributions (`aiz.58`):
+
+- **SINUS and PARABOLA** have one value, the largest, at the middle of the member, and
+  none at its ends. They are `LineLoad.half_wave` (a key of `HALF_WAVES` in
+  `domain/load.py`) and `LineLoad.peak`; `magnitude` is the mean value, as it is for a
+  load with samples. `_half_wave_load_to_nodal_forces()` integrates them with a
+  five-point Gauss rule.
+- **DISCRETE** is a configuration of `IfcStructuralLoadSingleForce` with a location
+  each. `_create_domain_loads()` returns a list for that reason: one `PointLoad` per
+  force, with id `<GlobalId>#<n>` and `action_id` the GlobalId (the check for loads in
+  no load case goes by it). In LOCAL_COORDS they keep `coordinate_system = "local"`
+  and `member_reference`, and `_point_load_lines()` turns them with the member's axes.
+- **A point load on the span of a curve member gets a mesh node**
+  (`_seed_load_points()`), whatever it came from. It once went to the nearest node,
+  silently if that was within 0.1 m.
+- EQUIDISTANT and USERDEFINED actions, the varying actions of IFC2X3 and a warping
+  moment raise `ModelExtractionError`; never read one as a constant load.
+- A point action in LOCAL_COORDS is still applied in global axes (`aiz.85`).
 
 **Applied moments** (`aiz.58`) are `Load.moment`: N·m on a `PointLoad`, N·m per
 metre on a `LineLoad` with one value (a moment that varies along its member raises).
