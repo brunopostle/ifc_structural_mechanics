@@ -810,21 +810,27 @@ class ResultsExporter:
         the bending moment is, and the diagram passes through nothing where
         it should reach half the moment on each side.
 
-        The middle cross-section of a quadratic element is its own. From one
-        middle to the next a force normally changes by the same amount per
-        metre all along the member (the distributed load), so the median of
-        those slopes is the normal one, and an interface where the change is
-        out of line with it by more than ``_JUMP_FRACTION`` has a jump of the
-        difference. A bending moment changes by its shear force per metre,
-        which the middles on either side give. The averaged value is
-        replaced by one on each side, half the jump apart. Forces need four
-        quadratic elements in the member and moments two; linear elements
-        have no middle cross-section and are left as they are.
+        The middle cross-section of a quadratic element is its own, and a
+        force there is the mean of the element's own values at its two ends,
+        less what the load does to it by varying along the element. Where the
+        solver's value at an end is the mean with a neighbour's, the middle
+        is out by a quarter of the jump there, which ``_jumps_between()``
+        looks for. Nothing is assumed of the load along the member: the
+        slopes between middles were once compared with their median, which
+        put a step at every element end under a load that varied or stopped
+        part of the way (``aiz.84``).
+
+        A bending moment changes by its shear force per metre, which the
+        middles on either side give, so a change the shear does not account
+        for is a jump. The averaged value is replaced by one on each side,
+        half the jump apart, when the jump is more than ``_JUMP_FRACTION`` of
+        the force's largest value. Two quadratic elements are enough; linear
+        elements have no middle cross-section and are left as they are.
 
         The end of a member that runs on into another in line
         (``shared_ends``: the elements that share nodes with another
         member's) is averaged with that member, which is not in ``records``.
-        It gets the value its own last middle leads to.
+        It is treated as one more cross-section with a jump to find.
         """
         middles = sorted(
             (r for r in records if r["position"] == 0.0), key=lambda r: r["distance"]
@@ -860,36 +866,58 @@ class ResultsExporter:
         # The outermost cross-sections, where they are shared with a member
         # that runs on: (record, its element's own middle)
         outer = []
+        outer_start = outer_end = None
         for middle, position in ((middles[0], -1.0), (middles[-1], 1.0)):
             record = ends.get((middle["element_id"], position))
             if record is not None and middle["element_id"] in (shared_ends or ()):
                 outer.append((record, middle))
+                if position < 0.0:
+                    outer_start = record
+                else:
+                    outer_end = record
 
-        normal_slopes: Dict[str, float] = {}
         for key in self._JUMPING_FORCES:
-            if scales.get(key, 0.0) <= 0.0 or len(middles) < 4:
+            if scales.get(key, 0.0) <= 0.0:
                 continue
-            slopes = sorted(
-                (b.get(key, 0.0) - a.get(key, 0.0)) / gap for a, b, gap in pairs
+            # What the middle of each element has over the mean of its ends
+            excess: List[Optional[float]] = []
+            lengths: List[float] = []
+            for middle in middles:
+                first = ends.get((middle["element_id"], -1.0))
+                last = ends.get((middle["element_id"], 1.0))
+                length = (
+                    0.0
+                    if first is None or last is None
+                    else last["distance"] - first["distance"]
+                )
+                lengths.append(length)
+                if first is None or last is None or length <= 1e-12:
+                    excess.append(None)
+                else:
+                    excess.append(
+                        middle.get(key, 0.0)
+                        - 0.5 * (first.get(key, 0.0) + last.get(key, 0.0))
+                    )
+            between = [interface(a, b, key) for a, b in zip(middles, middles[1:])]
+            jumps = self._jumps_between(
+                excess,
+                lengths,
+                outer_start is not None,
+                outer_end is not None,
+                self._JUMP_FRACTION * scales[key],
             )
-            if len(slopes) < 3:
-                continue
-            normal = normal_slopes[key] = slopes[len(slopes) // 2]
-            for a, b, gap in pairs:
-                found = interface(a, b, key)
-                if found:
-                    jump = b.get(key, 0.0) - a.get(key, 0.0) - normal * gap
-                    set_apart(*found, key, jump)
-
-        # What an outer cross-section's own element leads to, kept for the
-        # moments, which need the shear there
-        led_to: Dict[int, Dict[str, float]] = {}
-        for record, middle in outer:
-            reach = record["distance"] - middle["distance"]
-            led_to[id(record)] = {
-                key: middle.get(key, 0.0) + normal_slopes.get(key, 0.0) * reach
-                for key in self._JUMPING_FORCES
-            }
+            for n, found in enumerate(between):
+                if found and jumps.get(n):
+                    set_apart(*found, key, jumps[n])
+            for record, n, side in (
+                (outer_start, -1, 1.0),
+                (outer_end, len(between), -1.0),
+            ):
+                # Half of the jump is this member's side of it
+                if record is not None and (
+                    abs(jumps.get(n, 0.0)) > 2.0 * self._JUMP_FRACTION * scales[key]
+                ):
+                    record[key] = record.get(key, 0.0) + side * jumps[n] / 2.0
 
         for moment, shear in self._MOMENTS_AND_SHEARS:
             if scales.get(moment, 0.0) <= 0.0:
@@ -907,32 +935,142 @@ class ResultsExporter:
                 found = interface(a, b, moment)
                 if not found:
                     continue
-                at = found[0]["distance"]
-                sheared = sign * (
-                    a.get(shear, 0.0) * (at - a["distance"])
-                    + b.get(shear, 0.0) * (b["distance"] - at)
+                # The shear on each side, as restored above, with its middle
+                left, right = found
+                at = left["distance"]
+                sheared = (
+                    sign
+                    * 0.5
+                    * (
+                        (a.get(shear, 0.0) + left.get(shear, 0.0))
+                        * (at - a["distance"])
+                        + (right.get(shear, 0.0) + b.get(shear, 0.0))
+                        * (b["distance"] - at)
+                    )
                 )
                 jump = b.get(moment, 0.0) - a.get(moment, 0.0) - sheared
                 set_apart(*found, moment, jump)
             for record, middle in outer:
                 reach = record["distance"] - middle["distance"]
-                mean_shear = 0.5 * (middle.get(shear, 0.0) + led_to[id(record)][shear])
+                mean_shear = 0.5 * (middle.get(shear, 0.0) + record.get(shear, 0.0))
                 value = middle.get(moment, 0.0) + sign * mean_shear * reach
                 if abs(value - record.get(moment, 0.0)) > (
                     self._JUMP_FRACTION * scales[moment]
                 ):
                     record[moment] = value
 
-        for record, _ in outer:
-            for key in self._JUMPING_FORCES:
-                if scales.get(key, 0.0) <= 0.0:
-                    continue
-                value = led_to[id(record)][key]
-                if (
-                    abs(value - record.get(key, 0.0))
-                    > self._JUMP_FRACTION * scales[key]
-                ):
-                    record[key] = value
+    # How many cross-sections say what is usual for the one in their middle
+    _JUMP_WINDOW = 7
+
+    @classmethod
+    def _jumps_between(
+        cls,
+        excess: List[Optional[float]],
+        lengths: List[float],
+        start_shared: bool,
+        end_shared: bool,
+        tolerance: float,
+    ) -> Dict[int, float]:
+        """The jumps of a force at the cross-sections between elements.
+
+        ``excess[e]`` is what the force at the middle of element ``e`` has
+        over the mean of the solver's values at its ends, and ``lengths[e]``
+        its length. With ``J[n]`` the jump between elements ``n`` and
+        ``n + 1`` (the value after less the value before), an element's own
+        ends are the solver's values with half a jump taken off or put on,
+        and::
+
+            4 excess[e] = J[e - 1] - J[e] + (what the load does in e)
+
+        The load's part is half the change of the load per metre times the
+        square of the element's length: nothing under a uniform load or
+        none, whether it covers the member or not, and in proportion to the
+        squares of the lengths where the load varies linearly. Added up from
+        the start of the member, the left sides are then on a straight line
+        against the sum of those squares, except at a cross-section with a
+        jump, which is off the line by the jump.
+
+        The line is looked for among the ``_JUMP_WINDOW`` cross-sections
+        around each one, so that it follows a load that curves: the one
+        through two of them that has the most of them within half of
+        ``tolerance``, fitted to those. When that is not more than half of
+        them the line says nothing, and no jump is given: a member tied to a
+        slab at every node has a force coming in at each of them, the middle
+        ones as well.
+
+        A member with fewer than four elements has too few for that: the
+        line then goes through its two ends, where they have no jump to
+        find, and is level through one. The end of a member that runs on
+        into another (``start_shared``, ``end_shared``) is a cross-section
+        ``-1`` or ``len(excess) - 1`` with a jump of its own.
+
+        Returns the jump at every cross-section, small or not; none where a
+        value is missing.
+        """
+        count = len(excess)
+        if count < 2 or any(value is None for value in excess):
+            return {}
+        # At cross-section n - 1, for n from 0: the sum so far and where it
+        # is plotted
+        sums, places = [0.0], [0.0]
+        for value, length in zip(excess, lengths):
+            sums.append(sums[-1] + 4.0 * value)
+            places.append(places[-1] + length**2)
+
+        usual: List[float] = []
+        if count >= 4:
+            usual = cls._lines_most_are_on(places, sums, 0.5 * tolerance)
+        elif not start_shared and not end_shared:
+            usual = [sums[-1] * place / places[-1] for place in places]
+        elif not start_shared:
+            usual = [0.0] * (count + 1)
+        elif not end_shared:
+            usual = [sums[-1]] * (count + 1)
+        else:
+            return {}
+        return {n - 1: usual[n] - sums[n] for n in range(count + 1)}
+
+    @classmethod
+    def _lines_most_are_on(
+        cls, xs: List[float], ys: List[float], band: float
+    ) -> List[float]:
+        """For each point, the line most of the points around it are on.
+
+        Each point has the ``_JUMP_WINDOW`` points around it (those at an
+        end, the first or last that many). Of the lines through two of them,
+        the one with the most of them within ``band`` is kept, the closest
+        one of several, and fitted to those by least squares. Returns its
+        value at each point, or the point's own value where the line has no
+        more than half of the points on it.
+        """
+        x, y = np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+        width = min(cls._JUMP_WINDOW, len(x))
+        first = np.clip(np.arange(len(x)) - width // 2, 0, len(x) - width)
+        window = first[:, None] + np.arange(width)[None, :]
+        wx, wy = x[window], y[window]
+        one, other = np.triu_indices(width, 1)
+        slope = (wy[:, other] - wy[:, one]) / (wx[:, other] - wx[:, one])
+        # Windows, lines, points
+        off = np.abs(
+            wy[:, None, :]
+            - wy[:, one, None]
+            - slope[:, :, None] * (wx[:, None, :] - wx[:, one, None])
+        )
+        on = off <= band
+        # The number on the line first, how close they are second
+        score = on.sum(axis=2) - (off * on).sum(axis=2) / (band * width + 1e-300)
+        best = np.argmax(score, axis=1)
+        rows = np.arange(len(x))
+        weight = on[rows, best, :].astype(float)
+        number = weight.sum(axis=1)
+        mean_x = (weight * wx).sum(axis=1) / number
+        mean_y = (weight * wy).sum(axis=1) / number
+        spread = (weight * (wx - mean_x[:, None]) ** 2).sum(axis=1)
+        fitted = (weight * (wx - mean_x[:, None]) * (wy - mean_y[:, None])).sum(
+            axis=1
+        ) / np.where(spread > 0.0, spread, 1.0)
+        value = mean_y + fitted * (x - mean_x)
+        return [float(v) for v in np.where(2 * number > width, value, y)]
 
     def _member_axes(self, member, elem_ids: set) -> Optional[Dict[str, List[float]]]:
         """The axes section forces are given in: ``x``, ``1`` and ``2``.

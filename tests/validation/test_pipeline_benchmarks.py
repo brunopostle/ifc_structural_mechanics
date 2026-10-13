@@ -2424,6 +2424,23 @@ class TestLoadThatVariesAlongABeam:
         (member,) = data["members"]
         return data, lifts, member["envelope"]["section_forces"]
 
+    def _assert_shear(self, data, shear, largest):
+        """The shear diagram is ``shear(x)`` all along, with no step in it.
+
+        A step was once put at every element end whose load was not that of
+        the middle of the beam, 5 to 14% of the shear to either side
+        (``aiz.84``).
+        """
+        (member,) = data["members"]
+        diagram = member["section_force_diagrams"]["Load"]
+        distances = diagram["distance_m"]
+        assert len(distances) == len(set(distances)) > 30
+        assert [abs(v) for v in diagram["Vf2_N"]] == pytest.approx(
+            [abs(shear(x)) for x in distances], abs=0.005 * largest
+        )
+        forces = member["envelope"]["section_forces"]
+        assert forces["max_Vf2_N"] == pytest.approx(largest, rel=0.005)
+
     def test_triangular_load(self, tmp_path):
         """Nothing at A rising to w at B: w L / 6 and w L / 3 on the supports,
         w L² / (9 √3) at L / √3, and 0.006522 w L⁴ / E I at 0.5193 L."""
@@ -2439,6 +2456,9 @@ class TestLoadThatVariesAlongABeam:
         moment_there = w * span * x / 6 * (1 - (x / span) ** 2)
         expected = 0.006522 * w * span**4 / stiffness + moment_there / shear
         assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.01)
+        self._assert_shear(
+            data, lambda x: w * span / 6 - w * x**2 / (2 * span), w * span / 3
+        )
 
     def test_load_on_part_of_the_beam(self, tmp_path):
         """w from 1.9 to 3.9 m, which starts and ends inside an element.
@@ -2447,12 +2467,14 @@ class TestLoadThatVariesAlongABeam:
         is zero 1.55 m from B, where the moment is 1.19625 w.
         """
         w = self.PEAK
-        _, lifts, forces = self._beam(
+        data, lifts, forces = self._beam(
             tmp_path, values=[(0.0, -w), (0.0, -w)], locations=[1.9, 3.9]
         )
         assert lifts == pytest.approx([0.55 * w, 1.45 * w], rel=1e-4)
         assert forces["max_Mf2_Nm"] == pytest.approx(1.19625 * w, rel=FORCE_TOLERANCE)
-        assert forces["max_Vf2_N"] == pytest.approx(1.45 * w, rel=FORCE_TOLERANCE)
+        self._assert_shear(
+            data, lambda x: w * (0.55 - min(max(x - 1.9, 0.0), 2.0)), 1.45 * w
+        )
 
     def _deflection(self, bending: float, moment_at_the_middle: float) -> float:
         """Midspan deflection: ``bending`` times w L⁴ / E I, plus shear."""
@@ -2476,6 +2498,11 @@ class TestLoadThatVariesAlongABeam:
         assert _max_vertical_deflection(data) == pytest.approx(
             self._deflection(1 / math.pi**4, moment), rel=0.01
         )
+        self._assert_shear(
+            data,
+            lambda x: w * span / math.pi * math.cos(math.pi * x / span),
+            w * span / math.pi,
+        )
 
     def test_parabolic_half_wave(self, tmp_path):
         """w at the middle: w L / 3 on each support, 5 w L² / 48 at midspan
@@ -2489,6 +2516,11 @@ class TestLoadThatVariesAlongABeam:
         assert forces["max_Mf2_Nm"] == pytest.approx(moment, rel=FORCE_TOLERANCE)
         assert _max_vertical_deflection(data) == pytest.approx(
             self._deflection(61 / 5760, moment), rel=0.01
+        )
+        self._assert_shear(
+            data,
+            lambda x: w * span / 3 - 2 * w * x**2 / span + 4 * w * x**3 / (3 * span**2),
+            w * span / 3,
         )
 
     def test_series_of_point_forces(self, tmp_path):
@@ -3432,8 +3464,9 @@ class TestLoadCombinations:
         diagram = member["section_force_diagrams_by_combination"][self.NAME]
         reference_diagram = reference["section_force_diagrams"]["Dead"]
         assert diagram["distance_m"] == pytest.approx(reference_diagram["distance_m"])
+        # A jump is made of six of the solver's figures, four times over
         for key, series in reference_diagram.items():
-            close(diagram[key], series, 1.0e4)
+            close(diagram[key], series, 4.0e4)
 
         close(
             combined["global_displacements"]["by_load_combination"][self.NAME][

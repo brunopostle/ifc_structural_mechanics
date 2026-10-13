@@ -1,5 +1,7 @@
 """Signed section forces along a member, as exported in results.json."""
 
+import math
+
 import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section
@@ -67,11 +69,39 @@ def _records(shear, moment=lambda x: 0.0, axial=lambda x: 0.0, elements=8, case=
     return records
 
 
-def _member(records, model=None):
+def _member(records, model=None, element_nodes=None):
     exporter = ResultsExporter(
-        model or _model(), {"displacement": [], "stress": [], "section_forces": records}
+        model or _model(),
+        {"displacement": [], "stress": [], "section_forces": records},
+        element_nodes=element_nodes,
     )
     return exporter._build()["members"][0]
+
+
+def _shear(records, **kwargs):
+    """The shear diagram as (distance, value) pairs."""
+    diagram = _member(records, **kwargs)["section_force_diagrams"]["Dead"]
+    return list(zip(diagram["distance_m"], diagram["Vf1_N"]))
+
+
+def _steps(pairs):
+    """Where a diagram has two values, with the two."""
+    return {
+        at: (before, after)
+        for (at, before), (other, after) in zip(pairs, pairs[1:])
+        if at == other
+    }
+
+
+def _with_point_loads(shear, loads):
+    """``shear(x)`` with a step of ``loads[at]`` at each ``at``."""
+
+    def stepped(x, side):
+        return shear(x) + sum(
+            force for at, force in loads.items() if x > at or (x == at and side > 0)
+        )
+
+    return stepped
 
 
 def _point_load_shear(x, side):
@@ -171,8 +201,8 @@ class TestJumps:
             [-1.0e4, -1.0e4]
         )
 
-    def test_short_members_are_left_averaged(self):
-        """With fewer than four elements there is no telling what is normal."""
+    def test_two_elements_are_enough(self):
+        """Each has its own middle and an end that is its own."""
         records = _records(
             lambda x, side: (
                 (-1.0 if x < 0.5 else 1.0) if x != 0.5 else -float(side or 1)
@@ -183,7 +213,127 @@ class TestJumps:
             "section_force_diagrams"
         ]["Dead"]
 
-        assert len(diagram["distance_m"]) == len(set(diagram["distance_m"]))
+        assert diagram["distance_m"] == [0.0, 0.25, 0.5, 0.5, 0.75, 1.0]
+        assert diagram["Vf1_N"] == pytest.approx([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0])
+
+
+def _long():
+    return {"model": _model(end=(8.0, 0.0, 0.0), elements=16)}
+
+
+def _triangular(x):
+    """Shear under a load rising from nothing to 3 kN/m over 4 m."""
+    return 2000.0 - 375.0 * x**2
+
+
+def _on_part(x):
+    """Shear under 3 kN/m from 1.5 m to 3.5 m."""
+    return 1650.0 - 3000.0 * min(max(x - 1.5, 0.0), 2.0)
+
+
+class TestJumpsUnderALoadThatVaries:
+    """A step was once put wherever the load was not that of the middle of
+    the member (``aiz.84``): the slopes were compared with their median."""
+
+    @pytest.mark.parametrize(
+        "shear",
+        [
+            _triangular,
+            _on_part,
+            lambda x: 3819.7 * math.cos(math.pi * x / 4.0),
+            lambda x: 4000.0 - 1500.0 * x**2 + 250.0 * x**3,
+        ],
+        ids=["triangular", "on part of the member", "sine", "parabola"],
+    )
+    def test_no_step_where_nothing_jumps(self, shear):
+        pairs = _shear(_records(lambda x, side: shear(x), elements=16), **_long())
+
+        assert not _steps(pairs)
+        assert [value for _, value in pairs] == pytest.approx(
+            [shear(at) for at, _ in pairs]
+        )
+
+    @pytest.mark.parametrize("shear", [_triangular, _on_part])
+    def test_point_load_under_it(self, shear):
+        stepped = _with_point_loads(shear, {3.0: -5000.0})
+        pairs = _shear(_records(stepped, elements=16), **_long())
+
+        assert _steps(pairs) == {
+            3.0: (pytest.approx(shear(3.0)), pytest.approx(shear(3.0) - 5000.0))
+        }
+
+    def test_point_load_where_the_load_starts(self):
+        stepped = _with_point_loads(_on_part, {1.5: -5000.0})
+        pairs = _shear(_records(stepped, elements=16), **_long())
+
+        assert _steps(pairs) == {1.5: (pytest.approx(1650.0), pytest.approx(-3350.0))}
+
+    @pytest.mark.parametrize("second", [-5000.0, -10000.0, 5000.0])
+    def test_point_loads_at_nodes_next_to_each_other(self, second):
+        stepped = _with_point_loads(_triangular, {3.0: -5000.0, 3.5: second})
+        pairs = _shear(_records(stepped, elements=16), **_long())
+
+        assert _steps(pairs) == {
+            3.0: (
+                pytest.approx(_triangular(3.0)),
+                pytest.approx(_triangular(3.0) - 5000.0),
+            ),
+            3.5: (
+                pytest.approx(_triangular(3.5) - 5000.0),
+                pytest.approx(_triangular(3.5) - 5000.0 + second),
+            ),
+        }
+
+    def test_point_load_one_node_from_the_end(self):
+        stepped = _with_point_loads(_triangular, {7.5: -5000.0})
+        pairs = _shear(_records(stepped, elements=16), **_long())
+
+        assert _steps(pairs) == {
+            7.5: (
+                pytest.approx(_triangular(7.5)),
+                pytest.approx(_triangular(7.5) - 5000.0),
+            )
+        }
+
+    def test_forces_at_every_node_are_left_as_the_solver_gives_them(self):
+        """A member tied to a slab at each of its nodes: there is no telling
+        a jump from what is usual, and nothing is made of it."""
+        forces = [0.0, 900.0, -400.0, 1300.0, 200.0, -700.0, 1100.0, -300.0, 600.0]
+        loads = {0.5 * (n + 1): force for n, force in enumerate(forces[1:8])}
+        pairs = _shear(_records(_with_point_loads(lambda x: 0.0, loads)))
+
+        assert not _steps(pairs)
+
+
+class TestMemberThatRunsOn:
+    """Its end shares nodes with the next member in line, so the solver's
+    value there is the mean with that member's."""
+
+    # Element 9 is the next member's
+    NODES = {n: [n, n + 1] for n in range(1, 10)}
+
+    def _end(self, shear, beyond):
+        records = _records(lambda x, side: shear(x))
+        last = records[-1]
+        assert last["distance"] == 4.0
+        last["Vf1"] = 0.5 * (last["Vf1"] + beyond)
+        return _shear(records, element_nodes=self.NODES)
+
+    @pytest.mark.parametrize(
+        "shear", [lambda x: 1000.0 - 500.0 * x, _triangular, lambda x: 800.0]
+    )
+    def test_end_has_its_own_value(self, shear):
+        pairs = self._end(shear, beyond=shear(4.0) + 6000.0)
+
+        assert not _steps(pairs)
+        assert [value for _, value in pairs] == pytest.approx(
+            [shear(at) for at, _ in pairs]
+        )
+
+    def test_nothing_changes_where_the_force_runs_on(self):
+        pairs = self._end(_triangular, beyond=_triangular(4.0))
+
+        assert pairs[-1] == (4.0, pytest.approx(_triangular(4.0)))
 
 
 class TestSummary:
