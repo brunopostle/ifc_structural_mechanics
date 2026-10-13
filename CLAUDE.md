@@ -657,7 +657,10 @@ rotational degrees of freedom**. This drives everything about joints:
   nodes of every unreleased member at a connection.
 - **Members that stop short of the joint** (rigid end zones: a column ending at
   the beam soffit) are bridged with a stiff B31 link, written by
-  `_write_rigid_links()`. Links are not in `self.elements` or `EALL`.
+  `_write_rigid_links()`. Links are not in `self.elements` or `EALL`. Where no
+  member reaches the connection (`building_02` has two, with 115 links for
+  its 117 eccentric ends) the nearest member end is the joint and the others
+  are linked to it: the connection itself has no node (`aiz.88`).
 - **Never tie the two ends of a rigid link in translation as well.** They are
   apart, so equal translations plus a rigid link means no rotation, which clamps
   the joint. `_write_point_connection()` skips nodes in the same
