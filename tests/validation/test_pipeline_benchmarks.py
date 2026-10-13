@@ -1504,6 +1504,39 @@ class TestSlabBearingOnBeams:
             ] == pytest.approx(self._expected(), rel=DEFLECTION_TOLERANCE)
             assert beam["by_load_case"]["Gravity"]["max_von_mises_Pa"] > 0
 
+    def test_results_say_which_members_were_tied(self, tmp_path):
+        """A tied member's section forces are its share only (`aiz.86`)."""
+        path = _slab_on_two_cantilevers(tmp_path, inset=0.25)
+        result = analyze_ifc(
+            ifc_path=path,
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+            gravity=True,
+        )
+        assert result["status"] == "success", result.get("errors")
+        assert any(
+            "depend on the mesh size" in w["message"] for w in result["warnings"]
+        )
+        with open(os.path.join(str(tmp_path / "out"), "results.json")) as fh:
+            members = json.load(fh)["members"]
+        (slab,) = [m for m in members if m["type"] == "surface"]
+        assert "tied_to_surface_members" not in slab
+        beams = [m for m in members if m["type"] == "curve"]
+        assert len(beams) == 2
+        for beam in beams:
+            assert beam["tied_to_surface_members"] == [slab["id"]]
+
+        result = analyze_ifc(
+            ifc_path=path,
+            output_dir=str(tmp_path / "strict"),
+            mesh_size=self.MESH,
+            gravity=True,
+            strict_connections=True,
+        )
+        with open(os.path.join(str(tmp_path / "strict"), "results.json")) as fh:
+            members = json.load(fh)["members"]
+        assert not [m for m in members if "tied_to_surface_members" in m]
+
     def test_i_section_beams_mixed_with_a_slab(self, tmp_path):
         """A model stock CalculiX could not run with U1 elements at all.
 

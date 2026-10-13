@@ -2349,8 +2349,8 @@ class UnifiedCalculixWriter:
             lo = np.min(list(points.values()), axis=0)
             hi = np.max(list(points.values()), axis=0)
 
-            # (node, terms, implied by geometry alone, along a line)
-            member_ties: List[Tuple[int, List[Tuple[int, float]], bool, bool]] = []
+            # (node, terms, implied by geometry alone, along a line, surface)
+            member_ties: List[Tuple[int, List[Tuple[int, float]], bool, bool, str]] = []
             for triangles, corners, s_lo, s_hi, shell_nodes, surface_id in surfaces:
                 if (hi < s_lo).any() or (lo > s_hi).any():
                     continue
@@ -2381,10 +2381,13 @@ class UnifiedCalculixWriter:
                         for p in shared_points.get((member.id, surface_id), ())
                     ):
                         continue  # a connection of the file joins them here
-                    member_ties.append((node, terms, not connected, along_a_line))
+                    member_ties.append(
+                        (node, terms, not connected, along_a_line, surface_id)
+                    )
 
             seen = set()
-            for node, terms, implied, along_a_line in member_ties:
+            tied_to = set()
+            for node, terms, implied, along_a_line, surface_id in member_ties:
                 if node in seen or node in linked_nodes or node in all_shell_nodes:
                     continue
                 seen.add(node)
@@ -2393,6 +2396,9 @@ class UnifiedCalculixWriter:
                     if strict:
                         continue
                 self._line_bearings.append((node, terms))
+                if along_a_line:
+                    tied_to.add(surface_id)
+            member.tied_to_surface_members = sorted(tied_to)
 
         # A node shared by two members is tied once
         unique = {}
@@ -2417,8 +2423,13 @@ class UnifiedCalculixWriter:
             else:
                 self._warn_user(
                     found + "They are tied to it in translation along the line (a "
-                    "hinge line), as a slab bearing on its beams. Use strict "
-                    "connections to analyse only the connections in the file."
+                    "hinge line), as a slab bearing on its beams. Their section "
+                    "forces are what is left to them with the surface taking its "
+                    "share; where force passes between the two at a point (the "
+                    "end of a wall, a column in a wall) they change abruptly "
+                    "from one cross-section to the next and their largest values "
+                    "depend on the mesh size. Use strict connections to analyse "
+                    "only the connections in the file."
                 )
         if meeting:
             found = (

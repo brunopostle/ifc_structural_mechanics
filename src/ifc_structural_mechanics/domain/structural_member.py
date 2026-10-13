@@ -191,6 +191,8 @@ class CurveMember(StructuralMember):
         # Set section property first
         self.section = section
         self.local_axis = local_axis
+        # Surface members it is tied to along its length (set by the writer)
+        self.tied_to_surface_members: List[str] = []
 
         # Initialize parent with common properties
         super().__init__(id, "curve", geometry, material, allow_none_props, ifc_guid)

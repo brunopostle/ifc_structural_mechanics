@@ -23,6 +23,7 @@ Schema (summary level)
       "type": "curve" | "surface",
       "status": "ok" | "warning" | "fail",
       "section_model": "equivalent_rectangle",
+      "tied_to_surface_members": ["..."],
       "envelope": {
         "max_displacement_m": 0.001,
         "max_relative_displacement_m": 0.0008,
@@ -182,6 +183,14 @@ shape for (I, T, L, C) when they were analysed as a rectangle of the same
 stiffness. Those members have no ``max_von_mises_Pa``: the stresses in the
 result file are the rectangle's.
 
+``tied_to_surface_members`` is only present on curve members that were tied
+along their length to the surface members they lie in (a beam under a slab, a
+column in a wall), and lists those. Force passes between the two at every
+node, so the member's section forces are its share only. Where that happens
+at a point (the end of a wall) they change abruptly from one cross-section to
+the next and their largest values, the envelope with them, depend on the mesh
+size.
+
 ``global_reactions.total`` is only present when there is a single load case;
 each case is analysed on its own, so several cases have no common total.
 
@@ -227,7 +236,7 @@ class ResultsExporter:
         analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
     """
 
-    SCHEMA_VERSION = "1.4"
+    SCHEMA_VERSION = "1.5"
 
     def __init__(
         self,
@@ -500,6 +509,9 @@ class ResultsExporter:
         }
         if equivalent:
             result["section_model"] = "equivalent_rectangle"
+        tied_to = getattr(member, "tied_to_surface_members", None)
+        if tied_to:
+            result["tied_to_surface_members"] = list(tied_to)
         if envelope:
             result["envelope"] = envelope
         if by_load_case:
