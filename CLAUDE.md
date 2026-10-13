@@ -461,6 +461,16 @@ here. This section only records the constraints that shape day-to-day work.
   member's own last middle leads to. The envelope in `results.json` is
   taken from these diagrams, never from the raw cross-sections: beside a
   jump the mean can be larger than either side's own value.
+- **Section forces of a member tied to a surface along its length are its share
+  only** (`aiz.86`), and `results.json` marks it with
+  `tied_to_surface_members`. A tie brings force in at every node, middle nodes
+  included. Under a load spread along the member the diagram is smooth
+  (`TestSlabBearingOnBeams`, measured). Where force passes at a point it is
+  not: a column of `building_01` standing in a masonry wall has -3457, -871,
+  +1717 kN in its first element at a 0.5 m mesh and -4145, -834, +2574 kN at
+  0.25 m. The size is real (its `Dead` case is 48.5 MN), the values at the
+  ends of that element grow as the mesh is refined, and `_restore_jumps()`
+  has nothing to go by there. The tie warning says so; nothing is smoothed.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and
   13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
   in the file. `building_02` solves, its reactions match the applied loads and its

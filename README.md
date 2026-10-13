@@ -209,6 +209,12 @@ the ones a user needs to know before trusting a result.
   `--gravity` adds self-weight as a case of its own (`Gravity`). Standard
   gravity is taken as 9.81 m/s²; IFC gives self-weight as a share of the
   members' weight, not as an acceleration.
+- **A beam or column tied to the slab or wall it lies in** has section forces
+  that are its share only, and `results.json` marks it
+  (`tied_to_surface_members`, schema 1.5). Where force passes between the two
+  at a point (the end of a wall, a column in a wall) they change abruptly
+  from one cross-section to the next and their largest values depend on the
+  mesh size.
 - **Linear buckling** is validated for one Euler column only. Its
   `results.json` (schema 1.4) has the buckling factors of all the loads of
   the model together (`buckling.modes`) and the displacements under those
