@@ -681,7 +681,7 @@ class UnifiedCalculixWriter:
         """
         next_id = max(self.elements.keys(), default=0) + 1
         split_set: List[int] = []
-        new_ids: List[int] = []
+        second_halves: Dict[int, int] = {}
         for elem_id in self.element_sets[member_set]:
             split_set.append(elem_id)
             elem = self.elements.get(elem_id)
@@ -691,12 +691,22 @@ class UnifiedCalculixWriter:
             elem["nodes"] = [start, middle]
             self.elements[next_id] = {**elem, "nodes": [middle, end]}
             split_set.append(next_id)
-            new_ids.append(next_id)
+            second_halves[elem_id] = next_id
             next_id += 1
-        if new_ids:
+        if second_halves:
             self.element_sets[member_set] = split_set
+            # The end node is in the second half only: a member that lists
+            # the first half without it has no node at its end
+            geometry_sets = getattr(self, "_geometry_element_sets", {})
+            for name, elems in geometry_sets.items():
+                geometry_sets[name] = [
+                    e
+                    for elem_id in elems
+                    for e in (elem_id, second_halves.get(elem_id))
+                    if e is not None
+                ]
             self.domain_model.register_analysis_elements(
-                member.id, new_ids, entity_type="member"
+                member.id, list(second_halves.values()), entity_type="member"
             )
 
     def _resolve_overlapping_element_sets(self) -> None:

@@ -2541,6 +2541,21 @@ class TestPortalAgainstTheResultsInItsFile:
             assert reaction["fx_N"] == pytest.approx(thrust, rel=0.03)
             assert reaction["my_Nm"] == pytest.approx(moment, rel=0.08)
 
+    def test_user_elements_deflect_as_the_native_beams(self, tmp_path):
+        """A U1 member split into two-node elements once had no node at its
+        end, and a model with joints between U1 members did not run."""
+        path = os.path.join(IFC_DIR, "portal_01.ifc")
+        (tmp_path / "native").mkdir()
+        (tmp_path / "u1").mkdir()
+        native = _run(path, tmp_path / "native", 0.25)
+        u1 = _run(path, tmp_path / "u1", 0.25, open_sections="user_element")
+        assert u1["global_displacements"]["envelope"][
+            "max_displacement_m"
+        ] == pytest.approx(
+            native["global_displacements"]["envelope"]["max_displacement_m"],
+            rel=0.01,
+        )
+
     def test_load_is_what_the_file_says(self, tmp_path):
         data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)
         (total,) = data["global_reactions"]["by_load_case"].values()

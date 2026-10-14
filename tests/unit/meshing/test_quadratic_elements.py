@@ -124,6 +124,20 @@ class TestQuadraticUserElements:
         ]
         assert all(writer.elements[e]["type"] == "U1" for e in (1, 2, 3, 4))
 
+    def test_member_geometry_keeps_its_end_node(self):
+        """The end node is in a second half only; a member's joints are found
+        through its geometry, which once listed the first halves alone and
+        left every U1 member with no node at its end."""
+        member = _beam(section_type="i")
+        writer = _writer(member)
+        writer.analysis_config.set_open_sections("user_element")
+        writer._process_mesh(_two_quadratic_lines())
+        writer.element_sets = {"MEMBER_M1": [1, 2]}
+        writer._geometry_element_sets = {"MEMBER_M1": [1, 2]}
+        writer.short_id_map = {"beam": "M1"}
+        writer._identify_and_retype_u1_members()
+        assert writer._geometry_element_sets["MEMBER_M1"] == [1, 3, 2, 4]
+
     def test_new_elements_are_traceable_to_the_member(self):
         writer, member = self._retyped_writer()
         assert writer.domain_model.analysis_element_to_member[3] == "beam"
