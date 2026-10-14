@@ -39,9 +39,13 @@ the ones a user needs to know before trusting a result.
   rotation, by anything up to the size of the load; displacements and member
   forces are the same in both. The analysis detects this and warns. At such
   a support the forces are then taken from the ends of the members it holds,
-  good to about 1%; where that is not possible (a clamped slab edge, a beam
-  running on past its support) the support is marked `"unreliable"` in
-  `results.json`. The total reaction is the solver's and is then wrong too.
+  good to about 1%, and where the solver's total does not balance the loads
+  the total given is that of the supports (`"forces": "supports"` in
+  `global_reactions`). The other supports (a
+  clamped slab edge, a beam running on past its support) keep the solver's
+  figures, which are right there, as long as the whole then balances the
+  loads; if it does not they are marked `"unreliable"` in `results.json`
+  and the total is the solver's, and wrong.
 - **Reaction moments** come from the forces the solver gives on the nodes of
   the solids it expands beams and shells into, taken about the support: a
   member end, a clamped slab edge and a support a member runs on past alike
@@ -184,7 +188,10 @@ the ones a user needs to know before trusting a result.
   holds along each (`restrained`, and `restrained_in_axes` since schema 1.3). `global_reactions` gives
   their total, the applied load of each case and the difference between the
   two, which should be nothing. A load applied at a support node is counted
-  (CalculiX leaves it out of what it reports there).
+  (CalculiX leaves it out of what it reports there). Its moments (schema 1.7)
+  are those of all the supports about the origin of the global axes, with
+  the moment of the applied loads about the same point beside them
+  (`applied_moment_Nm`, `moment_imbalance_Nm`).
 - **Force diagrams** (`section_force_diagrams`) list the same six forces with
   their signs along each member, in the axes given by `section_axes`: `x` from
   the first point of the member's IFC edge to the last, `1` along the

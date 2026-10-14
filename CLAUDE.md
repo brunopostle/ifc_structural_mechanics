@@ -387,6 +387,18 @@ here. This section only records the constraints that shape day-to-day work.
   `ResultsExporter` takes it off. Reactions then equal the applied loads to
   six figures at any mesh size; `global_reactions` carries `applied_load_N`
   and `imbalance_N`.
+- **The moments in `global_reactions` are added up from `supports`**
+  (`94g.10`): each support's moments and its force at its position, about
+  the origin of the global axes. The solver has no total moment, and the
+  keys were zero in every model until schema 1.7. They are absent when a
+  support has no moments. `write_analysis_steps()` records the moment of
+  each step's loads about the origin (`StructuralModel.applied_load_moments`:
+  every nodal force where it acts, and every moment applied), which is
+  beside them as `applied_moment_Nm` with `moment_imbalance_Nm`. Measured:
+  the two cancel to six figures or better in all eight example models
+  (`building_01` `Dead`: 194 162 872 against 194 162 905 N·m), and on
+  CalculiX 2.21 to 5 in 100 000 in `beam_01` and `portal_01`, where the
+  forces come from the member ends.
 - **CalculiX gives a node no reaction moment; its forces on the expanded
   nodes have it** (`94g.8`). `*NODE FILE` asks for `RF`, which puts the
   force on every node of the expanded solids in the FRD. The writer records
@@ -397,7 +409,7 @@ here. This section only records the constraints that shape day-to-day work.
   the moment of those forces about each support node; `_support_entry()`
   adds the lever arms of the nodal forces and takes off every moment
   applied at the node, shares of a moment per length too
-  (`support_node_loads` has nine values per node for that). Measured: a
+  (`support_node_loads` has values 7 to 9 per node for that). Measured: a
   cantilever root, a slab clamped along one edge and a bar clamped along
   its span give statics to five figures at any mesh size, where member ends
   gave 0.1%. In a statically indeterminate model they are the mesh's own
@@ -421,8 +433,29 @@ here. This section only records the constraints that shape day-to-day work.
   displacements are identical). The errors of two
   supports can cancel, so `ResultsExporter` checks each such support against
   its member ends (3%) and the whole against the applied load, replaces what
-  it can (`forces: "member_end_forces"`), marks the rest `"unreliable"`, and
-  `plausibility.balance_warnings()` says so. Tests of the solver's own
+  it can (`forces: "member_end_forces"`), and
+  `plausibility.balance_warnings()` says so. 2.21 is wrong at clamped member
+  ends only (measured: slab edges, a wall foot and supports a member runs on
+  past are as 2.23 has them), so when the supports balance the loads to 1%
+  with those replaced, the others keep the solver's forces and moments and
+  the total in `global_reactions` is that of the supports where the solver's
+  own does not balance (`forces: "supports"`; `_supports()` builds them
+  twice for that). A solver's total that balances is kept: in `beam_01` the
+  errors of the two supports cancel and it is exact. Only if
+  they still do not balance are the others `"unreliable"` and the total the
+  solver's (`94g.7`). Measured on 2.21: `portal_01`'s own total is 11%
+  short and the supports' is off by 5 in 100 000; `structure_01`'s wall
+  foot was unreliable and is not. **A point force on a support node is not
+  in the member's end**: `support_node_loads` has it a second time (values
+  10 to 12, from the `** Point loads` line the load writer puts before
+  them) and `_support_entry()` takes it off the member end's force before
+  comparing. Without that a load on a clamped node made the solver look
+  wrong on any version and the reaction came out short by the load. **A
+  member tied to a surface along its length is no check on its support**
+  (`_member_ends_at()` returns None for it): its end has its share of the
+  force only. Two cantilevers under a slab had 58.5 N each for 49.7, as
+  `member_end_forces` with a warning, on 2.23; on 2.21 such a root is now
+  `"unreliable"`, which it is. Tests of the solver's own
   reactions at clamped supports call `_needs_solver_reactions()` and are
   skipped on 2.21; the 2.23 job in CI fails if any of them is skipped. To run the suite against 2.21 locally: a container from
   `ubuntu:24.04` with `calculix-ccx`, and a `ccx` script first in `PATH`

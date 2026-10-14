@@ -775,8 +775,34 @@ printed force is (`cantilever_01`: 25.28 N·m for 27.55 at the root, with 11.3 N
 member that is not there) and the same as 2.23's elsewhere (the edges of `slab_01`, the
 wall foot of `structure_01`, the supports of `grid_of_beams`), so a support whose forces
 come from its member ends has its moments from there too.
-A support with no member ends to use is marked `"unreliable"` and the analysis warns in
-either case. The whole fast suite was run against 2.21 in a container: it passes, with
+Since the errors are at member ends alone, the supports are added up once those are
+replaced: if they balance the loads to 1%, the supports with no member end keep the
+solver's forces and moments and, where the solver's total does not balance,
+`global_reactions` gives the supports' total (`"forces": "supports"`); if not, those supports are marked `"unreliable"`. The analysis
+warns in either case. Measured on 2.21 (`94g.7`):
+
+| Model | Solver's total | Supports' total | Applied |
+|---|---|---|---|
+| `portal_01` | 38 029 N | 42 701.0 N | 42 702.9 N |
+| `beam_01` | 28 829.0 N (the errors of its two supports cancel; kept) | 28 827.9 N | 28 829.0 N |
+| `structure_01`, gravity | 667.9 N, and 6.9 N sideways | 660.19 N | 660.20 N |
+
+`structure_01`'s wall foot, once unreliable, has the solver's forces and moments, and the
+moments of its three supports about the origin balance those of the weight to 2 in
+100 000.
+
+**A point load on a clamped support node** made the solver look wrong on any version: the
+member's end has none of a force the support takes, the two differed by the load, and
+the member end's figure was given (a cantilever with 1000 N at its tip and 700 N on its
+root: 1000 N for 1700, and a warning). The load writer now marks point loads, and they
+are taken off the member end before the comparison: 1700.0 N and no warning.
+
+**A beam tied to a slab along its length** did the same: its end has its share of the
+force only, the slab brings the rest to the support, and the two cantilevers under a slab
+of `TestSlabBearingOnBeams` were given 58.45 N each for 49.74 on 2.23, with the warning
+that the solver was wrong. Such a member is no longer used as a check: 49.73 and 49.74 N,
+moments -124.34 N·m each for the -124.34 of statics. On 2.21, where the solver is wrong at
+these roots (50.6 N along the beams that is not there), they are marked `"unreliable"`. The whole fast suite was run against 2.21 in a container: it passes, with
 the nine tests of the solver's own reactions at clamped supports skipped. Against
 conda-forge's unpatched 2.23, also in a container, none is skipped and all pass; CI now
 runs the suite on both versions.
@@ -1225,10 +1251,10 @@ to a node of shells alone swings freely about their normal.
   other than through the totals of `building_01` and `building_02`, and buckling.
 - **Load combinations** are checked on one beam. Buckling has none. A case without
   loads adds nothing and is named in `cases_without_loads`.
-- **Reactions on CalculiX 2.21 and earlier** at supports that clamp a slab edge or a
-  member running on past them: marked unreliable, not corrected. The total reaction is
-  the solver's and is wrong there too.
-- **Reaction moments at those same supports**, on any version: not computed.
+- **Reactions on CalculiX 2.21 and earlier** at a clamped member end with no section
+  forces to replace them (a U1 member, a member and a slab at one support): marked
+  unreliable, with every other support that has no member end, and the total is the
+  solver's.
 
 - **Distributed loads on shells in their own axes** (`GlobalOrLocal` local): global
   ones are covered by the plate benchmark; local ones only by a unit test.
