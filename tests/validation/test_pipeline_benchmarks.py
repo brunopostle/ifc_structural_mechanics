@@ -3514,11 +3514,12 @@ class TestPlacedModel:
 
         before = shipped["global_displacements"]["envelope"]
         after = placed["global_displacements"]["envelope"]
-        # The mesh of a surface is not the same after the move
-        tolerance = 0.002
+        # The mesh of a surface is not the same after the move, which moves
+        # a small component by as much as a large one
+        tolerance = 0.002 * before["max_displacement_m"]
         for moved, original in (("tx", "ty"), ("ty", "tx"), ("tz", "tz")):
             assert after[f"max_{moved}_m"] == pytest.approx(
-                before[f"max_{original}_m"], rel=tolerance, abs=1e-9
+                before[f"max_{original}_m"], rel=0, abs=tolerance
             )
 
         reactions = placed["global_reactions"]["by_load_case"]

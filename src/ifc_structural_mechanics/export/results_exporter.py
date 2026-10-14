@@ -1365,10 +1365,32 @@ class ResultsExporter:
     # Global displacement stats
     # ------------------------------------------------------------------
 
+    def _link_nodes(self) -> set:
+        """Result nodes of elements that belong to no member, and of no member.
+
+        The stiff links, the arms of hinges and supports and the links that
+        make knots are expanded into solids as members are, with faces up to
+        a quarter of a metre from their axis, which a rotation moves further
+        than the structure. They are not part of it (``aiz.92``).
+        """
+        owned = getattr(self.model, "analysis_element_to_member", None) or {}
+        if not self.element_nodes or not owned:
+            return set()
+        members: set = set()
+        others: set = set()
+        for elem_id, nodes in self.element_nodes.items():
+            (members if elem_id in owned else others).update(nodes)
+        return others - members
+
     def _global_displacements(self) -> Dict[str, Any]:
         disp_results = self.parsed_results.get("displacement", [])
         if not disp_results:
             return {}
+        links = {str(node) for node in self._link_nodes()}
+        if links:
+            disp_results = [
+                r for r in disp_results if str(r.reference_element) not in links
+            ]
 
         by_lc: Dict[str, List] = defaultdict(list)
         for r in disp_results:

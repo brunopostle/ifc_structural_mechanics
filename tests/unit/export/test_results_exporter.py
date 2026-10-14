@@ -370,3 +370,41 @@ class TestBuckling:
         data = _make_exporter()._build()
         assert data["analysis_type"] == "linear_static"
         assert "buckling" not in data
+
+
+class TestGlobalDisplacementsLeaveOutLinks:
+    """Links and arms belong to no member and are not part of the structure.
+
+    Their expanded faces are up to 0.25 m from their axis; in building_01 one
+    of them set the largest displacement of the model (aiz.92).
+    """
+
+    def _exporter(self):
+        from ifc_structural_mechanics.domain.result import DisplacementResult
+
+        model = StructuralModel(id="test")
+        model.add_member(_curve_member(_rect_section()))
+        model.set_analysis_elements("m1", [1])
+        results = []
+        for node, tz in ((1, 0.0), (2, -0.001), (3, -0.005)):
+            result = DisplacementResult(reference_element=str(node), load_case="LC")
+            result.set_translations([0.0, 0.0, tz])
+            results.append(result)
+        return ResultsExporter(
+            domain_model=model,
+            parsed_results={
+                "displacement": results,
+                "stress": [],
+                "reaction": [],
+                "section_forces": [],
+            },
+            # Element 7 is a link from the member's node 2 to its tip, node 3
+            element_nodes={1: [1, 2], 7: [2, 3]},
+        )
+
+    def test_the_tip_of_a_link_is_left_out(self):
+        envelope = self._exporter()._global_displacements()["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(0.001)
+
+    def test_a_node_shared_with_a_member_is_kept(self):
+        assert self._exporter()._link_nodes() == {3}
