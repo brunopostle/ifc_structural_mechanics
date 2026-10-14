@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import traceback
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -22,7 +22,9 @@ from ..domain.result import (
 )
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
+from .plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from .section_forces import element_section_forces
+from .user_element_forces import u1_nodal_forces
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -768,6 +770,158 @@ class ResultsParser:
             )
         return steps
 
+    def _correct_user_element_forces(self, parsed_results: Dict[str, Any]) -> None:
+        """Put right the forces CalculiX printed at support nodes of U1 elements.
+
+        CalculiX adds a U1 element's end forces to its nodes with the wrong
+        sign at the element's first node, and from a recovery that does not
+        match the element (``aiz.19``; see ``user_element_forces``). At a
+        support node where only U1 elements meet, the force and the moment
+        inside the structure are worked out from the elements' stiffness and
+        the solver's displacements instead, and the printed total for the
+        support nodes is corrected by as much. A node where U1 elements meet
+        other elements (only possible on a patched CalculiX) is left alone.
+        """
+        elements = getattr(self.domain_model, "user_elements", None)
+        recorded = getattr(self.domain_model, "support_node_elements", None)
+        steps = parsed_results.get("support_node_forces") or []
+        if not isinstance(elements, dict) or not elements or not steps:
+            return
+        if not isinstance(recorded, dict):
+            return
+        nodes = {
+            node
+            for node, (_, at_node) in recorded.items()
+            if at_node and all(e in elements for e in at_node)
+        }
+        if not nodes:
+            return
+        involved = {
+            n
+            for element in elements.values()
+            if nodes.intersection(element["nodes"])
+            for n in element["nodes"]
+        }
+        by_case: Dict[str, Dict[int, List[float]]] = {}
+        for result in parsed_results.get("displacement", []):
+            node = int(result.reference_element)
+            if node in involved:
+                case = result.metadata.get("load_case")
+                by_case.setdefault(case, {})[node] = list(
+                    result.get_translations()
+                ) + list(result.get_rotations())
+
+        moment_steps = parsed_results.get("support_node_moments") or []
+        if len(moment_steps) != len(steps):
+            moment_steps = [
+                {"load_case": step["load_case"], "moments": {}} for step in steps
+            ]
+            parsed_results["support_node_moments"] = moment_steps
+        totals = [
+            r
+            for r in parsed_results.get("reaction", [])
+            if getattr(r, "reference_element", None) == "TOTAL"
+        ]
+        worked_out: List[Dict[int, np.ndarray]] = []
+        changes: List[np.ndarray] = []
+        for step in steps:
+            moved = by_case.get(step["load_case"], {})
+            missing = involved - set(moved)
+            if missing:
+                raise ResultProcessingError(
+                    f"Load case {step['load_case']}: the result file has no "
+                    f"displacement for node(s) {sorted(missing)[:5]} of the U1 "
+                    "elements at the supports, so their reactions cannot be "
+                    "worked out."
+                )
+            forces = {
+                node: force
+                for node, force in u1_nodal_forces(elements, moved, nodes).items()
+                if node in step["forces"]
+            }
+            worked_out.append(forces)
+            changes.append(
+                sum(
+                    (
+                        force[:3] - np.array(step["forces"][node], dtype=float)
+                        for node, force in forces.items()
+                    ),
+                    np.zeros(3),
+                )
+            )
+
+        # The matrix is CalculiX's as of 2.23. Statics says which is right:
+        # the reactions have to balance the loads
+        ours = [self._balances(i, totals, change) for i, change in enumerate(changes)]
+        solver = [self._balances(i, totals, np.zeros(3)) for i in range(len(steps))]
+        if not all(ours) and all(solver):
+            self._warn(
+                "The solver's own forces at the supports of U1 elements "
+                "balance the loads and those worked out from the U1 stiffness "
+                "do not: this version of CalculiX has changed its U1 element, "
+                "and the solver's forces are given, with no moments. Report "
+                "it: analysis/user_element_forces.py needs bringing up to date."
+            )
+            return
+        if not all(ours):
+            self._warn(
+                "The forces at the supports of U1 elements, worked out from "
+                "the U1 stiffness of CalculiX 2.23 because the solver's are "
+                "wrong, do not balance the loads (nor do the solver's): this "
+                "version of CalculiX may have a different U1 element. Do not "
+                "rely on the reactions."
+            )
+        elif all(solver):
+            self._warn(
+                "The solver's own forces at the supports of U1 elements "
+                "balance the loads: this version of CalculiX has put right "
+                "what 2.23 gets wrong there. The reactions given are worked "
+                "out from the U1 stiffness and agree with them."
+            )
+        for index, step in enumerate(steps):
+            for node, force in worked_out[index].items():
+                step["forces"][node] = [float(v) for v in force[:3]]
+                moment_steps[index]["moments"][node] = [float(v) for v in force[3:]]
+            if index < len(totals):
+                total = totals[index]
+                total.set_forces(
+                    [float(v) for v in np.array(total.get_forces()) + changes[index]]
+                )
+
+    def _balances(
+        self, index: int, totals: List[ReactionForceResult], change: np.ndarray
+    ) -> bool:
+        """Whether the printed total of step ``index``, changed by ``change``,
+        balances the step's loads. True when the loads are not known."""
+        loads = getattr(self.domain_model, "applied_load_totals", None)
+        on_nodes = getattr(self.domain_model, "support_node_loads", None)
+        if not isinstance(loads, list) or index >= len(loads) or index >= len(totals):
+            return True
+        load = np.array(loads[index][:3], dtype=float)
+        reaction = np.array(totals[index].get_forces(), dtype=float) + change
+        if isinstance(on_nodes, list) and index < len(on_nodes):
+            for node_load in on_nodes[index].values():
+                reaction -= np.array(node_load[:3], dtype=float)
+        size = max(float(np.linalg.norm(load)), float(np.linalg.norm(reaction)))
+        return float(np.linalg.norm(reaction + load)) <= max(
+            BALANCE_NOISE_N, BALANCE_LIMIT * size
+        )
+
+    def _warn(self, message: str) -> None:
+        """A warning for the results."""
+        logger.warning(message)
+        if not hasattr(self.domain_model, "analysis_warnings"):
+            self.domain_model.analysis_warnings = []
+        self.domain_model.analysis_warnings.append(
+            {
+                "message": message,
+                "severity": "warning",
+                "entity_type": None,
+                "ccx_id": None,
+                "domain_id": None,
+            }
+        )
+
     def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
         """
         Parse total reaction forces from CalculiX TOTALS=ONLY format.
@@ -1135,6 +1289,7 @@ class ResultsParser:
                             parsed_results["support_node_forces"],
                         )
                     )
+                self._correct_user_element_forces(parsed_results)
 
                 # Parse buckling eigenvalues (non-empty only for buckling analyses)
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)

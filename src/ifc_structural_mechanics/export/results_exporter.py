@@ -162,9 +162,12 @@ elsewhere, and ``moments`` says where:
   support itself. They are in equilibrium with the loads as the forces are,
   for a member end, a clamped slab edge and a support a member runs on past
   alike. For a line support they include what its forces do about the middle
-  of its edge.
+  of its edge. At a node of U1 user elements, which are not expanded and whose
+  nodal forces CalculiX gets wrong, force and moment are the elements'
+  stiffness times the solver's displacements (``aiz.19``), good to about
+  1 in 10 000 (the result file has six figures).
 - ``member_end_forces``: the solver's forces at the support are wrong (see
-  ``forces``) or cannot be attributed to its nodes (a user element), and
+  ``forces``) or cannot be attributed to its nodes, and
   every member it connects is a curve member ending there. The moments are
   the section forces at those member ends, moved to ``position_m``, about the
   restrained axes. They are integrated from stresses and are good to about

@@ -70,6 +70,10 @@ class StructuralModel:
         # analysis element ID → (member axis, section 1-direction) as written
         # on its beam section card; set by the input writer
         self.beam_section_frames: Dict[int, tuple] = {}
+        # analysis element ID → its nodes, their positions, section,
+        # 1-direction and material, as written, for every U1 element: the
+        # results parser works out their nodal forces; set by the input writer
+        self.user_elements: Dict[int, Dict] = {}
         # connection.id → {"nodes": {node: (x, y, z)}, "dofs": [1..6]} for
         # every support, as written to the solver; set by the input writer
         self.support_nodes: Dict[str, Dict] = {}

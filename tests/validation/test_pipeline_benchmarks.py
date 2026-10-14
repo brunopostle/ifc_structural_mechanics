@@ -486,6 +486,20 @@ class TestISectionCantileverSelfWeight:
             expected, rel=DEFLECTION_TOLERANCE
         )
 
+    def test_reaction_holds_up_the_weight(self, tmp_path):
+        """CalculiX gives the force at a U1 element's first node the wrong
+        sign (aiz.19): the root once pushed down with 2.6 N for 2.7 N."""
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        data = _run(path, tmp_path, **self.U1)
+        weight = CANT_RHO * G_ACCEL * I_AREA * CANT_L
+        (support,) = data["supports"]
+        assert support["forces"] == "solver"
+        assert support["moments"] == "solver"
+        (reaction,) = support["by_load_case"].values()
+        assert reaction["fz_N"] == pytest.approx(weight, rel=1e-4)
+        # The cantilever runs along +x from the root
+        assert reaction["my_Nm"] == pytest.approx(-weight * CANT_L / 2, rel=1e-4)
+
 
 class TestISectionAsEquivalentRectangle:
     """The same I-section cantilever on a native beam element.
@@ -1196,6 +1210,33 @@ class TestFixedFixedISectionBeam:
         )
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
             self.B.LOAD, rel=1e-3
+        )
+
+    def test_point_load_on_user_elements(self, tmp_path):
+        """Each clamped end of a U1 beam takes half the load and PL/8.
+
+        The total of the solver's forces was once zero (aiz.19). The forces
+        are worked out from the elements' stiffness and displacements read
+        to six figures, which the shear of a short element loses some of.
+        """
+        model = _beam_01()
+        _give_beam_01_an_i_profile(model)
+        path = str(tmp_path / "i_beam.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, open_sections="user_element")
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            self.B.LOAD, rel=1e-3
+        )
+        moments = []
+        for support in data["supports"]:
+            assert support["forces"] == "solver"
+            assert support["moments"] == "solver"
+            (reaction,) = support["by_load_case"].values()
+            assert reaction["fz_N"] == pytest.approx(self.B.LOAD / 2, rel=1e-3)
+            moments.append(reaction["my_Nm"])
+        assert sorted(moments) == pytest.approx(
+            [-self.B.LOAD * self.B.LENGTH / 8, self.B.LOAD * self.B.LENGTH / 8],
+            rel=0.01,
         )
 
     def test_line_load(self, tmp_path):
@@ -2589,6 +2630,17 @@ class TestPortalAgainstTheResultsInItsFile:
             native["global_displacements"]["envelope"]["max_displacement_m"],
             rel=0.01,
         )
+        # Their reactions once had the wrong sign and added up to -85 kN for
+        # 43 kN (aiz.19); the two elements differ by about 0.5 %
+        (total,) = u1["global_reactions"]["by_load_case"].values()
+        assert total["imbalance_N"] < 1e-4 * abs(total["fz_N"])
+        for ours, theirs in zip(u1["supports"], native["supports"]):
+            assert ours["position_m"] == theirs["position_m"]
+            assert ours["moments"] == "solver"
+            (mine,) = ours["by_load_case"].values()
+            (other,) = theirs["by_load_case"].values()
+            for key in ("fx_N", "fz_N", "my_Nm"):
+                assert mine[key] == pytest.approx(other[key], rel=0.01)
 
     def test_load_is_what_the_file_says(self, tmp_path):
         data = _run(os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path, 0.25)

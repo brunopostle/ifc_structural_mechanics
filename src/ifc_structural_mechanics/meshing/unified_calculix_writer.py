@@ -1528,6 +1528,34 @@ class UnifiedCalculixWriter:
             f"{beam_normal[0]:.6e}, {beam_normal[1]:.6e}," f" {beam_normal[2]:.6e}\n\n"
         )
 
+        # CalculiX misreports the forces at the nodes of U1 elements: the
+        # results parser works them out from the element's stiffness, with
+        # the values the solver read
+        def written(value: float) -> float:
+            return float(f"{float(value):.6e}")
+
+        properties = {
+            "direction": tuple(written(v) for v in beam_normal),
+            "modulus": written(material.elastic_modulus),
+            "poisson": written(material.poisson_ratio),
+            "area": written(A),
+            "inertia_11": written(xi11),
+            "inertia_22": written(xi22),
+            "shear_factor": written(k_s),
+        }
+        for elem_id in elem_ids:
+            elem = self.elements.get(elem_id)
+            if elem is None:
+                continue
+            ends = (elem["nodes"][0], elem["nodes"][1])
+            self.domain_model.user_elements[int(elem_id)] = {
+                "nodes": ends,
+                "positions": tuple(
+                    tuple(written(c) for c in self.nodes[node]) for node in ends
+                ),
+                **properties,
+            }
+
         # Mass of the U1 elements at their nodes, for their self-weight
         density = getattr(material, "density", None)
         if density and A:

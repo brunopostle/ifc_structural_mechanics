@@ -66,7 +66,9 @@ def _length(value: float) -> str:
     return f"{value * 1000.0:.3g} mm"
 
 
-def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+def balance_warnings(
+    results: Dict[str, Any], user_elements: bool = False
+) -> List[Dict[str, Any]]:
     """Return one warning if the solver's reactions are not to be trusted.
 
     Statics requires the reactions to balance the loads, so a difference
@@ -79,6 +81,8 @@ def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     Args:
         results: The dict written to ``results.json``.
+        user_elements: The model has U1 elements, whose reactions are worked
+            out from their stiffness and not taken from the solver.
 
     Returns:
         A list with one warning, or an empty list.
@@ -127,12 +131,25 @@ def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
             f" At {unreliable} support(s) that hold a rotation there is "
             "nothing to take them from, and the figures given are wrong."
         )
-    message += (
-        " CalculiX 2.21 and earlier misreport the force at a support that "
-        "holds a rotation; 2.23 does not. Displacements and member forces "
-        "are not affected."
-    )
+    if user_elements:
+        message += (
+            " The forces at the supports of U1 elements are worked out from "
+            "the U1 stiffness of CalculiX 2.23, because the solver's are "
+            "wrong; this version of CalculiX may have a different U1 element."
+        )
+    else:
+        message += (
+            " CalculiX 2.21 and earlier misreport the force at a support that "
+            "holds a rotation; 2.23 does not."
+        )
+    message += " Displacements and member forces are not affected."
     return [_warning(message)]
+
+
+def _has_user_elements(domain_model) -> bool:
+    """Whether the input writer recorded U1 elements in the model."""
+    recorded = getattr(domain_model, "user_elements", None)
+    return isinstance(recorded, dict) and bool(recorded)
 
 
 def plausibility_warnings(
@@ -166,7 +183,9 @@ def plausibility_warnings(
             sizes[member.id] = extent
     model_size = _extent(everything)
 
-    warnings: List[Dict[str, Any]] = balance_warnings(results)
+    warnings: List[Dict[str, Any]] = balance_warnings(
+        results, _has_user_elements(domain_model)
+    )
     members = results.get("members", [])
     by_case = results.get("global_displacements", {}).get("by_load_case", {})
     for case in results.get("load_cases", []) or list(by_case):

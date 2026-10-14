@@ -469,7 +469,20 @@ here. This section only records the constraints that shape day-to-day work.
   element crashes in gen3delem
   (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it);
   on a patched build a U1 beam and a native beam sharing a node transfer no
-  moment (`aiz.14`). U1 reactions have the wrong sign (`aiz.19`).
+  moment (`aiz.14`). CalculiX gets the nodal forces of U1 wrong
+  (`resultsmech_u1.f` adds both end forces with one sign and recovers them
+  with `1/(1 - phi)`: a root printed -1500 N, or 728 N, for +1500), and its
+  printed section forces with them. At support nodes where only U1 elements
+  meet, `ResultsParser._correct_user_element_forces()` replaces force and
+  moment with the elements' stiffness times the displacements
+  (`analysis/user_element_forces.py`, the matrix of `e_c3d_u1.f` as it is,
+  which is not the textbook Timoshenko beam) and corrects the printed total
+  (`aiz.19`). Good to about 1e-4: the FRD has six figures, and the shear of a
+  short element is a small difference of its displacements. Measured the
+  same on 2.21 and 2.23. Statics decides at run time: if ours do not balance
+  the loads and the solver's do, CalculiX has changed U1 and its forces are
+  kept, with a warning to update the matrix; if both balance, a warning says
+  the solver has put it right; if neither, a U1 warning says so.
 - **Equivalent-rectangle members have no `max_von_mises_Pa`** (the solver's
   stresses are the rectangle's); `results.json` marks them with
   `section_model`. Their stress is `max_normal_stress_Pa`, from the section
