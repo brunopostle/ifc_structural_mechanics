@@ -469,7 +469,11 @@ here. This section only records the constraints that shape day-to-day work.
   element crashes in gen3delem
   (`CalculixRunner._raise_if_known_gen3delem_user_element_bug()` reports it);
   on a patched build a U1 beam and a native beam sharing a node transfer no
-  moment (`aiz.14`). CalculiX gets the nodal forces of U1 wrong
+  moment (`aiz.14`), and a U1 member at a connection is tied in translation
+  only. So the writer refuses a U1 member joined to native beams or shells,
+  by a shared node or a connection, unless the file releases every rotation
+  of one of the two (`_check_user_elements_join_their_own_kind()`, an
+  `AnalysisError`). CalculiX gets the nodal forces of U1 wrong
   (`resultsmech_u1.f` adds both end forces with one sign and recovers them
   with `1/(1 - phi)`: a root printed -1500 N, or 728 N, for +1500), and its
   printed section forces with them. At support nodes where only U1 elements
