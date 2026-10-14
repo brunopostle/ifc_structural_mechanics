@@ -285,6 +285,7 @@ class UnifiedCalculixWriter:
             # Step 2c: Resolve remaining overlapping-geometry element ownership
             self._resolve_overlapping_element_sets()
             self._check_members_reach_their_connections()
+            self._check_user_elements_join_their_own_kind()
 
             # Step 2c2: Give members hinged along an edge their own edge nodes
             self._release_hinged_edges()
@@ -780,6 +781,67 @@ class UnifiedCalculixWriter:
                 f"The mesh has no node for {len(missing)} member end(s) at "
                 "their connection, so they cannot be joined as the model "
                 f"says. The first are {', '.join(missing[:5])}."
+            )
+
+    def _check_user_elements_join_their_own_kind(self) -> None:
+        """Stop when a U1 member is joined to a beam or shell of another type.
+
+        CalculiX expands native beams and shells into solids and joins them at
+        a knot; the rotations of a U1 node are not part of it, so a U1 element
+        and a native one sharing a node pass no moment (``aiz.14``: the second
+        half of a propped cantilever made of U1 deflected as a cantilever with
+        a pinned link). A U1 member at a connection is not merged with the
+        others either (``_merge_rigid_connection_nodes``) and is tied to them
+        in translation only. Either way the joint is a pin. Stock CalculiX
+        stops in gen3delem on such a model; a build that gets past it would
+        analyse another structure. A joint that releases every rotation of
+        one of the two members is a pin in the file too, and is left alone.
+
+        Raises:
+            AnalysisError: If a U1 member meets a member of native elements at
+                a shared node or a connection that does not release it.
+        """
+        if not self._u1_members:
+            return
+        owners: Dict[int, set] = {}
+        for member in self.domain_model.members:
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            for elem_id in self.element_sets.get(member_set, []):
+                elem = self.elements.get(elem_id)
+                if elem is None:
+                    continue
+                for node in elem["nodes"]:
+                    owners.setdefault(node, set()).add(member.id)
+
+        pairs: set = set()
+        for members in owners.values():
+            for user in members & self._u1_members:
+                pairs.update((user, other) for other in members - self._u1_members)
+        pinned: set = set()
+        for conn in self.domain_model.connections:
+            if getattr(conn, "edge", None) is not None:
+                continue
+            members = set(conn.connected_members)
+            released = getattr(conn, "released_dofs_by_member", None) or {}
+            for user in members & self._u1_members:
+                for other in members - self._u1_members:
+                    if conn.entity_type == "hinge" or any(
+                        {4, 5, 6}.issubset(released.get(m) or ()) for m in (user, other)
+                    ):
+                        pinned.add((user, other))
+                    elif conn.entity_type in ("point", "rigid"):
+                        pairs.add((user, other))
+        wrong = sorted(pairs - pinned)
+        if wrong:
+            first = ", ".join(f"{user} with {other}" for user, other in wrong[:5])
+            raise AnalysisError(
+                f"{len(wrong)} joint(s) join a member of user elements (U1, "
+                "--open-sections user-element) to a member of native beam or "
+                "shell elements. CalculiX passes no moment between the two, "
+                "so each would be a pin, and stock CalculiX stops on such a "
+                f"model. The first are {first}. Analyse the model without "
+                "user elements: every section is then an equivalent rectangle "
+                "on native elements."
             )
 
     def _register_node_memberships(self) -> None:
