@@ -759,6 +759,18 @@ rotational degrees of freedom**. This drives everything about joints:
   member reaches the connection (`building_02` has two, with 115 links for
   its 117 eccentric ends) the nearest member end is the joint and the others
   are linked to it: the connection itself has no node (`aiz.88`).
+- **A point force at a free member end is put on a knot** (`aiz.76`,
+  `_knot_point_loaded_nodes()`). On a beam node that is not a knot CalculiX
+  puts a force on the four corners of the expanded cross-section, a quarter
+  each (`gen3dforc.f`), and dents them more the finer the mesh: a column
+  under a load on its top shortened 6.6% more than PL/EA at a 0.1 m mesh. A
+  short thin link at right angles, its tip free, makes the node a knot, and
+  the column is right to 0.03% at any mesh. Only at free ends: a knot also
+  stops the section distorting in bending, and a load at midspan on a knot
+  was 3% stiff at a 0.5 m mesh on a 4 m span. A force across a member
+  inside it dents nothing measurable; one along it does, by about a third
+  of the end's, and is left so. The knot links are in `_knot_links`, not
+  `_rigid_links`.
 - **Never tie the two ends of a rigid link in translation as well.** They are
   apart, so equal translations plus a rigid link means no rotation, which clamps
   the joint. `_write_point_connection()` skips nodes in the same
