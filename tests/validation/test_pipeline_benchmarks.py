@@ -4399,6 +4399,30 @@ class TestPlaneFrame:
                 ), key
 
 
+class TestPointLoadAtAFreeEnd:
+    """A 3 m column, 0.1 m square, 10 kN down on its top (aiz.76).
+
+    CalculiX put the force on the four corners of the expanded top face, a
+    quarter each, and dented them: 2.7 % more shortening than PL/EA at a
+    0.25 m mesh and 6.6 % at 0.1 m. The top is now a knot.
+    """
+
+    @pytest.mark.parametrize("mesh_size", [0.5, 0.1])
+    def test_shortening_is_pl_over_ea_at_any_mesh(self, tmp_path, mesh_size):
+        data, _ = _plane_run(
+            tmp_path,
+            mesh_size=mesh_size,
+            nodes={"A": (0, 0), "B": (0, 3)},
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            loads={"B": (0.0, -10000.0)},
+            hinged=False,
+        )
+        expected = 10000.0 * 3.0 / (PLANE_E * 0.01)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(expected, rel=1e-3)
+
+
 class TestBeamOnTwoDimensionalSupports:
     """A 4 m beam on a pin and a roller that hold X and Z only, 10 kN at midspan.
 

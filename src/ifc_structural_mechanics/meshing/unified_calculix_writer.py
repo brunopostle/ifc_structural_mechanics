@@ -312,6 +312,9 @@ class UnifiedCalculixWriter:
             # of step 2c7 among them
             self._build_support_arms()
 
+            # Step 2c9: Spread point forces on beam nodes over a rigid section
+            self._knot_point_loaded_nodes()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -2300,6 +2303,110 @@ class UnifiedCalculixWriter:
             self._member_node_cache = {}
             logger.info(f"Built arms at {len(self._support_arms)} skew supports")
 
+    # A knot link carries nothing; it is short and thin so that its
+    # expanded nodes stay next to the node it is hung on.
+    _KNOT_LINK = 0.01
+
+    def _knot_point_loaded_nodes(self) -> None:
+        """Make a knot of every free member end a point force is applied to.
+
+        CalculiX applies a force on a beam node that is not a knot to the
+        four corner nodes of the expanded cross-section, a quarter each
+        (``gen3dforc.f``), where a uniform push on the face of a 20-node
+        brick has -1/12 at the corners and 1/3 at the middles of its sides.
+        The corners are dented, and more so the shorter the elements are: a
+        3 m column under 10 kN at its top shortened 2.7 % more than PL/EA at
+        a 0.25 m mesh and 6.6 % at 0.1 m (``aiz.76``). At a knot the
+        cross-section is rigid and the force is spread as the elements
+        need, and the column comes out at PL/EA to 0.03 % at any mesh.
+
+        Only at the free end of a member, a node of one beam element and of
+        nothing else. A rigid cross-section also stops it distorting as
+        bending makes it, which stiffens a member over the length of the
+        elements beside it: a beam with a knot under a load at midspan was
+        3 % stiff at a 0.5 m mesh on a 4 m span, 0.6 % at 0.05 m. There is
+        no bending moment at a free end. Inside a member a force across it
+        dents nothing measurable (0.06 %); one along it does, by about a
+        third of what it does at an end, and is left so.
+
+        CalculiX makes a knot where beams of different directions meet, so
+        a short link at right angles to the member is hung on the node, its
+        other end free. It carries no force. Support nodes are left alone
+        (the force there goes into the support), and so are nodes a link
+        already makes a knot of. Nothing in a model with U1 members, where
+        link elements cannot be used on stock CalculiX.
+        """
+        from ..analysis.boundary_condition_handling import (
+            find_closest_node,
+            find_connection_support_nodes,
+        )
+        from ..domain.load import PointLoad
+
+        self._knot_links: List[Tuple[int, int, int]] = []
+        if self._u1_members:
+            return
+        loads = [
+            load
+            for group in self.domain_model.load_groups
+            for load in group.loads
+            if isinstance(load, PointLoad)
+        ] + [
+            load
+            for member in self.domain_model.members
+            for load in getattr(member, "loads", [])
+            if isinstance(load, PointLoad)
+        ]
+        if not loads:
+            return
+        structure = self._structure_nodes()
+        elements_at: Dict[int, List[dict]] = {}
+        for elem in self.elements.values():
+            for node in elem["nodes"]:
+                elements_at.setdefault(node, []).append(elem)
+        free_end_axis: Dict[int, np.ndarray] = {}
+        for node, elems in elements_at.items():
+            if len(elems) != 1 or elems[0]["type"] not in BEAM_ELEMENT_TYPES:
+                continue
+            nodes = elems[0]["nodes"]
+            if node in (nodes[0], nodes[-1]):
+                free_end_axis[node] = np.array(self.nodes[nodes[-1]]) - np.array(
+                    self.nodes[nodes[0]]
+                )
+        skip = {n for _, a, b in getattr(self, "_rigid_links", []) for n in (a, b)}
+        for conn in self.domain_model.connections:
+            if conn.has_stiffness_properties():
+                skip.update(find_connection_support_nodes(conn, structure))
+
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [elem_id for elem_id, _, _ in getattr(self, "_rigid_links", [])]
+            )
+            + 1
+        )
+        for load in loads:
+            position = getattr(load, "position", None)
+            if position is None or not len(position):
+                continue
+            node = find_closest_node(position, structure)
+            if node is None or node in skip or node not in free_end_axis:
+                continue
+            skip.add(node)
+            across = self._orthogonal_beam_normal(
+                (0.0, 0.0, 1.0), tuple(free_end_axis[node])
+            )
+            self.nodes[next_node] = tuple(
+                float(v)
+                for v in np.array(self.nodes[node]) + self._KNOT_LINK * np.array(across)
+            )
+            helpers.add(next_node)
+            self._knot_links.append((next_elem, node, next_node))
+            next_node += 1
+            next_elem += 1
+        self._helper_nodes = helpers
+
     def _drilling_axis(self, element_ids: List[int]) -> Optional[np.ndarray]:
         """The normal of the shells at a node, if it is a node of shells alone.
 
@@ -2961,12 +3068,18 @@ class UnifiedCalculixWriter:
         return groups
 
     def _write_rigid_links(self, file: TextIO) -> None:
-        """Write the stiff B31 elements that bridge rigid end zones.
+        """Write the stiff B31 elements: links, arms and knot links.
 
         They are kept out of ``self.elements`` and ``EALL`` so they carry no
         self-weight and belong to no member.
         """
-        links = getattr(self, "_rigid_links", [])
+        links = [
+            (elem_id, a, b, self._RIGID_LINK_SIDE)
+            for elem_id, a, b in getattr(self, "_rigid_links", [])
+        ] + [
+            (elem_id, a, b, self._KNOT_LINK)
+            for elem_id, a, b in getattr(self, "_knot_links", [])
+        ]
         if not links:
             return
         file.write("** Rigid links bridging member ends to their joints\n")
@@ -2974,8 +3087,7 @@ class UnifiedCalculixWriter:
         # every step with self-weight, that the material has no density
         file.write("*MATERIAL, NAME=MAT_RIGID_LINK\n*DENSITY\n0.\n*ELASTIC\n")
         file.write(f"{self._RIGID_LINK_MODULUS:.6e}, 0.3\n\n")
-        side = self._RIGID_LINK_SIDE
-        for elem_id, node_a, node_b in links:
+        for elem_id, node_a, node_b, side in links:
             axis = np.array(self.nodes[node_b]) - np.array(self.nodes[node_a])
             normal = self._orthogonal_beam_normal((0.0, 0.0, 1.0), tuple(axis))
             elset = f"RIGID_LINK_{elem_id}"
