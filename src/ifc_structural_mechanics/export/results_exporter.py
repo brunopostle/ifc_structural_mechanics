@@ -302,6 +302,7 @@ class ResultsExporter:
         self._mesh_nodes: Optional[Dict[str, set]] = None
         self._translations: Optional[Dict[int, List[Tuple[str, List[float]]]]] = None
         self._section_force_records: Optional[Dict[int, List[Dict]]] = None
+        self._member_record_cache: Dict[frozenset, Dict[str, List[Dict]]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -515,7 +516,7 @@ class ResultsExporter:
         )
         disp_by_lc = self._member_displacements(node_ids)
         stress_by_lc = {} if equivalent else self._member_stresses(node_ids)
-        diagrams = self._member_diagrams(elem_ids)
+        diagrams = self._member_diagrams(elem_ids, member)
         sf_by_lc = self._member_section_forces(elem_ids, diagrams)
         util_by_lc = self._member_utilisation(elem_ids, member)
 
@@ -775,7 +776,46 @@ class ResultsExporter:
         ("Mf2", "Mf2_Nm"),
     )
 
-    def _member_diagrams(self, elem_ids: set) -> Dict[str, Dict[str, List[float]]]:
+    def _member_records(self, elem_ids: set, member=None) -> Dict[str, List[Dict]]:
+        """The section force records of a member's elements, per load case.
+
+        Copies: those placed along the member (``distance``) have the jumps
+        that nodal averaging smooths out put back and the error of the
+        element's linear stress under a load along it taken off (see
+        ``_restore_jumps()``), and are sorted along the member, the end of one
+        element before the start of the next. Those with no place are as the
+        solver gave them. Built once per set of elements.
+        """
+        key = frozenset(elem_ids)
+        cached = self._member_record_cache.get(key)
+        if cached is not None:
+            return cached
+        index = self._section_force_index()
+        placed: Dict[str, List[Dict]] = defaultdict(list)
+        unplaced: Dict[str, List[Dict]] = defaultdict(list)
+        for elem_id in elem_ids:
+            for rec in index.get(elem_id, ()):
+                case = rec.get("load_case", "_combined")
+                (placed if "distance" in rec else unplaced)[case].append(dict(rec))
+        axes = self._member_axes(member, elem_ids) if member is not None else None
+        shared = self._ends_shared(elem_ids) if placed else set()
+        by_case: Dict[str, List[Dict]] = {}
+        for case, records in placed.items():
+            records.sort(key=lambda r: (round(r["distance"], 9), -r["position"]))
+            scales = {
+                key: max((abs(r.get(key, 0.0)) for r in records), default=0.0)
+                for key, _ in self._DIAGRAM_KEYS
+            }
+            self._restore_jumps(records, scales, shared, axes)
+            by_case[case] = records
+        for case, records in unplaced.items():
+            by_case.setdefault(case, []).extend(records)
+        self._member_record_cache[key] = by_case
+        return by_case
+
+    def _member_diagrams(
+        self, elem_ids: set, member=None
+    ) -> Dict[str, Dict[str, List[float]]]:
         """Section forces along the member, per load case, with their signs.
 
         Each diagram is a set of parallel lists ordered by ``distance_m`` from
@@ -784,25 +824,19 @@ class ResultsExporter:
         support, another member framing in). Where neighbouring elements
         agree, the cross-section they share is listed once.
         """
-        index = self._section_force_index()
-        by_case: Dict[str, List[Dict]] = defaultdict(list)
-        for elem_id in elem_ids:
-            for rec in index.get(elem_id, ()):
-                if "distance" in rec:
-                    by_case[rec.get("load_case", "_combined")].append(rec)
-
         diagrams: Dict[str, Dict[str, List[float]]] = {}
-        for case, records in by_case.items():
-            # At a shared cross-section the end of one element comes before
-            # the start of the next
-            records = [dict(r) for r in records]
-            records.sort(key=lambda r: (round(r["distance"], 9), -r["position"]))
-            scales = {
-                key: max((abs(r.get(key, 0.0)) for r in records), default=0.0)
-                for key, _ in self._DIAGRAM_KEYS
-            }
-            self._restore_jumps(records, scales, self._ends_shared(elem_ids))
-            scale = max(scales.values(), default=0.0)
+        for case, records in self._member_records(elem_ids, member).items():
+            records = [r for r in records if "distance" in r]
+            if not records:
+                continue
+            scale = max(
+                (
+                    abs(r.get(key, 0.0))
+                    for r in records
+                    for key, _ in self._DIAGRAM_KEYS
+                ),
+                default=0.0,
+            )
             kept: List[Dict] = []
             for rec in records:
                 previous = kept[-1] if kept else None
@@ -858,6 +892,7 @@ class ResultsExporter:
         records: List[Dict],
         scales: Dict[str, float],
         shared_ends: Optional[set] = None,
+        axes: Optional[Dict[str, List[float]]] = None,
     ) -> None:
         """Put back the jumps that nodal averaging smooths out, in place.
 
@@ -889,13 +924,19 @@ class ResultsExporter:
         (``shared_ends``: the elements that share nodes with another
         member's) is averaged with that member, which is not in ``records``.
         It is treated as one more cross-section with a jump to find.
+
+        Once the shear forces are one-sided, the bending moments are put
+        right where a load acts along an element (``_correct_curvature()``),
+        before their own jumps are looked for. ``axes`` (``_member_axes()``)
+        lets the moment vectors follow.
         """
         middles = sorted(
             (r for r in records if r["position"] == 0.0), key=lambda r: r["distance"]
         )
-        if len(middles) < 2:
-            return
         ends = {(r["element_id"], r["position"]): r for r in records}
+        if len(middles) < 2:
+            self._correct_curvature(middles, ends, axes)
+            return
         pairs = [
             (a, b, b["distance"] - a["distance"])
             for a, b in zip(middles, middles[1:])
@@ -977,6 +1018,8 @@ class ResultsExporter:
                 ):
                     record[key] = record.get(key, 0.0) + side * jumps[n] / 2.0
 
+        self._correct_curvature(middles, ends, axes)
+
         for moment, shear in self._MOMENTS_AND_SHEARS:
             if scales.get(moment, 0.0) <= 0.0:
                 continue
@@ -1016,6 +1059,91 @@ class ResultsExporter:
                     self._JUMP_FRACTION * scales[moment]
                 ):
                     record[moment] = value
+
+    @classmethod
+    def _correct_curvature(
+        cls,
+        middles: List[Dict],
+        ends: Dict[Tuple[int, float], Dict],
+        axes: Optional[Dict[str, List[float]]],
+    ) -> None:
+        """Take off the error of a linear stress where the moment is curved.
+
+        A quadratic beam element is expanded into solids with two integration
+        points along it, and the stress at its nodes is the straight line
+        through those. Under a load along the element the bending moment is a
+        parabola, ``M'' = dV/dx``, and the line through its values at the two
+        points is above it by ``M'' h² / 12`` at the ends and below it by
+        ``M'' h² / 24`` at the middle (``aiz.89``: 46 N·m at the fixed ends of
+        ``beam_01`` at a 0.5 m mesh). The shear of such a load is a straight
+        line, which the element has right, so ``M'' h²`` is the change of the
+        element's own shear times its length: nothing is assumed of the load.
+
+        The shear must be one-sided first: where the solver averaged it with
+        a neighbour's under a point load, the element's change of shear would
+        include half the jump. A cross-section two elements share keeps one
+        value, put right by the mean of the two errors, so that a jump in the
+        moment there is still found. With dM/dx = V in these axes, ``Mf1``
+        goes with ``Vf1`` and ``Mf2`` with ``Vf2``.
+        """
+        # The correction of each element's ends and middle, per moment
+        fixes: Dict[int, Dict[str, float]] = {}
+        for middle in middles:
+            first = ends.get((middle["element_id"], -1.0))
+            last = ends.get((middle["element_id"], 1.0))
+            if first is None or last is None:
+                continue
+            length = last["distance"] - first["distance"]
+            if length <= 1e-12:
+                continue
+            fixes[middle["element_id"]] = {
+                moment: (last.get(shear, 0.0) - first.get(shear, 0.0)) * length
+                for moment, shear in cls._MOMENTS_AND_SHEARS
+            }
+
+        def shift(record: Dict, moment: str, amount: float) -> None:
+            if not amount:
+                return
+            record[moment] = record.get(moment, 0.0) + amount
+            if axes is not None and "moment" in record:
+                # The vector is T x + Mf2 e1 - Mf1 e2
+                direction = axes["1"] if moment == "Mf2" else axes["2"]
+                sign = 1.0 if moment == "Mf2" else -1.0
+                record["moment"] = [
+                    float(v) + sign * amount * d
+                    for v, d in zip(record["moment"], direction)
+                ]
+
+        # The start of the next element at the end of each, and back
+        by_place = {
+            (round(r["distance"], 9), r["position"]): r
+            for r in ends.values()
+            if r["position"] != 0.0
+        }
+        partner = {
+            id(r): by_place.get((round(r["distance"], 9), -r["position"]))
+            for r in ends.values()
+            if r["position"] != 0.0
+        }
+
+        planned: List[Tuple[Dict, str, float]] = []
+        for element, fix in fixes.items():
+            middle = next(m for m in middles if m["element_id"] == element)
+            for moment, curvature in fix.items():
+                planned.append((middle, moment, -curvature / 24.0))
+                for position in (-1.0, 1.0):
+                    record = ends[(element, position)]
+                    other = partner.get(id(record))
+                    own = curvature / 12.0
+                    if other is not None and abs(
+                        other.get(moment, 0.0) - record.get(moment, 0.0)
+                    ) <= 1e-9 * max(abs(record.get(moment, 0.0)), 1.0):
+                        theirs = fixes.get(other["element_id"], {}).get(moment)
+                        if theirs is not None:
+                            own = 0.5 * (curvature + theirs) / 12.0
+                    planned.append((record, moment, own))
+        for record, moment, amount in planned:
+            shift(record, moment, amount)
 
     # How many cross-sections say what is usual for the one in their middle
     _JUMP_WINDOW = 7
@@ -1191,16 +1319,14 @@ class ResultsExporter:
         if y_max is None or z_max is None:
             return {}
 
-        index = self._section_force_index()
         stress: Dict[str, float] = {}
-        for elem_id in elem_ids:
-            for rec in index.get(elem_id, ()):
+        for case, records in self._member_records(elem_ids, member).items():
+            for rec in records:
                 sigma = (
                     abs(rec.get("N", 0.0)) / area
                     + abs(rec.get("Mf1", 0.0)) / iy * y_max
                     + abs(rec.get("Mf2", 0.0)) / iz * z_max
                 )
-                case = rec.get("load_case", "_combined")
                 stress[case] = max(stress.get(case, 0.0), sigma)
 
         yield_strength = getattr(
@@ -1672,7 +1798,6 @@ class ResultsExporter:
         member_ids = list(getattr(connection, "connected_members", None) or [])
         if not member_ids:
             return None
-        index = self._section_force_index()
         ends: Dict[str, tuple] = {}
         for member_id in member_ids:
             member = self.model.get_member(member_id)
@@ -1682,11 +1807,12 @@ class ResultsExporter:
             # the force only, and the surface brings the rest to the support
             if getattr(member, "tied_to_surface_members", None):
                 return None
-            by_case: Dict[str, List[Dict]] = defaultdict(list)
-            for elem_id in getattr(member, "analysis_element_ids", []):
-                for rec in index.get(elem_id, ()):
-                    if "distance" in rec and "moment" in rec:
-                        by_case[rec.get("load_case", "_combined")].append(rec)
+            elem_ids = set(getattr(member, "analysis_element_ids", []))
+            by_case = {
+                case: placed
+                for case, records in self._member_records(elem_ids, member).items()
+                if (placed := [r for r in records if "distance" in r and "moment" in r])
+            }
             if not by_case:
                 return None
             geometry = getattr(member, "geometry", None)

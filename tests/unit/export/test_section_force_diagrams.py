@@ -336,6 +336,113 @@ class TestMemberThatRunsOn:
         assert pairs[-1] == (4.0, pytest.approx(_triangular(4.0)))
 
 
+def _as_the_solver_gives_them(records, moment):
+    """Replace each element's moments with the solver's straight line.
+
+    The stress of an expanded quadratic beam element is the line through
+    its values at the two integration points, ``h / 2 / sqrt(3)`` either side
+    of its middle; where two elements share a cross-section the solver gives
+    the mean of their two values. ``moment(x, element)`` is the true moment
+    inside ``element``.
+    """
+    by_element = {}
+    for record in records:
+        by_element.setdefault(record["element_id"], {})[record["position"]] = record
+    for element, own in by_element.items():
+        start, end = own[-1.0]["distance"], own[1.0]["distance"]
+        middle, reach = (start + end) / 2, (end - start) / 2 / math.sqrt(3)
+        before = moment(middle - reach, element)
+        after = moment(middle + reach, element)
+        for position, record in own.items():
+            record["Mf1"] = (before + after) / 2 + (after - before) * position * (
+                math.sqrt(3) / 2
+            )
+    for element, own in by_element.items():
+        following = by_element.get(element + 1)
+        if following is not None:
+            mean = (own[1.0]["Mf1"] + following[-1.0]["Mf1"]) / 2
+            own[1.0]["Mf1"] = following[-1.0]["Mf1"] = mean
+    return records
+
+
+def _moments(records):
+    diagram = _member(records)["section_force_diagrams"]["Dead"]
+    return list(zip(diagram["distance_m"], diagram["Mf1_Nm"]))
+
+
+class TestCurvedMoment:
+    """Under a load along an element its moment is a parabola, and the
+    solver's straight line through two points of it is above it at the ends
+    by w h² / 12 and below it at the middle by w h² / 24 (``aiz.89``)."""
+
+    LOAD = 3000.0  # N/m, along -1
+
+    def test_uniform_load(self):
+        """Fixed at both ends: M = w (6 L x - 6 x² - L²) / 12."""
+        w, length = self.LOAD, 4.0
+
+        def moment(x, element=None):
+            return w * (6 * length * x - 6 * x * x - length * length) / 12
+
+        records = _records(lambda x, side: w * (length / 2 - x))
+        pairs = _moments(_as_the_solver_gives_them(records, moment))
+
+        assert pairs[0][1] == pytest.approx(-w * length**2 / 12)
+        assert [value for _, value in pairs] == pytest.approx(
+            [moment(at) for at, _ in pairs], abs=1e-9 * w
+        )
+
+    def test_point_load_on_top_of_it(self):
+        """A kink at midspan: the shear jumps there, the moment does not."""
+        w, length, point = self.LOAD, 4.0, 10000.0
+
+        def shear(x, side=0):
+            beyond = x > 2.0 or (x == 2.0 and side > 0)
+            return w * (length / 2 - x) + (point / 2 if not beyond else -point / 2)
+
+        def moment(x, element=None):
+            fixed = w * (6 * length * x - 6 * x * x - length * length) / 12
+            return fixed + point * (min(x, length - x) / 2 - length / 8)
+
+        records = _records(shear)
+        pairs = _moments(_as_the_solver_gives_them(records, moment))
+
+        assert [value for _, value in pairs] == pytest.approx(
+            [moment(at) for at, _ in pairs], abs=1e-9 * point
+        )
+
+    def test_load_on_part_of_the_member(self):
+        """The two elements meeting where the load stops have different
+        errors, and the solver gives the mean of the two there."""
+        w, length, stop = self.LOAD, 4.0, 2.0
+        # Simply supported, loaded from 0 to 2 m
+        left = w * stop * (length - stop / 2) / length
+
+        def shear(x, side=0):
+            return left - w * min(x, stop)
+
+        def moment(x, element=None):
+            loaded = min(x, stop)
+            return left * x - w * loaded * (x - loaded / 2)
+
+        records = _records(shear)
+        pairs = _moments(_as_the_solver_gives_them(records, moment))
+
+        assert [value for _, value in pairs] == pytest.approx(
+            [moment(at) for at, _ in pairs], abs=1e-9 * w * length**2
+        )
+
+    def test_nothing_changes_without_a_load_along_the_member(self):
+        records = _records(lambda x, side: 2500.0)
+        pairs = _moments(
+            _as_the_solver_gives_them(records, lambda x, element: 2500.0 * x)
+        )
+
+        assert [value for _, value in pairs] == pytest.approx(
+            [2500.0 * at for at, _ in pairs]
+        )
+
+
 class TestSummary:
     def test_tension_and_compression_are_told_apart(self):
         member = _member(

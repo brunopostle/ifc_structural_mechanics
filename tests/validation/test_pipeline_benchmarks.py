@@ -371,6 +371,23 @@ class TestRectangularCantileverSelfWeight:
                 load * (CANT_L - x) ** 2 / 2, abs=FORCE_TOLERANCE * root_moment
             )
 
+    def test_force_diagram_on_a_coarse_mesh(self, tmp_path):
+        """Six elements: the moment is exact at every cross-section.
+
+        The solver's stress is a straight line along each element, through
+        the parabola of the moment at two points; read at the ends it was
+        w h² / 12 too large, 0.5% of the root moment (``aiz.89``).
+        """
+        data = _run(CANTILEVER, tmp_path, 0.5, gravity=True)
+        diagram = _curve_member_diagram(data)
+        load = CANT_RHO * G_ACCEL * 0.2 * 0.4
+        root_moment = load * CANT_L**2 / 2
+        assert len(diagram["distance_m"]) == 13
+        for x, moment in zip(diagram["distance_m"], diagram["Mf1_Nm"]):
+            assert moment == pytest.approx(
+                load * (CANT_L - x) ** 2 / 2, abs=1e-4 * root_moment
+            )
+
     def test_weak_axis_forces_are_reported_about_the_other_axis(self, tmp_path):
         path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0))
         data = _run(path, tmp_path, gravity=True)
@@ -2256,6 +2273,23 @@ class TestSupportReactions:
                 sign * moment, rel=FORCE_TOLERANCE
             )
             assert reaction["resultant_N"] == pytest.approx(force, rel=FORCE_TOLERANCE)
+
+    def test_member_ends_have_the_support_moments(self, tmp_path):
+        """The moments at the ends of beam_01's diagram are those the solver's
+        nodal forces give its supports. They were 46 N·m apart at a 0.5 m
+        mesh, w h² / 12 (``aiz.89``)."""
+        _needs_solver_reactions()
+        beam = TestFixedFixedBeamPointLoad
+        data = _run(BEAM, tmp_path, 0.5)
+        diagram = _curve_member_diagram(data)
+        left = _support_at(data, (0.0, 4.0, 4.0))
+        right = _support_at(data, (beam.LENGTH, 4.0, 4.0))
+        for support, end in ((left, 0), (right, -1)):
+            assert support["moments"] == "solver"
+            (reaction,) = support["by_load_case"].values()
+            assert abs(diagram["Mf1_Nm"][end]) == pytest.approx(
+                abs(reaction["my_Nm"]), rel=1e-4
+            )
 
     def test_pin_and_roller_carry_no_bending_moment(self, tmp_path):
         """w L / 2 each. The pin's hold on the beam's own axis carries nothing."""
