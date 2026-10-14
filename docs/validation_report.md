@@ -548,7 +548,7 @@ model.
 | `grid_of_beams` | `--gravity` | 0.372 mm | 273 N | Covered by Tier 2 (Code_Aster, corrected) |
 | `portal_01` | — | 2.15 mm | 42.7 kN | Reactions against the results in the file (Tier 2). 2.17 mm at 0.25 m; 2.06 and 2.18 mm with U1 elements. Until 2026-10-12 it was loaded on the whole beam, twice what the file says: 4.04 mm and 85.4 kN |
 | `building_02` | — | 16.8 mm (Dead), 25.7 mm (Live), 15.3 mm (Extra_dead) | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. `Dead` is the self-weight. At 4 m (measured before `Dead` was a case, with `--gravity`): 15.7 / 24.1 / 14.4 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
-| `building_01` | — | 6.78 mm (Dead), 0.286 mm (Live), 0.10 mm (floor finishing) | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | `Dead` is the self-weight, nearly all of it a `Masonry` of 202 t/m³. At 0.5 and 0.25 m: 7.90 and 8.63 mm (Dead), 0.338 and 0.352 mm (Live). Reactions match the applied loads; deflections unchecked |
+| `building_01` | — | 6.70 mm (Dead), 0.288 mm (Live), 0.10 mm (floor finishing) | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | `Dead` is the self-weight, nearly all of it a `Masonry` of 202 t/m³. At 0.5 and 0.25 m: 7.79 and 8.49 mm (Dead), 0.338 and 0.353 mm (Live). The largest displacements leave out the links and arms the writer adds, which once set those of `Dead` (`aiz.92`). Reactions match the applied loads; deflections unchecked |
 
 `building_02` is given at 2 m because a 1 m mesh of quadratic shells needs more than 5 GB
 of memory. With linear shells at 1 m it gave 99 mm (Live) and 252 mm (Extra_dead): the

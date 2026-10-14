@@ -378,7 +378,7 @@ The repository includes example IFC structural models (as a git submodule in `ex
 | `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
 | `portal_01` | Portal frame of I-sections, load on half of its beam | No | 2.15 mm (2.17 mm at 0.25 m) | 42.7 kN | Reactions stored in the file: vertical to 0.02%, thrust 1.9% lower (shear area) | Verified against a plane frame with the same shear area, within 1.5% |
 | `building_02` | Multi-storey building, three load cases and 17 combinations | No | 16.8 mm (Dead, its self-weight), 25.7 mm (Live), 15.3 mm (Extra_dead), 54.4 mm (1.4D+1.6L) at a 2 m mesh | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
-| `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.78 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.90, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
+| `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.70 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.79, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,

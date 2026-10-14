@@ -568,6 +568,11 @@ here. This section only records the constraints that shape day-to-day work.
 - **Member results are read on the faces of expanded elements.** A member's
   largest displacement in `results.json` includes what its rotation adds at
   the faces: a few percent on a slender member, more on a deep one.
+  `global_displacements` leaves out the nodes of links and arms, elements of
+  no member (`ResultsExporter._link_nodes()`, `aiz.92`): their faces are up
+  to 0.25 m from their axis, and one set `structure_01`'s largest Y
+  displacement 57% above the structure's own and `building_01`'s `Dead`
+  0.6% above it.
 - **`slab_01.rmed` is not a reference for `slab_01.ifc`** (`aiz.36`): it was
   computed with one edge hinged; the IFC file as shipped clamps both. The
   Code_Aster runs also give their rigid eccentricity arms weight (16 N each in
