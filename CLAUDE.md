@@ -414,9 +414,8 @@ here. This section only records the constraints that shape day-to-day work.
   its span give statics to five figures at any mesh size, where member ends
   gave 0.1%. In a statically indeterminate model they are the mesh's own
   answer: `beam_01`'s fixing moment is 0.4% above beam theory at 0.5 m and
-  0.1% at 0.1 m, and the section forces at that end differ from it by
-  w h²/12, the error of stresses taken to an element's end under a load
-  along it. CalculiX 2.21 has these forces wrong at a clamped member end
+  0.1% at 0.1 m, and the moment at that end of the member's diagram agrees
+  with it to 1 in 100 000 (`aiz.89`, below). CalculiX 2.21 has these forces wrong at a clamped member end
   only (the same as 2.23 on the slab edges, the wall foot and the grid),
   with the printed force wrong by as much, so the check on the forces
   covers the moments.
@@ -519,6 +518,20 @@ here. This section only records the constraints that shape day-to-day work.
   member's own last middle leads to. The envelope in `results.json` is
   taken from these diagrams, never from the raw cross-sections: beside a
   jump the mean can be larger than either side's own value.
+- **A moment curved along an element is put right** (`aiz.89`,
+  `_correct_curvature()`). An expanded B32R has two integration points
+  along it and its nodal stress is the straight line through them, so
+  where a load along the element makes the moment a parabola the ends read
+  `M'' h²/12` too large and the middle `M'' h²/24` too small (46 N·m at
+  `beam_01`'s fixed ends at a 0.5 m mesh). The shear is a straight line and
+  right, and `M''` is its change along the element: nothing is assumed of
+  the load. It is done after the shear jumps are restored (a point load
+  would otherwise count as half a load along the element), with one value
+  at a shared cross-section so that a jump in the moment is still found.
+  The diagrams, the envelope, `max_normal_stress_Pa` and the member ends a
+  support is checked against all read the corrected records
+  (`_member_records()`). Measured: `cantilever_01`'s diagram is
+  w (L - x)²/2 to 1 in 100 000 at a 0.5 m mesh, where it was 0.5% out.
 - **Section forces of a member tied to a surface along its length are its share
   only** (`aiz.86`), and `results.json` marks it with
   `tied_to_surface_members`. A tie brings force in at every node, middle nodes

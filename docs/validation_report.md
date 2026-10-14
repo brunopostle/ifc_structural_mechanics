@@ -745,9 +745,28 @@ moment it is met at any mesh size:
 Where statics does not decide it (`beam_01`, the portal) the moment is the mesh's own: it
 converges as the displacements do. The section forces at the same member end, which is
 where these moments came from before, are integrated from stresses taken to the end of an
-element, and differ from the support's moment by w h² / 12 under a load of w along an
+element, and differed from the support's moment by w h² / 12 under a load of w along an
 element of length h (measured on `beam_01`: 46.1, 11.5 and 1.9 N·m at 0.5, 0.25 and
 0.1 m; they gave the cantilever's root 0.1% low at 0.25 m).
+
+**The moment along an element** (`aiz.89`). That difference is the expanded element's:
+its stress is the straight line through its two integration points, and where the
+moment is a parabola the line is above it by w h² / 12 at the ends and below it by
+w h² / 24 at the middle, all along the member. Statics between two cross-sections was
+met all the same (root and midspan of `beam_01` were both shifted), so the diagrams
+were within the 1% they are checked to. The shear under such a load is a straight line,
+which the element has right, and w h is its change along the element, so the diagram
+is put right with that and nothing assumed of the load:
+
+| Case | Before | After |
+|---|---|---|
+| `beam_01`, diagram's end moment less the support's, 0.5 / 0.25 / 0.1 m mesh | 46.1 / 11.5 / 1.9 N·m | 0.12 / 0.06 / 0.11 N·m |
+| `cantilever_01`, 0.5 m mesh, largest difference from w (L − x)² / 2 | 0.128 N·m | 0.0002 N·m |
+| `cantilever_01`, root moment from the member end, 0.5 m mesh (statics 27.546) | 27.42 N·m | 27.55 N·m |
+| `beam_01`, midspan plus end moment, 0.5 m mesh (P L / 4 + w L² / 8 = 24 414.5) | 24 414.3 N·m | 24 414.3 N·m |
+
+The support moments, which come from the solver's nodal forces, do not change; on
+CalculiX 2.21, where they come from the member ends, they now have the same accuracy.
 
 Supports that had no moment before have one now: the clamped edges of `slab_01`
 (∓96.1 N·m under its weight, w L² / 12 being 95.6), the wall foot of `structure_01`, the
