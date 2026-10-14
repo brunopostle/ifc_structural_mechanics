@@ -32,7 +32,13 @@ def combine_results(
     name: str,
     support_node_loads: Optional[List[Dict[int, List[float]]]] = None,
     applied_load_totals: Optional[List[List[float]]] = None,
-) -> Tuple[Dict[str, Any], List[Dict[int, List[float]]], List[List[float]]]:
+    applied_load_moments: Optional[List[Optional[List[float]]]] = None,
+) -> Tuple[
+    Dict[str, Any],
+    List[Dict[int, List[float]]],
+    List[List[float]],
+    List[List[float]],
+]:
     """Add up the results of load cases, each multiplied by its factor.
 
     Args:
@@ -44,10 +50,13 @@ def combine_results(
             (``StructuralModel.support_node_loads``).
         applied_load_totals: The whole load of each step
             (``StructuralModel.applied_load_totals``).
+        applied_load_moments: The moment of each step's load about the
+            origin (``StructuralModel.applied_load_moments``).
 
     Returns:
-        The combined results, and the two per-step lists with the single
-        step of the combination in them (empty when they were not given).
+        The combined results, and the three per-step lists with the single
+        step of the combination in them (empty when they were not given, or
+        a load case has no value).
 
     Raises:
         ResultProcessingError: If a load case has no results, or the results
@@ -138,20 +147,25 @@ def combine_results(
                 summed[node] = summed.get(node, 0.0) + factor * np.array(load)
         node_loads = [{n: [float(v) for v in f] for n, f in summed.items()}]
 
-    load_totals: List[List[float]] = []
-    if applied_load_totals and step_of:
-        whole = np.zeros(3)
-        complete = True
-        for case, factor in factors.items():
-            index = step_of[case]
-            if index >= len(applied_load_totals):
-                complete = False
-                break
-            whole += factor * np.array(applied_load_totals[index])
-        if complete:
-            load_totals = [[float(v) for v in whole]]
+    load_totals = _combine_step_vectors(applied_load_totals, factors, step_of)
+    load_moments = _combine_step_vectors(applied_load_moments, factors, step_of)
 
-    return combined, node_loads, load_totals
+    return combined, node_loads, load_totals, load_moments
+
+
+def _combine_step_vectors(
+    per_step: Optional[List[Any]], factors: Dict[str, float], step_of: Dict[str, int]
+) -> List[List[float]]:
+    """One vector per step, added up; nothing if a case has none."""
+    if not per_step or not step_of:
+        return []
+    whole = np.zeros(3)
+    for case, factor in factors.items():
+        index = step_of[case]
+        if index >= len(per_step) or per_step[index] is None:
+            return []
+        whole += factor * np.array(per_step[index])
+    return [[float(v) for v in whole]]
 
 
 def _by_case(results: List[Any], factors: Dict[str, float]) -> Dict[str, List[Any]]:

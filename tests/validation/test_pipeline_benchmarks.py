@@ -1487,6 +1487,16 @@ class TestSlabBearingOnBeams:
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
             weight, rel=0.01
         )
+        # Half each, and the weight's moment about the roots. A beam tied to
+        # the slab has only its share of the force at its end: that was once
+        # taken to show the solver wrong, and each root given 58.5 N of 49.7
+        _needs_solver_reactions()
+        for support in data["supports"]:
+            assert support["forces"] == "solver"
+            assert support["moments"] == "solver"
+            reaction = support["by_load_case"]["Gravity"]
+            assert reaction["fz_N"] == pytest.approx(weight / 2, rel=1e-3)
+            assert reaction["my_Nm"] == pytest.approx(-weight * SOB_L / 4, rel=1e-3)
 
     def test_each_beam_reports_the_deflection(self, tmp_path):
         """results.json gives it per member, for beams as for the slab."""
@@ -2314,6 +2324,14 @@ class TestSupportReactions:
             for key in ("fx_N", "fy_N", "fz_N"):
                 summed = sum(s["by_load_case"][case][key] for s in data["supports"])
                 assert summed == pytest.approx(total[key], abs=1e-6 * scale)
+            # and their moments about the origin balance those of the loads
+            turning = max(abs(v) for v in total["applied_moment_Nm"])
+            assert turning > scale
+            assert total["moment_imbalance_Nm"] < 1e-5 * turning
+            for key, applied in zip(
+                ("mx_Nm", "my_Nm", "mz_Nm"), total["applied_moment_Nm"]
+            ):
+                assert total[key] == pytest.approx(-applied, abs=1e-5 * turning)
 
     def test_portal_feet_balance_its_load(self, tmp_path):
         """portal_01 is loaded on the right half of its beam only.
@@ -2355,6 +2373,33 @@ class TestSupportReactions:
         for key in ("mx_Nm", "my_Nm", "mz_Nm"):
             total = sum(s["by_load_case"]["Gravity"][key] for s in data["supports"])
             assert abs(total) < 1e-3 * abs(first["my_Nm"])
+
+    def test_point_load_on_a_clamped_support(self, tmp_path):
+        """A load on the very node a cantilever is clamped at (`94g.7`).
+
+        It goes into the support and the member has none of it. The member's
+        end was once taken to show the solver wrong by that load, and the
+        reaction given was the member's, 700 N short and with no thrust.
+        """
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            loads={"A": (300.0, -700.0), "B": (0.0, -1000.0)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        (support,) = data["supports"]
+        reaction = support["by_load_case"]["Load"]
+        assert reaction["fx_N"] == pytest.approx(-300.0, rel=1e-3)
+        assert reaction["fz_N"] == pytest.approx(1700.0, rel=1e-3)
+        assert reaction["my_Nm"] == pytest.approx(-4000.0, rel=1e-3)
+        total = data["global_reactions"]["total"]
+        assert total["imbalance_N"] < 1e-3 * 1700.0
+        if _solver_reports_clamped_reactions():
+            assert support["forces"] == "solver"
+            assert not [w for w in warnings if "solver reported" in w]
 
     def test_member_clamped_along_its_span(self, tmp_path):
         """A bar held at one point, 1 m from one end and 2 m from the other.
@@ -2796,6 +2841,11 @@ class TestAppliedMoments:
         assert forces["max_Vf2_N"] < 1e-3 * self.MOMENT
         (reaction,) = data["supports"][0]["by_load_case"].values()
         assert reaction["my_Nm"] == pytest.approx(-self.MOMENT, rel=1e-3)
+        # A case of a moment alone: the whole reaction is that moment too
+        total = data["global_reactions"]["total"]
+        assert total["applied_moment_Nm"] == pytest.approx([0.0, self.MOMENT, 0.0])
+        assert total["my_Nm"] == pytest.approx(-self.MOMENT, rel=1e-3)
+        assert total["moment_imbalance_Nm"] < 1e-3 * self.MOMENT
         assert _max_vertical_deflection(data) == pytest.approx(
             self.MOMENT * self.SPAN**2 / (2 * self._stiffness()), rel=0.01
         )
@@ -2992,6 +3042,38 @@ class TestSolverReactionsAreChecked:
             (warning,) = warned
             assert "At 2 support(s) that hold a rotation" in warning["message"]
             assert "CalculiX 2.21 and earlier" in warning["message"]
+            # The total is then that of the supports (`94g.7`): the
+            # solver's own is 11 % short here
+            assert total["forces"] == "supports"
+            assert "the total given is that of the supports" in warning["message"]
+            assert total["imbalance_N"] < 1e-3 * total["resultant_N"]
+
+    def test_supports_the_solver_has_right_stay_its_own(self, tmp_path):
+        """structure_01: two column feet and a wall foot, all clamped (`94g.7`).
+
+        CalculiX 2.21 is wrong at the column feet only. The wall foot has no
+        member end to check it against and was once marked unreliable
+        because the whole did not balance; with the columns' forces replaced
+        it does.
+        """
+        data = _run(
+            os.path.join(IFC_DIR, "structure_01.ifc"), tmp_path, 0.5, gravity=True
+        )
+        total = data["global_reactions"]["total"]
+        assert total["imbalance_N"] < 1e-3 * total["resultant_N"]
+        assert total["moment_imbalance_Nm"] < 1e-3 * max(
+            abs(v) for v in total["applied_moment_Nm"]
+        )
+        sources = sorted(s["forces"] for s in data["supports"])
+        if _solver_reports_clamped_reactions():
+            assert sources == ["solver"] * 3
+            assert total["forces"] == "solver"
+        else:
+            assert sources == ["member_end_forces"] * 2 + ["solver"]
+            assert total["forces"] == "supports"
+        (wall,) = [s for s in data["supports"] if s["type"] == "line"]
+        assert wall["forces"] == "solver"
+        assert wall["moments"] == "solver"
 
 
 class TestSimplySupportedPlateSelfWeight:
@@ -3820,6 +3902,11 @@ class TestSelfWeightOfALoadCase:
         assert total["fz_N"] == pytest.approx(
             1.5 * (beam.LOAD + beam.WEIGHT * beam.LENGTH), rel=1e-5
         )
+        case = data["global_reactions"]["by_load_case"]["Dead"]
+        assert total["applied_moment_Nm"] == pytest.approx(
+            [1.5 * v for v in case["applied_moment_Nm"]]
+        )
+        assert max(abs(v) for v in total["applied_moment_Nm"]) > beam.LOAD
         forces = _only_curve_member(data)["by_load_combination"]["DCon1"]
         assert forces["section_forces"]["max_Mf1_Nm"] == pytest.approx(
             1.5 * (beam.LOAD * beam.LENGTH / 8 + beam.WEIGHT * beam.LENGTH**2 / 12),

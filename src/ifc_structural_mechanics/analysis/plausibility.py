@@ -117,6 +117,11 @@ def balance_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
             f" At {replaced} support(s) that hold a rotation the forces are "
             "taken from the ends of the members instead, good to about 1 %."
         )
+        if any(r.get("forces") == "supports" for r in cases.values()):
+            message += (
+                " Where the solver's total did not balance the applied "
+                "loads, the total given is that of the supports."
+            )
     if unreliable:
         message += (
             f" At {unreliable} support(s) that hold a rotation there is "

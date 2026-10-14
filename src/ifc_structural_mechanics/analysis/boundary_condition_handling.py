@@ -997,6 +997,7 @@ def _write_step_output_requests(
 
 # The comment that introduces the nodal shares of moments per length
 _DISTRIBUTED_MOMENTS = "** Distributed moments"
+_POINT_LOADS = "** Point loads"
 
 
 class _StepLoadRecorder:
@@ -1020,9 +1021,11 @@ class _StepLoadRecorder:
         self._held_rotations = held_rotations or set()
         self._shares_follow = False
         self._shares = False
+        self._points_follow = False
+        self._points = False
         # One per step: {"nodal": {node: [fx, fy, fz, mx, my, mz, sx, sy,
-        # sz]}, "gravity": vector}; s is the node's share of moments per
-        # length
+        # sz, px, py, pz]}, "gravity": vector}; s is the node's share of
+        # moments per length, p what of f is point loads
         self.steps: List[Dict[str, Any]] = []
 
     def write(self, text: str) -> int:
@@ -1044,11 +1047,14 @@ class _StepLoadRecorder:
         """Note what a line applies; False for a line that is not to be written."""
         if line.startswith(_DISTRIBUTED_MOMENTS):
             self._shares_follow = True
+        if line.startswith(_POINT_LOADS):
+            self._points_follow = True
         if not line or line.startswith("**"):
             return True
         if line.startswith("*"):
             self._block = line.split(",")[0].strip().upper()
             self._shares, self._shares_follow = self._shares_follow, False
+            self._points, self._points_follow = self._points_follow, False
             if self._block == "*STEP":
                 self.steps.append({"nodal": {}, "gravity": None})
             return True
@@ -1064,7 +1070,13 @@ class _StepLoadRecorder:
             # forces at the node do not
             if 1 <= dof <= 6:
                 slot = dof + 2 if dof >= 4 and self._shares else dof - 1
-                step["nodal"].setdefault(node, [0.0] * 9)[slot] += value
+                load = step["nodal"].setdefault(node, [0.0] * 12)
+                load[slot] += value
+                # A point force is noted a second time: at a support it
+                # goes into the support and not into the member, where a
+                # node's share of a load along a member is the member's
+                if dof <= 3 and self._points:
+                    load[dof + 8] += value
             return (node, dof) not in self._held_rotations
         if self._block == "*DLOAD" and len(parts) >= 6 and parts[1] == "GRAV":
             step["gravity"] = float(parts[2]) * np.array([float(v) for v in parts[3:6]])
@@ -1133,12 +1145,18 @@ def write_analysis_steps(
     See ``_write_analysis_steps`` for the arguments. Afterwards
     ``domain_model.support_node_loads`` holds, for each step in order, the
     load applied directly at each support node, ``{node: [fx, fy, fz, mx,
-    my, mz, sx, sy, sz]}``: the results exporter takes it off what the solver
-    reports there, and the moment off what the ends of the members give. The
-    last three are the node's share of moments per length, which the ends of
-    the members include and the solver's forces at the node do not.
+    my, mz, sx, sy, sz, px, py, pz]}``: the results exporter takes it off
+    what the solver reports there, and the moment off what the ends of the
+    members give. ``s`` is the node's share of moments per length, which the
+    ends of the members include and the solver's forces at the node do not.
+    ``p`` is what of the force is point loads: a member's end has none of
+    one that its support takes, and has the node's share of a load along
+    the member.
     ``domain_model.applied_load_totals`` holds the whole load of each step,
-    ``[fx, fy, fz]``, which the reactions have to balance.
+    ``[fx, fy, fz]``, which the reactions have to balance, and
+    ``domain_model.applied_load_moments`` its moment about the origin of the
+    global axes, ``[mx, my, mz]``: that of the forces where they act and the
+    moments applied, which the moments of the reactions have to balance.
     """
     supports = getattr(domain_model, "support_nodes", None)
     held_rotations = set()
@@ -1170,23 +1188,40 @@ def write_analysis_steps(
     nodes = {node for record in supports.values() for node in record["nodes"]}
     recorded = []
     totals = []
+    moments = []
     for step in recorder.steps:
         everywhere = {node: np.array(force) for node, force in step["nodal"].items()}
         if step["gravity"] is not None and elements_data and node_coords:
             for node, weight in _weight_on_nodes(
                 domain_model, elements_data, node_coords, None, step["gravity"]
             ).items():
-                everywhere[node] = everywhere.get(node, np.zeros(9)) + np.append(
-                    weight, np.zeros(6)
+                everywhere[node] = everywhere.get(node, np.zeros(12)) + np.append(
+                    weight, np.zeros(9)
                 )
         recorded.append(
             {n: [float(v) for v in f] for n, f in everywhere.items() if n in nodes}
         )
         totals.append(
-            [float(v) for v in sum(everywhere.values(), np.zeros(9))[:3]]  # type: ignore
+            [float(v) for v in sum(everywhere.values(), np.zeros(12))[:3]]  # type: ignore
+        )
+        # About the origin. Without the place of every loaded node there is
+        # no such figure, and none is given
+        about_origin: Optional[np.ndarray] = np.zeros(3)
+        for node, load in everywhere.items():
+            if not node_coords or node not in node_coords:
+                about_origin = None
+                break
+            about_origin += (
+                np.cross(np.array(node_coords[node], dtype=float), load[:3])
+                + load[3:6]
+                + load[6:9]
+            )
+        moments.append(
+            None if about_origin is None else [float(v) for v in about_origin]
         )
     domain_model.support_node_loads = recorded
     domain_model.applied_load_totals = totals
+    domain_model.applied_load_moments = moments
 
 
 def _write_analysis_steps(
@@ -1633,6 +1668,7 @@ def _write_validated_loads_within_step(
         # Deduplicate: skip loads already written (from another load group)
         point_loads = [load for load in point_loads if load.id not in written_load_ids]
         if point_loads:
+            file.write(f"{_POINT_LOADS}\n")
             file.write("*CLOAD\n")
             for load in point_loads:
                 written_load_ids.add(load.id)
@@ -1765,6 +1801,7 @@ def _write_validated_loads_within_step(
         point_loads = [load for load in member_loads if isinstance(load, PointLoad)]
         point_loads = [load for load in point_loads if load.id not in written_load_ids]
         if point_loads:
+            file.write(f"{_POINT_LOADS}\n")
             file.write("*CLOAD\n")
             for load in point_loads:
                 written_load_ids.add(load.id)

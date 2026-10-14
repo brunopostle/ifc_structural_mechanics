@@ -45,7 +45,7 @@ def _load_results_json(output_dir: str) -> dict:
 
 def _assert_schema(data: dict) -> None:
     """Assert top-level results.json schema is present and well-formed."""
-    assert data.get("schema_version") == "1.6"
+    assert data.get("schema_version") == "1.8"
     units = data.get("units", {})
     assert units.get("displacement") == "m"
     assert units.get("stress") == "Pa"
@@ -344,6 +344,11 @@ class TestBuilding02ResultsJson:
             rel=1e-9,
         )
         assert combined["imbalance_N"] < 1e-6 * combined["fz_N"]
+        # 51 supports: their moments about the origin balance the loads' too
+        for values in list(cases.values()) + [combined]:
+            turning = max(abs(v) for v in values["applied_moment_Nm"])
+            assert turning > values["fz_N"]
+            assert values["moment_imbalance_Nm"] < 1e-6 * turning
         largest = max(
             values["max_displacement_m"]
             for values in data["global_displacements"]["by_load_combination"].values()

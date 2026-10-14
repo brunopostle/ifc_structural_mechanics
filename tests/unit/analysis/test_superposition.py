@@ -89,7 +89,7 @@ FACTORS = {"Dead": 1.35, "Live": 1.5}
 
 class TestLinearResults:
     def test_displacements_are_added_as_vectors(self):
-        combined, _, _ = combine_results(_results(), FACTORS, "ULS")
+        combined, _, _, _ = combine_results(_results(), FACTORS, "ULS")
         by_node = {r.reference_element: r for r in combined["displacement"]}
         assert by_node["2"].get_translations() == pytest.approx(
             [1.5 * 4.0, 0.0, 1.35 * -2.0 + 1.5 * 1.0]
@@ -99,7 +99,7 @@ class TestLinearResults:
         assert by_node["1"].get_magnitude() == pytest.approx(math.hypot(4.5, 1.35))
 
     def test_stress_components_are_added_and_von_mises_follows(self):
-        combined, _, _ = combine_results(_results(), FACTORS, "ULS")
+        combined, _, _, _ = combine_results(_results(), FACTORS, "ULS")
         by_node = {r.reference_element: r for r in combined["stress"]}
         assert by_node["1"].values["sxx"] == pytest.approx(135.0)
         assert by_node["1"].values["sxy"] == pytest.approx(45.0)
@@ -112,7 +112,7 @@ class TestLinearResults:
         )
 
     def test_section_forces_are_added_at_each_cross_section(self):
-        combined, _, _ = combine_results(_results(), FACTORS, "ULS")
+        combined, _, _, _ = combine_results(_results(), FACTORS, "ULS")
         records = sorted(combined["section_forces"], key=lambda r: r["position"])
         assert [r["Mf1"] for r in records] == pytest.approx(
             [1.35 * 10 - 1.5 * 4, 1.35 * 20 + 1.5 * 6]
@@ -128,7 +128,7 @@ class TestLinearResults:
             assert record["distance"] == 1.0 + record["position"]
 
     def test_reactions_and_what_the_steps_applied(self):
-        combined, node_loads, totals = combine_results(
+        combined, node_loads, totals, _ = combine_results(
             _results(),
             FACTORS,
             "ULS",
@@ -143,6 +143,21 @@ class TestLinearResults:
         assert node_loads == [{1: pytest.approx([0.0, 0.0, -1.35])}]
         assert totals == [pytest.approx([3.0, 0.0, -19.5])]
 
+    def test_moment_of_what_the_steps_applied(self):
+        *_, moments = combine_results(
+            _results(),
+            FACTORS,
+            "ULS",
+            applied_load_moments=[[0.0, 10.0, 0.0], [2.0, 0.0, -4.0]],
+        )
+        assert moments == [pytest.approx([3.0, 13.5, -6.0])]
+
+    def test_no_moment_when_a_case_has_none(self):
+        *_, moments = combine_results(
+            _results(), FACTORS, "ULS", applied_load_moments=[[0.0, 10.0, 0.0], None]
+        )
+        assert moments == []
+
     def test_moments_at_support_nodes(self):
         results = _results()
         results["support_node_moments"] = [
@@ -150,7 +165,7 @@ class TestLinearResults:
             {"load_case": "Live", "moments": {1: [4.0, -2.0, 0.0]}},
         ]
 
-        combined, _, _ = combine_results(results, FACTORS, "ULS")
+        combined, _, _, _ = combine_results(results, FACTORS, "ULS")
 
         (step,) = combined["support_node_moments"]
         assert step["load_case"] == "ULS"
@@ -164,19 +179,19 @@ class TestLinearResults:
             {"load_case": "Dead", "moments": {1: [0.0, 10.0, 0.0]}}
         ]
 
-        combined, _, _ = combine_results(results, FACTORS, "ULS")
+        combined, _, _, _ = combine_results(results, FACTORS, "ULS")
 
         assert combined["support_node_moments"] == []
 
     def test_negative_factor(self):
-        combined, _, _ = combine_results(
+        combined, _, _, _ = combine_results(
             _results(), {"Dead": 1.0, "Live": -1.0}, "difference"
         )
         by_node = {r.reference_element: r for r in combined["displacement"]}
         assert by_node["1"].get_translations() == pytest.approx([-3.0, 0.0, -1.0])
 
     def test_one_case_alone(self):
-        combined, _, _ = combine_results(_results(), {"Dead": 1.5}, "DCon1")
+        combined, _, _, _ = combine_results(_results(), {"Dead": 1.5}, "DCon1")
         by_node = {r.reference_element: r for r in combined["displacement"]}
         assert by_node["2"].get_translations() == pytest.approx([0.0, 0.0, -3.0])
         assert len(combined["section_forces"]) == 2

@@ -7,7 +7,7 @@ writes a ``results.json`` file keyed to IFC GlobalIds.
 Schema (summary level)
 ----------------------
 {
-  "schema_version": "1.4",
+  "schema_version": "1.8",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m"},
   "model": {"id": "...", "name": "..."},
@@ -46,8 +46,13 @@ Schema (summary level)
   },
   "global_reactions": {
     "by_load_case": {"Dead": {"fx_N": 0.0, "fy_N": 0.0, "fz_N": 5000.0,
-                              "mx_Nm": 0.0, "my_Nm": 0.0, "mz_Nm": 0.0,
-                              "resultant_N": 5000.0}},
+                              "mx_Nm": 0.0, "my_Nm": -1.25e4, "mz_Nm": 0.0,
+                              "resultant_N": 5000.0,
+                              "forces": "solver" | "supports",
+                              "applied_load_N": [0.0, 0.0, -5000.0],
+                              "imbalance_N": 0.0,
+                              "applied_moment_Nm": [0.0, 1.25e4, 0.0],
+                              "moment_imbalance_Nm": 0.0}},
     "total": {...}
   },
   "supports": [
@@ -116,8 +121,26 @@ the file includes.
 whole load of the case as written to the solver ``[fx, fy, fz]``, and
 ``imbalance_N``, the size of what is left when it is added to the reaction.
 It should be nothing. CalculiX 2.21 and earlier misreport the force along a
-member at a support that holds the member's rotation, and then it is not; the
-analysis warns when that happens.
+member at a support that holds the member's rotation, and the analysis warns
+when that happens. ``forces`` (schema 1.8) says where the entry's forces come
+from: ``solver``, its own total, or ``supports``, those of ``supports`` added
+up, when the solver's total does not balance the loads, some supports' forces
+had to be taken from member ends and none is ``unreliable``. If one is, the
+total is the solver's and does not balance.
+
+The moments of a ``global_reactions`` entry (schema 1.7) are those of the
+reactions about the origin of the global axes: for each support of
+``supports``, its moments and the moment of its force at ``position_m``,
+added up. The solver has no such figure, and until 1.7 these keys were
+always zero. They are absent when a support has no moments (``moments`` is
+``not_computed``) or the model's supports are not known. Note that they are
+made of the forces ``supports`` gives, which are not the solver's where it
+got them wrong (``forces``). ``applied_moment_Nm`` is the moment about the same point of
+the loads as written to the solver, forces where they act and moments
+applied, ``[mx, my, mz]``, and ``moment_imbalance_Nm`` the size of what is
+left when it is added to the reactions' moment. It should be nothing next to
+either: a restraint the analysis added to hold the model (see the warnings)
+is in neither ``supports`` nor here, and what it takes shows up as this.
 
 ``supports`` (schema 1.1) has the reaction at each support: what the support
 exerts on the structure, at ``position_m``, in global axes. ``restrained``
@@ -148,7 +171,8 @@ elsewhere, and ``moments`` says where:
   1 %.
 - ``not_computed``: neither can be had: the solver's forces are wrong or not
   attributable, and the support joins a surface member, a member that runs on
-  past it, or one without section forces. The moment keys are absent, not
+  past it, one tied to a surface member along its length, or one without
+  section forces. The moment keys are absent, not
   zero.
 
 ``forces`` says where the forces come from. ``solver`` is the normal case.
@@ -156,10 +180,13 @@ CalculiX 2.21 and earlier misreport the force at a support that holds a
 rotation. Where the solver's force at such a support is more than 3 % from
 the force at the ends of its members, or the reactions of the load case do
 not balance its loads, the support has ``member_end_forces`` (good to about
-1 %), and its moments come from there as well. If the member ends cannot be
-had (see ``moments``) and the load case does not balance, it has
-``unreliable``: the solver's figures are given, and are wrong, and it has no
-moments. The analysis warns in both cases.
+1 %), and its moments come from there as well, less any point load applied
+at the support itself, which the member has none of. The solver is wrong at
+member ends only, so if the supports then balance the loads to 1 % the others
+are as the solver has them. If they do not, a support that holds a rotation
+and has no member ends to go by (see ``moments``) has ``unreliable``: the
+solver's figures are given, may be wrong, and it has no moments. The analysis
+warns in both cases.
 
 ``axes``, ``restrained_in_axes`` and ``by_load_case_in_axes`` are present when
 the support has axes of its own (a ``ConditionCoordinateSystem``, or the edge
@@ -249,7 +276,7 @@ class ResultsExporter:
         analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
     """
 
-    SCHEMA_VERSION = "1.6"
+    SCHEMA_VERSION = "1.8"
 
     def __init__(
         self,
@@ -270,6 +297,7 @@ class ResultsExporter:
         # What each solver step put on the structure, in step order
         self._support_node_loads = getattr(domain_model, "support_node_loads", None)
         self._applied_load_totals = getattr(domain_model, "applied_load_totals", None)
+        self._applied_load_moments = getattr(domain_model, "applied_load_moments", None)
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
         self._mesh_nodes: Optional[Dict[str, set]] = None
         self._translations: Optional[Dict[int, List[Tuple[str, List[float]]]]] = None
@@ -300,6 +328,7 @@ class ResultsExporter:
 
     def _build(self) -> Dict[str, Any]:
         load_cases = self._load_case_names()
+        supports = self._supports()
         data = {
             "schema_version": self.SCHEMA_VERSION,
             "units": {
@@ -317,8 +346,8 @@ class ResultsExporter:
             "load_cases": load_cases,
             "members": [self._member_entry(m) for m in self.model.members],
             "global_displacements": self._global_displacements(),
-            "global_reactions": self._global_reactions(),
-            "supports": self._supports(),
+            "global_reactions": self._global_reactions(supports),
+            "supports": supports,
         }
         if self.analysis_type == "linear_buckling":
             data["buckling"] = self._buckling(load_cases)
@@ -410,18 +439,20 @@ class ResultsExporter:
     def _add_one_combination(
         self, data: Dict[str, Any], name: str, factors: Dict[str, float]
     ) -> None:
-        combined, node_loads, load_totals = combine_results(
+        combined, node_loads, load_totals, load_moments = combine_results(
             self.parsed_results,
             factors,
             name,
             self._support_node_loads,
             self._applied_load_totals,
+            self._applied_load_moments,
         )
         part = ResultsExporter(
             self.model, combined, limits=self.limits, element_nodes=self.element_nodes
         )
         part._support_node_loads = node_loads
         part._applied_load_totals = load_totals
+        part._applied_load_moments = load_moments
         part._mesh_nodes = self._mesh_nodes
         result = part._build()
 
@@ -1266,20 +1297,81 @@ class ResultsExporter:
         steps = self.parsed_results.get("support_node_forces") or []
         if not isinstance(recorded, dict) or not recorded or not steps:
             return []
-        entries = []
-        taken: set = set()
-        for connection in self.model.connections:
-            record = recorded.get(connection.id)
-            if not record:
-                continue
-            nodes = {n: xyz for n, xyz in record["nodes"].items() if n not in taken}
-            taken.update(nodes)
-            entries.append(self._support_entry(connection, record, nodes, steps))
-        return entries
+
+        def entries(trusted: bool) -> List[Dict[str, Any]]:
+            found = []
+            taken: set = set()
+            for connection in self.model.connections:
+                record = recorded.get(connection.id)
+                if not record:
+                    continue
+                nodes = {n: xyz for n, xyz in record["nodes"].items() if n not in taken}
+                taken.update(nodes)
+                found.append(
+                    self._support_entry(connection, record, nodes, steps, trusted)
+                )
+            return found
+
+        # Where the solver's reactions do not balance the loads, those at
+        # member ends that hold a rotation are replaced. If the whole then
+        # balances, the solver was right at the other supports
+        supports = entries(trusted=True)
+        if all(
+            self._reactions_balance(index)
+            or self._supports_balance(supports, index, step["load_case"])
+            for index, step in enumerate(steps)
+        ):
+            return supports
+        return entries(trusted=False)
+
+    # The forces at the ends of members are good to about 1 %; with some of
+    # the supports' forces taken from there, the whole balances the loads
+    # this closely or the solver's figure at another support is wrong too
+    _REPLACED_BALANCE_LIMIT = 0.01
+
+    def _supports_balance(
+        self, supports: List[Dict[str, Any]], step_index: int, case: str
+    ) -> bool:
+        """Whether the supports' forces balance the loads of one step."""
+        loads = self._applied_load_totals
+        if not isinstance(loads, list) or step_index >= len(loads):
+            return False
+        load = np.array(loads[step_index], dtype=float)
+        whole = self._force_of_supports(supports, case)
+        if whole is None:
+            return False
+        size = max(float(np.linalg.norm(load)), float(np.linalg.norm(whole)))
+        return float(np.linalg.norm(whole + load)) <= max(
+            BALANCE_NOISE_N, self._REPLACED_BALANCE_LIMIT * size
+        )
+
+    @staticmethod
+    def _force_of_supports(
+        supports: List[Dict[str, Any]], case: str
+    ) -> Optional[np.ndarray]:
+        """The forces of all the supports in one load case, added up."""
+        whole = np.zeros(3)
+        for support in supports:
+            values = support.get("by_load_case", {}).get(case)
+            if values is None:
+                return None
+            whole += [values["fx_N"], values["fy_N"], values["fz_N"]]
+        return whole
 
     def _support_entry(
-        self, connection, record: Dict, nodes: Dict[int, tuple], steps: List[Dict]
+        self,
+        connection,
+        record: Dict,
+        nodes: Dict[int, tuple],
+        steps: List[Dict],
+        trusted: bool = True,
     ) -> Dict[str, Any]:
+        """One support's reactions.
+
+        ``trusted`` says the solver's forces are right at a support that has
+        no member end to check them against, in a load case its reactions do
+        not balance: see ``_supports``.
+        """
         edge = getattr(connection, "edge", None)
         if edge is not None and len(edge) == 2:
             kind = "line"
@@ -1302,6 +1394,9 @@ class ResultsExporter:
         entry["forces"] = "solver"
         ends = self._member_ends_at(connection, position) if held_rotations else {}
         balanced = all(self._reactions_balance(index) for index in range(len(steps)))
+        # The solver is known to go wrong at member ends that hold a
+        # rotation; a support with those is not taken on trust
+        balanced = balanced or (trusted and not ends)
 
         # Per load case: the solver's force, the moment of its nodal forces,
         # and what the ends of the members give for both
@@ -1312,6 +1407,7 @@ class ResultsExporter:
         for index, step in enumerate(steps):
             applied = self._loads_on_support_nodes(index)
             applied_moments = self._moments_on_support_nodes(index)
+            pushed = self._point_forces_on_support_nodes(index)
             couples = self._support_node_moments(index, nodes) if balanced else None
             force = np.zeros(3)
             moment = np.zeros(3)
@@ -1346,9 +1442,10 @@ class ResultsExporter:
                 end_moment += sign * (
                     np.array(rec["moment"]) + np.cross(arm, np.array(rec["force"]))
                 )
-            # The support takes that, less a moment applied at its own
-            # node, and only resists what it holds
+            # The support takes that, less a point force or a moment
+            # applied at its own node, and only resists what it holds
             for node in nodes:
+                end_force -= np.array(pushed.get(node, (0.0, 0.0, 0.0)))
                 end_moment -= np.array(applied_moments.get(node, (0.0, 0.0, 0.0)))
             held_force = hold @ end_force
             at_ends.append((held_force, turn @ end_moment))
@@ -1532,6 +1629,22 @@ class ResultsExporter:
         load += [0.0] * (9 - len(load))
         return np.array(load[3:6]) + np.array(load[6:9])
 
+    def _point_forces_on_support_nodes(self, step_index: int) -> Dict[int, List[float]]:
+        """Point forces applied directly at support nodes in one step.
+
+        Without a node's share of the loads along its members: the section
+        forces at the end of a member have those, and have nothing of a
+        point load that the support takes.
+        """
+        recorded = self._support_node_loads
+        if not isinstance(recorded, list) or step_index >= len(recorded):
+            return {}
+        return {
+            node: list(load[9:12])
+            for node, load in recorded[step_index].items()
+            if len(load) >= 12
+        }
+
     @staticmethod
     def _in_axes(values: Dict[str, float], rotation: np.ndarray) -> Dict[str, float]:
         """The components of a reaction along three given axes."""
@@ -1553,8 +1666,8 @@ class ResultsExporter:
         so +1 at a member's far end and -1 at its start.
 
         None when the moments cannot be had this way: the support connects no
-        member, a member that is not a curve member or has no section forces,
-        or one that runs on past the support.
+        member, a member that is not a curve member, has no section forces
+        or is tied to a surface member, or one that runs on past the support.
         """
         member_ids = list(getattr(connection, "connected_members", None) or [])
         if not member_ids:
@@ -1564,6 +1677,10 @@ class ResultsExporter:
         for member_id in member_ids:
             member = self.model.get_member(member_id)
             if member is None or getattr(member, "entity_type", None) != "curve":
+                return None
+            # Tied to a surface along its length, a member has its share of
+            # the force only, and the surface brings the rest to the support
+            if getattr(member, "tied_to_surface_members", None):
                 return None
             by_case: Dict[str, List[Dict]] = defaultdict(list)
             for elem_id in getattr(member, "analysis_element_ids", []):
@@ -1605,7 +1722,15 @@ class ResultsExporter:
     # Global reactions
     # ------------------------------------------------------------------
 
-    def _global_reactions(self) -> Dict[str, Any]:
+    def _global_reactions(
+        self, supports: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """The whole reaction of each load case.
+
+        Args:
+            supports: What ``_supports()`` returned, when it has been called
+                already.
+        """
         reaction_results = self.parsed_results.get("reaction", [])
         if not reaction_results:
             return {}
@@ -1613,8 +1738,10 @@ class ResultsExporter:
         totals = [r for r in reaction_results if r.reference_element == "TOTAL"]
         if not totals:
             return {}
+        if supports is None:
+            supports = self._supports()
 
-        def _entry(index: int) -> Dict[str, float]:
+        def _entry(index: int, case: str) -> Dict[str, Any]:
             # The solver's total is of the forces inside the structure at
             # the support nodes: a load applied at one of them in a
             # restrained direction is missing from it, and has to be taken
@@ -1624,16 +1751,35 @@ class ResultsExporter:
                 value - sum(load[axis] for load in applied)
                 for axis, value in enumerate(totals[index].get_forces())
             ]
-            moments = totals[index].get_moments()
-            entry = {
+            # Where the solver's total does not balance the loads and the
+            # supports it had wrong could all be replaced, the total is that
+            # of the supports. One that balances is kept: the errors of two
+            # supports can cancel, and it is then exact where theirs is not
+            source = "solver"
+            kinds = {support["forces"] for support in supports}
+            if (
+                "member_end_forces" in kinds
+                and "unreliable" not in kinds
+                and not self._reactions_balance(index)
+            ):
+                whole = self._force_of_supports(supports, case)
+                if whole is not None and self._supports_balance(supports, index, case):
+                    forces = [float(v) for v in whole]
+                    source = "supports"
+            entry: Dict[str, Any] = {
+                "forces": source,
                 "fx_N": forces[0],
                 "fy_N": forces[1],
                 "fz_N": forces[2],
-                "mx_Nm": moments[0],
-                "my_Nm": moments[1],
-                "mz_Nm": moments[2],
-                "resultant_N": math.sqrt(sum(f * f for f in forces)),
             }
+            moment = self._moment_about_origin(supports, case)
+            if moment is not None:
+                entry.update(
+                    mx_Nm=float(moment[0]),
+                    my_Nm=float(moment[1]),
+                    mz_Nm=float(moment[2]),
+                )
+            entry["resultant_N"] = math.sqrt(sum(f * f for f in forces))
             loads = self._applied_load_totals
             if isinstance(loads, list) and index < len(loads):
                 load = loads[index]
@@ -1641,15 +1787,48 @@ class ResultsExporter:
                 entry["imbalance_N"] = math.sqrt(
                     sum((f + a) ** 2 for f, a in zip(forces, load))
                 )
+            turning = self._applied_load_moments
+            if (
+                moment is not None
+                and isinstance(turning, list)
+                and index < len(turning)
+                and turning[index] is not None
+            ):
+                entry["applied_moment_Nm"] = [float(v) for v in turning[index]]
+                entry["moment_imbalance_Nm"] = float(
+                    np.linalg.norm(moment + np.array(turning[index], dtype=float))
+                )
             return entry
 
-        by_load_case = {
-            r.metadata.get("load_case", f"step_{i + 1}"): _entry(i)
-            for i, r in enumerate(totals)
-        }
+        names = [
+            r.metadata.get("load_case", f"step_{i + 1}") for i, r in enumerate(totals)
+        ]
+        by_load_case = {name: _entry(i, name) for i, name in enumerate(names)}
         reactions: Dict[str, Any] = {"by_load_case": by_load_case}
         # One load case: its total is the total. With several there is no
         # single figure, since each case is analysed on its own.
         if len(totals) == 1:
-            reactions["total"] = _entry(0)
+            reactions["total"] = _entry(0, names[0])
         return reactions
+
+    @staticmethod
+    def _moment_about_origin(
+        supports: List[Dict[str, Any]], case: str
+    ) -> Optional[np.ndarray]:
+        """The moment of the reactions of one load case about the origin.
+
+        Each support's moment, and that of its force at the support's
+        position. None when a support has no moment, or there is no support
+        to add up: the solver has no figure of its own for this.
+        """
+        if not supports:
+            return None
+        moment = np.zeros(3)
+        for support in supports:
+            values = support.get("by_load_case", {}).get(case)
+            if values is None or "mx_Nm" not in values:
+                return None
+            force = [values["fx_N"], values["fy_N"], values["fz_N"]]
+            moment += np.cross(np.array(support["position_m"], dtype=float), force)
+            moment += [values["mx_Nm"], values["my_Nm"], values["mz_Nm"]]
+        return moment

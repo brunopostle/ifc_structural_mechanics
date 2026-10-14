@@ -68,6 +68,24 @@ def _export(model, node_forces, section_forces=(), case="Dead", node_moments=Non
     return ResultsExporter(model, results)._supports()
 
 
+def _global(model, node_forces, node_moments=None, case="Dead"):
+    """The whole reaction of one load case, as the exporter gives it."""
+    total = ReactionForceResult(reference_element="TOTAL")
+    whole = sum((np.array(f, dtype=float) for f in node_forces.values()), np.zeros(3))
+    total.set_forces([float(v) for v in whole])
+    total.add_metadata("load_case", case)
+    results = {
+        "displacement": [],
+        "stress": [],
+        "reaction": [total],
+        "section_forces": [],
+        "support_node_forces": [{"load_case": case, "forces": node_forces}],
+    }
+    if node_moments is not None:
+        results["support_node_moments"] = [{"load_case": case, "moments": node_moments}]
+    return ResultsExporter(model, results)._global_reactions()["total"]
+
+
 def _model(*supports, members=None):
     model = StructuralModel(id="model")
     for member in members if members is not None else [_beam()]:
@@ -150,6 +168,56 @@ class TestForces:
             reactions = exporter._global_reactions()
         assert reactions["total"]["fz_N"] == pytest.approx(1000.0)
         assert reactions["by_load_case"]["Dead"]["fz_N"] == pytest.approx(1000.0)
+
+    def test_global_moment_is_that_of_the_supports_about_the_origin(self):
+        """Each support's force at its position; the solver has no such total."""
+        left, right = _support("a", (1, 0, 0)), _support("b", (1 + LENGTH, 2, 0))
+        model = _model(
+            (left, {"nodes": {1: (1, 0, 0)}, "dofs": [1, 2, 3]}),
+            (right, {"nodes": {2: (1 + LENGTH, 2, 0)}, "dofs": [3]}),
+        )
+        model.applied_load_totals = [[0.0, 0.0, -40.0]]
+        model.applied_load_moments = [[-60.0, 190.0, 0.0]]
+
+        entry = _global(model, {1: [0.0, 0.0, 10.0], 2: [0.0, 0.0, 30.0]})
+
+        moment = (entry["mx_Nm"], entry["my_Nm"], entry["mz_Nm"])
+        assert moment == pytest.approx((60.0, -10.0 - 30.0 * (1 + LENGTH), 0.0))
+        assert entry["applied_moment_Nm"] == [-60.0, 190.0, 0.0]
+        assert entry["moment_imbalance_Nm"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_global_moment_includes_the_moments_of_the_supports(self):
+        support = _support("a", (0, 0, 0))
+        model = _model((support, {"nodes": {1: (0, 0, 0)}, "dofs": [1, 2, 3, 4, 5, 6]}))
+
+        entry = _global(
+            model, {1: [0.0, 0.0, 10.0]}, node_moments={1: [0.0, -25.0, 0.0]}
+        )
+
+        assert entry["my_Nm"] == pytest.approx(-25.0)
+        # Nothing was recorded of the loads: there is nothing to compare with
+        assert "applied_moment_Nm" not in entry
+        assert "moment_imbalance_Nm" not in entry
+
+    def test_no_global_moment_when_a_support_has_none(self):
+        """A total with a support's moment missing would read as a result."""
+        clamp, pin = _support("a", (0, 0, 0)), _support("b", (LENGTH, 0, 0))
+        model = _model(
+            (clamp, {"nodes": {1: (0, 0, 0)}, "dofs": [1, 2, 3, 4, 5, 6]}),
+            (pin, {"nodes": {2: (LENGTH, 0, 0)}, "dofs": [3]}),
+        )
+        model.applied_load_moments = [[0.0, 100.0, 0.0]]
+
+        entry = _global(model, {1: [0.0, 0.0, 10.0], 2: [0.0, 0.0, 10.0]})
+
+        assert entry["fz_N"] == pytest.approx(20.0)
+        for key in ("mx_Nm", "my_Nm", "mz_Nm", "moment_imbalance_Nm"):
+            assert key not in entry
+
+    def test_no_global_moment_without_supports(self):
+        model = _model()
+        entry = _global(model, {})
+        assert "mx_Nm" not in entry
 
     def test_node_shared_by_two_supports_is_counted_once(self):
         first, second = _support("a", (0, 0, 0)), _support("b", (0, 0, 0))
@@ -325,6 +393,19 @@ class TestMoments:
         )
         records = [
             _record(1, 0.0, (0, 0, 0), (0, 0, 0), (0, 0, 0)),
+            _record(1, LENGTH, (LENGTH, 0, 0), (0, 0, 0), (0, 0, 0)),
+        ]
+        self._not_computed(model, records)
+
+    def test_member_tied_to_a_surface_along_its_length(self):
+        """Its end has its share of the force; the surface has the rest."""
+        beam = _beam()
+        beam.analysis_element_ids = [1]
+        beam.tied_to_surface_members = ["slab"]
+        support = _support("a", (0, 0, 0))
+        model = _model((support, self.FIXED), members=[beam])
+        records = [
+            _record(1, 0.0, (0, 0, 0), (0, 0, -60.0), (0, 80.0, 0)),
             _record(1, LENGTH, (LENGTH, 0, 0), (0, 0, 0), (0, 0, 0)),
         ]
         self._not_computed(model, records)
@@ -520,11 +601,91 @@ class TestSolverThatMisreportsReactions:
         assert entry["by_load_case"]["Dead"]["fz_N"] == 1076.6
 
     def test_global_reactions_give_the_load_and_the_imbalance(self):
-        reactions = self._column(1076.6, 1076.6)._global_reactions()
+        exporter = self._column(1076.6, 1076.6, with_records=False)
 
-        entry = reactions["by_load_case"]["Dead"]
+        entry = exporter._global_reactions()["by_load_case"]["Dead"]
+
+        assert entry["forces"] == "solver"
         assert entry["applied_load_N"] == [0.0, 0.0, -1000.0]
         assert entry["imbalance_N"] == pytest.approx(76.6)
+
+    def test_total_is_that_of_the_supports_where_they_were_replaced(self):
+        entry = self._column(1076.6, 1076.6)._global_reactions()["total"]
+
+        assert entry["forces"] == "supports"
+        assert entry["fz_N"] == pytest.approx(1000.0)
+        assert entry["imbalance_N"] == pytest.approx(0.0, abs=1e-9)
+
+    def _column_and_wall(self, wall_fz):
+        """A column and a wall foot share 3000 N; the column's is misreported."""
+        exporter = self._column(1076.6, 1076.6 + wall_fz, applied=3000.0)
+        model = exporter.model
+        wall = SurfaceMember(
+            id="wall",
+            geometry=[[2, 0, 0], [4, 0, 0], [4, 0, 3], [2, 0, 3]],
+            material=_material(),
+            thickness=Thickness(id="t", name="t", value=0.2),
+        )
+        model.add_member(wall)
+        foot = _support("w", (3, 0, 0), members=("wall",))
+        model.add_connection(foot)
+        model.support_nodes["w"] = {"nodes": {2: (3, 0, 0)}, "dofs": [1, 2, 3, 4, 5, 6]}
+        exporter.parsed_results["support_node_forces"][0]["forces"][2] = [
+            0.0,
+            0.0,
+            wall_fz,
+        ]
+        exporter.parsed_results["support_node_moments"] = [
+            {"load_case": "Dead", "moments": {1: [0.0] * 3, 2: [0.0, 5.0, 0.0]}}
+        ]
+        return exporter
+
+    def test_other_supports_are_right_when_the_whole_then_balances(self):
+        """A wall foot has no member end to check it against.
+
+        Measured on 2.21: its forces are those of 2.23. With the column's
+        replaced the loads are balanced, so nothing else is wrong.
+        """
+        exporter = self._column_and_wall(2000.0)
+
+        column, wall = exporter._supports()
+
+        assert column["forces"] == "member_end_forces"
+        assert wall["forces"] == "solver"
+        assert wall["moments"] == "solver"
+        assert wall["by_load_case"]["Dead"]["my_Nm"] == pytest.approx(5.0)
+        total = exporter._global_reactions()["total"]
+        assert total["forces"] == "supports"
+        assert total["fz_N"] == pytest.approx(3000.0)
+
+    def test_other_supports_are_not_when_it_still_does_not(self):
+        exporter = self._column_and_wall(2100.0)
+
+        column, wall = exporter._supports()
+
+        assert column["forces"] == "member_end_forces"
+        assert wall["forces"] == "unreliable"
+        assert wall["moments"] == "not_computed"
+        total = exporter._global_reactions()["total"]
+        assert total["forces"] == "solver"
+        assert total["imbalance_N"] == pytest.approx(176.6)
+
+    def test_point_load_at_the_support_is_not_in_the_member_end(self):
+        """700 N on the clamped node itself goes into the support.
+
+        The member end has 1000 N, the solver 1700 N less the 700 applied
+        there... which is the reaction: 1700 N. The two once differed by
+        the load, and the member end was taken, 700 N short.
+        """
+        exporter = self._column(1000.0, 1000.0, applied=1700.0)
+        exporter._support_node_loads = [
+            {1: [0, 0, -700.0] + [0.0] * 6 + [0, 0, -700.0]}
+        ]
+
+        (entry,) = exporter._supports()
+
+        assert entry["forces"] == "solver"
+        assert entry["by_load_case"]["Dead"]["fz_N"] == pytest.approx(1700.0)
 
     def test_warning_says_what_was_done(self):
         exporter = self._column(1076.6, 1076.6)
@@ -536,10 +697,23 @@ class TestSolverThatMisreportsReactions:
         (warning,) = balance_warnings(results)
 
         message = warning["message"]
+        assert "do not balance" not in message
+        assert "At 1 support(s) that hold a rotation the forces are taken" in message
+        assert "the total given is that of the supports" in message
+        assert "CalculiX 2.21 and earlier" in message
+
+    def test_warning_when_the_total_does_not_balance(self):
+        exporter = self._column(1076.6, 1076.6, with_records=False)
+        results = {
+            "global_reactions": exporter._global_reactions(),
+            "supports": exporter._supports(),
+        }
+
+        (warning,) = balance_warnings(results)
+
+        message = warning["message"]
         assert "do not balance the applied loads in 1 load case(s)" in message
         assert "Dead (off by 76.6 N of 1000 N)" in message
-        assert "At 1 support(s) that hold a rotation the forces are taken" in message
-        assert "CalculiX 2.21 and earlier" in message
 
     def test_warning_for_supports_nothing_could_replace(self):
         exporter = self._column(1076.6, 1076.6, with_records=False)

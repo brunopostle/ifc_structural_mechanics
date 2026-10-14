@@ -78,12 +78,17 @@ class StructuralModel:
         # included; set by the input writer
         self.support_node_elements: Dict[int, tuple] = {}
         # Per analysis step, the load applied directly at each support node,
-        # {node: [fx, fy, fz, mx, my, mz, sx, sy, sz]}, the last three being
-        # its share of moments per length; set by the input writer
+        # {node: [fx, fy, fz, mx, my, mz, sx, sy, sz, px, py, pz]}: s is its
+        # share of moments per length, p what of the force is point loads;
+        # set by the input writer
         self.support_node_loads: List[Dict[int, List[float]]] = []
         # Per analysis step, the whole applied load [fx, fy, fz]; set by the
         # input writer
         self.applied_load_totals: List[List[float]] = []
+        # Per analysis step, the moment of the applied load about the origin
+        # [mx, my, mz], None where it could not be had; set by the input
+        # writer
+        self.applied_load_moments: List[Optional[List[float]]] = []
         # member.id → its mesh nodes; a node at a joint belongs to several
         self.member_nodes: Dict[str, set] = {}
 
