@@ -616,7 +616,9 @@ The example models are unaffected: none of the removed fallbacks fired on them, 
 their deflections and reactions are those of the tables above. Two things they did hide
 are now in their results:
 
-- `portal_01`: its steel has no Poisson's ratio in the file; 0.3 is assumed.
+- `portal_01`: its steel has no Poisson's ratio in the file; 0.3 was assumed. The file
+  gives a shear modulus, and since `aiz.83` Poisson's ratio is taken from it
+  (E / 2G − 1 = 0.2946), with no warning; the reactions moved by under 0.01%.
 - `building_01`: seven members overlap others and one is left with no elements of its
   own (a landing lying in a floor slab); where two overlap, the stiffness is that of the
   member that comes first in the file.
@@ -738,7 +740,7 @@ moment it is met at any mesh size:
 | `slab_01` clamped along one edge only, 2 kN/m², moment about the edge, 2 / 1 / 0.5 m mesh | 75 000 N·m | 75 000.0 / 75 000.0 / 75 000.0 N·m | under 1 in a million |
 | Bar clamped 1 m from one end and 2 m from the other, loads at both ends | −5000 N·m | −5000.0 N·m | none in six figures |
 | `beam_01`, fixed-end moments, P L / 8 + w L² / 12, 0.5 / 0.25 / 0.1 / 0.05 m mesh | ∓12 943 N·m | ∓12 997 / 12 971 / 12 958 / 12 954 N·m | 0.4 / 0.2 / 0.1 / 0.1% |
-| `portal_01`, feet, against a plane frame with the same shear area, 0.25 m mesh | 7171.8 and −4546.8 N·m | 7236.1 and −4611.1 N·m | 0.9 and 1.4% |
+| `portal_01`, feet, against a plane frame with the same shear area, 0.25 m mesh | 7175.0 and −4549.6 N·m | 7236.2 and −4611.4 N·m | 0.9 and 1.4% |
 
 Where statics does not decide it (`beam_01`, the portal) the moment is the mesh's own: it
 converges as the displacements do. The section forces at the same member end, which is
@@ -1024,17 +1026,17 @@ not been compared with ours (0.25 m mesh):
 
 | `portal_01` | In the file | Plane frame, shear area of the web | Result |
 |---|---|---|---|
-| Vertical reaction, left and right | 10 135.4 and 32 567.5 N | 10 137.5 and 32 565.4 N | 10 137.5 and 32 565.5 N |
-| Thrust | 6328.4 N | 6165.5 N | 6206.0 N |
-| Moment at the left and right foot | 7535.5 and 4900.8 N·m | 7171.8 and 4546.8 N·m | 7236.1 and 4611.1 N·m |
+| Vertical reaction, left and right | 10 135.4 and 32 567.5 N | 10 137.4 and 32 565.5 N | 10 137.5 and 32 565.4 N |
+| Thrust | 6328.4 N | 6166.9 N | 6205.5 N |
+| Moment at the left and right foot | 7535.5 and 4900.8 N·m | 7175.0 and 4549.6 N·m | 7236.2 and 4611.4 N·m |
 
 The vertical reactions are the file's to 0.02%. The thrust is 1.9% below the file's and
 the moments 4 and 6%. That is the shear area. A plane frame by the stiffness method
 with shear deformation, worked out for this comparison, gives the file's thrust for a
 shear area of 0.79 of the section (6330 N at 7.0 in² of 8.84) and 6472 N with no shear
 deformation at all; with the area of the web, which is what this library takes for an I
-section, it gives 6165.5 N, and the result is 0.7% above that, falling as the mesh is
-refined (6241, 6206 and 6187 N at 0.5, 0.25 and 0.125 m).
+section, it gives 6166.9 N, and the result is 0.6% above that, falling as the mesh is
+refined (6240, 6206 and 6188 N at 0.5, 0.25 and 0.125 m).
 
 | 4 m beam, 0.1 m square, simply supported, 0.25 m mesh | Beam theory | Result |
 |---|---|---|

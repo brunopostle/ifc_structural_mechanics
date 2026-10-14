@@ -100,7 +100,8 @@ the ones a user needs to know before trusting a result.
 - **Nothing the file leaves out is made up.** The analysis stops, with an
   error that names the entity, when
   - a member has no geometry, no material, no profile or (a slab or wall) no
-    thickness, or its material has no Young's modulus;
+    thickness, or its material has no Young's modulus, or a shear modulus
+    (and no Poisson's ratio) that no isotropic material could have;
   - a connection has no position, or is an `IfcStructuralSurfaceConnection`;
   - a load has no position or no member, applies a moment to a surface
     member or one that varies along its member, or is of a kind
@@ -115,8 +116,10 @@ the ones a user needs to know before trusting a result.
     `results.json`.
 
   It carries on, with a warning in the results, when
-  - a material has no mass density (its members weigh nothing) or no
-    Poisson's ratio (0.3 is assumed);
+  - a material has no mass density (its members weigh nothing), or neither a
+    Poisson's ratio nor a shear modulus (0.3 is assumed; from a shear modulus
+    it is E / 2G − 1), or a shear modulus that disagrees with its Poisson's
+    ratio (the Poisson's ratio is used);
   - loads of the file belong to no load group or load case (they are not
     applied);
   - a point load lands more than 0.1 m from the nearest mesh node;
