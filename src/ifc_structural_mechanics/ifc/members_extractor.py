@@ -439,9 +439,10 @@ class MembersExtractor:
         density_raw = commonProps.get("massDensity")
         elastic_modulus_raw = mechProps.get("youngModulus")
         poisson_ratio = mechProps.get("poissonRatio")
+        shear_modulus_raw = mechProps.get("shearModulus")
 
         # Second pass: if key properties still missing, search all psets by property name
-        if elastic_modulus_raw is None or density_raw is None:
+        if None in (elastic_modulus_raw, density_raw, poisson_ratio, shear_modulus_raw):
             for pset in psets:
                 for prop in getattr(
                     pset, "Properties", getattr(pset, "HasProperties", [])
@@ -464,6 +465,8 @@ class MembersExtractor:
                         "poissonratio" in lower_name or "poisson" in lower_name
                     ) and poisson_ratio is None:
                         poisson_ratio = value
+                    elif "shearmodulus" in lower_name and shear_modulus_raw is None:
+                        shear_modulus_raw = value
 
         name = getattr(material, "Name", None) or "unnamed"
         if elastic_modulus_raw is None:
@@ -484,11 +487,37 @@ class MembersExtractor:
                 "(Pset_MaterialCommon.MassDensity); its members are analysed "
                 "as weightless."
             )
+        # An isotropic material has G = E / 2(1 + nu): a shear modulus given
+        # in place of Poisson's ratio is the same information
+        if poisson_ratio is None and shear_modulus_raw is not None:
+            if not shear_modulus_raw > 0:
+                raise ModelExtractionError(
+                    f"Its material '{name}' has a shear modulus of "
+                    f"{shear_modulus_raw} and no Poisson's ratio."
+                )
+            poisson_ratio = elastic_modulus_raw / (2.0 * shear_modulus_raw) - 1.0
+            if not -1.0 < poisson_ratio < 0.5:
+                raise ModelExtractionError(
+                    f"Its material '{name}' has no Poisson's ratio, and its "
+                    f"Young's modulus {elastic_modulus_raw} and shear modulus "
+                    f"{shear_modulus_raw} give {poisson_ratio:.4g}, which no "
+                    "isotropic material has."
+                )
+        elif poisson_ratio is not None and shear_modulus_raw is not None:
+            implied = elastic_modulus_raw / (2.0 * (1.0 + poisson_ratio))
+            if abs(implied - shear_modulus_raw) > 0.01 * abs(implied):
+                self._warn_once(
+                    f"Material '{name}' has a shear modulus of "
+                    f"{shear_modulus_raw}, where its Young's modulus and "
+                    f"Poisson's ratio {poisson_ratio} give {implied:.6g}; the "
+                    "material is analysed as isotropic with the Poisson's ratio."
+                )
         if poisson_ratio is None:
             poisson_ratio = 0.3
             self._warn_once(
                 f"Material '{name}' has no Poisson's ratio "
-                "(Pset_MaterialMechanical.PoissonRatio); 0.3 is assumed."
+                "(Pset_MaterialMechanical.PoissonRatio) and no shear modulus; "
+                "0.3 is assumed."
             )
 
         # Yield stress, where the file gives one (Pset_MaterialSteel). A

@@ -2517,11 +2517,11 @@ class TestPortalAgainstTheResultsInItsFile:
     Its vertical reactions are ours. Its thrust is 1422.7 lbf, which a plane
     frame with shear deformation gives for a shear area of 0.79 of the
     section; with the area of the web, which is what this library takes for
-    an I section, the same frame gives 1386.1 lbf, and without shear
+    an I section, the same frame gives 1386.4 lbf, and without shear
     deformation 1454.9.
     """
 
-    THRUST_WITH_THE_SHEAR_AREA_OF_THE_WEB = 1386.07 * POUND_FORCE
+    THRUST_WITH_THE_SHEAR_AREA_OF_THE_WEB = 1386.37 * POUND_FORCE
 
     def test_reactions(self, tmp_path):
         _needs_solver_reactions()

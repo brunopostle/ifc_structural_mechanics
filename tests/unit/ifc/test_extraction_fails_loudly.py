@@ -88,6 +88,41 @@ class TestMembers:
         (message,) = [w["message"] for w in extracted.analysis_warnings]
         assert "no Poisson's ratio" in message and "0.3 is assumed" in message
 
+    def test_poisson_ratio_comes_from_the_shear_modulus(self):
+        """portal_01 gives E and G; 0.3 used to be assumed (aiz.83)."""
+        extracted = Extractor(_open("portal_01")).extract_model()
+        material = extracted.members[0].material
+        assert material.poisson_ratio == pytest.approx(29e6 / (2 * 11.2e6) - 1)
+        assert not any(
+            "Poisson" in w["message"] or "shear modulus" in w["message"]
+            for w in extracted.analysis_warnings
+        )
+
+    @staticmethod
+    def _set_shear_modulus(model, value):
+        for pset in model.by_type("IfcMaterialProperties"):
+            for prop in pset.Properties:
+                if prop.Name == "ShearModulus":
+                    measure = prop.NominalValue.is_a()
+                    prop.NominalValue = model.create_entity(measure, value)
+
+    def test_impossible_shear_modulus_is_an_error(self):
+        model = _open("portal_01")
+        self._set_shear_modulus(model, 5e6)  # E 29e6 gives nu = 1.9
+        with pytest.raises(ModelExtractionError, match="no isotropic material"):
+            Extractor(model).extract_model()
+
+    def test_shear_modulus_at_odds_with_poisson_ratio_gets_a_warning(self):
+        model = _open("beam_01")
+        self._set_shear_modulus(model, 10000.0)  # E 30000, nu 0.2 give 12500
+        messages = _warnings(model)
+        assert any(
+            "shear modulus" in m and "Poisson's ratio 0.2" in m for m in messages
+        )
+
+    def test_consistent_shear_modulus_raises_no_warning(self):
+        assert not any("shear modulus" in m for m in _warnings(_open("beam_01")))
+
     def test_slab_without_thickness_is_an_error(self):
         """It used to be 0.1 m thick."""
         model = _open("slab_01")
