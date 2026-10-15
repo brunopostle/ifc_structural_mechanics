@@ -17,7 +17,7 @@ is the matrix of ``e_c3d_u1.f`` as it is, not the textbook Timoshenko beam
 refined), so that the forces are those of the model that was solved.
 """
 
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -168,3 +168,78 @@ def u1_nodal_forces(
             if node in wanted:
                 totals[node] += force
     return totals
+
+
+def u1_section_forces(
+    element: Mapping,
+    displacements: Mapping[int, Sequence[float]],
+    loads: Optional[Sequence[float]],
+    axis: Sequence[float],
+) -> List[Dict]:
+    """Section forces at the two ends of a U1 element.
+
+    A U1 element carries no load of its own: what acts along it was written
+    as forces on its nodes. What the element's nodes put on it is its
+    stiffness times their displacements; less its share of those loads, it
+    is the force on the element itself at either end, in equilibrium with
+    the load along it. In a statically determinate member that is exact at
+    every node, whatever the mesh.
+
+    The records are those of ``section_forces.element_section_forces``: at
+    each end, what the part of the member beyond the cross-section (along
+    ``axis``) exerts on the part before it, in the section's axes and as
+    vectors in global axes, the moment about the node.
+
+    Args:
+        element: The element's record (see ``u1_element_forces``).
+        displacements: Node number to its six displacements and rotations.
+        loads: The element's share of the loads along it, ``[fx, fy, fz,
+            mx, my, mz]`` at its first node and then at its second, in
+            global axes, or None.
+        axis: Direction of the member; ``position`` -1 is the end it starts
+            from.
+
+    Returns:
+        Two dicts with ``position``, ``centre``, ``N``, ``Vf1``, ``Vf2``,
+        ``T``, ``Mf1``, ``Mf2``, ``force`` and ``moment``.
+    """
+    on_nodes = u1_element_forces(element, displacements)
+    shares = np.zeros(12) if loads is None else np.asarray(loads, dtype=float)
+    first, second = element["nodes"]
+    start, end = (np.array(p, dtype=float) for p in element["positions"])
+    t = np.array(axis, dtype=float)
+    t /= np.linalg.norm(t)
+    e1 = np.array(element["direction"], dtype=float)
+    e1 = e1 - np.dot(e1, t) * t
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(t, e1)
+    forward = float(np.dot(end - start, t)) > 0.0
+
+    records = []
+    for node, centre, share, is_first in (
+        (first, start, shares[:6], True),
+        (second, end, shares[6:], False),
+    ):
+        # What the node puts on the element, the load along it taken off
+        on_element = on_nodes[node] - share
+        # The element lies beyond its first node when it points the way
+        # the member does: what is beyond the cross-section there is the
+        # element, which puts the opposite on the node
+        beyond_is_element = is_first == forward
+        acting = -on_element if beyond_is_element else on_element
+        force, moment = acting[:3], acting[3:]
+        records.append(
+            {
+                "position": -1.0 if beyond_is_element else 1.0,
+                "centre": [float(v) for v in centre],
+                "N": float(force @ t),
+                "Vf1": float(force @ e1),
+                "Vf2": float(force @ e2),
+                "T": float(moment @ t),
+                "Mf1": float(-(moment @ e2)),
+                "Mf2": float(moment @ e1),
+                "force": [float(v) for v in force],
+                "moment": [float(v) for v in moment],
+            }
+        )
+    return sorted(records, key=lambda r: r["position"])

@@ -82,6 +82,8 @@ class TestStepLoadRecorder:
             {
                 "nodal": {4: [0.0, 0.0, -150.0] + [0.0] * 9},
                 "gravity": None,
+                "elements": {},
+                "user_weight": None,
             }
         ]
 
@@ -107,6 +109,8 @@ class TestStepLoadRecorder:
         assert first == {
             "nodal": {4: [7.0, 0.0, -150.0] + [0.0] * 9},
             "gravity": None,
+            "elements": {},
+            "user_weight": None,
         }
         assert second["nodal"] == {}
         assert list(second["gravity"]) == [0.0, 0.0, -9.81]

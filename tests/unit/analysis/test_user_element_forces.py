@@ -7,6 +7,7 @@ from ifc_structural_mechanics.analysis.user_element_forces import (
     u1_element_forces,
     u1_local_stiffness,
     u1_nodal_forces,
+    u1_section_forces,
 )
 
 E, NU, A, I11, I22, K = 2.1e11, 0.3, 0.01, 8.0e-6, 3.0e-6, 0.8
@@ -64,10 +65,12 @@ def test_rigid_movement_gives_no_force():
         assert np.allclose(force, 0.0, atol=1e-6)
 
 
-def test_forces_of_a_cantilever_balance_its_load():
-    """Solve a cantilever of U1 elements with this stiffness: the forces
-    at the free nodes are the loads and at the root the reaction."""
-    count, length, load = 6, 3.0, -1000.0
+def _cantilever(count, length, loads):
+    """Solve a cantilever of U1 elements along x, clamped at node 1.
+
+    ``loads`` has six values per node. Returns the elements and the
+    displacements of their nodes.
+    """
     points = [np.array([length * i / count, 0.0, 0.0]) for i in range(count + 1)]
     elements = {
         i + 1: _element(points[i], points[i + 1], (0.0, 0.0, 1.0), (i + 1, i + 2))
@@ -81,18 +84,78 @@ def test_forces_of_a_cantilever_balance_its_load():
         turn = np.kron(np.eye(4), axes)
         dofs = list(range(6 * (number - 1), 6 * (number + 1)))
         stiffness[np.ix_(dofs, dofs)] += turn.T @ local @ turn
-    loads = np.zeros(size)
-    loads[6 * count + 2] = load
     free = list(range(6, size))
     solution = np.zeros(size)
     solution[free] = np.linalg.solve(stiffness[np.ix_(free, free)], loads[free])
     moved = {n + 1: solution[6 * n : 6 * n + 6] for n in range(count + 1)}
+    return elements, moved
+
+
+def test_forces_of_a_cantilever_balance_its_load():
+    """Solve a cantilever of U1 elements with this stiffness: the forces
+    at the free nodes are the loads and at the root the reaction."""
+    count, length, load = 6, 3.0, -1000.0
+    loads = np.zeros(6 * (count + 1))
+    loads[6 * count + 2] = load
+    elements, moved = _cantilever(count, length, loads)
     forces = u1_nodal_forces(elements, moved, [1, 4, count + 1])
     assert forces[count + 1][2] == pytest.approx(load)
     assert np.allclose(forces[4], 0.0, atol=1e-6)
     assert forces[1][2] == pytest.approx(-load)
     # The root holds the moment of the load at the end of the cantilever
     assert forces[1][4] == pytest.approx(load * length)
+
+
+class TestSectionForces:
+    """Section forces at the ends of U1 elements (bgz).
+
+    A cantilever of 3 m along x, its section's 1-direction up, under a load
+    of 1000 N/m downwards written as half of each element's share at either
+    of its nodes, as the input writer does. A cantilever is statically
+    determinate, so at every node the shear is w (L - x) and the moment
+    w (L - x)^2 / 2, hogging, however coarse the mesh.
+    """
+
+    COUNT, LENGTH, W = 4, 3.0, -1000.0
+
+    def _records(self, axis):
+        step = self.LENGTH / self.COUNT
+        loads = np.zeros(6 * (self.COUNT + 1))
+        share = np.zeros(12)
+        share[2] = share[8] = self.W * step / 2
+        for number in range(1, self.COUNT + 1):
+            loads[6 * (number - 1) : 6 * (number + 1)] += share
+        elements, moved = _cantilever(self.COUNT, self.LENGTH, loads)
+        return [
+            record
+            for element in elements.values()
+            for record in u1_section_forces(element, moved, share, axis)
+        ]
+
+    def test_shear_and_moment_are_those_of_statics(self):
+        for record in self._records((1.0, 0.0, 0.0)):
+            beyond = self.LENGTH - record["centre"][0]
+            # Fibres on top in tension, and the part beyond pulls down
+            assert record["Mf1"] == pytest.approx(-self.W * beyond**2 / 2, abs=1e-6)
+            assert record["Vf1"] == pytest.approx(self.W * beyond, abs=1e-6)
+            for key in ("N", "Vf2", "T", "Mf2"):
+                assert record[key] == pytest.approx(0.0, abs=1e-6)
+            # About 2 = x cross 1, which is -y here
+            assert record["moment"][1] == pytest.approx(record["Mf1"], abs=1e-6)
+
+    def test_positions_follow_the_axis_given(self):
+        """Turned round, an element starts at its second node: the moment is
+        the same and the shear changes sign."""
+        forward = self._records((1.0, 0.0, 0.0))
+        # Each element's first node is the nearer the root
+        for start, end in zip(forward[::2], forward[1::2]):
+            assert (start["position"], end["position"]) == (-1.0, 1.0)
+            assert start["centre"][0] < end["centre"][0]
+        by_place = {(round(r["centre"][0], 9), r["position"]): r for r in forward}
+        for record in self._records((-1.0, 0.0, 0.0)):
+            twin = by_place[(round(record["centre"][0], 9), -record["position"])]
+            assert record["Mf1"] == pytest.approx(twin["Mf1"], abs=1e-6)
+            assert record["Vf1"] == pytest.approx(-twin["Vf1"], abs=1e-6)
 
 
 class TestWhichForcesAreGiven:

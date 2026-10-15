@@ -1599,6 +1599,8 @@ class UnifiedCalculixWriter:
         def written(value: float) -> float:
             return float(f"{float(value):.6e}")
 
+        density = getattr(material, "density", None)
+        mass_per_length = float(density) * float(A) if density and A else 0.0
         properties = {
             "direction": tuple(written(v) for v in beam_normal),
             "modulus": written(material.elastic_modulus),
@@ -1607,6 +1609,7 @@ class UnifiedCalculixWriter:
             "inertia_11": written(xi11),
             "inertia_22": written(xi22),
             "shear_factor": written(k_s),
+            "mass_per_length": mass_per_length,
         }
         for elem_id in elem_ids:
             elem = self.elements.get(elem_id)
@@ -1620,11 +1623,14 @@ class UnifiedCalculixWriter:
                 ),
                 **properties,
             }
+            # Section forces are worked out from the stiffness in these axes
+            self.domain_model.beam_section_frames[elem_id] = (
+                tuple(float(v) for v in beam_axis),
+                tuple(float(v) for v in beam_normal),
+            )
 
         # Mass of the U1 elements at their nodes, for their self-weight
-        density = getattr(material, "density", None)
-        if density and A:
-            mass_per_length = float(density) * float(A)
+        if mass_per_length:
             for elem_id in elem_ids:
                 elem = self.elements.get(elem_id)
                 if elem is None:

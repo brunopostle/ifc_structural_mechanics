@@ -500,6 +500,40 @@ class TestISectionCantileverSelfWeight:
         # The cantilever runs along +x from the root
         assert reaction["my_Nm"] == pytest.approx(-weight * CANT_L / 2, rel=1e-4)
 
+    @pytest.mark.parametrize(
+        "axis, moment_key, shear_key, mesh, moment_error, shear_error",
+        [
+            (None, "Mf1_Nm", "Vf1_N", MESH_SIZE, 2e-4, 0.01),
+            ((0.0, 1.0, 0.0), "Mf2_Nm", "Vf2_N", 0.25, 1e-3, 0.01),
+        ],
+        ids=["strong", "weak"],
+    )
+    def test_section_forces_follow_the_weight(
+        self, tmp_path, axis, moment_key, shear_key, mesh, moment_error, shear_error
+    ):
+        """w (L - x) and w (L - x)^2 / 2 at every node (bgz).
+
+        U1 elements have no stresses; the weight written on their nodes is
+        taken off what each element's stiffness gives. Turned on its side
+        the moment is about the section's other axis. The result file has
+        six figures, and towards the free end the forces are small
+        differences of large displacements: measured, the weak axis's shear
+        is out by 0.7% of the root's at a 0.25 m mesh and 5% at 0.05 m, its
+        moment by 3e-4 to 1e-3.
+        """
+        w = CANT_RHO * G_ACCEL * I_AREA
+        path = _cantilever_variant(tmp_path, axis=axis, i_profile=True)
+        data = _run(path, tmp_path, mesh, **self.U1)
+        diagram = _curve_member_diagram(data)
+        for x, moment, shear in zip(
+            diagram["distance_m"], diagram[moment_key], diagram[shear_key]
+        ):
+            beyond = CANT_L - x
+            assert abs(moment) == pytest.approx(
+                w * beyond**2 / 2, abs=moment_error * w * CANT_L**2 / 2
+            )
+            assert abs(shear) == pytest.approx(w * beyond, abs=shear_error * w * CANT_L)
+
 
 class TestISectionAsEquivalentRectangle:
     """The same I-section cantilever on a native beam element.
@@ -1011,6 +1045,34 @@ class TestSimplySupportedBeam:
             load * length**2 / 8, rel=FORCE_TOLERANCE
         )
 
+    def test_line_load_on_user_elements(self, tmp_path):
+        """w x (L - x) / 2 at every node, the shear w (L / 2 - x) (bgz).
+
+        The beam is statically determinate, so the section forces worked out
+        from the stiffness of U1 elements are those of statics at every node
+        whatever the mesh, once each element's share of the load is taken
+        off what its nodes put on it.
+        """
+        path = _beam_on_supports(
+            tmp_path, PIN, ROLLER, line_load=self.LINE_LOAD, i_profile=True
+        )
+        data = _run(path, tmp_path, self.MESH, open_sections="user_element")
+        diagram = _curve_member_diagram(data)
+        load, length = self.LINE_LOAD, self.B.LENGTH
+        largest = load * length**2 / 8
+        for x, moment, shear in zip(
+            diagram["distance_m"], diagram["Mf1_Nm"], diagram["Vf1_N"]
+        ):
+            # Sagging: the fibres below, on the -1 side, in tension
+            assert -moment == pytest.approx(
+                load * x * (length - x) / 2, abs=1e-3 * largest
+            )
+            assert abs(shear) == pytest.approx(
+                abs(load * (length / 2 - x)), abs=1e-3 * load * length
+            )
+        forces = _curve_member_envelope(data)["section_forces"]
+        assert forces["max_Mf1_Nm"] == pytest.approx(largest, rel=1e-3)
+
     def test_i_section_line_load(self, tmp_path):
         """A third of the deflection is shear in the web."""
         path = _beam_on_supports(
@@ -1237,6 +1299,37 @@ class TestFixedFixedISectionBeam:
         assert sorted(moments) == pytest.approx(
             [-self.B.LOAD * self.B.LENGTH / 8, self.B.LOAD * self.B.LENGTH / 8],
             rel=0.01,
+        )
+
+    def test_section_forces_of_user_elements(self, tmp_path):
+        """PL/8 at the ends and in the middle, and the shear steps by P (bgz).
+
+        U1 elements have no stresses; their section forces are worked out
+        from their stiffness. The jump under the load is one-sided at once.
+        """
+        model = _beam_01()
+        _give_beam_01_an_i_profile(model)
+        path = str(tmp_path / "i_beam.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, open_sections="user_element")
+        diagram = _curve_member_diagram(data)
+        load, length = self.B.LOAD, self.B.LENGTH
+        moments = diagram["Mf1_Nm"]
+        middle = min(
+            range(len(moments)),
+            key=lambda i: abs(diagram["distance_m"][i] - length / 2),
+        )
+        for value in (moments[0], moments[-1], -moments[middle]):
+            assert value == pytest.approx(load * length / 8, rel=0.01)
+        shears = diagram["Vf1_N"]
+        assert max(shears) - min(shears) == pytest.approx(load, rel=1e-3)
+        assert abs(shears[0]) == pytest.approx(load / 2, rel=1e-3)
+        forces = _curve_member_envelope(data)
+        assert forces["section_forces"]["max_Mf1_Nm"] == pytest.approx(
+            load * length / 8, rel=0.01
+        )
+        assert forces["max_normal_stress_Pa"] == pytest.approx(
+            load * length / 8 / I_STRONG * I_H / 2, rel=0.01
         )
 
     def test_line_load(self, tmp_path):

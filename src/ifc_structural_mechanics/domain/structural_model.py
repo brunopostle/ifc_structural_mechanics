@@ -74,6 +74,10 @@ class StructuralModel:
         # 1-direction and material, as written, for every U1 element: the
         # results parser works out their nodal forces; set by the input writer
         self.user_elements: Dict[int, Dict] = {}
+        # Per analysis step, what each U1 element gives its two nodes of the
+        # loads along it, {element: [fx, fy, fz, mx, my, mz] at the first
+        # node, then at the second}; set by the input writer
+        self.user_element_loads: List[Dict[int, List[float]]] = []
         # connection.id → {"nodes": {node: (x, y, z)}, "dofs": [1..6]} for
         # every support, as written to the solver; set by the input writer
         self.support_nodes: Dict[str, Dict] = {}

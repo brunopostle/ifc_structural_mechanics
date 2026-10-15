@@ -549,6 +549,10 @@ def _write_self_weight(
             f"{direction[2]:.6e}\n\n"
         )
     if u1_node_masses:
+        # The section forces of U1 elements are worked out with it
+        note = getattr(file, "note_user_element_weight", None)
+        if note is not None:
+            note(vector)
         file.write("** Self-weight for U1 beam elements (equivalent nodal loads)\n")
         file.write("*CLOAD\n")
         for node_id, mass in sorted(u1_node_masses.items()):
@@ -1025,8 +1029,28 @@ class _StepLoadRecorder:
         self._points = False
         # One per step: {"nodal": {node: [fx, fy, fz, mx, my, mz, sx, sy,
         # sz, px, py, pz]}, "gravity": vector}; s is the node's share of
-        # moments per length, p what of f is point loads
+        # moments per length, p what of f is point loads. "elements" has
+        # what each U1 element gives its two nodes of the loads along it,
+        # and "user_weight" the acceleration of their self-weight
         self.steps: List[Dict[str, Any]] = []
+
+    def note_element_loads(self, loads: Dict[int, np.ndarray]) -> None:
+        """Note the shares of a load along a member that U1 elements give."""
+        if not self.steps:
+            return
+        elements = self.steps[-1]["elements"]
+        for element, values in loads.items():
+            elements[element] = elements.get(element, np.zeros(12)) + values
+
+    def note_user_element_weight(self, acceleration: np.ndarray) -> None:
+        """Note the acceleration of the self-weight written for U1 elements."""
+        if self.steps:
+            step = self.steps[-1]
+            step["user_weight"] = (
+                acceleration
+                if step["user_weight"] is None
+                else step["user_weight"] + acceleration
+            )
 
     def write(self, text: str) -> int:
         self._pending += text
@@ -1056,7 +1080,9 @@ class _StepLoadRecorder:
             self._shares, self._shares_follow = self._shares_follow, False
             self._points, self._points_follow = self._points_follow, False
             if self._block == "*STEP":
-                self.steps.append({"nodal": {}, "gravity": None})
+                self.steps.append(
+                    {"nodal": {}, "gravity": None, "elements": {}, "user_weight": None}
+                )
             return True
         if not self.steps:
             return True
@@ -1183,6 +1209,7 @@ def write_analysis_steps(
         elements_data,
     )
     recorder.finish()
+    _record_user_element_loads(domain_model, recorder.steps)
     if not isinstance(supports, dict):
         return
     nodes = {node for record in supports.values() for node in record["nodes"]}
@@ -1222,6 +1249,80 @@ def write_analysis_steps(
     domain_model.support_node_loads = recorded
     domain_model.applied_load_totals = totals
     domain_model.applied_load_moments = moments
+
+
+def _record_user_element_loads(
+    domain_model: Optional[StructuralModel], steps: List[Dict[str, Any]]
+) -> None:
+    """Record what each U1 element gives its nodes of the loads, step by step.
+
+    CalculiX gets the forces of U1 elements wrong, and the results parser
+    works out their section forces from their stiffness and displacements
+    (``user_element_section_forces``). A U1 element carries no load of its
+    own: what acts along it is written as forces on its nodes, and its
+    section forces are what the stiffness gives less its share of those.
+    ``domain_model.user_element_loads`` has, for each step in order,
+    ``{element: [fx, fy, fz, mx, my, mz] at its first node, then at its
+    second}``, its self-weight included.
+    """
+    elements = getattr(domain_model, "user_elements", None)
+    if not isinstance(elements, dict) or not elements:
+        return
+    recorded = []
+    for step in steps:
+        loads = {element: np.array(v, float) for element, v in step["elements"].items()}
+        acceleration = step["user_weight"]
+        if acceleration is not None:
+            for element, record in elements.items():
+                mass = float(record.get("mass_per_length") or 0.0)
+                if not mass:
+                    continue
+                start, end = (np.array(p, dtype=float) for p in record["positions"])
+                half = mass * float(np.linalg.norm(end - start)) / 2.0 * acceleration
+                share = loads.setdefault(element, np.zeros(12))
+                share[0:3] += half
+                share[6:9] += half
+        recorded.append({e: [float(v) for v in share] for e, share in loads.items()})
+    domain_model.user_element_loads = recorded
+
+
+def _note_user_element_loads(
+    file: TextIO,
+    load,
+    element_set_name: str,
+    domain_model: StructuralModel,
+    element_sets: Dict[str, List[int]],
+    elements_data: Dict[int, Dict],
+    node_coords: Dict,
+) -> None:
+    """Pass on what each U1 element of a set gives its nodes of a load.
+
+    Each element's share is worked out as the load's nodal forces and
+    moments on a set of that element alone, so that the sum of them is what
+    was written.
+    """
+    note = getattr(file, "note_element_loads", None)
+    elements = getattr(domain_model, "user_elements", None)
+    if note is None or not isinstance(elements, dict) or not elements:
+        return
+    shares: Dict[int, np.ndarray] = {}
+    for element in element_sets.get(element_set_name, []):
+        if element not in elements:
+            continue
+        alone = {element_set_name: [element]}
+        forces, _ = _load_to_nodal_forces(
+            load, element_set_name, domain_model, alone, elements_data, node_coords
+        )
+        moments = _load_to_nodal_moments(
+            load, element_set_name, domain_model, alone, elements_data, node_coords
+        )
+        values = np.zeros(12)
+        for slot, node in zip((0, 6), elements[element]["nodes"]):
+            values[slot : slot + 3] += forces.get(node, (0.0, 0.0, 0.0))
+            values[slot + 3 : slot + 6] += moments.get(node, (0.0, 0.0, 0.0))
+        shares[element] = values
+    if shares:
+        note(shares)
 
 
 def _write_analysis_steps(
@@ -1763,6 +1864,15 @@ def _write_validated_loads_within_step(
                                 "applied in global axes.",
                             )
                         _add_nodal(u1_extra_cloads, partial)
+                        _note_user_element_loads(
+                            file,
+                            load,
+                            element_set_name,
+                            domain_model,
+                            element_sets or {},
+                            elements_data,
+                            node_coords,
+                        )
                         _add_nodal(
                             nodal_moments,
                             _load_to_nodal_moments(
@@ -1846,6 +1956,15 @@ def _write_validated_loads_within_step(
                             node_coords,
                         )
                         _add_nodal(member_cloads, partial)
+                        _note_user_element_loads(
+                            file,
+                            load,
+                            element_set_name,
+                            domain_model,
+                            element_sets or {},
+                            elements_data,
+                            node_coords,
+                        )
                         _add_nodal(
                             member_moments,
                             _load_to_nodal_moments(

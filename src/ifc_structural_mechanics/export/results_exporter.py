@@ -204,7 +204,10 @@ of the axial force N, the torque T, the bending moments Mf1 (stress varying
 over the section's depth; strong-axis bending of a section deeper than wide)
 and Mf2, and the shear forces Vf1 (along the depth) and Vf2, plus
 ``max_tension_N`` and ``max_compression_N``. They are integrated from the
-solver's stresses over each cross-section.
+solver's stresses over each cross-section. U1 user elements have no
+stresses: theirs are worked out from each element's stiffness and the
+displacements of its two nodes, less its share of the loads along it, and
+have no middle cross-section.
 
 ``section_force_diagrams`` holds the same forces along the member, signed, per
 load case: parallel lists ``distance_m`` (from the member's start), ``N_N``,

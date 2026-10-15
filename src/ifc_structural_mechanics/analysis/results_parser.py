@@ -24,7 +24,7 @@ from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
 from .plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from .section_forces import element_section_forces
-from .user_element_forces import u1_nodal_forces
+from .user_element_forces import u1_nodal_forces, u1_section_forces
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1306,6 +1306,10 @@ class ResultsParser:
             computed = self.compute_beam_section_forces(parsed_results["stress"])
             if computed:
                 parsed_results["section_forces"] = computed
+            # and for U1 elements, from their stiffness
+            parsed_results["section_forces"].extend(
+                self.compute_user_element_section_forces(parsed_results["displacement"])
+            )
 
             # Map results to domain model entities if a model is provided
             if self.domain_model:
@@ -1386,21 +1390,9 @@ class ResultsParser:
         directed: Dict[int, tuple] = {}
         owners = getattr(self.domain_model, "analysis_element_to_member", None) or {}
         for elem, (axis, direction_1) in frames.items():
-            start = along = None
-            member = self.domain_model.get_member(owners.get(elem, ""))
-            geometry = getattr(member, "geometry", None)
-            if isinstance(geometry, (list, tuple)) and len(geometry) >= 2:
-                try:
-                    start = np.array(geometry[0], dtype=float)
-                    along = np.array(geometry[-1], dtype=float) - start
-                except (TypeError, ValueError):
-                    start = along = None
-            if along is not None and np.linalg.norm(along) > 1e-12:
-                along = along / np.linalg.norm(along)
-                if float(np.dot(along, axis)) < 0:
-                    axis = tuple(-float(v) for v in axis)
-            else:
-                start = along = None
+            start, along = self._member_start_and_direction(owners.get(elem))
+            if along is not None and float(np.dot(along, axis)) < 0:
+                axis = tuple(-float(v) for v in axis)
             directed[elem] = (axis, direction_1, start, along)
 
         records: List[Dict] = []
@@ -1417,6 +1409,103 @@ class ResultsParser:
                         forces["distance"] = float(np.dot(centre - start, along))
                     records.append({"element_id": elem, "load_case": case, **forces})
         return records
+
+    def compute_user_element_section_forces(
+        self, displacements: List[DisplacementResult]
+    ) -> List[Dict]:
+        """Section forces of every U1 element, from its stiffness.
+
+        CalculiX writes no stresses for U1 elements, and the section forces
+        it prints for them are wrong (``aiz.19``). They are worked out from
+        the element's stiffness and the displacements of its nodes, less its
+        share of the loads along it (``StructuralModel.user_element_loads``,
+        one per step in the order of the load cases in the result file); see
+        ``user_element_forces.u1_section_forces``. Records are those of
+        ``compute_beam_section_forces``, axes turned the same way, with no
+        middle cross-section.
+
+        Args:
+            displacements: Nodal displacements and rotations, by load case.
+
+        Returns:
+            List[Dict]: One record per element, end and load case.
+
+        Raises:
+            ResultProcessingError: If a node of a U1 element has no
+                displacement, or the loads recorded are not one per load case.
+        """
+        elements = getattr(self.domain_model, "user_elements", None)
+        if not isinstance(elements, dict) or not elements:
+            return []
+        frames = getattr(self.domain_model, "beam_section_frames", None) or {}
+        involved = {node for element in elements.values() for node in element["nodes"]}
+        cases: List[str] = []
+        moved: Dict[str, Dict[int, List[float]]] = {}
+        for result in displacements:
+            case = result.metadata.get("load_case", "_combined")
+            if case not in moved:
+                cases.append(case)
+                moved[case] = {}
+            node = int(result.reference_element)
+            if node in involved:
+                moved[case][node] = list(result.get_translations()) + list(
+                    result.get_rotations()
+                )
+        loads = getattr(self.domain_model, "user_element_loads", None)
+        if not isinstance(loads, list) or len(loads) != len(cases):
+            raise ResultProcessingError(
+                f"The loads along the U1 elements were recorded for "
+                f"{len(loads) if isinstance(loads, list) else 0} step(s) and the "
+                f"result file has {len(cases)} load case(s), so their section "
+                "forces cannot be worked out."
+            )
+
+        owners = getattr(self.domain_model, "analysis_element_to_member", None) or {}
+        records: List[Dict] = []
+        for index, case in enumerate(cases):
+            missing = involved - set(moved[case])
+            if missing:
+                raise ResultProcessingError(
+                    f"Load case {case}: the result file has no displacement for "
+                    f"node(s) {sorted(missing)[:5]} of U1 elements, so their "
+                    "section forces cannot be worked out."
+                )
+            for elem, element in elements.items():
+                start, along = self._member_start_and_direction(owners.get(elem))
+                axis = np.array(frames.get(elem, (None,))[0] or (), dtype=float)
+                if axis.size != 3:
+                    first, last = (np.array(p, float) for p in element["positions"])
+                    axis = last - first
+                if along is not None and float(np.dot(along, axis)) < 0:
+                    axis = -axis
+                for forces in u1_section_forces(
+                    element, moved[case], loads[index].get(elem), axis
+                ):
+                    if start is not None:
+                        forces["distance"] = float(
+                            np.dot(np.array(forces["centre"]) - start, along)
+                        )
+                    records.append({"element_id": elem, "load_case": case, **forces})
+        return records
+
+    def _member_start_and_direction(self, member_id: Optional[str]) -> tuple:
+        """The first point of a member's geometry and its direction to the last.
+
+        ``(None, None)`` if the member is not known or has no length.
+        """
+        member = self.domain_model.get_member(member_id or "")
+        geometry = getattr(member, "geometry", None)
+        if not isinstance(geometry, (list, tuple)) or len(geometry) < 2:
+            return None, None
+        try:
+            start = np.array(geometry[0], dtype=float)
+            along = np.array(geometry[-1], dtype=float) - start
+        except (TypeError, ValueError):
+            return None, None
+        length = float(np.linalg.norm(along))
+        if length < 1e-12:
+            return None, None
+        return start, along / length
 
     def _map_results_to_domain(self, results: Dict[str, List[Result]]) -> None:
         """
