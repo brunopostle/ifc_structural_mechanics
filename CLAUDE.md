@@ -487,6 +487,20 @@ here. This section only records the constraints that shape day-to-day work.
   the loads and the solver's do, CalculiX has changed U1 and its forces are
   kept, with a warning to update the matrix; if both balance, a warning says
   the solver has put it right; if neither, a U1 warning says so.
+  **Section forces of U1 members** (`bgz`) come from the same matrix:
+  `ResultsParser.compute_user_element_section_forces()` takes each
+  element's stiffness times its displacements, less its share of the loads
+  along it (`StructuralModel.user_element_loads`, recorded per step by the
+  load writer: `_note_user_element_loads()` works out each element's share
+  on a set of that element alone, and the self-weight is half of each
+  element's at either end), and gives records at both ends and no middle,
+  which `_restore_jumps()` leaves as they are. A U1 element carries no load
+  of its own, so these are the forces of statics at every node of a
+  determinate member, at any mesh. The six figures of the FRD limit them
+  towards a free end, where the forces are small differences of large
+  displacements: measured on the I cantilever about its weak axis, shear
+  out by 0.7% of the root's at a 0.25 m mesh and 5% at 0.05 m, moments by
+  3e-4 to 1e-3; about the strong axis 0.1% and 0.5%.
 - **Equivalent-rectangle members have no `max_von_mises_Pa`** (the solver's
   stresses are the rectangle's); `results.json` marks them with
   `section_model`. Their stress is `max_normal_stress_Pa`, from the section
