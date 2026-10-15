@@ -1533,14 +1533,20 @@ class UnifiedCalculixWriter:
 
         Side-effects:
             Adds the mass of the elements to ``self._u1_node_masses``.
+
+        Raises:
+            AnalysisError: If the member has no section or material, or its
+                section has no area or no second moment of area: without
+                them its elements would not be written and the structure
+                would be analysed without the member.
         """
         section = member.section
         material = member.material
         if section is None or material is None:
-            self._warn_user(
-                f"Member {member.id}: missing section or material, skipping U1"
+            raise AnalysisError(
+                f"Member {member.id} cannot be analysed with user elements: "
+                "it has no section or no material."
             )
-            return
 
         A = getattr(section, "area", None)
         xi11 = getattr(section, "moment_of_inertia_y", None)
@@ -1548,11 +1554,11 @@ class UnifiedCalculixWriter:
         shear_area = getattr(section, "shear_area_y", None)
 
         if not all([A, xi11, xi22]):
-            self._warn_user(
-                f"Member {member.id}: incomplete section properties "
-                f"(A={A}, Iy={xi11}, Iz={xi22}), skipping U1"
+            raise AnalysisError(
+                f"Member {member.id} cannot be analysed with user elements: "
+                f"its section has A={A}, Iy={xi11}, Iz={xi22}, and needs all "
+                "three."
             )
-            return
 
         # Shear correction factor k_s (dimensionless)
         k_s = float(shear_area) / float(A) if shear_area else 0.833

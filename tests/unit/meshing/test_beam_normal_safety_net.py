@@ -11,6 +11,7 @@ import io
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
@@ -18,6 +19,7 @@ from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
 )
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
 
 
 def _make_mat():
@@ -109,3 +111,40 @@ class TestNativeBeamNormalOrthogonalisation:
         beam_axis = np.array([0.0, 0.0, 1.0])
         assert abs(np.linalg.norm(normal) - 1.0) < 1e-6
         assert abs(np.dot(normal, beam_axis)) < 1e-6
+
+
+class TestUserElementSectionMustBeComplete:
+    """A member whose section lacks a property is not left out (aiz.93).
+
+    The U1 path once warned and returned, so the member's elements were not
+    written and the structure was analysed without it.
+    """
+
+    def _write(self, member):
+        writer = MagicMock(spec=UnifiedCalculixWriter)
+        writer.domain_model = StructuralModel(id="test_model")
+        write = UnifiedCalculixWriter._write_beam_section_general.__get__(writer)
+        write(io.StringIO(), member, [1])
+
+    def test_section_without_inertia_stops_the_analysis(self):
+        section = Section(
+            id="c1",
+            name="Custom",
+            section_type="custom",
+            area=0.01,
+            dimensions={"depth": 0.1},
+        )
+        member = CurveMember(
+            id="m1",
+            geometry=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+            material=_make_mat(),
+            section=section,
+        )
+        with pytest.raises(AnalysisError, match="m1.*Iy=None"):
+            self._write(member)
+
+    def test_member_without_material_stops_the_analysis(self):
+        member = _rect_member([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)])
+        member.material = None
+        with pytest.raises(AnalysisError, match="m1.*no material"):
+            self._write(member)
