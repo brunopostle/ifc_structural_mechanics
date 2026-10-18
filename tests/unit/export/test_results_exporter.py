@@ -261,7 +261,7 @@ class TestExportWritesJson:
         assert (tmp_path / "results.json").exists()
         with open(out) as fh:
             loaded = json.load(fh)
-        assert loaded["schema_version"] == "1.9"
+        assert loaded["schema_version"] == ResultsExporter.SCHEMA_VERSION
         assert "units" in loaded
 
     def test_export_returns_dict(self, tmp_path):
@@ -289,7 +289,7 @@ class TestSchemaStructure:
     ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
     """
 
-    CURRENT_SCHEMA_VERSION = "1.9"
+    CURRENT_SCHEMA_VERSION = "1.10"
 
     _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
     _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}
@@ -408,3 +408,31 @@ class TestGlobalDisplacementsLeaveOutLinks:
 
     def test_a_node_shared_with_a_member_is_kept(self):
         assert self._exporter()._link_nodes() == {3}
+
+
+class TestSchemaDocumentation:
+    """docs/results_schema.md is the schema outsiders read (94g.11)."""
+
+    @staticmethod
+    def _doc() -> str:
+        with open("docs/results_schema.md") as fh:
+            return fh.read()
+
+    def test_doc_describes_this_version(self):
+        version = ResultsExporter.SCHEMA_VERSION
+        doc = self._doc()
+        assert f"describes schema **{version}**" in doc
+        assert f'"schema_version": "{version}"' in doc
+
+    def test_changelog_has_a_line_for_this_version(self):
+        assert f"\n| {ResultsExporter.SCHEMA_VERSION} | " in self._doc()
+
+    def test_example_has_this_version(self):
+        with open("docs/examples/beam_01_results.json") as fh:
+            example = json.load(fh)
+        assert example["schema_version"] == ResultsExporter.SCHEMA_VERSION
+
+    def test_limits_are_in_the_file(self):
+        model = StructuralModel(id="m", name="m")
+        exporter = ResultsExporter(model, {}, limits={"max_displacement_m": 0.02})
+        assert exporter.build()["limits"] == {"max_displacement_m": 0.02}

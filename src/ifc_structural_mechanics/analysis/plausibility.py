@@ -135,7 +135,12 @@ def balance_warnings(
             "holds a rotation; 2.23 does not."
         )
     message += " Displacements and member forces are not affected."
-    return [warning("W-RES-001", message)]
+    concerned = [
+        s["ifc_guid"]
+        for s in supports
+        if s.get("forces") in ("member_end_forces", "unreliable") and s.get("ifc_guid")
+    ]
+    return [warning("W-RES-001", message, ifc_guids=concerned)]
 
 
 def _has_user_elements(domain_model) -> bool:

@@ -8,13 +8,16 @@ Fast models (beam_01, portal_01, slab_01) run as part of the normal suite.
 building_02 is marked slow.
 """
 
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 
 import pytest
 
+from ifc_structural_mechanics import __version__
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
 
 logger = logging.getLogger(__name__)
@@ -45,7 +48,7 @@ def _load_results_json(output_dir: str) -> dict:
 
 def _assert_schema(data: dict) -> None:
     """Assert top-level results.json schema is present and well-formed."""
-    assert data.get("schema_version") == "1.9"
+    assert data.get("schema_version") == "1.10"
     units = data.get("units", {})
     assert units.get("displacement") == "m"
     assert units.get("stress") == "Pa"
@@ -113,6 +116,58 @@ class TestBeam01ResultsJson:
         if resultant is not None:
             logger.info(f"beam_01 reaction resultant: {resultant:.1f} N")
             assert resultant > 0, "Zero total reaction force"
+
+    def test_run_and_warnings_recorded(self, tmp_path):
+        """A report has to state how the results were made and every warning
+        (94g.11); a viewer goes by the input's hash and the warnings' GlobalIds."""
+        output_dir = str(tmp_path / "beam_01")
+        path = _ifc("beam_01.ifc")
+        result = analyze_ifc(ifc_path=path, output_dir=output_dir, mesh_size=0.5)
+        data = _load_results_json(output_dir)
+        with open(path, "rb") as fh:
+            sha256 = hashlib.sha256(fh.read()).hexdigest()
+        run = data["run"]
+        assert run["input_file"] == {"name": "beam_01.ifc", "sha256": sha256}
+        assert run["library"]["version"] == __version__
+        assert re.fullmatch(r"\d+\.\d+.*", run["solver"]["version"])
+        assert run["settings"] == {
+            "analysis_type": "linear_static",
+            "mesh_size_m": 0.5,
+            "element_order": 2,
+            "strict_connections": False,
+            "open_sections": "equivalent",
+            "gravity": False,
+        }
+        assert data["limits"] == {}
+        assert data["warnings"] == result["warnings"]
+        beam = data["members"][0]["ifc_guid"]
+        rectangles = [w for w in data["warnings"] if w["code"] == "W-SEC-001"]
+        assert rectangles and beam in rectangles[0]["ifc_guids"]
+
+    def test_example_in_the_docs_has_this_shape(self, tmp_path):
+        """docs/examples/beam_01_results.json is what consumers develop
+        against: it must have every key a fresh run has, and no other."""
+        output_dir = str(tmp_path / "beam_01")
+        analyze_ifc(ifc_path=_ifc("beam_01.ifc"), output_dir=output_dir, mesh_size=0.5)
+        with open(os.path.join("docs", "examples", "beam_01_results.json")) as fh:
+            example = json.load(fh)
+        assert _keys(example) == _keys(_load_results_json(output_dir)), (
+            "Regenerate docs/examples/beam_01_results.json "
+            "(see docs/results_schema.md)"
+        )
+
+
+def _keys(value, path: str = "") -> set:
+    """Every key path in a JSON value; list items are merged."""
+    found = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.add(f"{path}.{key}")
+            found |= _keys(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for item in value:
+            found |= _keys(item, f"{path}[]")
+    return found
 
 
 # ---------------------------------------------------------------------------

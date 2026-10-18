@@ -185,7 +185,7 @@ Configuration system with three main classes:
 
 #### 7. API (`src/ifc_structural_mechanics/api/`)
 Public-facing API for users:
-- `structural_analysis.py`: Main entry point, `analyze_ifc()`. `results.json` (schema in the docstring of `export/results_exporter.py`) is the contract with other tools: bump `SCHEMA_VERSION` when it changes. It returns `status: "failed"` with the error in `result["errors"]` for meshing, solver and result-reading failures, and raises `ModelExtractionError` for a file it cannot read
+- `structural_analysis.py`: Main entry point, `analyze_ifc()`. `results.json` (schema, versioning and changelog in `docs/results_schema.md`, example in `docs/examples/beam_01_results.json`) is the contract with other tools: bump `SCHEMA_VERSION` and add to the changelog when it changes, and regenerate the example. It returns `status: "failed"` with the error in `result["errors"]` for meshing, solver and result-reading failures, and raises `ModelExtractionError` for a file it cannot read
 
 #### 8. CLI (`src/ifc_structural_mechanics/cli/`)
 Command-line interface:

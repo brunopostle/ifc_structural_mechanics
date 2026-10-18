@@ -566,7 +566,9 @@ class UnifiedCalculixWriter:
                 "and a torsional stiffness tens of times too high: do not rely "
                 "on results where they carry torsion."
             )
-        self._warn_user("W-SEC-002", message)
+        self._warn_user(
+            "W-SEC-002", message, ifc_guids=self._ifc_guids(self._equivalent_sections)
+        )
 
     def _rectangle_moduli(self, member) -> Optional[Tuple[float, float]]:
         """Shear moduli of a solid rectangular member's own material, if any.
@@ -606,15 +608,16 @@ class UnifiedCalculixWriter:
     def _note_torsion_corrected_rectangles(self) -> None:
         """Say once what the torsion correction of solid rectangles costs."""
         softest = 1.0
-        count = 0
+        corrected = []
         for member in self.domain_model.members:
             if not self.element_sets.get(f"MEMBER_{self._get_short_id(member.id)}"):
                 continue
             moduli = self._rectangle_moduli(member)
             if moduli is None:
                 continue
-            count += 1
+            corrected.append(member.id)
             softest = min(softest, moduli[1] / moduli[0])
+        count = len(corrected)
         if count:
             self._warn_user(
                 "W-SEC-001",
@@ -622,6 +625,7 @@ class UnifiedCalculixWriter:
                 "their torsional stiffness by lowering the shear stiffness "
                 f"across their width, by up to {100 * (1 - softest):.0f} %. Bending, "
                 "and shear along their depth, are not affected.",
+                ifc_guids=self._ifc_guids(corrected),
             )
 
     def _identify_and_retype_u1_members(self) -> None:

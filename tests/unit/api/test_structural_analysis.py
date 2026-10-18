@@ -27,6 +27,17 @@ from ifc_structural_mechanics.utils.error_handling import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_run_record():
+    """These tests patch ``open`` and name an IFC file that is not there, so
+    the record of the run, which hashes the file, is left out."""
+    with patch(
+        "ifc_structural_mechanics.api.structural_analysis._run_record",
+        return_value={},
+    ):
+        yield
+
+
 # Mock the domain model for tests
 @pytest.fixture
 def mock_domain_model():

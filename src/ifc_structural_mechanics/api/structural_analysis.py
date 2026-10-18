@@ -5,11 +5,15 @@ This module provides the simplified public API for performing structural analysi
 on IFC models using the unified workflow that eliminates dual element writing.
 """
 
+import hashlib
 import logging
 import os
+import re
 import shutil
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from .. import __version__
 from ..analysis.calculix_runner import CalculixRunner
 from ..analysis.output_parser import solver_warnings
 from ..analysis.plausibility import plausibility_warnings
@@ -279,9 +283,23 @@ def analyze_ifc(
                     load_combinations=combinations,
                     analysis_type=analysis_type,
                 )
-                exported = exporter.export(results_json_path)
+                exported = exporter.build()
                 result["warnings"].extend(plausibility_warnings(exported, domain_model))
-                logger.info(f"Wrote results JSON: {results_json_path}")
+                exported = _with_run_record(
+                    exported,
+                    run=_run_record(
+                        ifc_path,
+                        calculix_runner.solver_output,
+                        analysis_type=analysis_type,
+                        mesh_size_m=mesh_size,
+                        element_order=element_order,
+                        strict_connections=strict_connections,
+                        open_sections=open_sections,
+                        gravity=gravity,
+                    ),
+                    warnings=result["warnings"],
+                )
+                ResultsExporter.write(exported, results_json_path)
             except StructuralAnalysisError:
                 raise
             except Exception as e:
@@ -577,6 +595,45 @@ def _validate_model(domain_model, gravity: bool) -> list:
         )
 
     return warnings
+
+
+def _run_record(ifc_path: str, solver_output: str, **settings) -> Dict[str, Any]:
+    """How the results were made, for the ``run`` of ``results.json``.
+
+    Args:
+        ifc_path: The IFC file analysed.
+        solver_output: What CalculiX printed, which names its version.
+        **settings: The options of ``analyze_ifc()`` that change the results.
+    """
+    sha256 = hashlib.sha256()
+    with open(ifc_path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            sha256.update(block)
+    found = re.search(r"CalculiX Version (\d[^,\s]*)", solver_output)
+    return {
+        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "library": {"name": "ifc_structural_mechanics", "version": __version__},
+        "solver": {"name": "CalculiX", "version": found.group(1) if found else None},
+        "input_file": {
+            "name": os.path.basename(ifc_path),
+            "sha256": sha256.hexdigest(),
+        },
+        "settings": settings,
+    }
+
+
+def _with_run_record(
+    data: Dict[str, Any], run: Dict[str, Any], warnings: list
+) -> Dict[str, Any]:
+    """The results with ``run`` after ``model`` and every warning at the end."""
+    ordered: Dict[str, Any] = {}
+    for key, value in data.items():
+        ordered[key] = value
+        if key == "model":
+            ordered["run"] = run
+    ordered.setdefault("run", run)
+    ordered["warnings"] = [dict(w) for w in warnings]
+    return ordered
 
 
 def _get_file_size(file_path: Optional[str]) -> Optional[int]:

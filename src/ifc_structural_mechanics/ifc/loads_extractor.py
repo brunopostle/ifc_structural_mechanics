@@ -333,10 +333,13 @@ class LoadsExtractor:
             label = f"{combination.name} ({entity.GlobalId})"
             if strangers:
                 not_cases.append(
-                    f"{label}: {strangers[0].is_a()} {strangers[0].GlobalId}"
+                    (
+                        f"{label}: {strangers[0].is_a()} {strangers[0].GlobalId}",
+                        [entity.GlobalId] + [s.GlobalId for s in strangers],
+                    )
                 )
             elif not combination.load_groups:
-                empty.append(label)
+                empty.append((label, entity.GlobalId))
             else:
                 load_combinations.append(combination)
 
@@ -345,9 +348,10 @@ class LoadsExtractor:
                 warning(
                     "W-LOD-004",
                     f"{len(empty)} load combination(s) name no load case and "
-                    f"have no results: {', '.join(empty[:3])}"
+                    f"have no results: {', '.join(e[0] for e in empty[:3])}"
                     + (" ..." if len(empty) > 3 else "")
                     + ".",
+                    ifc_guids=[e[1] for e in empty],
                 )
             )
         if not_cases:
@@ -356,9 +360,11 @@ class LoadsExtractor:
                     "W-LOD-005",
                     f"{len(not_cases)} load combination(s) include something "
                     "that is not a load case and have no results (the "
-                    f"combination and what it includes): {'; '.join(not_cases[:3])}"
+                    "combination and what it includes): "
+                    + "; ".join(n[0] for n in not_cases[:3])
                     + (" ..." if len(not_cases) > 3 else "")
                     + ".",
+                    ifc_guids=[g for n in not_cases for g in n[1]],
                 )
             )
 
