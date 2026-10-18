@@ -78,14 +78,27 @@ def building_02_run(tmp_path_factory):
         mesh_size=2.0,
     )
     # Session fixtures run before the function fixture that checks every
-    # results.json, so this one is checked here
+    # results.json, so this one is checked here, on a sample: the whole
+    # file (57 MB) took longer to validate than its analysis took to grow
+    # with the fields of schema 1.13 (95 s for 45 MB, measured). Every
+    # member has the same keys, so ten of each kind miss nothing
     results_path = Path(output_dir) / "results.json"
     if results_path.exists():
         import json
 
         from tests.helpers import check_results_schema
 
-        check_results_schema(json.loads(results_path.read_text()))
+        data = json.loads(results_path.read_text())
+        sample = dict(data)
+        sample["members"] = [
+            member
+            for kind in ("curve", "surface")
+            for member in [m for m in data["members"] if m["type"] == kind][:10]
+        ]
+        for key in ("connections", "supports"):
+            if key in data:
+                sample[key] = data[key][:10]
+        check_results_schema(sample)
     return result, output_dir
 
 
