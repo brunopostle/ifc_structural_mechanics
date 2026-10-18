@@ -1208,6 +1208,17 @@ class UnifiedCalculixWriter:
 
         logger.info(f"Wrote {len(written_sets)} element sets")
 
+    # Poisson's ratio of the materials of beams. Beam theory has no use for
+    # it: bending and axial stiffness are E alone and the shear moduli are
+    # given. In CalculiX's expanded solids it makes the cross-section contract
+    # and swell as the member bends, and wherever a knot holds the section
+    # rigid (a clamped end, a joint of members at an angle, an arm) that is
+    # stopped and the member is stiffer than it is. Measured on a 3 m
+    # cantilever with nu = 0.2: 1.2, 0.75 and 0.5 % stiff at a 0.5, 0.25 and
+    # 0.1 m mesh with it, 0.29 % at all three without (aiz.91); a beam with a
+    # knot at every node, nu = 0.3, 24 % stiff with it and right without.
+    _BEAM_POISSON = "0."
+
     def _write_materials(self, file: TextIO) -> None:
         """Write material definitions."""
         materials = {}
@@ -1260,7 +1271,7 @@ class UnifiedCalculixWriter:
             file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
             file.write(
                 f"{modulus:.6e}, {modulus:.6e}, {modulus:.6e},"
-                f" {poisson:.6e}, {poisson:.6e}, {poisson:.6e},"
+                f" {self._BEAM_POISSON}, {self._BEAM_POISSON}, {self._BEAM_POISSON},"
                 f" {moduli[0]:.6e}, {moduli[1]:.6e},\n"
             )
             file.write(f"{isotropic:.6e}\n")
@@ -1279,12 +1290,11 @@ class UnifiedCalculixWriter:
                 continue
             material = member.material
             modulus = material.elastic_modulus
-            poisson = material.poisson_ratio
             file.write(f"*MATERIAL, NAME={self._rectangle_material_name(member)}\n")
             file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
             file.write(
                 f"{modulus:.6e}, {modulus:.6e}, {modulus:.6e},"
-                f" {poisson:.6e}, {poisson:.6e}, {poisson:.6e},"
+                f" {self._BEAM_POISSON}, {self._BEAM_POISSON}, {self._BEAM_POISSON},"
                 f" {moduli[0]:.6e}, {moduli[1]:.6e},\n"
             )
             file.write(f"{moduli[0]:.6e}\n")
@@ -2325,7 +2335,7 @@ class UnifiedCalculixWriter:
     _KNOT_LINK = 0.01
 
     def _knot_point_loaded_nodes(self) -> None:
-        """Make a knot of every free member end a point force is applied to.
+        """Make a knot of every beam node a point force is applied to.
 
         CalculiX applies a force on a beam node that is not a knot to the
         four corner nodes of the expanded cross-section, a quarter each
@@ -2333,18 +2343,18 @@ class UnifiedCalculixWriter:
         brick has -1/12 at the corners and 1/3 at the middles of its sides.
         The corners are dented, and more so the shorter the elements are: a
         3 m column under 10 kN at its top shortened 2.7 % more than PL/EA at
-        a 0.25 m mesh and 6.6 % at 0.1 m (``aiz.76``). At a knot the
-        cross-section is rigid and the force is spread as the elements
-        need, and the column comes out at PL/EA to 0.03 % at any mesh.
+        a 0.25 m mesh and 6.6 % at 0.1 m (``aiz.76``), and an I section as
+        its equivalent rectangle under a load at midspan sagged 1.2 % more
+        than Timoshenko's beam at a 0.25 m mesh and 3.1 % at 0.05 m. At a
+        knot the cross-section is rigid and the force is spread as the
+        elements need: the column comes out at PL/EA to 0.03 % and the I
+        section to 3e-6 at any mesh.
 
-        Only at the free end of a member, a node of one beam element and of
-        nothing else. A rigid cross-section also stops it distorting as
-        bending makes it, which stiffens a member over the length of the
-        elements beside it: a beam with a knot under a load at midspan was
-        3 % stiff at a 0.5 m mesh on a 4 m span, 0.6 % at 0.05 m. There is
-        no bending moment at a free end. Inside a member a force across it
-        dents nothing measurable (0.06 %); one along it does, by about a
-        third of what it does at an end, and is left so.
+        A rigid cross-section once stiffened a member in bending over the
+        elements beside it (3 % at midspan of a 4 m span at a 0.5 m mesh),
+        by stopping the Poisson contraction of the section; beams have no
+        Poisson's ratio now (``_BEAM_POISSON``, aiz.91), and knots anywhere
+        cost nothing.
 
         CalculiX makes a knot where beams of different directions meet, so
         a short link at right angles to the member is hung on the node, its
@@ -2380,15 +2390,14 @@ class UnifiedCalculixWriter:
         for elem in self.elements.values():
             for node in elem["nodes"]:
                 elements_at.setdefault(node, []).append(elem)
-        free_end_axis: Dict[int, np.ndarray] = {}
+        beam_axis: Dict[int, np.ndarray] = {}
         for node, elems in elements_at.items():
-            if len(elems) != 1 or elems[0]["type"] not in BEAM_ELEMENT_TYPES:
+            if any(e["type"] not in BEAM_ELEMENT_TYPES for e in elems):
                 continue
             nodes = elems[0]["nodes"]
-            if node in (nodes[0], nodes[-1]):
-                free_end_axis[node] = np.array(self.nodes[nodes[-1]]) - np.array(
-                    self.nodes[nodes[0]]
-                )
+            beam_axis[node] = np.array(self.nodes[nodes[-1]]) - np.array(
+                self.nodes[nodes[0]]
+            )
         skip = {n for _, a, b in getattr(self, "_rigid_links", []) for n in (a, b)}
         for conn in self.domain_model.connections:
             if conn.has_stiffness_properties():
@@ -2408,11 +2417,11 @@ class UnifiedCalculixWriter:
             if position is None or not len(position):
                 continue
             node = find_closest_node(position, structure)
-            if node is None or node in skip or node not in free_end_axis:
+            if node is None or node in skip or node not in beam_axis:
                 continue
             skip.add(node)
             across = self._orthogonal_beam_normal(
-                (0.0, 0.0, 1.0), tuple(free_end_axis[node])
+                (0.0, 0.0, 1.0), tuple(beam_axis[node])
             )
             self.nodes[next_node] = tuple(
                 float(v)

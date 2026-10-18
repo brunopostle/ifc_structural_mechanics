@@ -317,6 +317,20 @@ class TestRectangularCantileverSelfWeight:
             expected, rel=DEFLECTION_TOLERANCE
         )
 
+    @pytest.mark.parametrize("mesh_size", [0.5, 0.25, 0.1])
+    def test_clamped_root_does_not_stiffen_it(self, tmp_path, mesh_size):
+        """The knot at the root holds its section rigid (aiz.91).
+
+        With the material's Poisson's ratio the section could not contract
+        there as bending makes it, and the cantilever was 1.2, 0.75 and
+        0.5 % stiff at these meshes.
+        """
+        data = _run(CANTILEVER, tmp_path, mesh_size=mesh_size, gravity=True)
+        expected = _cantilever_self_weight(
+            self.AREA, 0.2 * 0.4**3 / 12, self.SHEAR_AREA
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.005)
+
     def test_weak_axis_when_section_is_rotated(self, tmp_path):
         """Axis = +Y lays the section on its side: bending about the weak axis."""
         path = _cantilever_variant(tmp_path, axis=(0.0, 1.0, 0.0))
@@ -1257,19 +1271,25 @@ class TestFixedFixedISectionBeam:
         shear_modulus = self.B.E / (2 * (1 + self.B.NU))
         return self.B.E * I_STRONG, shear_modulus * I_H * I_TW
 
-    def test_point_load(self, tmp_path):
+    @pytest.mark.parametrize("mesh_size", [0.25, MESH_SIZE])
+    def test_point_load(self, tmp_path, mesh_size):
+        """Timoshenko's beam at any mesh.
+
+        The load once dented the equivalent rectangle's corners, 1.2 % at a
+        0.25 m mesh and 3.1 % at 0.05 m, and the knots at the clamped ends
+        stiffened it back by part of that (aiz.91): the node under the load
+        is a knot now, and beams have no Poisson's ratio.
+        """
         model = _beam_01()
         _give_beam_01_an_i_profile(model)
         path = str(tmp_path / "i_beam.ifc")
         model.write(path)
-        data = _run(path, tmp_path)
+        data = _run(path, tmp_path, mesh_size=mesh_size)
         bending, shear = self._stiffness()
         expected = self.B.LOAD * self.B.LENGTH**3 / (
             192 * bending
         ) + self.B.LOAD * self.B.LENGTH / (4 * shear)
-        assert _max_vertical_deflection(data) == pytest.approx(
-            expected, rel=DEFLECTION_TOLERANCE
-        )
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=1e-3)
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
             self.B.LOAD, rel=1e-3
         )

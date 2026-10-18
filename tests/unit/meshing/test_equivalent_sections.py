@@ -256,15 +256,16 @@ class TestWrittenInput:
         lines = _block(text, "NAME=MAT_EQ_M1")
         assert lines[0] == "*ELASTIC, TYPE=ENGINEERING CONSTANTS"
         constants = [float(v) for v in lines[1].rstrip(",").split(",")]
-        modulus, poisson = constants[0], constants[3]
+        modulus = constants[0]
         density = float(lines[4])
         assert constants[:3] == pytest.approx([modulus] * 3)
-        assert constants[3:6] == pytest.approx([NU] * 3)
+        # A beam's own Poisson's ratio only stiffens it where a knot holds
+        # its section (aiz.91)
+        assert constants[3:6] == [0.0] * 3
         assert modulus * a * b == pytest.approx(E * AREA, rel=1e-6)
         assert modulus * b * a**3 / 12 == pytest.approx(E * I_STRONG, rel=1e-6)
         assert modulus * a * b**3 / 12 == pytest.approx(E * I_WEAK, rel=1e-6)
         assert density * a * b == pytest.approx(RHO * AREA, rel=1e-6)
-        assert poisson == pytest.approx(NU)
 
     def test_shear_moduli_give_the_section_its_own_shear_stiffness(self):
         """An open section: shear is matched, over the rectangle's whole area."""
