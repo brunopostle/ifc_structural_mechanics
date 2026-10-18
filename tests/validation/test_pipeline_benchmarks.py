@@ -5236,3 +5236,366 @@ class TestSurfaceSupports:
             assert abs(values["my_Nm"]) == pytest.approx(moment * SLAB_W, rel=0.01)
         total = data["global_reactions"]["by_load_case"]["Imposed"]
         assert total["imbalance_N"] < 1e-6 * SLAB_Q * SLAB_L * SLAB_W
+
+
+SBB_L, SBB_B, SBB_T = 4.0, 3.0, 0.2
+SBB_E, SBB_Q = 3.0e10, 5000.0
+SBB_BEAM_B, SBB_BEAM_H = 0.3, 0.5
+SBB_OVERHANG = 0.5
+
+
+def _slab_between_beams(tmp_path, released: bool = False, drop: float = 0.0) -> str:
+    """Write a slab spanning between two beams it is joined to along line connections.
+
+    The slab is 4 m along x, spans 3 m along y and is 0.2 m thick, at z = 0,
+    with nu = 0 and free at x = 0 and x = 4, so that it bends as a strip. The
+    beams run along its long edges, ``drop`` below them and 0.5 m past its
+    ends, clamped at both ends and a thousand times as stiff as the slab's
+    material: the edges of the slab do not move, and they turn only as the
+    joint lets them. (A support at a corner of the slab would hold the slab's
+    node there as well.) Each line
+    connection runs along an edge of the slab and joins slab and beam; with
+    ``released`` the slab is free to rotate about it. A uniform load acts on
+    the slab, in a load case of its own.
+    """
+    model = ifcopenshell.file(schema="IFC4")
+    create = model.create_entity
+    guid = ifcopenshell.guid.new
+    up = create("IfcDirection", (0.0, 0.0, 1.0))
+    axes = create(
+        "IfcAxis2Placement3D",
+        create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+        up,
+        create("IfcDirection", (1.0, 0.0, 0.0)),
+    )
+    placement = create("IfcLocalPlacement", None, axes)
+    units = create(
+        "IfcUnitAssignment", [create("IfcSIUnit", None, "LENGTHUNIT", None, "METRE")]
+    )
+    context = create(
+        "IfcGeometricRepresentationContext", None, "Model", 3, 1e-5, axes, None
+    )
+    project = create(
+        "IfcProject",
+        guid(),
+        None,
+        "Benchmark",
+        None,
+        None,
+        None,
+        None,
+        [context],
+        units,
+    )
+    analysis = create(
+        "IfcStructuralAnalysisModel",
+        guid(),
+        None,
+        "Slab between beams",
+        None,
+        None,
+        "NOTDEFINED",
+        axes,
+        None,
+        None,
+        placement,
+    )
+    create("IfcRelDeclares", guid(), None, None, None, project, [analysis])
+
+    def material(name, modulus):
+        made = create("IfcMaterial", name, None, None)
+        create(
+            "IfcMaterialProperties",
+            "Pset_MaterialMechanical",
+            None,
+            [
+                create(
+                    "IfcPropertySingleValue",
+                    "YoungModulus",
+                    None,
+                    create("IfcModulusOfElasticityMeasure", modulus),
+                    None,
+                ),
+                create(
+                    "IfcPropertySingleValue",
+                    "PoissonRatio",
+                    None,
+                    create("IfcPositiveRatioMeasure", 0.0),
+                    None,
+                ),
+            ],
+            made,
+        )
+        return made
+
+    def vertex(x, y, z=0.0):
+        return create(
+            "IfcVertexPoint", create("IfcCartesianPoint", (float(x), float(y), z))
+        )
+
+    def shape(kind, item):
+        topology = create(
+            "IfcTopologyRepresentation", context, "Reference", kind, [item]
+        )
+        return create("IfcProductDefinitionShape", None, None, [topology])
+
+    def connect(member, connection, condition=None):
+        create(
+            "IfcRelConnectsStructuralMember",
+            guid(),
+            None,
+            None,
+            None,
+            member,
+            connection,
+            condition,
+            None,
+            None,
+            None,
+        )
+
+    corners = [
+        vertex(x, y) for x, y in ((0, 0), (SBB_L, 0), (SBB_L, SBB_B), (0, SBB_B))
+    ]
+    loop = create(
+        "IfcEdgeLoop",
+        [
+            create(
+                "IfcOrientedEdge",
+                None,
+                None,
+                create("IfcEdge", corners[i], corners[(i + 1) % 4]),
+                True,
+            )
+            for i in range(4)
+        ],
+    )
+    face = create(
+        "IfcFaceSurface",
+        [create("IfcFaceBound", loop, True)],
+        create("IfcPlane", axes),
+        True,
+    )
+    slab = create(
+        "IfcStructuralSurfaceMember",
+        guid(),
+        None,
+        "Slab",
+        None,
+        None,
+        placement,
+        shape("Face", face),
+        "SHELL",
+        SBB_T,
+    )
+    create(
+        "IfcRelAssociatesMaterial",
+        guid(),
+        None,
+        None,
+        None,
+        [slab],
+        material("Slab", SBB_E),
+    )
+    profile = create(
+        "IfcRectangleProfileDef", "AREA", "Beam", None, SBB_BEAM_B, SBB_BEAM_H
+    )
+    profile_set = create(
+        "IfcMaterialProfileSet",
+        None,
+        None,
+        [
+            create(
+                "IfcMaterialProfile",
+                "Beam",
+                None,
+                material("Stiff", 1000 * SBB_E),
+                profile,
+                None,
+                None,
+            )
+        ],
+        None,
+    )
+    products, beams = [slab], []
+    for y in (0.0, SBB_B):
+        beam = create(
+            "IfcStructuralCurveMember",
+            guid(),
+            None,
+            "Beam",
+            None,
+            None,
+            placement,
+            shape(
+                "Edge",
+                create(
+                    "IfcEdge",
+                    vertex(-SBB_OVERHANG, y, -drop),
+                    vertex(SBB_L + SBB_OVERHANG, y, -drop),
+                ),
+            ),
+            "RIGID_JOINED_MEMBER",
+            up,
+        )
+        beams.append(beam)
+        for x in (-SBB_OVERHANG, SBB_L + SBB_OVERHANG):
+            support = create(
+                "IfcStructuralPointConnection",
+                guid(),
+                None,
+                "Support",
+                None,
+                None,
+                placement,
+                shape("Vertex", vertex(x, y, -drop)),
+                create(
+                    "IfcBoundaryNodeCondition",
+                    None,
+                    *[create("IfcBoolean", True) for _ in range(6)],
+                ),
+                None,
+            )
+            connect(beam, support)
+            products.append(support)
+        line = create(
+            "IfcStructuralCurveConnection",
+            guid(),
+            None,
+            "Joint",
+            None,
+            None,
+            placement,
+            shape("Edge", create("IfcEdge", vertex(0, y), vertex(SBB_L, y))),
+            None,
+            up,
+        )
+        connect(beam, line)
+        held, free = create("IfcBoolean", True), create("IfcBoolean", False)
+        connect(
+            slab,
+            line,
+            (
+                create(
+                    "IfcBoundaryEdgeCondition", None, held, held, held, free, free, free
+                )
+                if released
+                else None
+            ),
+        )
+        products += [beam, line]
+    create("IfcRelAssociatesMaterial", guid(), None, None, None, beams, profile_set)
+    create("IfcRelAssignsToGroup", guid(), None, None, None, products, None, analysis)
+    _add_area_load(model, slab, (0.0, 0.0, -SBB_Q))
+    path = str(tmp_path / "slab_between_beams.ifc")
+    model.write(path)
+    return path
+
+
+def _sag_across(data_dir) -> float:
+    """How far the middle of the slab sags below its edges.
+
+    Read from the solver's nodes on the slab's faces, in the middle half of
+    its length: it bends as a strip, the same at every x. The slab node
+    nearest its centre line is within a few centimetres of it, where the
+    deflection is flat to a part in a thousand.
+    """
+    parser = ResultsParser()
+    frd = os.path.join(str(data_dir), "analysis.frd")
+    coordinates = parser.parse_node_coordinates(frd)
+    vertical = {
+        int(result.reference_element): result.get_translations()[2]
+        for result in parser.parse_displacements(frd)
+    }
+    faces = {
+        node: xyz
+        for node, xyz in coordinates.items()
+        if node in vertical
+        and abs(abs(xyz[2]) - SBB_T / 2) < 1e-6
+        and abs(xyz[0] - SBB_L / 2) < SBB_L / 4
+    }
+
+    def uz(y):
+        # The faces above and below a point of the middle surface: their
+        # mean is its deflection
+        nearest = min(faces, key=lambda node: abs(faces[node][1] - y))
+        assert abs(faces[nearest][1] - y) < 0.06
+        values = [
+            vertical[node]
+            for node, xyz in faces.items()
+            if math.dist(xyz[:2], faces[nearest][:2]) < 1e-6
+        ]
+        assert len(values) == 2
+        return sum(values) / 2
+
+    return uz(0.0) - uz(SBB_B / 2)
+
+
+class TestSlabJoinedToBeamsAlongALine:
+    """A slab joined to its beams by line connections of the file (aiz.51).
+
+    The beams are much stiffer than the slab, so it spans between them as a
+    strip with edges that do not move: clamped if the joints are rigid,
+    hinged if they release rotation about the line. Mindlin plate theory,
+    nu = 0, adds its shear: q B^2 / 8 kappa G t.
+    """
+
+    MESH = 0.25
+
+    def _expected(self, clamped: bool) -> float:
+        stiffness = SBB_E * SBB_T**3 / 12
+        shear = 5.0 / 6.0 * SBB_E / 2 * SBB_T
+        bending = SBB_Q * SBB_B**4 / (384 * stiffness)
+        return (bending if clamped else 5 * bending) + SBB_Q * SBB_B**2 / (8 * shear)
+
+    def test_rigid_joint_clamps_the_slab(self, tmp_path):
+        path = _slab_between_beams(tmp_path)
+        _run(path, tmp_path, mesh_size=self.MESH)
+        sag = _sag_across(tmp_path / f"out_{self.MESH}")
+        assert sag == pytest.approx(self._expected(clamped=True), rel=0.01)
+
+    def test_released_joint_hinges_the_slab(self, tmp_path):
+        """Once the slab hung from a point in the middle of each line."""
+        path = _slab_between_beams(tmp_path, released=True)
+        _run(path, tmp_path, mesh_size=self.MESH)
+        sag = _sag_across(tmp_path / f"out_{self.MESH}")
+        assert sag == pytest.approx(self._expected(clamped=False), rel=0.01)
+
+    def test_downstand_beams_clamp_it_through_links(self, tmp_path):
+        path = _slab_between_beams(tmp_path, drop=0.4)
+        _run(path, tmp_path, mesh_size=self.MESH)
+        sag = _sag_across(tmp_path / f"out_{self.MESH}")
+        assert sag == pytest.approx(self._expected(clamped=True), rel=0.01)
+
+    def test_downstand_beams_hinged_to_it(self, tmp_path):
+        path = _slab_between_beams(tmp_path, released=True, drop=0.4)
+        _run(path, tmp_path, mesh_size=self.MESH)
+        sag = _sag_across(tmp_path / f"out_{self.MESH}")
+        assert sag == pytest.approx(self._expected(clamped=False), rel=0.01)
+
+    def test_a_line_cannot_join_two_beams(self, tmp_path):
+        model = ifcopenshell.open(_slab_between_beams(tmp_path))
+        lines = model.by_type("IfcStructuralCurveConnection")
+        beams = model.by_type("IfcStructuralCurveMember")
+        model.create_entity(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            RelatingStructuralMember=beams[1],
+            RelatedStructuralConnection=lines[0],
+        )
+        path = str(tmp_path / "two_beams.ifc")
+        model.write(path)
+        result = analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"))
+        assert result["status"] == "failed"
+        assert any("joins curve members" in e for e in map(str, result["errors"]))
+
+    def test_supports_carry_the_load(self, tmp_path):
+        data = _run(_slab_between_beams(tmp_path), tmp_path, mesh_size=self.MESH)
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        # CalculiX 2.21 is 1.2e-6 short at these clamped ends
+        assert total["fz_N"] == pytest.approx(SBB_Q * SBB_L * SBB_B, rel=1e-5)
+        beams = [m for m in data["members"] if m["type"] == "curve"]
+        assert len(beams) == 2
+        (slab,) = [m for m in data["members"] if m["type"] == "surface"]
+        for beam in beams:
+            assert beam["tied_to_surface_members"] == [slab["id"]]

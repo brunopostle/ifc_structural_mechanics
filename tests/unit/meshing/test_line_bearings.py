@@ -238,35 +238,71 @@ class TestMemberMeetingASurfaceAtAPoint:
 
 
 class TestLineConnectionOfTheFile:
-    """An IfcStructuralCurveConnection joining a beam and a slab along an edge."""
+    """An IfcStructuralCurveConnection joining a beam and a slab along an edge.
 
-    def _connected(self, strict=False):
+    The geometry stage meshes the line into the slab node for node with the
+    beam (aiz.51); here the beam's nodes are the slab's corner and middle
+    nodes along y = 0.
+    """
+
+    def _connected(self, strict=False, released=False, beam_nodes=None):
         from ifc_structural_mechanics.domain.structural_connection import (
             RigidConnection,
         )
 
-        writer = _edge_beam()
+        writer = _slab_with_beam(
+            beam_nodes
+            or {20: (0.0, 0.0, 0.0), 21: (2.0, 0.0, 0.0), 22: (4.0, 0.0, 0.0)},
+            [(20, 22, 21)],
+            quadratic=True,
+        )
         edge = RigidConnection("edge", [2.0, 0.0, 0.0])
         edge.edge = [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]]
         edge.connect_member("beam")
         edge.connect_member("slab")
+        if released:
+            edge.released_dofs_by_member = {"slab": [4, 5, 6]}
         writer.domain_model.connections.append(edge)
         writer.analysis_config.set_strict_connections(strict)
-        writer._build_line_bearings()
         return writer
 
-    def test_beam_is_tied_along_the_edge_without_a_warning(self):
+    def test_rigid_joint_shares_the_nodes(self):
+        """Beam and slab nodes become one, which CalculiX makes a knot of."""
         writer = self._connected()
+        writer._merge_rigid_connection_nodes()
 
-        assert [node for node, _ in writer._line_bearings] == [20, 21, 22]
+        assert writer.elements[10]["nodes"] == [1, 2, 5]
+        writer._build_line_bearings()
+        assert writer._line_bearings == []
         assert _warnings(writer) == []
 
-    def test_it_holds_under_strict_connections_too(self):
-        """It is a connection of the file, not one read into the geometry."""
-        writer = self._connected(strict=True)
+    @pytest.mark.parametrize("strict", [False, True])
+    def test_released_joint_ties_each_node_to_the_slab(self, strict):
+        """A row of ball joints; a connection of the file, strict or not."""
+        writer = self._connected(strict=strict, released=True)
+        writer._merge_rigid_connection_nodes()
+        writer._build_line_bearings()
 
-        assert [node for node, _ in writer._line_bearings] == [20, 21, 22]
+        assert writer._line_bearings == [
+            (20, [(1, 1.0)]),
+            (21, [(5, 1.0)]),
+            (22, [(2, 1.0)]),
+        ]
         assert _warnings(writer) == []
+
+    def test_mesh_without_the_line_is_refused(self):
+        """Interpolating a slab's middle surface would hold none of its normals."""
+        from ifc_structural_mechanics.utils.error_handling import AnalysisError
+
+        writer = self._connected(
+            beam_nodes={
+                20: (0.0, 0.0, 0.0),
+                21: (1.0, 0.0, 0.0),
+                22: (4.0, 0.0, 0.0),
+            }
+        )
+        with pytest.raises(AnalysisError, match="has no node at"):
+            writer._merge_rigid_connection_nodes()
 
 
 class TestMembersLeftAlone:

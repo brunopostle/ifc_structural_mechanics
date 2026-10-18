@@ -1933,6 +1933,17 @@ class UnifiedCalculixWriter:
 
         Members with an end release keep their own node and are tied by
         translation equations in ``_write_point_connection``.
+
+        A line connection joining a curve and a surface member with no
+        release about the line (``_line_joints``) is made the same way at
+        every node along it: the beam and slab nodes are merged, or joined
+        by a link where the beam is eccentric. An arm or an equation cannot
+        do it: an equation reaches only the slab's middle surface, and the
+        slab's normals stay free to turn against its shear stiffness alone
+        (a slab clamped that way to a beam held against twisting came out
+        40 % too flexible in its own share). The slab is a knot along the
+        line, which holds its thickness there and stiffens it a little: 3 %
+        of a cantilevered slab's own deflection at a 0.25 m mesh, nu = 0.3.
         """
         parent: Dict[int, int] = {}
         links: List[Tuple[int, int]] = []
@@ -1946,6 +1957,8 @@ class UnifiedCalculixWriter:
             real_members = list(conn.connected_members)
             if len(real_members) < 2 or conn.entity_type not in ("point", "rigid"):
                 continue
+            if getattr(conn, "edge", None) is not None:
+                continue  # joined along the line (_build_line_joints)
             released = getattr(conn, "released_dofs_by_member", None) or {}
             rigid_members = [
                 m
@@ -1985,6 +1998,23 @@ class UnifiedCalculixWriter:
                         "no moment there.",
                         domain_id=conn.id,
                     )
+
+        # Members joined rigidly along a line connection of the file
+        for joint in self._line_joints():
+            if not joint["rigid"]:
+                continue
+            for node, shell_node in joint["pairs"]:
+                gap = float(
+                    np.linalg.norm(
+                        np.array(self.nodes[node]) - np.array(self.nodes[shell_node])
+                    )
+                )
+                if gap <= self._COINCIDENT_TOL:
+                    root_a, root_b = find(node), find(shell_node)
+                    if root_a != root_b:
+                        parent[max(root_a, root_b)] = min(root_a, root_b)
+                else:
+                    links.append((node, shell_node))
 
         if parent:
             for elem in self.elements.values():
@@ -2032,7 +2062,13 @@ class UnifiedCalculixWriter:
 
         for conn in self.domain_model.connections:
             edge = getattr(conn, "edge", None)
-            members = list(conn.connected_members)
+            # Surfaces only: a curve member's joint along the line is made
+            # by _build_line_joints, node for node
+            members = [
+                m
+                for m in conn.connected_members
+                if isinstance(self.domain_model.get_member(m), SurfaceMember)
+            ]
             if edge is None or len(edge) != 2 or len(members) < 2:
                 continue
 
@@ -2782,8 +2818,6 @@ class UnifiedCalculixWriter:
                     member.id,
                 )
             )
-        if not surfaces:
-            return
 
         # What the file itself connects: a line connection joining a curve
         # member and a surface member, and the points where two members share
@@ -2843,6 +2877,8 @@ class UnifiedCalculixWriter:
         for surface in surfaces:
             all_shell_nodes |= surface[4]
 
+        joined = self._build_line_joints()
+
         strict = self.analysis_config.get_strict_connections()
         lying, meeting = set(), set()
         for member in self.domain_model.members:
@@ -2868,6 +2904,8 @@ class UnifiedCalculixWriter:
             for triangles, corners, s_lo, s_hi, shell_nodes, surface_id in surfaces:
                 if (hi < s_lo).any() or (lo > s_hi).any():
                     continue
+                if (member.id, surface_id) in explicit_lines:
+                    continue  # a line connection of the file (_build_line_joints)
                 found = 0
                 ties = []
                 for node, point in points.items():
@@ -2888,19 +2926,16 @@ class UnifiedCalculixWriter:
                     ]
                     ties.append((node, terms))
                 along_a_line = found >= 2
-                connected = (member.id, surface_id) in explicit_lines
                 for node, terms in ties:
                     if not along_a_line and any(
                         float(np.linalg.norm(points[node] - p)) <= tol
                         for p in shared_points.get((member.id, surface_id), ())
                     ):
                         continue  # a connection of the file joins them here
-                    member_ties.append(
-                        (node, terms, not connected, along_a_line, surface_id)
-                    )
+                    member_ties.append((node, terms, True, along_a_line, surface_id))
 
             seen = set()
-            tied_to = set()
+            tied_to = set(joined.get(member.id, ()))
             for node, terms, implied, along_a_line, surface_id in member_ties:
                 if node in seen or node in linked_nodes or node in all_shell_nodes:
                     continue
@@ -2961,6 +2996,189 @@ class UnifiedCalculixWriter:
                     "column bearing on or passing through a slab. Use strict "
                     "connections to analyse only the connections in the file."
                 )
+
+    def _line_joints(self) -> List[dict]:
+        """The curve and surface members the line connections of the file join.
+
+        An ``IfcStructuralCurveConnection`` joining a beam and a slab holds
+        them together along its whole length. The geometry stage meshes the
+        line into the slab and the beam with the same nodes along it
+        (``GmshGeometry._seed_line_joints``), so each beam node on the line
+        has a node of the slab at its foot: the same point where the beam
+        lies in the slab, the point the eccentricity leads to where it does
+        not (a downstand beam; ``IfcRelConnectsWithEccentricity`` is drawn
+        as geometry, as at points).
+
+        Returns:
+            One entry per curve and surface member joined: ``conn``,
+            ``beam`` and ``plate`` (member ids), ``rigid`` (neither is
+            released about the line) and ``pairs``, ``[(beam node, slab
+            node), ...]``. A pair is one node where the two are merged.
+
+        Raises:
+            AnalysisError: For a line connection joining two curve members, a
+                curve member that does not run along its line or lies too far
+                from it, or a mesh with no slab node at a beam node's foot.
+        """
+        from ..analysis.boundary_condition_handling import released_rotation_axes
+
+        tol = self._COINCIDENT_TOL
+        joints: List[dict] = []
+        kinds = {m.id: m for m in self.domain_model.members}
+
+        def released_about(conn, member_id: str, direction: np.ndarray) -> bool:
+            axes = released_rotation_axes(conn, member_id)
+            return bool(len(axes)) and float(np.abs(axes @ direction).max()) > 0.5
+
+        def member_nodes(member_id: str) -> List[int]:
+            member_set = f"MEMBER_{self._get_short_id(member_id)}"
+            return sorted(
+                {
+                    n
+                    for e in self.element_sets.get(member_set, [])
+                    if e in self.elements
+                    for n in self.elements[e]["nodes"]
+                }
+            )
+
+        for conn in self.domain_model.connections:
+            edge = getattr(conn, "edge", None)
+            members = list(conn.connected_members or [])
+            if edge is None or len(members) < 2:
+                continue
+            beams = [m for m in members if isinstance(kinds.get(m), CurveMember)]
+            plates = [m for m in members if isinstance(kinds.get(m), SurfaceMember)]
+            if len(beams) > 1:
+                raise AnalysisError(
+                    f"Line connection {conn.id} joins curve members "
+                    f"{', '.join(beams)}. Curve members can only be joined along "
+                    "a line to a surface member; join them at points instead."
+                )
+            if not beams or not plates:
+                continue
+            start = np.array(edge[0], dtype=float)
+            along = np.array(edge[1], dtype=float) - start
+            length = float(np.linalg.norm(along))
+            if length < 1e-9:
+                continue
+            along /= length
+            beam_id = beams[0]
+            endpoints = self._get_member_endpoints(beam_id)
+            if endpoints is not None:
+                axis = endpoints[1] - endpoints[0]
+                if abs(float(axis @ along)) < (1.0 - 1e-3) * float(
+                    np.linalg.norm(axis)
+                ):
+                    raise AnalysisError(
+                        f"Line connection {conn.id} joins curve member {beam_id}, "
+                        "which does not run along the line."
+                    )
+            on_line = []
+            for node in member_nodes(beam_id):
+                point = np.array(self.nodes[node], dtype=float)
+                s = float((point - start) @ along)
+                if s < -tol or s > length + tol:
+                    continue
+                foot = start + s * along
+                gap = float(np.linalg.norm(foot - point))
+                if gap > self._MAX_RIGID_LINK:
+                    raise AnalysisError(
+                        f"Line connection {conn.id}: curve member {beam_id} lies "
+                        f"{gap:.2f} m from the line, too far for a rigid link."
+                    )
+                on_line.append((node, foot))
+            if len(on_line) < 2:
+                raise AnalysisError(
+                    f"Line connection {conn.id}: curve member {beam_id} has "
+                    f"{len(on_line)} node(s) along the line, so it cannot be "
+                    "joined there."
+                )
+
+            for plate_id in plates:
+                shell = member_nodes(plate_id)
+                coords = np.array([self.nodes[n] for n in shell], dtype=float)
+                pairs = []
+                for node, foot in on_line:
+                    if node in shell:
+                        pairs.append((node, node))
+                        continue
+                    distance = np.linalg.norm(coords - foot, axis=1)
+                    nearest = int(np.argmin(distance))
+                    if distance[nearest] > tol:
+                        raise AnalysisError(
+                            f"Line connection {conn.id}: the mesh of surface "
+                            f"member {plate_id} has no node at "
+                            f"({foot[0]:.3f}, {foot[1]:.3f}, {foot[2]:.3f}), "
+                            f"the foot of a node of {beam_id}. Is the line in "
+                            "the surface?"
+                        )
+                    pairs.append((node, shell[nearest]))
+                joints.append(
+                    {
+                        "conn": conn,
+                        "beam": beam_id,
+                        "plate": plate_id,
+                        "rigid": not (
+                            released_about(conn, beam_id, along)
+                            or released_about(conn, plate_id, along)
+                        ),
+                        "pairs": pairs,
+                    }
+                )
+        return joints
+
+    def _build_line_joints(self) -> Dict[str, set]:
+        """Hinge curve and surface members along the line connections of the file.
+
+        Rigid joints are made by ``_merge_rigid_connection_nodes``: the beam
+        and slab nodes on the line become one, or a rigid link joins them,
+        and CalculiX makes a knot of each. Where either member is released
+        about the line, each beam node is tied to the slab node at its foot
+        in translation: a row of ball joints, which is a hinge about the
+        line. An eccentric beam is carried to the slab by a rigid link
+        first, so the hinge is where the line is.
+
+        Returns:
+            ``{curve member id: {surface member id, ...}}`` for every pair the
+            file joins along a line, rigidly or not.
+        """
+        joined: Dict[str, set] = {}
+        links = list(getattr(self, "_rigid_links", []))
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [elem_id for elem_id, _, _ in links]
+            )
+            + 1
+        )
+        for joint in self._line_joints():
+            joined.setdefault(joint["beam"], set()).add(joint["plate"])
+            if joint["rigid"]:
+                continue
+            for node, shell_node in joint["pairs"]:
+                if node == shell_node:
+                    continue
+                gap = float(
+                    np.linalg.norm(
+                        np.array(self.nodes[node]) - np.array(self.nodes[shell_node])
+                    )
+                )
+                anchor = node
+                if gap > self._COINCIDENT_TOL:
+                    anchor = next_node
+                    self.nodes[anchor] = self.nodes[shell_node]
+                    helpers.add(anchor)
+                    links.append((next_elem, node, anchor))
+                    next_node += 1
+                    next_elem += 1
+                self._line_bearings.append((anchor, [(shell_node, 1.0)]))
+        if len(links) > len(getattr(self, "_rigid_links", [])):
+            self._rigid_links = links
+            self._member_node_cache = {}
+        self._helper_nodes = helpers
+        return joined
 
     @staticmethod
     def _write_equation(file: TextIO, terms: List[Tuple[int, int, float]]) -> None:
@@ -3141,15 +3359,18 @@ class UnifiedCalculixWriter:
                 continue
             directions[member.id] = axis / length
 
-        def turns_with(conn, member_id: str) -> bool:
-            """Whether the member passes torsion on to what it joins there."""
+        def turns_with(conn, member_id: str, axis=None) -> bool:
+            """Whether the member passes rotation about ``axis`` on there.
+
+            ``axis`` is the member's own by default: its torsion.
+            """
             if conn.entity_type == "hinge" and len(conn.connected_members) > 1:
                 return False
+            if axis is None:
+                axis = directions[member_id]
             released = released_rotation_axes(conn, member_id)
             # An axis counts when it has a share in rotation about the member
-            return not (
-                len(released) and np.abs(released @ directions[member_id]).max() > 0.5
-            )
+            return not (len(released) and np.abs(released @ axis).max() > 0.5)
 
         # The run each member belongs to, and the runs something holds
         run_of = {member_id: member_id for member_id in directions}
@@ -3184,7 +3405,12 @@ class UnifiedCalculixWriter:
                         and abs(float(directions[other] @ direction)) > 1.0 - 1e-6
                     )
                     if not in_line:
-                        restrained.add(member_id)
+                        # A surface it is joined to along a line holds it
+                        # unless the surface is hinged about that line
+                        if getattr(conn, "edge", None) is None or turns_with(
+                            conn, other, direction
+                        ):
+                            restrained.add(member_id)
                     elif turns_with(conn, other):
                         run_of[run(other)] = run(member_id)
 
@@ -3420,6 +3646,11 @@ class UnifiedCalculixWriter:
                 logger.debug(
                     f"Skipping connection {conn.id} - only {len(real_members)} real members (boundary condition)"
                 )
+                continue
+            if getattr(conn, "edge", None) is not None:
+                # Joined along the line: surfaces by their shared edge nodes
+                # (_release_hinged_edges), a curve member and a surface by
+                # _build_line_joints
                 continue
 
             # Get connection type

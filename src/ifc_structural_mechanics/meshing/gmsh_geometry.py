@@ -334,8 +334,9 @@ class GmshGeometryConverter:
                 surface member. Passed as *tools* to the surface fragment() so
                 the shell mesh has a node at each of them.
             surface_piece_tags: Surfaces where a surface support covers a
-                surface member (``_surface_support_pieces``), passed as tools
-                so the shell mesh follows its outline.
+                surface member (``_surface_support_pieces``), and the lines of
+                line connections joining a beam to it (``_seed_line_joints``),
+                passed as tools so the shell mesh follows them.
         """
         self._fragment_map = None
         curve_map = None
@@ -908,6 +909,172 @@ class GmshGeometryConverter:
             logger.info(f"Surface supports cover {len(pieces)} piece(s) of surfaces")
         return pieces
 
+    def _line_joints(self, domain_model: StructuralModel) -> List[tuple]:
+        """The line connections joining a straight curve member to surface members.
+
+        Returns:
+            ``(beam id, plate ids, start, end, offset)`` for each, with the
+            line's ends and ``offset`` the step from the beam to the line,
+            across it (zero for a beam lying in the surface). Lines the curve
+            member does not run along are left to the writer to report.
+        """
+        joints = []
+        for conn in domain_model.connections:
+            edge = getattr(conn, "edge", None)
+            if edge is None:
+                continue
+            members = [domain_model.get_member(m) for m in conn.connected_members]
+            beams = [m for m in members if isinstance(m, CurveMember)]
+            plates = [m.id for m in members if isinstance(m, SurfaceMember)]
+            if len(beams) != 1 or not plates:
+                continue
+            try:
+                start, end = (np.array(p, dtype=float) for p in edge)
+                geometry = self._convert_curve(beams[0].geometry)
+            except (TypeError, ValueError, KeyError, NotImplementedError):
+                continue
+            if len(geometry) != 2:
+                continue
+            a, b = (np.array(p, dtype=float) for p in geometry)
+            along, axis = end - start, b - a
+            length = float(np.linalg.norm(along))
+            if length < 1e-9 or float(np.linalg.norm(axis)) < 1e-9:
+                continue
+            along /= length
+            if abs(float(along @ axis)) < (1.0 - 1e-3) * float(np.linalg.norm(axis)):
+                continue
+            offset = (start - a) - float((start - a) @ along) * along
+            joints.append((beams[0].id, plates, start, end, offset))
+        return joints
+
+    def _seed_line_joints(
+        self, domain_model: StructuralModel
+    ) -> Tuple[List[int], List[Tuple[int, int]]]:
+        """Mesh a line connection into the slab, node for node with its beam.
+
+        A beam and a slab joined rigidly along a line share nodes there (or
+        have a rigid link between each pair, where the beam is eccentric).
+        The line becomes an edge of the slab's mesh, and the beam is split
+        wherever the line, the slab or the beam has a point on it, so that
+        both are cut into the same pieces. ``_conform_line_joints`` then
+        gives each pair of pieces the same number of nodes.
+
+        Called after all other seeding, so the points it mirrors are known.
+
+        Returns:
+            Point tags to pass as tools to the curve fragment(), and the
+            ``(1, tag)`` lines to pass as tools to the surface fragment().
+        """
+        self._line_joint_pieces: List[tuple] = []
+        curve_tools: List[int] = []
+        surface_tools: List[Tuple[int, int]] = []
+        for beam_id, plates, start, end, offset in self._line_joints(domain_model):
+            along = end - start
+            length = float(np.linalg.norm(along))
+            along /= length
+            beam_start, beam_end = start - offset, end - offset
+
+            # Every point on the line or on the beam along it, as a distance
+            # along the line
+            stations = {0.0, length}
+            for registry, shift in (
+                (self._curve_point_registry, offset),
+                (self._surface_point_registry, np.zeros(3)),
+            ):
+                for key in registry:
+                    point = np.array(key, dtype=float) + shift
+                    s = float((point - start) @ along)
+                    if 1e-6 < s < length - 1e-6 and self._point_on_segment(
+                        point, start, end
+                    ):
+                        stations.add(round(s, COORD_PRECISION))
+            stations = sorted(stations)
+
+            points = [start + s * along for s in stations]
+            surface_points = [
+                self._get_or_create_point(*point, dim=2) for point in points
+            ]
+            for i in range(len(points) - 1):
+                surface_tools.append(
+                    (
+                        1,
+                        gmsh.model.occ.addLine(
+                            surface_points[i], surface_points[i + 1]
+                        ),
+                    )
+                )
+            for point in points:
+                on_beam = point - offset
+                if self._point_on_segment(on_beam, beam_start, beam_end):
+                    curve_tools.append(self._get_or_create_point(*on_beam, dim=1))
+            size = min(
+                self._member_mesh_sizes.get(m, np.inf) for m in [beam_id, *plates]
+            )
+            self._line_joint_pieces.append(
+                (beam_id, offset, list(zip(points[:-1], points[1:])), size)
+            )
+        if self._line_joint_pieces:
+            logger.info(
+                f"Meshed {len(self._line_joint_pieces)} line connection(s) into "
+                "their surface members"
+            )
+        return sorted(set(curve_tools)), surface_tools
+
+    def _conform_line_joints(self) -> None:
+        """Give the beam and slab pieces of each line connection the same nodes.
+
+        Each piece of the line in the slab and the piece of the beam beside
+        it are straight and of one length; meshed with the same number of
+        evenly spaced nodes, their nodes (middle ones too) fall at the same
+        places along them.
+
+        Raises:
+            MeshingError: If a piece of the line has no curve in the slab.
+        """
+        pieces = getattr(self, "_line_joint_pieces", [])
+        if not pieces:
+            return
+        by_ends: Dict[frozenset, List[int]] = {}
+        for _, tag in gmsh.model.getEntities(1):
+            ends = gmsh.model.getBoundary([(1, tag)], oriented=False)
+            keys = frozenset(
+                self._coord_key(*gmsh.model.getValue(0, abs(point), []))
+                for _, point in ends
+            )
+            by_ends.setdefault(keys, []).append(tag)
+        for beam_id, offset, segments, size in pieces:
+            beam_tags = set(self._member_curve_tags.get(beam_id, []))
+            for a, b in segments:
+                count = max(1, int(np.ceil(float(np.linalg.norm(b - a)) / size - 1e-9)))
+                in_slab = [
+                    tag
+                    for tag in by_ends.get(
+                        frozenset((self._coord_key(*a), self._coord_key(*b))), []
+                    )
+                    if tag not in beam_tags
+                ]
+                if not in_slab:
+                    raise MeshingError(
+                        f"The line from {a.tolist()} to {b.tolist()}, which joins "
+                        f"member {beam_id} to a surface, is not in the surface's "
+                        "geometry."
+                    )
+                on_beam = [
+                    tag
+                    for tag in by_ends.get(
+                        frozenset(
+                            (
+                                self._coord_key(*(a - offset)),
+                                self._coord_key(*(b - offset)),
+                            )
+                        ),
+                        [],
+                    )
+                    if tag in beam_tags
+                ]
+                for tag in in_slab + on_beam:
+                    gmsh.model.mesh.setTransfiniteCurve(tag, count + 1)
+
     def _create_physical_groups(self, domain_model: StructuralModel) -> None:
         """
         Create Gmsh physical groups so mesh elements inherit member ownership.
@@ -1066,6 +1233,9 @@ class GmshGeometryConverter:
         support_point_tags += crossing_curve_tags
         surface_point_tags += crossing_surface_tags
         surface_piece_tags = self._surface_support_pieces(domain_model)
+        line_curve_tags, line_surface_tags = self._seed_line_joints(domain_model)
+        support_point_tags += line_curve_tags
+        surface_piece_tags += line_surface_tags
 
         # Phase 2: Fragment for shared topology
         self._fragment_all_entities(
@@ -1085,6 +1255,7 @@ class GmshGeometryConverter:
 
         # Phase 5: Apply mesh sizes
         self._apply_all_mesh_sizes(domain_model)
+        self._conform_line_joints()
 
         # Phase 6: Create physical groups for element-to-member mapping
         self._create_physical_groups(domain_model)
