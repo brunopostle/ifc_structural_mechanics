@@ -95,11 +95,17 @@ _KINDS = [
         "W-SEC-001",
         "Torsion of solid rectangles corrected",
         "CalculiX makes a solid rectangular beam too stiff in torsion (18.5 % "
-        "for a square). The shear stiffness across the member's width is "
-        "lowered until its torsion is right, which leaves bending and shear "
-        "along its depth as they are. Shear across the width is softer than "
-        "it should be by the percentage given. Nothing needs doing unless a "
-        "result depends on that shear.",
+        "for a square) and in shear (it shears with its whole area, not 5/6 "
+        "of it). The shear stiffness along the member's depth is set to "
+        "Timoshenko's and the one across its width is changed until its "
+        "torsion is right; it is then off by the percentage given, a few "
+        "percent for a section up to twice as deep as wide. A deeper section "
+        "would need a modulus across its width above the material's, so that "
+        "one is held at the material's and the one along the depth raised "
+        "instead: its shear stiffness along the depth is then too high by "
+        "the second percentage given (4 % at 3:1, 14 % at 10:1). Bending is "
+        "not affected. Nothing needs doing unless a result depends on that "
+        "shear.",
     ),
     MessageKind(
         "W-SEC-002",

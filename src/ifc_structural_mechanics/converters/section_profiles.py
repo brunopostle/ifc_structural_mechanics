@@ -243,27 +243,36 @@ def equivalent_shear_moduli(
     return modulus_12 * scale, modulus_13 * scale, scale
 
 
+#: Shear coefficient of a solid rectangle. CalculiX's expanded beam, with no
+#: Poisson's ratio, shears with its whole area (as if this were 1), so the
+#: moduli it is given are this share of the material's (aiz.101).
+RECTANGLE_SHEAR_COEFFICIENT = 5.0 / 6.0
+
+
 def rectangle_shear_moduli(
     a: float, b: float, shear_modulus: float, torsion_constant: float
 ) -> Tuple[float, float]:
-    """Return the shear moduli that make a solid rectangle twist as it should.
+    """Return the shear moduli that make a solid rectangle shear and twist right.
 
-    CalculiX's own rectangle is too stiff in torsion (see
-    ``expanded_rectangle_torsion_stiffness``): 18.5 % for a square, 16 % for
-    1:2. The modulus of the plane of the member axis and ``a`` is kept, so
-    bending and shear along ``a``, the depth, are untouched. The other one is
-    lowered until the torsional stiffness is ``shear_modulus *
-    torsion_constant``::
+    CalculiX's expanded rectangle, with the Poisson's ratio of zero beams
+    have, shears with its whole area rather than 5/6 of it, and is too stiff
+    in torsion (see ``expanded_rectangle_torsion_stiffness``): 18.5 % for a
+    square. The modulus of the plane of the member axis and ``a``, the
+    depth, is 5/6 of the material's, so bending and shear along the depth
+    are those of Timoshenko's beam. The other one is set so that the
+    torsional stiffness is ``shear_modulus * torsion_constant``::
 
-        P = G a b**3 / 12
+        P = G12 a b**3 / 12
         Q = G J P / (4 P - G J)        G13 = 12 Q / (b a**3)
 
-    The price is the shear stiffness along ``b``, the width, which goes down
-    in the same proportion as ``G13``: 27 % for a square, 45 % for a section
-    twice as deep as wide, 17 % for one twice as wide as deep. Measured: the
-    deflection of a cantilever loaded along ``a`` is the same to four figures
-    with and without this, and loaded along ``b`` it follows Timoshenko with
-    5/6 of the lowered modulus.
+    It then comes out within a few percent of 5/6 of the material's for
+    sections up to twice as deep as wide (0.85 G for a square, 0.87 G for
+    one twice as wide as deep, 0.98 G for one twice as deep). A deeper
+    section would need more than the material's own modulus, and soon
+    more than any: ``G13`` is then held at ``G`` and ``G12`` raised
+    instead until torsion is right, so shear along the depth is stiffer
+    than Timoshenko's by ``G12 / (5/6 G)`` (1.04 at 3:1, 1.09 at 5:1, 1.14
+    at 10:1, never the 1.2 of the material's modulus).
 
     Args:
         a: Dimension along the section's 1 direction (the depth).
@@ -276,23 +285,31 @@ def rectangle_shear_moduli(
 
     Raises:
         ValueError: If the torsion constant is not one a rectangle of this
-            size can have (it must be positive and below ``a b**3 / 3``).
+            size can have (it must be positive and below a third of its
+            long side times the cube of its short one).
     """
     if not (a > 0 and b > 0 and shear_modulus > 0):
         raise ValueError(
             f"rectangle needs positive sizes and shear modulus, got a={a}, "
             f"b={b}, G={shear_modulus}"
         )
-    limit = a * b**3 / 3.0
+    limit = max(a, b) * min(a, b) ** 3 / 3.0
     if not 0 < torsion_constant < limit:
         raise ValueError(
             f"torsion constant {torsion_constant} is not between 0 and "
-            f"a b^3 / 3 = {limit}"
+            f"a third of the long side times the short one cubed, {limit}"
         )
-    p = shear_modulus * a * b**3 / 12.0
     target = shear_modulus * torsion_constant
-    q = target * p / (4.0 * p - target)
-    return shear_modulus, 12.0 * q / (b * a**3)
+    modulus_12 = RECTANGLE_SHEAR_COEFFICIENT * shear_modulus
+    p = modulus_12 * a * b**3 / 12.0
+    if 4.0 * p > target:
+        q = target * p / (4.0 * p - target)
+        modulus_13 = 12.0 * q / (b * a**3)
+        if modulus_13 <= shear_modulus:
+            return modulus_12, modulus_13
+    q = shear_modulus * b * a**3 / 12.0
+    p = target * q / (4.0 * q - target)
+    return 12.0 * p / (a * b**3), shear_modulus
 
 
 def get_native_section(section_type: Optional[str]) -> Optional[SectionProfile]:

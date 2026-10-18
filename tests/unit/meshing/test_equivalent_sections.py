@@ -384,7 +384,7 @@ class TestWrittenInput:
         values = [float(v) for v in lines[1].rstrip(",").split(",")]
         shear = E / (2 * (1 + NU))
         assert values[:3] == pytest.approx([E] * 3)
-        assert values[6] == pytest.approx(shear)
+        assert values[6] == pytest.approx(5 / 6 * shear)
         assert values[7] < shear
         depth, width = 0.3, 0.2
         assert expanded_rectangle_torsion_stiffness(
@@ -408,7 +408,23 @@ class TestWrittenInput:
             if "solid rectangular section" in w["message"]
         ]
         assert message.startswith("1 member(s) with a solid rectangular section")
-        assert "by up to 37 %" in message
+        assert "off by up to 6 %" in message
+        assert "along their depth" not in message
+
+    def test_user_is_told_when_a_deep_rectangle_is_stiff_along_its_depth(self):
+        writer = _writer()
+        writer.domain_model.get_member("column").section = (
+            Section.create_rectangular_section(
+                id="sec_deep", name="deep", width=0.2, height=1.0
+            )
+        )
+        writer.domain_model.analysis_warnings.clear()
+
+        writer._note_torsion_corrected_rectangles()
+
+        (message,) = [w["message"] for w in writer.domain_model.analysis_warnings]
+        assert "off by up to 20 %" in message
+        assert "along their depth, which is too high by up to 9 %" in message
 
     def test_rectangle_whose_sizes_are_missing_is_refused(self):
         writer = _writer()

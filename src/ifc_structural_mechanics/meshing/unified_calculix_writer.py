@@ -27,6 +27,7 @@ from ..analysis.boundary_condition_handling import (
 )
 from ..config.analysis_config import AnalysisConfig
 from ..converters.section_profiles import (
+    RECTANGLE_SHEAR_COEFFICIENT,
     TORSION_MATCHED_SECTIONS,
     equivalent_rectangle,
     equivalent_shear_moduli,
@@ -574,9 +575,11 @@ class UnifiedCalculixWriter:
     def _rectangle_moduli(self, member) -> Optional[Tuple[float, float]]:
         """Shear moduli of a solid rectangular member's own material, if any.
 
-        CalculiX's rectangle is up to 18.5 % too stiff in torsion, so the
-        member gets an orthotropic material with the shear modulus across its
-        width lowered (``rectangle_shear_moduli``). None for any other member.
+        CalculiX's rectangle shears with its whole area and is up to 18.5 %
+        too stiff in torsion, so the member gets an orthotropic material with
+        5/6 of the shear modulus along its depth and the one across its width
+        set for torsion (``rectangle_shear_moduli``). None for any other
+        member.
         """
         section = getattr(member, "section", None)
         if not isinstance(member, CurveMember) or section is None:
@@ -592,7 +595,7 @@ class UnifiedCalculixWriter:
             return rectangle_shear_moduli(
                 float(dimensions["height"]),
                 float(dimensions["width"]),
-                material.elastic_modulus / (2.0 * (1.0 + material.poisson_ratio)),
+                self._shear_modulus(material),
                 float(constant),
             )
         except (KeyError, ValueError) as error:
@@ -602,13 +605,19 @@ class UnifiedCalculixWriter:
                 code="E-SEC-004",
             ) from error
 
+    @staticmethod
+    def _shear_modulus(material) -> float:
+        """Shear modulus of an isotropic material."""
+        return material.elastic_modulus / (2.0 * (1.0 + material.poisson_ratio))
+
     def _rectangle_material_name(self, member) -> str:
         """Name of the material of a torsion-corrected rectangular member."""
         return f"MAT_RT_{self._get_short_id(member.id)}"
 
     def _note_torsion_corrected_rectangles(self) -> None:
-        """Say once what the torsion correction of solid rectangles costs."""
-        softest = 1.0
+        """Say once what the shear moduli of solid rectangles cost."""
+        across_width = 0.0
+        along_depth = 0.0
         corrected = []
         for member in self.domain_model.members:
             if not self.element_sets.get(f"MEMBER_{self._get_short_id(member.id)}"):
@@ -617,15 +626,28 @@ class UnifiedCalculixWriter:
             if moduli is None:
                 continue
             corrected.append(member.id)
-            softest = min(softest, moduli[1] / moduli[0])
+            timoshenko = RECTANGLE_SHEAR_COEFFICIENT * self._shear_modulus(
+                member.material
+            )
+            along_depth = max(along_depth, moduli[0] / timoshenko - 1.0)
+            across_width = max(across_width, abs(moduli[1] / timoshenko - 1.0))
         count = len(corrected)
         if count:
+            message = (
+                f"{count} member(s) with a solid rectangular section are given "
+                "their torsional stiffness by changing the shear stiffness "
+                f"across their width, which is off by up to "
+                f"{100 * across_width:.0f} %"
+            )
+            if along_depth >= 0.005:
+                message += (
+                    ", and for sections more than twice as deep as wide the "
+                    "shear stiffness along their depth, which is too high by "
+                    f"up to {100 * along_depth:.0f} %"
+                )
             self._warn_user(
                 "W-SEC-001",
-                f"{count} member(s) with a solid rectangular section are given "
-                "their torsional stiffness by lowering the shear stiffness "
-                f"across their width, by up to {100 * (1 - softest):.0f} %. Bending, "
-                "and shear along their depth, are not affected.",
+                message + ". Bending is not affected.",
                 ifc_guids=self._ifc_guids(corrected),
             )
 

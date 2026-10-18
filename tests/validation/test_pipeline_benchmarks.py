@@ -328,13 +328,15 @@ class TestRectangularCantileverSelfWeight:
 
         With the material's Poisson's ratio the section could not contract
         there as bending makes it, and the cantilever was 1.2, 0.75 and
-        0.5 % stiff at these meshes.
+        0.5 % stiff at these meshes. Without it, it was 0.29 % stiff at all
+        three until its shear modulus along the depth was made 5/6 of the
+        material's (aiz.101); it is now Timoshenko's to 1e-6.
         """
         data = _run(CANTILEVER, tmp_path, mesh_size=mesh_size, gravity=True)
         expected = _cantilever_self_weight(
             self.AREA, 0.2 * 0.4**3 / 12, self.SHEAR_AREA
         )
-        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.005)
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=1e-5)
 
     def test_weak_axis_when_section_is_rotated(self, tmp_path):
         """Axis = +Y lays the section on its side: bending about the weak axis."""
@@ -819,9 +821,9 @@ class TestFixedFixedBeamPointLoad:
             + self.WEIGHT * self.LENGTH**4 / (384 * bending_stiffness)
             + self.WEIGHT * self.LENGTH**2 / (8 * shear_stiffness)
         )
-        assert _max_vertical_deflection(data) == pytest.approx(
-            expected, rel=DEFLECTION_TOLERANCE
-        )
+        # 1 % stiff until the shear modulus of solid rectangles was put
+        # right (aiz.101); exact to 1e-5 now
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=2e-3)
 
     def test_section_forces(self, tmp_path):
         """Largest at the ends: shear (P + w L) / 2, moment P L / 8 + w L^2 / 12."""
@@ -962,9 +964,8 @@ class TestFixedFixedBeamLineLoad:
         path = _beam_with_line_load(tmp_path, (0.0, 0.0, -self.LOAD))
         data = _run(path, tmp_path)
         envelope = data["global_displacements"]["envelope"]
-        assert envelope["max_tz_m"] == pytest.approx(
-            self._expected(), rel=DEFLECTION_TOLERANCE
-        )
+        # 4e-4 (1 % stiff before aiz.101)
+        assert envelope["max_tz_m"] == pytest.approx(self._expected(), rel=2e-3)
         assert envelope.get("max_ty_m", 0.0) < 0.01 * envelope["max_tz_m"]
         # The supports push up with the whole load, less the sliver that
         # lands on the restrained end nodes themselves (0.4% at this mesh)
@@ -1033,9 +1034,8 @@ class TestSimplySupportedBeam:
         expected = load * length**3 / (48 * self.B.E * self.B.INERTIA) + (
             load * length / (4 * self._shear_stiffness())
         )
-        assert _max_vertical_deflection(data) == pytest.approx(
-            expected, rel=DEFLECTION_TOLERANCE
-        )
+        # 6e-4 (0.2 % stiff before aiz.101)
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=2e-3)
         forces = _curve_member_envelope(data)["section_forces"]
         assert forces["max_Mf1_Nm"] == pytest.approx(
             load * length / 4, rel=FORCE_TOLERANCE
@@ -6281,23 +6281,23 @@ class TestModalAnalysis:
     def test_cantilever_bends_as_a_timoshenko_beam(self, tmp_path):
         """cantilever_01 (L/h = 7.5 vertically, 15 sideways), modes 1 to 4.
 
-        The expanded rectangle shears as if kappa were 1, not 5/6
-        (aiz.101), with the moduli it is given, the
-        lowered one across its width included; against that every mode
-        agrees to 1e-3. Timoshenko's own beam is lower by 0.16 to 2.8 %
-        over these modes, the higher ones the more.
+        The expanded rectangle shears with its whole area and the moduli it
+        is given (aiz.101): 5/6 of the material's along its depth, which is
+        Timoshenko's beam, and across its width the one set for torsion.
+        Against that every mode agrees to 1e-3.
         """
         data = self._run(CANTILEVER, tmp_path, 0.1, modes=12)
         area = 0.2 * 0.4
         vertical_inertia, side_inertia = 0.2 * 0.4**3 / 12, 0.4 * 0.2**3 / 12
-        _, across_width = rectangle_shear_moduli(
+        along_depth, across_width = rectangle_shear_moduli(
             0.4,
             0.2,
             CANT_G,
             Section.create_rectangular_section("s", "s", 0.2, 0.4).torsional_constant,
         )
+        assert along_depth == pytest.approx(5 / 6 * CANT_G)
         for direction, shear_modulus, inertia in (
-            ("z", CANT_G, vertical_inertia),
+            ("z", along_depth, vertical_inertia),
             ("y", across_width, side_inertia),
         ):
             found = _modes_along(data, direction)[:4]
@@ -6306,11 +6306,12 @@ class TestModalAnalysis:
                 CANT_E, shear_modulus, 1.0, CANT_RHO, area, inertia, CANT_L, 4
             )
             assert found == pytest.approx(expected, rel=1e-3), direction
-            # Within reach of the beam's own theory, the first mode closest
-            (truth,) = _timoshenko_cantilever_frequencies(
-                CANT_E, shear_modulus, 5 / 6, CANT_RHO, area, inertia, CANT_L, 1
-            )
-            assert found[0] == pytest.approx(truth, rel=0.002), direction
+        # Sideways the width modulus is 17 % above 5/6 G; at L/h = 15 that
+        # moves the first mode by little
+        (truth,) = _timoshenko_cantilever_frequencies(
+            CANT_E, CANT_G, 5 / 6, CANT_RHO, area, side_inertia, CANT_L, 1
+        )
+        assert _modes_along(data, "y")[0] == pytest.approx(truth, rel=1e-3)
 
     def test_cantilever_stretches_and_twists_as_a_rod(self, tmp_path):
         """Axial modes are exact; torsion is as good as the static benchmark (1 %)."""

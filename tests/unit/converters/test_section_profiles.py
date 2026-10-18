@@ -139,27 +139,42 @@ class TestIsSupported:
 
 
 class TestRectangleShearModuli:
-    """One shear modulus lowered so that a solid rectangle twists as it should."""
+    """Timoshenko's shear along the depth, and the other modulus for torsion."""
 
     @pytest.mark.parametrize(
-        "a, b, torsion_constant, lowered",
+        "a, b, torsion_constant, across_width",
         [
-            (0.3, 0.3, 0.1406 * 0.3**4, 0.7295),
-            (0.4, 0.2, 0.229 * 0.4 * 0.2**3, 0.5487),
-            (0.2, 0.4, 0.229 * 0.4 * 0.2**3, 0.8295),
+            (0.3, 0.3, 0.1406 * 0.3**4, 0.8541),
+            (0.4, 0.2, 0.229 * 0.4 * 0.2**3, 0.9781),
+            (0.2, 0.4, 0.229 * 0.4 * 0.2**3, 0.8653),
         ],
         ids=["square", "deep", "flat"],
     )
-    def test_torsion_is_matched_and_the_depth_modulus_kept(
-        self, a, b, torsion_constant, lowered
+    def test_torsion_is_matched_and_the_depth_shears_with_five_sixths(
+        self, a, b, torsion_constant, across_width
     ):
         shear = 80e9
         modulus_12, modulus_13 = rectangle_shear_moduli(a, b, shear, torsion_constant)
 
-        assert modulus_12 == shear
-        assert modulus_13 / shear == pytest.approx(lowered, abs=2e-3)
+        assert modulus_12 == pytest.approx(5 / 6 * shear)
+        assert modulus_13 / shear == pytest.approx(across_width, abs=2e-3)
         assert expanded_rectangle_torsion_stiffness(
             a, b, modulus_12, modulus_13
+        ) == pytest.approx(shear * torsion_constant)
+
+    def test_deep_section_keeps_the_width_modulus_at_the_materials(self):
+        """At 5:1 torsion would need more than G across the width: G13 is
+        held at G and G12 raised, 8.6 % above 5/6 G."""
+        shear = 80e9
+        torsion_constant = 0.291 * 1.0 * 0.2**3
+        modulus_12, modulus_13 = rectangle_shear_moduli(
+            1.0, 0.2, shear, torsion_constant
+        )
+
+        assert modulus_13 == shear
+        assert modulus_12 / (5 / 6 * shear) == pytest.approx(1.086, abs=2e-3)
+        assert expanded_rectangle_torsion_stiffness(
+            1.0, 0.2, modulus_12, modulus_13
         ) == pytest.approx(shear * torsion_constant)
 
     @pytest.mark.parametrize("torsion_constant", [0.0, -1.0, 0.3 * 0.3**3 / 3, 1.0])
