@@ -5796,3 +5796,376 @@ class TestSupportDisplacements:
         )
         assert result["status"] == "failed"
         assert result["errors"][0]["code"] == "E-LOD-007"
+
+
+def _heated_slab(tmp_path, change, expansion=1.2e-5) -> str:
+    """slab_01 on three of its corners, free to curve, heated.
+
+    The line connections of the file hold nothing; point supports at (0, 0)
+    (x, y and z), (5, 0) (y and z) and (0, 3) (z) hold it, statically
+    determinate. ``change`` is ``(DeltaTConstant, DeltaTZ)`` on a planar
+    action, in a load case of its own.
+    """
+    model = ifcopenshell.open(SLAB)
+    slab = model.by_type("IfcStructuralSurfaceMember")[0]
+    for relation in model.by_type("IfcRelConnectsStructuralMember"):
+        relation.AppliedCondition = None
+    for connection in model.by_type("IfcStructuralCurveConnection"):
+        connection.AppliedCondition = None
+    mechanical = [
+        p
+        for p in model.by_type("IfcMaterialProperties")
+        if p.Name == "Pset_MaterialMechanical"
+    ][0]
+    mechanical.Properties = list(mechanical.Properties) + [
+        model.create_entity(
+            "IfcPropertySingleValue",
+            "ThermalExpansionCoefficient",
+            None,
+            model.create_entity("IfcThermalExpansionCoefficientMeasure", expansion),
+            None,
+        )
+    ]
+    context = slab.Representation.Representations[0].ContextOfItems
+    group = model.by_type("IfcRelAssignsToGroup")[0]
+    for corner, held in (
+        ((0.0, 0.0, 0.0), (True, True, True)),
+        ((SLAB_L, 0.0, 0.0), (False, True, True)),
+        ((0.0, SLAB_W, 0.0), (False, False, True)),
+    ):
+        vertex = model.create_entity(
+            "IfcVertexPoint", model.create_entity("IfcCartesianPoint", corner)
+        )
+        connection = model.create_entity(
+            "IfcStructuralPointConnection",
+            ifcopenshell.guid.new(),
+            slab.OwnerHistory,
+            "corner",
+            None,
+            None,
+            slab.ObjectPlacement,
+            model.create_entity(
+                "IfcProductDefinitionShape",
+                None,
+                None,
+                [
+                    model.create_entity(
+                        "IfcTopologyRepresentation",
+                        context,
+                        "Reference",
+                        "Vertex",
+                        [vertex],
+                    )
+                ],
+            ),
+            model.create_entity(
+                "IfcBoundaryNodeCondition",
+                None,
+                *[model.create_entity("IfcBoolean", h) for h in held],
+                *[model.create_entity("IfcBoolean", False)] * 3,
+            ),
+            None,
+        )
+        model.create_entity(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            slab.OwnerHistory,
+            None,
+            None,
+            slab,
+            connection,
+        )
+        group.RelatedObjects = list(group.RelatedObjects) + [connection]
+    for case in model.by_type("IfcStructuralLoadCase"):
+        for relation in case.IsGroupedBy:
+            model.remove(relation)
+    action = model.create_entity(
+        "IfcStructuralPlanarAction",
+        GlobalId=ifcopenshell.guid.new(),
+        Name="heat",
+        AppliedLoad=model.create_entity(
+            "IfcStructuralLoadTemperature",
+            None,
+            float(change[0]),
+            0.0,
+            float(change[1]),
+        ),
+        GlobalOrLocal="LOCAL_COORDS",
+        PredefinedType="CONST",
+    )
+    model.create_entity(
+        "IfcRelConnectsStructuralActivity",
+        ifcopenshell.guid.new(),
+        None,
+        None,
+        None,
+        slab,
+        action,
+    )
+    case = model.create_entity(
+        "IfcStructuralLoadCase",
+        GlobalId=ifcopenshell.guid.new(),
+        Name="Heat",
+        PredefinedType="LOAD_CASE",
+        ActionType="VARIABLE_Q",
+        ActionSource="NOTDEFINED",
+    )
+    model.create_entity(
+        "IfcRelAssignsToGroup",
+        ifcopenshell.guid.new(),
+        None,
+        None,
+        None,
+        [action],
+        None,
+        case,
+    )
+    model.by_type("IfcStructuralAnalysisModel")[0].LoadedBy = [case]
+    path = str(tmp_path / "heated_slab.ifc")
+    model.write(path)
+    return path
+
+
+class TestTemperatureLoads:
+    """Temperature changes of members (``aiz.98``), against closed forms.
+
+    ``IfcStructuralLoadTemperature``: a uniform change, and differences
+    between the outer fibres on either side of a member's local y and z
+    (across a slab's thickness, z). A curvature of alpha dT / h, where h is
+    the real section's depth along that axis. The bar is ``plane_model``'s,
+    0.1 m wide (local y, along global Z) and here 0.2 m deep (local z, along
+    global Y).
+    """
+
+    ALPHA = 1.2e-5
+    SPAN = 4.0
+    WIDTH = 0.1
+    DEPTH = 0.2
+
+    def _bar(self, tmp_path, supports, change, depth=DEPTH, **kwargs) -> str:
+        return plane_model(
+            str(tmp_path / "bar.ifc"),
+            nodes={"A": (0, 0), "B": (self.SPAN, 0)},
+            members=[("A", "B")],
+            supports=supports,
+            loads={},
+            hinged=False,
+            temperatures={("A", "B"): change},
+            expansion=self.ALPHA,
+            depth=depth,
+            **kwargs,
+        )
+
+    def test_free_bar_expands(self, tmp_path):
+        data = _run(
+            self._bar(tmp_path, {"A": PLANE_FIXED}, (30.0, 0.0, 0.0)),
+            tmp_path,
+            mesh_size=0.25,
+        )
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tx_m"] == pytest.approx(self.ALPHA * 30 * self.SPAN)
+        assert envelope["max_tz_m"] < 1e-9
+        diagram = _curve_member_diagram(data)
+        assert max(abs(n) for n in diagram["N_N"]) < 1.0
+        # Nothing holds the section's own expansion, and nothing is stressed
+        (member,) = [m for m in data["members"] if m["type"] == "curve"]
+        assert member["by_load_case"]["Load"]["max_von_mises_Pa"] < 1e3
+
+    def test_clamped_bar_is_compressed(self, tmp_path):
+        """N = -E A alpha dT, and the supports push back with it: the one at
+        x = 0 towards +x."""
+        data = _run(
+            self._bar(tmp_path, {"A": PLANE_FIXED, "B": PLANE_FIXED}, (30.0, 0.0, 0.0)),
+            tmp_path,
+            mesh_size=0.25,
+        )
+        force = PLANE_E * self.WIDTH * self.DEPTH * self.ALPHA * 30
+        diagram = _curve_member_diagram(data)
+        for n in diagram["N_N"]:
+            assert n == pytest.approx(-force, rel=1e-4)
+        assert _support_at(data, (0, 0, 0))["by_load_case"]["Load"][
+            "fx_N"
+        ] == pytest.approx(force, rel=1e-4)
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["applied_load_N"] == [0.0, 0.0, 0.0]
+        assert total["imbalance_N"] < 1e-6 * force
+
+    @pytest.mark.parametrize(
+        "change, axis, sign, depth",
+        [
+            # Hotter on local +y, global -Z: it bends up, over the width
+            ((0.0, 20.0, 0.0), 2, 1.0, WIDTH),
+            # Hotter on local +z, global +Y: it bends to -Y, over the depth
+            ((0.0, 0.0, 20.0), 1, -1.0, DEPTH),
+        ],
+    )
+    def test_cantilever_bends_away_from_its_hot_side(
+        self, tmp_path, change, axis, sign, depth
+    ):
+        """Tip alpha dT L^2 / 2 h, with h the section's size across."""
+        data = _run(
+            self._bar(tmp_path, {"A": PLANE_FIXED}, change), tmp_path, mesh_size=0.25
+        )
+        expected = self.ALPHA * 20 * self.SPAN**2 / (2 * depth)
+        frd = str(tmp_path / "out_0.25" / "analysis.frd")
+        displacements = [
+            result.get_translations()[axis]
+            for result in ResultsParser().parse_displacements(frd)
+        ]
+        tip = max(displacements, key=abs)
+        assert tip == pytest.approx(sign * expected, rel=1e-3)
+        diagram = _curve_member_diagram(data)
+        for key in ("Mf1_Nm", "Mf2_Nm"):
+            assert max(abs(m) for m in diagram[key]) < 1.0
+
+    def test_fixed_beam_under_a_gradient(self, tmp_path):
+        """M = E I alpha dT / h all along, and no deflection."""
+        data = _run(
+            self._bar(
+                tmp_path,
+                {"A": PLANE_FIXED, "B": PLANE_FIXED},
+                (0.0, 20.0, 0.0),
+                depth=None,
+            ),
+            tmp_path,
+            mesh_size=0.25,
+        )
+        moment = PLANE_E * self.WIDTH**4 / 12 * self.ALPHA * 20 / self.WIDTH
+        diagram = _curve_member_diagram(data)
+        bending = max(
+            ("Mf1_Nm", "Mf2_Nm"), key=lambda key: max(abs(m) for m in diagram[key])
+        )
+        for m in diagram[bending]:
+            assert abs(m) == pytest.approx(moment, rel=1e-3)
+        for x in (0.0, self.SPAN):
+            reaction = _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]
+            assert abs(reaction["my_Nm"]) == pytest.approx(moment, rel=1e-3)
+        assert data["global_displacements"]["envelope"]["max_tz_m"] < 1e-8
+
+    def test_gradient_across_the_plane_is_not_held_in_it(self, tmp_path):
+        """A simply supported beam bowing out of its plane: alpha dT L^2 / 8 h.
+
+        A frame in one plane, loaded in it, is held in it; a temperature
+        difference across that plane bends it out, and is not to be held.
+        """
+        data = _run(
+            self._bar(tmp_path, {"A": PLANE_PIN, "B": PLANE_ROLLER}, (0.0, 0.0, 20.0)),
+            tmp_path,
+            mesh_size=0.25,
+        )
+        expected = self.ALPHA * 20 * self.SPAN**2 / (8 * self.DEPTH)
+        assert data["global_displacements"]["envelope"]["max_ty_m"] == (
+            pytest.approx(expected, rel=2e-3)
+        )
+
+    def _slab_displacements(self, tmp_path, change):
+        """Displacement of each node of the heated slab, by its position."""
+        _run(_heated_slab(tmp_path, change), tmp_path, mesh_size=0.5)
+        frd = str(tmp_path / "out_0.5" / "analysis.frd")
+        parser = ResultsParser()
+        coordinates = parser.parse_node_coordinates(frd)
+        return [
+            (np.array(coordinates[node]), np.array(result.get_translations()))
+            for result in parser.parse_displacements(frd)
+            for node in [int(result.reference_element)]
+            if node in coordinates
+        ]
+
+    def test_slab_curves_into_a_sphere(self, tmp_path):
+        """Hotter on top, a free slab curves as alpha dT / t both ways.
+
+        On three corners its middle rises by 4.25 m^2 times the curvature,
+        and the fourth corner stays level: -k (x^2 + y^2) / 2 + 2.5 k x +
+        1.5 k y. Nothing holds it, and nothing is stressed.
+        """
+        curvature = self.ALPHA * 20 / SLAB_T
+        for point, moved in self._slab_displacements(tmp_path, (0.0, 20.0)):
+            if abs(point[2]) > 1e-9:
+                # A face of the expanded shell, turned with the slab
+                continue
+            x, y = point[0], point[1]
+            expected = curvature * (-(x**2 + y**2) / 2 + 2.5 * x + 1.5 * y)
+            assert moved[2] == pytest.approx(expected, abs=0.002 * 4.25 * curvature)
+
+    def test_slab_expands_in_its_plane(self, tmp_path):
+        for point, moved in self._slab_displacements(tmp_path, (30.0, 0.0)):
+            if abs(point[2]) > 1e-9:
+                # The faces of the expanded shell move as it thickens
+                continue
+            np.testing.assert_allclose(
+                moved,
+                [self.ALPHA * 30 * point[0], self.ALPHA * 30 * point[1], 0.0],
+                atol=1e-3 * self.ALPHA * 30 * SLAB_L,
+            )
+
+    def test_other_cases_are_not_heated(self, tmp_path):
+        """A temperature stays in force until it is written again."""
+        path = self._bar(
+            tmp_path,
+            {"A": PLANE_FIXED, "B": PLANE_FIXED},
+            (30.0, 0.0, 0.0),
+            line_loads={("A", "B"): {"values": [(0.0, -1000.0)]}},
+            cases={"Other": ["QAB"]},
+        )
+        data = _run(path, tmp_path, mesh_size=0.25)
+        (member,) = [m for m in data["members"] if m["type"] == "curve"]
+        diagrams = member["section_force_diagrams"]
+        force = PLANE_E * self.WIDTH * self.DEPTH * self.ALPHA * 30
+        assert diagrams["Load"]["N_N"][0] == pytest.approx(-force, rel=1e-4)
+        assert max(abs(n) for n in diagrams["Other"]["N_N"]) < 1e-3 * force
+
+    def test_node_shared_with_an_unheated_member(self, tmp_path):
+        """Between clamps, a heated half and a cold half: N = -E A alpha dT / 2.
+
+        Their shared node takes the mean, which keeps the whole expansion.
+        """
+        path = plane_model(
+            str(tmp_path / "halves.ifc"),
+            nodes={"A": (0, 0), "B": (2, 0), "C": (4, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": PLANE_FIXED, "C": PLANE_FIXED},
+            loads={},
+            hinged=False,
+            temperatures={("A", "B"): (30.0, 0.0, 0.0)},
+            expansion=self.ALPHA,
+            depth=self.DEPTH,
+        )
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.25
+        )
+        assert result["status"] == "success", result.get("errors")
+        assert "W-LOD-010" in [w["code"] for w in result["warnings"]]
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        force = PLANE_E * self.WIDTH * self.DEPTH * self.ALPHA * 30 / 2
+        for x in (0.0, 4.0):
+            reaction = _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]
+            assert abs(reaction["fx_N"]) == pytest.approx(force, rel=1e-4)
+
+    def test_without_an_expansion_coefficient_is_an_error(self, tmp_path):
+        path = plane_model(
+            str(tmp_path / "cold.ifc"),
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED},
+            loads={},
+            hinged=False,
+            temperatures={("A", "B"): (30.0, 0.0, 0.0)},
+        )
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.5
+        )
+        assert result["status"] == "failed"
+        (error,) = result["errors"]
+        assert error["code"] == "E-LOD-008"
+        assert "ThermalExpansionCoefficient" in error["message"]
+
+    def test_buckling_is_an_error(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=self._bar(tmp_path, {"A": PLANE_FIXED}, (30.0, 0.0, 0.0)),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=0.5,
+            analysis_type="linear_buckling",
+        )
+        assert result["status"] == "failed"
+        assert result["errors"][0]["code"] == "E-LOD-008"

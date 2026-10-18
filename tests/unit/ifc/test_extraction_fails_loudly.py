@@ -449,3 +449,141 @@ class TestSupportDisplacements:
             Extractor(model).extract_model()
         assert error.value.code == "E-LOD-001"
         assert "distortion" in str(error.value)
+
+
+def _temperature(model, item, kind="IfcStructuralCurveAction", **values):
+    """An action heating *item*, in the first load case of the file."""
+    action = model.create_entity(
+        kind,
+        ifcopenshell.guid.new(),
+        AppliedLoad=model.create_entity("IfcStructuralLoadTemperature", **values),
+        GlobalOrLocal="LOCAL_COORDS",
+        PredefinedType="CONST",
+    )
+    model.create_entity(
+        "IfcRelConnectsStructuralActivity",
+        ifcopenshell.guid.new(),
+        RelatingElement=item,
+        RelatedStructuralActivity=action,
+    )
+    cases = model.by_type("IfcStructuralLoadCase")
+    if not cases:
+        cases = [
+            model.create_entity(
+                "IfcStructuralLoadCase",
+                ifcopenshell.guid.new(),
+                Name="Heat",
+                PredefinedType="LOAD_CASE",
+                ActionType="VARIABLE_Q",
+                ActionSource="NOTDEFINED",
+            )
+        ]
+        model.by_type("IfcStructuralAnalysisModel")[0].LoadedBy = cases
+    model.create_entity(
+        "IfcRelAssignsToGroup",
+        ifcopenshell.guid.new(),
+        RelatedObjects=[action],
+        RelatingGroup=cases[0],
+    )
+    return action
+
+
+class TestTemperatureLoads:
+    """Temperature changes of members (``aiz.98``).
+
+    They used to stop the analysis as loads of an unsupported kind.
+    """
+
+    def test_is_read_beside_the_loads(self):
+        model = _open("beam_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        action = _temperature(
+            model, member, DeltaTConstant=20.0, DeltaTY=5.0, DeltaTZ=-10.0
+        )
+        extracted = Extractor(model).extract_model()
+        (group,) = [g for g in extracted.load_groups if g.temperature_loads]
+        (heat,) = group.temperature_loads
+        assert heat.id == action.GlobalId
+        assert heat.member_id == member.GlobalId
+        assert (heat.delta_t_constant, heat.delta_t_y, heat.delta_t_z) == (
+            20.0,
+            5.0,
+            -10.0,
+        )
+        assert all(load.id != action.GlobalId for load in group.loads)
+        assert group.has_actions
+        # beam_01's concrete gives its coefficient in Pset_MaterialMechanical
+        (curve,) = [m for m in extracted.members if m.id == member.GlobalId]
+        assert curve.material.thermal_expansion_coefficient == pytest.approx(9.9e-6)
+
+    def test_fahrenheit(self):
+        """A difference of 9 degrees F is 5 K, and alpha per F is 1.8 per K."""
+        model = _open("beam_01")
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        kelvin = model.create_entity(
+            "IfcSIUnit", None, "THERMODYNAMICTEMPERATUREUNIT", None, "KELVIN"
+        )
+        fahrenheit = model.create_entity(
+            "IfcConversionBasedUnit",
+            model.create_entity("IfcDimensionalExponents", 0, 0, 0, 0, 1, 0, 0),
+            "THERMODYNAMICTEMPERATUREUNIT",
+            "degree Fahrenheit",
+            model.create_entity(
+                "IfcMeasureWithUnit",
+                model.create_entity("IfcThermodynamicTemperatureMeasure", 5 / 9),
+                kelvin,
+            ),
+        )
+        assignment.Units = [
+            u
+            for u in assignment.Units
+            if getattr(u, "UnitType", None) != "THERMODYNAMICTEMPERATUREUNIT"
+        ] + [fahrenheit]
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        _temperature(model, member, DeltaTConstant=9.0)
+        extracted = Extractor(model).extract_model()
+        (heat,) = [t for g in extracted.load_groups for t in g.temperature_loads]
+        assert heat.delta_t_constant == pytest.approx(5.0)
+        (curve,) = [m for m in extracted.members if m.id == member.GlobalId]
+        assert curve.material.thermal_expansion_coefficient == pytest.approx(
+            9.9e-6 * 1.8
+        )
+
+    def test_surface_member_takes_its_normal_and_dtz(self):
+        model = _open("slab_01")
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        _temperature(model, slab, "IfcStructuralPlanarAction", DeltaTZ=10.0)
+        extracted = Extractor(model).extract_model()
+        (heat,) = [t for g in extracted.load_groups for t in g.temperature_loads]
+        assert heat.delta_t_z == 10.0
+        assert extracted.members[0].normal == pytest.approx([0.0, 0.0, 1.0])
+
+    def test_dty_on_a_surface_member_is_an_error(self):
+        model = _open("slab_01")
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        action = _temperature(model, slab, "IfcStructuralPlanarAction", DeltaTY=10.0)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-008"
+        assert action.GlobalId in error.value.ifc_guids
+        assert "DeltaTY" in str(error.value)
+
+    def test_curve_action_on_a_surface_member_is_an_error(self):
+        model = _open("slab_01")
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        _temperature(model, slab, DeltaTConstant=10.0)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-008"
+        assert "IfcStructuralCurveMember" in str(error.value)
+
+    def test_varying_distribution_is_an_error(self):
+        """Never read as a constant change."""
+        model = _open("beam_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        action = _temperature(model, member, DeltaTConstant=10.0)
+        action.PredefinedType = "LINEAR"
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-008"
+        assert "LINEAR" in str(error.value)

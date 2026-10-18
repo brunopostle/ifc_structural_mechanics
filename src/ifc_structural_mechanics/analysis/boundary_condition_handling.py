@@ -1185,6 +1185,36 @@ def _write_support_displacements(
     file.write("\n")
 
 
+def _write_temperatures(
+    file: TextIO,
+    temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]],
+    group_ids: Optional[Iterable[str]],
+) -> None:
+    """Give the nodes the temperatures of a step's load groups.
+
+    A temperature stays in force in later steps, so every node that any
+    group heats is written in every step, zero where none of this step's
+    groups heats it. ``group_ids`` None means all groups. The values are
+    changes from the initial zero: the change of temperature, then the
+    gradients CalculiX takes across a beam (along its section's 2 and 1
+    axes) or a shell (along its normal), in K/m.
+    """
+    if not temperatures:
+        return
+    nodes = sorted({node for field in temperatures.values() for node in field})
+    step: Dict[int, np.ndarray] = {}
+    for group_id, field in temperatures.items():
+        if group_ids is None or group_id in group_ids:
+            for node, values in field.items():
+                step[node] = step.get(node, np.zeros(3)) + np.array(values)
+    file.write("** Temperatures (zero where this step heats nothing)\n")
+    file.write("*TEMPERATURE\n")
+    for node in nodes:
+        t, g2, g1 = step.get(node, np.zeros(3))
+        file.write(f"{node}, {t:.9e}, {g2:.9e}, {g1:.9e}\n")
+    file.write("\n")
+
+
 def _write_load_reset(file: TextIO) -> None:
     """Clear loads carried over from earlier steps.
 
@@ -1398,6 +1428,7 @@ def write_analysis_steps(
     u1_node_masses: Optional[Dict[int, float]] = None,
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
+    temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]] = None,
 ) -> None:
     """
     Write the analysis steps, and record the loads they put on support nodes.
@@ -1445,6 +1476,7 @@ def write_analysis_steps(
             u1_node_masses,
             u1_element_sets,
             elements_data,
+            temperatures,
         )
     finally:
         moved = getattr(domain_model, "_moved_point_loads", None) or {}
@@ -1589,6 +1621,7 @@ def _write_analysis_steps(
     u1_node_masses: Optional[Dict[int, float]] = None,
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
+    temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]] = None,
 ) -> None:
     """
     Write analysis step definitions to the CalculiX input file.
@@ -1612,6 +1645,8 @@ def _write_analysis_steps(
         elements_data: Optional dict mapping element_id → element dict (with "nodes"
             key).  When provided, distributed loads on U1 sets are converted to
             work-equivalent *CLOAD nodal forces instead of being dropped.
+        temperatures: ``{group id: {node: (T, gradient, gradient)}}``, the
+            *TEMPERATURE values of each load group's temperature loads.
     """
     file.write("** Analysis Steps\n")
 
@@ -1644,6 +1679,19 @@ def _write_analysis_steps(
                 "are given.",
                 code="E-LOD-007",
                 ifc_guids=guids_of(domain_model, moved),
+            )
+        if temperatures:
+            heated = [
+                t.id
+                for g in domain_model.load_groups
+                for t in getattr(g, "temperature_loads", ())
+            ]
+            raise AnalysisError(
+                f"The model has {len(heated)} temperature load(s) (the first is "
+                f"{heated[0]}); a buckling analysis takes none: CalculiX scales "
+                "the loads of the buckling step, not its temperatures.",
+                code="E-LOD-008",
+                ifc_guids=guids_of(domain_model, heated),
             )
         file.write("*STEP\n")
         file.write("*BUCKLE\n")
@@ -1710,6 +1758,8 @@ def _write_analysis_steps(
                 )
             _write_support_displacements(file, displacements, [load_case.id])
             loads_written |= load_case.id in displacements
+            _write_temperatures(file, temperatures, [load_case.id])
+            loads_written |= load_case.id in (temperatures or {})
             if not loads_written:
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
@@ -1733,6 +1783,7 @@ def _write_analysis_steps(
                 has_u1_elements,
             )
             _write_support_displacements(file, displacements, [])
+            _write_temperatures(file, temperatures, [])
             _write_step_output_requests(
                 file, has_u1_elements=has_u1_elements, has_springs=has_springs
             )
@@ -1763,6 +1814,8 @@ def _write_analysis_steps(
             )
         _write_support_displacements(file, displacements, None)
         loads_written |= bool(displacements)
+        _write_temperatures(file, temperatures, None)
+        loads_written |= bool(temperatures)
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")

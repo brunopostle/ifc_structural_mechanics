@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import ifcopenshell
+import numpy as np
 
 from ..domain.property import Material, Section, Thickness
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
@@ -83,6 +84,10 @@ class MembersExtractor:
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
+        # Kelvin per unit of the file: a difference of temperature
+        self.temperature_scale = self.unit_scales.get(
+            "THERMODYNAMICTEMPERATUREUNIT", 1.0
+        )
 
         # What the analysis will not do exactly as the file says; the
         # Extractor passes these on to the results
@@ -290,7 +295,7 @@ class MembersExtractor:
         if thickness_value <= 0:
             raise ModelExtractionError("It has no thickness.", code="E-SEC-003")
 
-        return SurfaceMember(
+        member = SurfaceMember(
             id=entity.GlobalId,
             geometry=geometry,
             material=self._create_material(material),
@@ -301,6 +306,32 @@ class MembersExtractor:
             ),
             ifc_guid=entity.GlobalId,
         )
+        member.normal = self._surface_normal(representation, transformation)
+        return member
+
+    @staticmethod
+    def _surface_normal(representation, transformation) -> Optional[List[float]]:
+        """The local z of a surface member: the normal of its face's plane.
+
+        As for surface connections, a face whose sense opposes its plane's
+        turns it over. None when the face has no plane.
+        """
+        item = representation.Items[0]
+        surface = getattr(item, "FaceSurface", None)
+        if surface is None or not surface.is_a("IfcPlane"):
+            return None
+        axis = surface.Position.Axis
+        normal = np.array(
+            axis.DirectionRatios if axis else (0.0, 0.0, 1.0), dtype=float
+        )
+        if not getattr(item, "SameSense", True):
+            normal = -normal
+        if transformation:
+            normal = np.array(transformation["rotationMatrix"], dtype=float) @ normal
+        length = float(np.linalg.norm(normal))
+        if not length > 0:
+            return None
+        return [float(v) for v in normal / length]
 
     def _extract_geometry(self, representation, unit_scale: float = 1.0):
         """
@@ -460,9 +491,16 @@ class MembersExtractor:
         elastic_modulus_raw = mechProps.get("youngModulus")
         poisson_ratio = mechProps.get("poissonRatio")
         shear_modulus_raw = mechProps.get("shearModulus")
+        expansion_raw = mechProps.get("thermalExpansionCoefficient")
 
         # Second pass: if key properties still missing, search all psets by property name
-        if None in (elastic_modulus_raw, density_raw, poisson_ratio, shear_modulus_raw):
+        if None in (
+            elastic_modulus_raw,
+            density_raw,
+            poisson_ratio,
+            shear_modulus_raw,
+            expansion_raw,
+        ):
             for pset in psets:
                 for prop in getattr(
                     pset, "Properties", getattr(pset, "HasProperties", [])
@@ -487,6 +525,11 @@ class MembersExtractor:
                         poisson_ratio = value
                     elif "shearmodulus" in lower_name and shear_modulus_raw is None:
                         shear_modulus_raw = value
+                    elif (
+                        "thermalexpansioncoefficient" in lower_name
+                        and expansion_raw is None
+                    ):
+                        expansion_raw = value
 
         name = getattr(material, "Name", None) or "unnamed"
         if elastic_modulus_raw is None:
@@ -573,6 +616,13 @@ class MembersExtractor:
             elastic_modulus=elastic_modulus,
             poisson_ratio=poisson_ratio,
             yield_strength=yield_strength,
+            # Per unit of the file's temperature: strain is alpha times a
+            # difference of temperature
+            thermal_expansion_coefficient=(
+                float(expansion_raw) / self.temperature_scale
+                if expansion_raw is not None
+                else None
+            ),
         )
 
     def _create_section(self, profile):

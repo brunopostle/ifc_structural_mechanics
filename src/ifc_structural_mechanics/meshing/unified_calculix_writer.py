@@ -906,6 +906,7 @@ class UnifiedCalculixWriter:
         # Collect boundary condition (node, DOF) pairs before writing connections
         # to avoid MPC/SPC conflicts
         bc_node_dofs = self._collect_boundary_condition_dofs()
+        self._prepare_temperature_loads()
 
         with open(output_file, "w") as f:
             # Header
@@ -968,6 +969,14 @@ class UnifiedCalculixWriter:
                     f.write(f"{node}, {dof}, {dof}\n")
                 f.write("\n")
 
+            temperatures = self._temperature_fields()
+            if temperatures:
+                f.write("** Temperatures are changes from zero\n")
+                f.write("*INITIAL CONDITIONS, TYPE=TEMPERATURE\n")
+                for node in sorted(self.nodes):
+                    f.write(f"{node}, 0.\n")
+                f.write("\n")
+
             # Analysis steps
             write_analysis_steps(
                 f,
@@ -981,6 +990,240 @@ class UnifiedCalculixWriter:
                 u1_node_masses=self._u1_node_masses,
                 u1_element_sets=self._u1_element_sets,
                 elements_data=dict(self.elements),
+                temperatures=temperatures,
+            )
+
+    def _temperature_loads(self) -> List[Tuple[Any, Any]]:
+        """Every temperature load of the model with its load group."""
+        return [
+            (group, load)
+            for group in getattr(self.domain_model, "load_groups", None) or []
+            for load in getattr(group, "temperature_loads", None) or []
+        ]
+
+    def _prepare_temperature_loads(self) -> None:
+        """Check the temperature loads, and turn the elements of members with a
+        temperature difference to run the way the member does.
+
+        CalculiX takes a gradient along the element's own axes: across a beam
+        along its tangent (first node to last) times the section's 1 axis,
+        and across a shell along the normal its node order gives (measured;
+        each turns over with the element). Nodes are shared, so the elements
+        of a member have to agree.
+
+        Raises:
+            AnalysisError: E-LOD-008 for a temperature load that cannot be
+                applied (see the message registry).
+        """
+        loads = self._temperature_loads()
+        if not loads:
+            return
+        sets = self._load_element_sets()
+        for _, load in loads:
+            member = self.domain_model.get_member(load.member_id)
+            guids = guids_of(self.domain_model, [load.id, load.member_id])
+
+            def refuse(reason: str) -> None:
+                raise AnalysisError(
+                    f"Temperature load {load.id} on member {load.member_id} "
+                    f"cannot be applied: {reason}",
+                    code="E-LOD-008",
+                    ifc_guids=guids,
+                )
+
+            if member is None:
+                refuse("the member is not in the model.")
+            material = getattr(member, "material", None)
+            if not getattr(material, "thermal_expansion_coefficient", None):
+                refuse(
+                    f"its material '{getattr(material, 'name', None)}' has no "
+                    "thermal expansion coefficient "
+                    "(Pset_MaterialMechanical.ThermalExpansionCoefficient)."
+                )
+            if member.id in self._u1_members:
+                refuse(
+                    "it is made of CalculiX user elements (U1), which take no "
+                    "temperature."
+                )
+            elements = [
+                e
+                for e in sets.get(f"MEMBER_{self._get_short_id(member.id)}", [])
+                if e in self.elements
+            ]
+            if isinstance(member, CurveMember):
+                if not (load.delta_t_y or load.delta_t_z):
+                    continue
+                axes = getattr(member, "local_axis", None)
+                if axes is None:
+                    refuse(
+                        "it has a temperature difference across the member, "
+                        "and the member has no local axes (Axis) to say which "
+                        "way."
+                    )
+                depths = member.section.get_depths()
+                for delta, depth, axis in zip(
+                    (load.delta_t_y, load.delta_t_z), depths, "yz"
+                ):
+                    if delta and not (depth and depth > 0):
+                        refuse(
+                            f"it has a temperature difference across local "
+                            f"{axis}, and the depth of the section "
+                            f"({member.section.section_type}) along it is not "
+                            "known."
+                        )
+                geometry = np.array(member.geometry, dtype=float)
+                self._orient_elements(elements, geometry[-1] - geometry[0])
+            else:
+                if not load.delta_t_z:
+                    continue
+                normal = getattr(member, "normal", None)
+                if normal is None:
+                    refuse(
+                        "it has a temperature difference across the thickness, "
+                        "and the member's face has no plane to give its normal."
+                    )
+                self._orient_elements(elements, np.array(normal, dtype=float))
+
+    def _element_direction(self, element_id: int) -> np.ndarray:
+        """A beam's tangent (first node to last) or a shell's normal."""
+        element = self.elements[element_id]
+        points = [np.array(self.nodes[n], dtype=float) for n in element["nodes"]]
+        if element["type"] in SHELL_ELEMENT_TYPES:
+            return np.cross(points[1] - points[0], points[2] - points[0])
+        # B31 (start, end), B32R (start, middle, end)
+        return points[-1] - points[0]
+
+    def _orient_elements(self, element_ids: List[int], direction: np.ndarray) -> None:
+        """Reverse the node order of the elements that run against ``direction``."""
+        for element_id in element_ids:
+            if float(np.dot(self._element_direction(element_id), direction)) >= 0:
+                continue
+            element = self.elements[element_id]
+            nodes = list(element["nodes"])
+            if element["type"] in SHELL_ELEMENT_TYPES:
+                corners = 3 if len(nodes) in (3, 6) else 4
+                head, middles = nodes[:corners], nodes[corners:]
+                head = [head[0], *reversed(head[1:])]
+                middles = list(reversed(middles))
+                nodes = head + middles
+            else:
+                # B31 (start, end) or B32R (start, middle, end)
+                nodes = list(reversed(nodes))
+            element["nodes"] = nodes
+
+    def _temperature_fields(self) -> Dict[Optional[str], Dict[int, Tuple[float, ...]]]:
+        """The *TEMPERATURE values each load group gives the nodes.
+
+        Returns:
+            ``{group id: {node: (T, gradient, gradient)}}``: the change of
+            temperature, then for a beam the gradients (K/m) along the
+            element's tangent times its section's 1 axis and along that 1
+            axis, for a shell the gradient along its normal and zero. Every
+            node of a member whose material expands is in every group,
+            zero where the group does not heat it. A node shared by members
+            with different values takes their mean, with one warning.
+
+            Has to run after the sections are written: the beams' section
+            axes are those recorded then.
+        """
+        loads = self._temperature_loads()
+        if not loads:
+            return {}
+        sets = self._load_element_sets()
+        frames = getattr(self.domain_model, "beam_section_frames", {})
+
+        # Members whose material expands, by node
+        expanding: Dict[int, set] = {}
+        for member in self.domain_model.members:
+            material = getattr(member, "material", None)
+            if not getattr(material, "thermal_expansion_coefficient", None):
+                continue
+            for element_id in sets.get(f"MEMBER_{self._get_short_id(member.id)}", []):
+                if element_id in self.elements:
+                    for node in self.elements[element_id]["nodes"]:
+                        expanding.setdefault(node, set()).add(member.id)
+
+        fields: Dict[Optional[str], Dict[int, Tuple[float, ...]]] = {}
+        shared_nodes: set = set()
+        shared_members: set = set()
+        for group in {id(g): g for g, _ in loads}.values():
+            # The loads of one member in a group add up; at a node its
+            # elements agree, being turned the same way
+            member_values: Dict[str, Dict[int, np.ndarray]] = {}
+            for load in group.temperature_loads:
+                member = self.domain_model.get_member(load.member_id)
+                at_nodes: Dict[int, List[np.ndarray]] = {}
+                for element_id, element_values in self._element_temperatures(
+                    member, load, sets, frames
+                ):
+                    for node in self.elements[element_id]["nodes"]:
+                        at_nodes.setdefault(node, []).append(element_values)
+                values = member_values.setdefault(member.id, {})
+                for node, node_values in at_nodes.items():
+                    values[node] = values.get(node, np.zeros(3)) + np.mean(
+                        node_values, axis=0
+                    )
+            field: Dict[int, Tuple[float, ...]] = {}
+            for node, members in expanding.items():
+                values = [
+                    member_values.get(member_id, {}).get(node, np.zeros(3))
+                    for member_id in sorted(members)
+                ]
+                mean = np.mean(values, axis=0)
+                if any(not np.allclose(v, mean, atol=1e-9) for v in values):
+                    shared_nodes.add(node)
+                    shared_members.update(members)
+                field[node] = tuple(float(v) for v in mean)
+            fields[group.id] = field
+
+        if shared_nodes:
+            members = sorted(shared_members)
+            self._warn_user(
+                "W-LOD-010",
+                f"{len(shared_nodes)} node(s) are shared by members with "
+                "different temperature changes and take the mean of their "
+                f"values; members concerned: {', '.join(members[:5])}"
+                + (f" and {len(members) - 5} more" if len(members) > 5 else "")
+                + ".",
+                ifc_guids=guids_of(self.domain_model, members),
+            )
+        return fields
+
+    def _element_temperatures(self, member, load, sets, frames):
+        """(element, (T, field 3, field 4)) for the elements of a heated member."""
+        constant = load.delta_t_constant
+        elements = [
+            e
+            for e in sets.get(f"MEMBER_{self._get_short_id(member.id)}", [])
+            if e in self.elements
+        ]
+        if isinstance(member, SurfaceMember):
+            thickness = float(getattr(member.thickness, "value", 0.0) or 0.0)
+            gradient = load.delta_t_z / thickness if load.delta_t_z else 0.0
+            for element_id in elements:
+                yield element_id, np.array([constant, gradient, 0.0])
+            return
+        gradient = np.zeros(3)
+        if load.delta_t_y or load.delta_t_z:
+            axes = np.array(member.local_axis, dtype=float)
+            depth_y, depth_z = member.section.get_depths()
+            if load.delta_t_y:
+                gradient += load.delta_t_y / depth_y * axes[1]
+            if load.delta_t_z:
+                gradient += load.delta_t_z / depth_z * axes[2]
+        for element_id in elements:
+            if not gradient.any():
+                yield element_id, np.array([constant, 0.0, 0.0])
+                continue
+            tangent = self._element_direction(element_id)
+            tangent = tangent / np.linalg.norm(tangent)
+            normal = np.array(frames[element_id][1], dtype=float)
+            yield element_id, np.array(
+                [
+                    constant,
+                    float(gradient @ np.cross(tangent, normal)),
+                    float(gradient @ normal),
+                ]
             )
 
     def _load_element_sets(self) -> Dict[str, List[int]]:
@@ -1273,6 +1516,7 @@ class UnifiedCalculixWriter:
             if hasattr(material, "density") and material.density:
                 file.write("*DENSITY\n")
                 file.write(f"{material.density:.6e}\n")
+            self._write_expansion(file, material)
             file.write("\n")
 
         # One material per equivalent rectangle, scaled to the real section
@@ -1315,6 +1559,7 @@ class UnifiedCalculixWriter:
             if getattr(material, "density", None):
                 file.write("*DENSITY\n")
                 file.write(f"{material.density * factor:.6e}\n")
+            self._write_expansion(file, material, along_member=True)
             file.write("\n")
 
         # One material per solid rectangle, with the shear modulus across its
@@ -1338,7 +1583,30 @@ class UnifiedCalculixWriter:
             if getattr(material, "density", None):
                 file.write("*DENSITY\n")
                 file.write(f"{material.density:.6e}\n")
+            self._write_expansion(file, material, along_member=True)
             file.write("\n")
+
+    def _write_expansion(self, file: TextIO, material, along_member=False) -> None:
+        """Thermal expansion of a material, in a model with temperature loads.
+
+        The materials of beams, which have their 1 axis along the member,
+        expand along it only. Beam theory knows no other expansion, and in
+        CalculiX's expanded solids the section swelling in its own plane is
+        held wherever a knot holds the section: a free cantilever under a
+        gradient had E alpha dT of stress at its clamped root, and 0.1 % too
+        much deflection (measured). An equivalent rectangle has the real
+        section's EA and EI, so EA alpha dT and EI alpha dT / h are the real
+        member's.
+        """
+        coefficient = getattr(material, "thermal_expansion_coefficient", None)
+        if not coefficient or not self._temperature_loads():
+            return
+        if along_member:
+            file.write("*EXPANSION, ZERO=0., TYPE=ORTHO\n")
+            file.write(f"{coefficient:.6e}, 0., 0.\n")
+        else:
+            file.write("*EXPANSION, ZERO=0.\n")
+            file.write(f"{coefficient:.6e}\n")
 
     @staticmethod
     def _matched_torsion_constant(member) -> Optional[float]:

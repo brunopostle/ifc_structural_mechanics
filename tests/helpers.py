@@ -54,6 +54,10 @@ def plane_model(
     moments=None,
     local_loads=None,
     support_displacements=None,
+    temperatures=None,
+    expansion=None,
+    depth=None,
+    cases=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -95,6 +99,18 @@ def plane_model(
         support_displacements: ``{name: (dx, dy, dz, rx, ry, rz)}`` in metres
             and radians, a prescribed displacement of that joint (an
             ``IfcStructuralLoadSingleDisplacement``) in the load case.
+        temperatures: ``{(name, name): (dT, dTY, dTZ)}`` in K, a temperature
+            change of that member (an ``IfcStructuralLoadTemperature`` on a
+            curve action) in the load case.
+        expansion: The material's thermal expansion coefficient
+            (``Pset_MaterialMechanical.ThermalExpansionCoefficient``), 1/K.
+        depth: Depth of the section along the member's local z (across the
+            plane), when it is not ``side``: a ``side`` by ``depth``
+            rectangle.
+        cases: ``{name: [actions]}``, further load cases, each with the
+            actions named ``P<joint>``, ``Q<joint><joint>``,
+            ``D<joint>`` or ``T<joint><joint>`` that it holds; the
+            ``Load`` case holds them all unless they are listed here.
 
     Returns:
         *path*.
@@ -154,7 +170,20 @@ def plane_model(
                 create("IfcPositiveRatioMeasure", nu),
                 None,
             ),
-        ],
+        ]
+        + (
+            [
+                create(
+                    "IfcPropertySingleValue",
+                    "ThermalExpansionCoefficient",
+                    None,
+                    create("IfcThermalExpansionCoefficientMeasure", expansion),
+                    None,
+                )
+            ]
+            if expansion is not None
+            else []
+        ),
         material,
     )
     if density is not None:
@@ -173,7 +202,7 @@ def plane_model(
             ],
             material,
         )
-    profile = create("IfcRectangleProfileDef", "AREA", "Bar", None, side, side)
+    profile = create("IfcRectangleProfileDef", "AREA", "Bar", None, side, depth or side)
     profile_set = create(
         "IfcMaterialProfileSet",
         None,
@@ -401,7 +430,76 @@ def plane_model(
             action,
         )
         actions.append(action)
-    create("IfcRelAssignsToGroup", guid(), None, None, None, actions, None, case)
-    analysis.LoadedBy = [case]
+    for ends, (constant, across_y, across_z) in (temperatures or {}).items():
+        action = create(
+            "IfcStructuralCurveAction",
+            guid(),
+            None,
+            f"T{ends[0]}{ends[1]}",
+            None,
+            None,
+            None,
+            None,
+            create(
+                "IfcStructuralLoadTemperature",
+                None,
+                float(constant),
+                float(across_y),
+                float(across_z),
+            ),
+            "LOCAL_COORDS",
+            None,
+            None,
+            "CONST",
+        )
+        create(
+            "IfcRelConnectsStructuralActivity",
+            guid(),
+            None,
+            None,
+            None,
+            bar_of[ends],
+            action,
+        )
+        actions.append(action)
+    listed = {name for names in (cases or {}).values() for name in names}
+    create(
+        "IfcRelAssignsToGroup",
+        guid(),
+        None,
+        None,
+        None,
+        [action for action in actions if action.Name not in listed],
+        None,
+        case,
+    )
+    loaded_by = [case]
+    for name, names in (cases or {}).items():
+        other = create(
+            "IfcStructuralLoadCase",
+            guid(),
+            None,
+            name,
+            None,
+            None,
+            "LOAD_CASE",
+            "NOTDEFINED",
+            "NOTDEFINED",
+            None,
+            None,
+            None,
+        )
+        create(
+            "IfcRelAssignsToGroup",
+            guid(),
+            None,
+            None,
+            None,
+            [action for action in actions if action.Name in names],
+            None,
+            other,
+        )
+        loaded_by.append(other)
+    analysis.LoadedBy = loaded_by
     model.write(path)
     return path

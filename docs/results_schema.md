@@ -302,7 +302,9 @@ moves (an `IfcStructuralLoadSingleDisplacement`: a settlement, or a support
 turned): what it is moved by in each load case and combination that moves
 it, in global axes, metres and radians. A load case that only moves
 supports has an `applied_load_N` of zero, and reactions that balance each
-other.
+other. So has a load case that only changes the temperature of members (an
+`IfcStructuralLoadTemperature`), which is a load case like any other in
+`by_load_case`.
 
 ### Where the moments come from: `moments`
 

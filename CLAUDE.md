@@ -819,6 +819,48 @@ Reactions balance each other (`applied_load_N` is zero), and
 has a settled middle support and a turned end of a fixed beam against
 Timoshenko's closed forms (0.1%), a second case, and a combination.
 
+**Temperature loads** (`aiz.98`): a curve or planar action whose applied load
+is an `IfcStructuralLoadTemperature` changes the temperature of the whole
+member it is assigned to (CONST only; another distribution, or one on a point
+action, raises `E-LOD-008`). It is a `TemperatureLoad` in
+`LoadGroup.temperature_loads`, never among `loads`, in K
+(`THERMODYNAMICTEMPERATUREUNIT`: a difference, so 5/9 per °F, and the
+material's `ThermalExpansionCoefficient` per file unit is divided by the
+same). `DeltaTY` and `DeltaTZ` are differences between the outer fibres on
+either side of local y and z: across a curve member's real section
+(`Section.get_depths()`: width along y, depth along z), across a surface
+member's thickness (z only; its normal is that of its face's plane,
+`SurfaceMember.normal`). No coefficient, no axes or depth for a difference,
+a U1 member or a buckling analysis raises `E-LOD-008`. Measured on 2.21 and
+2.23, and what the writer rests on:
+
+- `*TEMPERATURE` takes the change, then gradients in K/m: on a beam node
+  along the element's tangent times its section's 1 axis, then along the 1
+  axis; on a shell node along the element's normal. The curvature is alpha
+  times the gradient whatever the rectangle, so an equivalent one is
+  exact. Both turn over with the element's node order, so
+  `_prepare_temperature_loads()` turns the elements of a member with a
+  difference to run with its x or normal, and `_temperature_fields()` gives
+  each node its values from the section axes recorded per element.
+- Beam materials (`MAT_RT_`, `MAT_EQ_`, 1 axis along the member) expand
+  along the member only (`TYPE=ORTHO`): isotropic expansion is held by any
+  knot that holds the section, and a free cantilever under a gradient had
+  E alpha dT of stress at its root. Shells expand isotropically.
+- A node has one temperature. Where members with different changes meet
+  (one heated, one not but with a coefficient), the node takes the mean
+  (`W-LOD-010`): two elements see part of the other's change, and a
+  restrained run keeps its whole expansion (exact for B32R).
+- Every node of a member that expands is written in every step, zero where
+  the step heats nothing (temperatures stay in force), after
+  `*INITIAL CONDITIONS, TYPE=TEMPERATURE` of zero. A free cantilevered slab
+  is no closed form (its clamped edge holds the curvature across); the
+  benchmark is a slab on three corners, a sphere.
+
+`plane_structure.py` takes a difference as bending along its gradient.
+`TestTemperatureLoads` has a free and a clamped bar, cantilevers, a fixed
+beam, a beam bowing out of its plane, the slab, a second case and a node
+shared with a cold member against closed forms.
+
 **Member-side releases** (`IfcRelConnectsStructuralMember.AppliedCondition`) are in
 the axes of that relation (`connection.release_axes_by_member`; the member's own axes
 when the relation has no `ConditionCoordinateSystem`). `released_rotation_axes()`

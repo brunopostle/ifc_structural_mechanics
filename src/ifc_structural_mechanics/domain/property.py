@@ -634,6 +634,28 @@ class Section:
             return ho / 2, wo / 2
         return None, None
 
+    def get_depths(self) -> Tuple[Optional[float], Optional[float]]:
+        """Overall size of the section along the member's local y and z, in m.
+
+        The profile's depth (``height``) lies along local z and its width
+        along local y. None where the section type has no such dimensions.
+        """
+        d = self.dimensions
+        t = self.section_type
+        if t in ("circular",):
+            return 2 * d["radius"], 2 * d["radius"]
+        if t in ("pipe", "hollow_circular"):
+            r = d.get("outer_radius", d.get("radius"))
+            return (2 * r, 2 * r) if r else (None, None)
+        if t in ("box", "hollow_rectangular"):
+            return (
+                d.get("width", d.get("outer_width")),
+                d.get("height", d.get("outer_height")),
+            )
+        if t in ("rectangular", "i", "t", "l", "c"):
+            return d.get("width"), d.get("height")
+        return None, None
+
     @classmethod
     def create_rectangular_section(
         cls, id: str, name: str, width: float, height: float

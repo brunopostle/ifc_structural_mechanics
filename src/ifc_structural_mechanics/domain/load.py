@@ -506,6 +506,56 @@ class SupportDisplacement(DomainEntity):
         return result
 
 
+class TemperatureLoad(DomainEntity):
+    """A change of temperature of a whole member.
+
+    IFC gives it as an ``IfcStructuralCurveAction`` or
+    ``IfcStructuralPlanarAction`` whose applied load is an
+    ``IfcStructuralLoadTemperature``. It is not a force and is not among a
+    group's ``loads``: the writer gives the member's nodes temperatures in
+    the steps of the load cases it belongs to, and zero in the others.
+
+    The differences are between the outer fibres on the positive and the
+    negative side of the member's local y and z axes: across a curve
+    member's section, and across a surface member's thickness (z only).
+    """
+
+    def __init__(
+        self,
+        id: str,
+        member_id: str,
+        delta_t_constant: float = 0.0,
+        delta_t_y: float = 0.0,
+        delta_t_z: float = 0.0,
+    ):
+        """Initialize a TemperatureLoad.
+
+        Args:
+            id: GlobalId of the IFC action.
+            member_id: Id of the member it heats.
+            delta_t_constant: Change of the whole section, in K.
+            delta_t_y: Change at the outer fibre on the positive side of
+                local y less that on the negative side, in K.
+            delta_t_z: The same along local z, in K.
+        """
+        super().__init__(id=id, entity_type="temperature_load")
+        self.member_id = member_id
+        self.delta_t_constant = float(delta_t_constant)
+        self.delta_t_y = float(delta_t_y)
+        self.delta_t_z = float(delta_t_z)
+        # As for loads: the action of the file this comes from
+        self.action_id: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        """Convert the temperature load to a dictionary representation."""
+        result = super().as_dict()
+        result["member_id"] = self.member_id
+        result["delta_t_constant"] = self.delta_t_constant
+        result["delta_t_y"] = self.delta_t_y
+        result["delta_t_z"] = self.delta_t_z
+        return result
+
+
 class LoadGroup(DomainEntity):
     """A group of loads that are applied together."""
 
@@ -531,6 +581,8 @@ class LoadGroup(DomainEntity):
         self.self_weight_coefficients: Optional[List[float]] = None
         # Supports the group moves (IfcStructuralLoadSingleDisplacement)
         self.support_displacements: List[SupportDisplacement] = []
+        # Members the group heats (IfcStructuralLoadTemperature)
+        self.temperature_loads: List[TemperatureLoad] = []
 
     @property
     def includes_self_weight(self) -> bool:
@@ -539,19 +591,29 @@ class LoadGroup(DomainEntity):
 
     @property
     def has_actions(self) -> bool:
-        """Whether the group loads the structure: with loads, self-weight or
-        supports it moves."""
+        """Whether the group loads the structure: with loads, self-weight,
+        supports it moves or members it heats."""
         return (
             bool(self.loads)
             or self.includes_self_weight
             or bool(self.support_displacements)
+            or bool(self.temperature_loads)
         )
 
-    def add_load(self, load: Union[Load, SupportDisplacement]) -> None:
-        """Add a load, or a support displacement, to the group."""
+    @property
+    def actions(self) -> List[Union[Load, SupportDisplacement, TemperatureLoad]]:
+        """Everything the group applies: loads, support displacements and
+        temperature loads."""
+        return [*self.loads, *self.support_displacements, *self.temperature_loads]
+
+    def add_load(self, load: Union[Load, SupportDisplacement, TemperatureLoad]) -> None:
+        """Add a load, a support displacement or a temperature load."""
         if isinstance(load, SupportDisplacement):
             if load not in self.support_displacements:
                 self.support_displacements.append(load)
+        elif isinstance(load, TemperatureLoad):
+            if load not in self.temperature_loads:
+                self.temperature_loads.append(load)
         elif load not in self.loads:
             self.loads.append(load)
 
@@ -595,6 +657,8 @@ class LoadGroup(DomainEntity):
             result["support_displacements"] = [
                 d.as_dict() for d in self.support_displacements
             ]
+        if self.temperature_loads:
+            result["temperature_loads"] = [t.as_dict() for t in self.temperature_loads]
 
         return result
 

@@ -23,6 +23,7 @@ from ..domain.load import (
     LoadGroup,
     PointLoad,
     SupportDisplacement,
+    TemperatureLoad,
 )
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
@@ -91,6 +92,10 @@ class LoadsExtractor:
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.angle_scale = self.unit_scales.get("PLANEANGLEUNIT", 1.0)
+        # Kelvin per unit of the file: a difference of temperature
+        self.temperature_scale = self.unit_scales.get(
+            "THERMODYNAMICTEMPERATUREUNIT", 1.0
+        )
 
         # Cache for already extracted loads to avoid duplications
         self._load_cache = {}
@@ -272,10 +277,7 @@ class LoadsExtractor:
                             ):
                                 # Get all loads from the referenced group
                                 referenced_group = all_groups[obj.GlobalId]
-                                for load in [
-                                    *referenced_group.loads,
-                                    *referenced_group.support_displacements,
-                                ]:
+                                for load in referenced_group.actions:
                                     load_case.add_load(load)
 
         # Return all populated groups
@@ -448,6 +450,9 @@ class LoadsExtractor:
                     "supported.",
                     code="E-LOD-001",
                 )
+
+        if applied_load.is_a("IfcStructuralLoadTemperature"):
+            return self._temperature_load(ifc_load, applied_load, load_id)
 
         # For structural point actions
         if ifc_load.is_a("IfcStructuralPointAction"):
@@ -681,6 +686,74 @@ class LoadsExtractor:
             coordinate_system=self._coordinate_system(ifc_load),
         )
         return displacement
+
+    def _temperature_load(
+        self, ifc_load, applied_load, load_id: str
+    ) -> TemperatureLoad:
+        """The temperature load of a curve or planar action, on its whole member.
+
+        Raises:
+            ModelExtractionError: If it is on another kind of action, does
+                not have a constant distribution, is not assigned to one
+                member of the action's kind, or has a difference across a
+                surface member's width (DeltaTY).
+        """
+        if ifc_load.is_a("IfcStructuralCurveAction") or ifc_load.is_a(
+            "IfcStructuralLinearAction"
+        ):
+            kind = "IfcStructuralCurveMember"
+        elif ifc_load.is_a("IfcStructuralPlanarAction"):
+            kind = "IfcStructuralSurfaceMember"
+        else:
+            raise ModelExtractionError(
+                "Its applied load is an IfcStructuralLoadTemperature, which "
+                "only curve and planar actions can carry.",
+                code="E-LOD-008",
+            )
+        distribution = getattr(ifc_load, "PredefinedType", None) or "CONST"
+        if distribution != "CONST":
+            raise ModelExtractionError(
+                f"Its temperature change has a {distribution} distribution; "
+                "only a constant one over the whole member is supported.",
+                code="E-LOD-008",
+            )
+        members = [
+            relation.RelatingElement
+            for relation in getattr(ifc_load, "AssignedToStructuralItem", None) or []
+            if getattr(relation, "RelatingElement", None) is not None
+        ]
+        if len(members) != 1 or not members[0].is_a(kind):
+            raise ModelExtractionError(
+                "It is a temperature change and is assigned to "
+                + (
+                    "no item"
+                    if not members
+                    else ", ".join(f"an {item.is_a()}" for item in members)
+                )
+                + f"; it has to be assigned to one {kind}.",
+                code="E-LOD-008",
+            )
+        constant, delta_y, delta_z = (
+            value * self.temperature_scale
+            for value in self._components(
+                applied_load, ("DeltaTConstant", "DeltaTY", "DeltaTZ")
+            )
+        )
+        if kind == "IfcStructuralSurfaceMember" and delta_y != 0:
+            raise ModelExtractionError(
+                f"It gives surface member {members[0].GlobalId} a temperature "
+                f"difference across its width (DeltaTY = {delta_y:.6g} K); a "
+                "surface member takes one across its thickness (DeltaTZ) only.",
+                code="E-LOD-008",
+                ifc_guids=[members[0].GlobalId],
+            )
+        return TemperatureLoad(
+            id=load_id,
+            member_id=members[0].GlobalId,
+            delta_t_constant=constant,
+            delta_t_y=delta_y,
+            delta_t_z=delta_z,
+        )
 
     def _point_load(self, ifc_load, applied_load, load_id: str, position) -> PointLoad:
         """The point load of a single force of an action, at a position in metres.

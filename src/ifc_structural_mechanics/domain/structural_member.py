@@ -278,6 +278,9 @@ class SurfaceMember(StructuralMember):
         """
         # Set thickness property first
         self.thickness = thickness
+        # Local z in global axes, the normal of the face's plane, where the
+        # file gives one
+        self.normal: Optional[List[float]] = None
 
         # Initialize parent with common properties
         super().__init__(id, "surface", geometry, material, allow_none_props, ifc_guid)

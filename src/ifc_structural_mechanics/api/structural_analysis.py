@@ -587,6 +587,8 @@ def _validate_model(domain_model, gravity: bool) -> list:
         or getattr(g, "includes_self_weight", False) is True
         or isinstance(getattr(g, "support_displacements", None), list)
         and bool(g.support_displacements)
+        or isinstance(getattr(g, "temperature_loads", None), list)
+        and bool(g.temperature_loads)
         for g in load_groups
     )
     if not has_explicit_loads and not gravity:

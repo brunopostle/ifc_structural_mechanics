@@ -95,6 +95,7 @@ class Extractor:
             "PRESSUREUNIT",
             "MASSUNIT",
             "PLANEANGLEUNIT",
+            "THERMODYNAMICTEMPERATUREUNIT",
         ):
             try:
                 scale = ifcopenshell.util.unit.calculate_unit_scale(self.ifc, unit_type)
@@ -295,9 +296,7 @@ class Extractor:
                 model.add_load_group(group)
 
         grouped = {
-            load.action_id or load.id
-            for group in load_groups
-            for load in [*group.loads, *group.support_displacements]
+            load.action_id or load.id for group in load_groups for load in group.actions
         }
         loose = [
             action

@@ -264,7 +264,7 @@ The model has no structural connections, so nothing supports it and the analysis
 
 ### E-LOD-001: Load of an unsupported kind
 
-Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations), and point actions with single displacements on supports. Temperature loads, displacements with a distortion and the varying actions of IFC2X3 are not.
+Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations), point actions with single displacements on supports, and curve and planar actions with temperature changes of a constant distribution. Displacements with a distortion and the varying actions of IFC2X3 are not.
 
 ### E-LOD-002: Load distribution cannot be used
 
@@ -289,6 +289,10 @@ The action has no AppliedLoad, or its force cannot be read. Give it one.
 ### E-LOD-007: Support displacement that cannot be applied
 
 A prescribed displacement (IfcStructuralLoadSingleDisplacement) moves a support along what it holds. It has to be a point action assigned to a point connection with an AppliedCondition, and every component that is not zero has to be along a direction the support holds rigidly in global axes: not one it leaves free, which would add a restraint the file does not have, not a spring, and not a skew direction, which is held by equations. A buckling analysis takes no support displacements. The message says which applies.
+
+### E-LOD-008: Temperature load that cannot be applied
+
+A temperature change (IfcStructuralLoadTemperature) is applied to the whole of the member its action is assigned to: a curve action to one curve member, a planar action to one surface member, with a constant distribution. The member's material needs a thermal expansion coefficient (Pset_MaterialMechanical.ThermalExpansionCoefficient), which is never assumed. A difference across a curve member needs its local axes (Axis) and a section whose depth is known; a surface member takes a difference across its thickness (DeltaTZ) only, and needs a plane for its normal. A buckling analysis takes no temperature loads, nor does a member of CalculiX user elements (--open-sections user-element). The message says which applies.
 
 ### W-LOD-001: No loads
 
@@ -325,6 +329,10 @@ No longer given: such a load stops the analysis (E-LOD-004), since its direction
 ### W-LOD-009: Load on a member with no elements (retired)
 
 No longer given: the loads of a member that another one overlaps are applied to the elements lying in its own geometry, whoever they belong to.
+
+### W-LOD-010: Temperature shared at nodes between members
+
+CalculiX gives each node one temperature, and members meeting at a node share it. Where a heated member meets one with another temperature change (or none) and a thermal expansion coefficient, the node takes the mean of their values, so the elements next to it on both sides see part of the other's change. The effect is local and shrinks as the mesh is refined; a gradient at a joint between members at an angle is the least accurate. The message counts the nodes and names the members.
 
 ## The solver
 

@@ -86,14 +86,20 @@ def plane_normal(
         return None
     flat = [axis for axis in range(3) if extent[axis] <= _FLAT * size]
 
-    # Loads are forces, self-weight is a direction and a support displacement
-    # a length: each kind is judged against its own largest
+    # Loads are forces, self-weight is a direction, a support displacement
+    # a length and a temperature difference a gradient, which bends its
+    # member along it: each kind is judged against its own largest
     forces = []
     weights = []
     moments = []
     shifts = []
     turns = []
+    bends = []
     for group in domain_model.load_groups:
+        for temperature in getattr(group, "temperature_loads", None) or ():
+            gradient = _temperature_gradient(domain_model, temperature)
+            if gradient is not None:
+                bends.append(np.abs(gradient))
         for displacement in getattr(group, "support_displacements", None) or ():
             shift = np.array(displacement.translation, dtype=float)
             turn = np.array(displacement.rotation, dtype=float)
@@ -122,7 +128,7 @@ def plane_normal(
     if gravity_direction is not None:
         weights.append(np.abs(np.array(gravity_direction, dtype=float)))
     loaded = []
-    for vectors in (forces, weights, shifts):
+    for vectors in (forces, weights, shifts, bends):
         largest = max((float(vector.max()) for vector in vectors), default=0.0)
         loaded += [
             axis
@@ -365,3 +371,28 @@ def spinning_members(domain_model: StructuralModel, normal: int) -> List[Tuple]:
         column = basis[:, pivot] / turning[pivot]
         basis = np.delete(basis - np.outer(column, turning), pivot, axis=1)
     return holds
+
+
+def _temperature_gradient(domain_model, temperature) -> Optional[np.ndarray]:
+    """The gradient (K/m) of a temperature difference across a curve member,
+    in global axes; None for none, or where the member has no axes or depth
+    (the writer refuses those)."""
+    if not (temperature.delta_t_y or temperature.delta_t_z):
+        return None
+    member = domain_model.get_member(temperature.member_id)
+    axes = getattr(member, "local_axis", None)
+    section = getattr(member, "section", None)
+    if axes is None or section is None:
+        return None
+    depth_y, depth_z = section.get_depths()
+    axes = np.array(axes, dtype=float)
+    gradient = np.zeros(3)
+    for delta, depth, axis in (
+        (temperature.delta_t_y, depth_y, axes[1]),
+        (temperature.delta_t_z, depth_z, axes[2]),
+    ):
+        if delta:
+            if not depth:
+                return None
+            gradient += delta / depth * axis
+    return gradient
