@@ -288,7 +288,6 @@
         "section_force_diagrams": {"$ref": "#/$defs/diagrams"},
         "section_force_diagrams_by_combination": {"$ref": "#/$defs/diagrams"},
         "deflected_shapes": {"$ref": "#/$defs/deflected_shapes"},
-        "deflected_shapes_by_combination": {"$ref": "#/$defs/deflected_shapes"},
         "mode_shapes": {
           "description": "The shape of each mode of a buckling or modal analysis along the member, by its name (Mode <n>), as a deflected shape (schema 1.13). Shapes, not displacements: each buckling mode is scaled to a largest translation of one along any member, each modal one to a generalised mass of one.",
           "$ref": "#/$defs/deflected_shapes"

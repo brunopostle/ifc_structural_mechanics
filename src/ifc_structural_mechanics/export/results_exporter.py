@@ -112,8 +112,9 @@ class ResultsExporter:
         self._section_force_records: Optional[Dict[int, List[Dict]]] = None
         self._member_record_cache: Dict[frozenset, Dict[str, List[Dict]]] = {}
         self._surface_meshes: Dict[str, Optional[SurfaceMesh]] = {}
-        # Off for the exporter of a combination, which gives none
-        self._with_surface_fields = True
+        # On for the exporter of one load combination, which gives only what
+        # is not linear in the load (_add_one_combination)
+        self._for_a_combination = False
         self._by_case_cache: Dict[str, Dict[str, Dict[int, List[float]]]] = {}
 
     # ------------------------------------------------------------------
@@ -194,9 +195,10 @@ class ResultsExporter:
             "theory_type": self._IFC_THEORY.get(self.analysis_type, "NOTDEFINED"),
             "is_linear": True,
         }
-        connections = self._connections(data["members"])
-        if connections:
-            data["connections"] = connections
+        if not self._for_a_combination:
+            connections = self._connections(data)
+            if connections:
+                data["connections"] = connections
         return data
 
     # IfcAnalysisTheoryTypeEnum of the results. A buckling analysis's results
@@ -220,7 +222,7 @@ class ResultsExporter:
         }
         return {case: groups.get(case) for case in load_cases}
 
-    def _connections(self, members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _connections(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """How each point connection moves, per load case and combination.
 
         Taken from the deflected shapes of the curve members joined there:
@@ -230,11 +232,13 @@ class ResultsExporter:
         over those members; the rotation that of the members not released
         there, absent where every member is (a pin has no one rotation). A
         connection with no curve member that has a deflected shape is left
-        out.
+        out. A combination's are its cases' times their factors, as the
+        movement is linear in the load; a rotation only where each of its
+        cases has one.
         """
         shapes_of = {
             member.id: (member, entry)
-            for member, entry in zip(self.model.members, members)
+            for member, entry in zip(self.model.members, data["members"])
             if entry.get("deflected_shapes")
         }
         listed = []
@@ -257,30 +261,43 @@ class ResultsExporter:
                 "id": conn.id,
                 "position_m": [float(v) for v in point],
             }
-            for key, target in (
-                ("deflected_shapes", "by_load_case"),
-                ("deflected_shapes_by_combination", "by_load_combination"),
-            ):
-                cases = sorted({c for _, e in joined for c in e.get(key, {})})
-                values = {}
-                for case in cases:
-                    moved = self._connection_movement(conn, point, joined, key, case)
-                    if moved is not None:
-                        values[case] = moved
-                if values:
-                    entry[target] = values
-            if "by_load_case" in entry:
-                listed.append(entry)
+            cases = sorted({c for _, e in joined for c in e["deflected_shapes"]})
+            values = {}
+            for case in cases:
+                moved = self._connection_movement(conn, point, joined, case)
+                if moved is not None:
+                    values[case] = moved
+            if not values:
+                continue
+            entry["by_load_case"] = values
+            combined = {}
+            for combination in data.get("load_combinations", []):
+                parts = [
+                    (factor, values[case])
+                    for case, factor in combination["factors"].items()
+                    if case in values
+                ]
+                if not parts:
+                    continue
+                moved = {
+                    key: [float(sum(f * v[key][i] for f, v in parts)) for i in range(3)]
+                    for key in ("translation_m", "rotation_rad")
+                    if all(key in v for _, v in parts)
+                }
+                combined[combination["name"]] = moved
+            if combined:
+                entry["by_load_combination"] = combined
+            listed.append(entry)
         return listed
 
     @staticmethod
     def _connection_movement(
-        conn, point: np.ndarray, joined: list, key: str, case: str
+        conn, point: np.ndarray, joined: list, case: str
     ) -> Optional[Dict[str, List[float]]]:
         """The translation and rotation of a connection in one case."""
         translations, rotations = [], []
         for member, entry in joined:
-            shape = entry.get(key, {}).get(case)
+            shape = entry["deflected_shapes"].get(case)
             geometry = getattr(member, "geometry", None)
             if not shape or not isinstance(geometry, (list, tuple)):
                 continue
@@ -511,20 +528,22 @@ class ResultsExporter:
         part._applied_load_moments = load_moments
         part._mesh_nodes = self._mesh_nodes
         part._surface_meshes = self._surface_meshes
-        part._with_surface_fields = False
+        part._for_a_combination = True
         result = part._build()
 
         for member, combined_member in zip(data["members"], result["members"]):
             values = combined_member.get("by_load_case", {}).get(name)
             if values is not None:
                 member.setdefault("by_load_combination", {})[name] = values
-            # Surface fields are not given for combinations: they are linear
-            # in the load, and for building_02 they would be 19 sets where
-            # its load cases are 3
-            for key in ("section_force_diagrams", "deflected_shapes"):
-                diagram = combined_member.get(key, {}).get(name)
-                if diagram is not None:
-                    member.setdefault(f"{key}_by_combination", {})[name] = diagram
+            # Deflected shapes and surface fields are not given for
+            # combinations: they are linear in the load, and building_02's
+            # 16 combinations made them 13.5 and 12.5 MB more. A diagram is
+            # not: its jumps are found again in the sum
+            diagram = combined_member.get("section_force_diagrams", {}).get(name)
+            if diagram is not None:
+                member.setdefault("section_force_diagrams_by_combination", {})[
+                    name
+                ] = diagram
 
         for block in ("global_displacements", "global_reactions"):
             values = result.get(block, {}).get("by_load_case", {}).get(name)
@@ -640,15 +659,15 @@ class ResultsExporter:
             if axes:
                 result["section_axes"] = axes
             result["section_force_diagrams"] = diagrams
+        if self._for_a_combination:
+            return result
         shapes = self._member_deflections(member, elem_ids)
         if shapes:
             result["deflected_shapes"] = shapes
         modes = self._member_deflections(member, elem_ids, kind="mode_shapes")
         if modes:
             result["mode_shapes"] = modes
-        if getattr(member, "entity_type", None) == "surface" and (
-            self._with_surface_fields
-        ):
+        if getattr(member, "entity_type", None) == "surface":
             result.update(self._surface_entry(member))
         return result
 

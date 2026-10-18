@@ -72,7 +72,7 @@ instance). Absent means unknown; never read it as zero.
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
-| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
+| 1.13 | 2026-10-18 | `deflected_shapes` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
 
 ## Outline
 
@@ -466,8 +466,10 @@ of a line support); the last gives the same reactions along them.
   it by a stiff link). The translation is the mean over those members, which
   agree to 3 in 10 000 in `building_01`. The rotation is that of the members
   not released at the connection, and is absent where every member is: a
-  pin has no one rotation. Line and surface connections, and point
-  connections that join surface members only, are not listed.
+  pin has no one rotation. A combination's are its cases' times their
+  factors, a rotation only where each case has one. Line and surface
+  connections, and point connections that join surface members only, are
+  not listed.
 - `load_case_ifc_guids` gives the GlobalId of the `IfcStructuralLoadCase`
   of each load case, by its name, or `null` for one the analysis made itself
   (`Gravity`, the `Reference loads` of a buckling analysis). Load
@@ -551,8 +553,12 @@ file does.
 
 Fields are given for load cases only: everything in them is linear in the
 load, so a combination's are its cases' times the factors in
-`load_combinations`. Given for each of `building_02`'s 16 combinations they
-would have been six times the size. In a buckling or modal analysis
+`load_combinations`. The same holds for the deflected shapes of curve
+members. For each of `building_02`'s 16 combinations the two together were
+26 MB of its 62 (measured, without indentation). The section force
+diagrams are given for combinations, since their jumps are found again in
+the sum, and so are the movements of `connections`, which an IFC export
+writes per result group: those are the cases' times their factors. In a buckling or modal analysis
 `surface_mode_shapes` has the translation at each point in each mode,
 scaled as `mode_shapes` are.
 
@@ -566,8 +572,9 @@ to the last), the translation `ux_m`, `uy_m`, `uz_m` of the axis and the
 rotation `rx_rad`, `ry_rad`, `rz_rad` of the cross-section, both in global
 axes. There is a point at both ends and (quadratic elements) the middle of
 every element, so a viewer draws the deflected line without the solver's
-files; a point two elements share is listed once. Combinations are in
-`deflected_shapes_by_combination`.
+files; a point two elements share is listed once. They are given for load
+cases only, as the surface fields are: a combination's shape is its cases'
+times their factors, exactly.
 
 The solver reports on the faces of the solids it expands a beam into, which
 move by more than the axis where the beam turns; at each cross-section the

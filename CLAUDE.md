@@ -610,7 +610,10 @@ here. This section only records the constraints that shape day-to-day work.
   moments from a straight-line fit through the thickness of the expanded
   solid's stresses, shears from the moments by equilibrium (the solver's
   own transverse shear was 12% high at a clamped edge), for load cases only
-  (linear: a combination is its cases times their factors). The writer
+  (linear: a combination is its cases times their factors), as are the
+  deflected shapes: in `building_02` the two for its 16 combinations were
+  26 MB of 62. The exporter of a combination (`_for_a_combination`) builds
+  only what is copied back from it. The writer
   records the shell mesh for it (`StructuralModel.shell_elements`).
   `ResultsExporter.write()` puts lists of numbers on one line.
   `global_displacements` leaves out the nodes of links and arms, elements of
