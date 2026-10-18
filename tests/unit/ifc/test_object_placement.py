@@ -103,10 +103,11 @@ def _grid(model, u_axes, v_axes, placement=None):
 
 
 def _intersection(model, axes, offsets=None):
+    # OffsetDistances is mandatory: the ifcopenshell of Python 3.9 refuses
+    # None for it, so it is left unset when there are none
+    attributes = {"OffsetDistances": [float(o) for o in offsets]} if offsets else {}
     return model.create_entity(
-        "IfcVirtualGridIntersection",
-        IntersectingAxes=axes,
-        OffsetDistances=[float(o) for o in offsets] if offsets else None,
+        "IfcVirtualGridIntersection", IntersectingAxes=axes, **attributes
     )
 
 
