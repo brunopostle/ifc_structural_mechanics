@@ -50,7 +50,7 @@ The material has no Pset_MaterialMechanical.YoungModulus, and nothing can be ana
 
 ### E-MAT-003: Self-weight of a material without a density
 
-A load case includes self-weight, or --gravity was given, and a material has no Pset_MaterialCommon.MassDensity, so the weight cannot be worked out. Give the material its density.
+A load case includes self-weight, --gravity was given, or the analysis is modal, and a material has no Pset_MaterialCommon.MassDensity, so the weight or the mass cannot be worked out. Give the material its density.
 
 ### E-MAT-004: Elastic constants that do not fit together
 
@@ -90,13 +90,17 @@ The section's properties cannot be turned into a CalculiX section (a dimension o
 
 A curve member of no length, or with ends that cannot be read, has no direction to place its section by. Check its geometry.
 
+### E-SEC-006: User elements in a modal analysis
+
+CalculiX gives its U1 elements no mass, so a modal analysis cannot be made of members analysed with them (--open-sections user-element). Analyse the model with equivalent sections.
+
 ### W-SEC-001: Torsion of solid rectangles corrected
 
 CalculiX makes a solid rectangular beam too stiff in torsion (18.5 % for a square). The shear stiffness across the member's width is lowered until its torsion is right, which leaves bending and shear along its depth as they are. Shear across the width is softer than it should be by the percentage given. Nothing needs doing unless a result depends on that shear.
 
 ### W-SEC-002: Sections analysed as equivalent rectangles
 
-CalculiX has no I, T, L or channel shape, so these members are rectangles with the same area, bending stiffness and weight. Their deflections and section forces are right; their stress is worked out from the section forces and the real section (max_normal_stress_Pa), and the solver's own stresses are not given. An open section is far too stiff in torsion: do not rely on results where such members carry torsion. Closed and round sections have their torsion right and are up to twice too stiff in shear.
+CalculiX has no I, T, L or channel shape, so these members are rectangles with the same area, bending stiffness and weight. Their deflections and section forces are right; their stress is worked out from the section forces and the real section (max_normal_stress_Pa), and the solver's own stresses are not given. An open section is far too stiff in torsion: do not rely on results where such members carry torsion, nor on modes in which they twist. Closed and round sections have their torsion right and are up to twice too stiff in shear.
 
 ### W-SEC-003: Section orientation guessed
 
@@ -314,9 +318,9 @@ These load combinations include no load case and have no results.
 
 A combination may only include load cases. These include another group (a load group or another combination) and have no results.
 
-### W-LOD-006: Load combinations in a buckling analysis
+### W-LOD-006: Load combinations outside a linear static analysis
 
-Combinations are only formed in a linear static analysis, by adding up the results of their load cases. A buckling analysis has none.
+Combinations are only formed in a linear static analysis, by adding up the results of their load cases. A buckling or modal analysis has none.
 
 ### W-LOD-007: Point load moved to the nearest node
 
@@ -333,6 +337,10 @@ No longer given: the loads of a member that another one overlaps are applied to 
 ### W-LOD-010: Temperature shared at nodes between members
 
 CalculiX gives each node one temperature, and members meeting at a node share it. Where a heated member meets one with another temperature change (or none) and a thermal expansion coefficient, the node takes the mean of their values, so the elements next to it on both sides see part of the other's change. The effect is local and shrinks as the mesh is refined; a gradient at a joint between members at an angle is the least accurate. The message counts the nodes and names the members.
+
+### W-LOD-011: Loads are not mass in a modal analysis
+
+A modal analysis takes its mass from the density of the members' materials and applies no load. A load that stands for mass (finishes, partitions, a share of the imposed load) is not counted, since nothing in IFC says which loads are mass, and the frequencies are those of the bare structure. Where that mass matters, the frequencies are too high by about the square root of the ratio of the masses.
 
 ## The solver
 
@@ -394,6 +402,10 @@ The buckling analysis ran and CalculiX reported no buckling factor.
 
 The reaction of an elastic support is its stiffness times the displacement CalculiX prints for it, and it printed none. Report it.
 
+### E-RES-007: No modes
+
+The modal analysis ran and CalculiX reported no frequency. Its output in the output directory says why.
+
 ### W-RES-001: Reactions corrected
 
 CalculiX 2.21 and earlier misreport the force at a support that holds a rotation. Such supports have their forces taken from the ends of their members (good to about 1 %), and the message says which totals still do not balance the loads. Displacements and member forces are not affected. CalculiX 2.23 does not need this.
@@ -423,6 +435,10 @@ The member bends or stretches by more than 1/100 of its size, leaving out how it
 ### W-CHK-002: Displacement too large
 
 A displacement is more than 5 % of the size of the model, so the model is probably a mechanism. Check the supports and the connections between members.
+
+### W-CHK-003: Modes that are mechanisms
+
+A modal analysis found modes with no frequency (below 0.01 Hz, or a negative eigenvalue): some part of the model can move without straining, which a static analysis would stop at. Their frequencies, participation factors and shapes mean nothing. Check the supports and the connections between members.
 
 ## Anything else
 

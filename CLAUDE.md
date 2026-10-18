@@ -76,6 +76,9 @@ ifc-analysis analyze model.ifc --output ./results --strict-connections
 # CalculiX U1 elements for I/T/L/C/round/hollow sections (models of those only)
 ifc-analysis analyze model.ifc --output ./results --open-sections user-element
 
+# Natural frequencies and mode shapes (mass from the materials only)
+ifc-analysis analyze model.ifc --output ./results --analysis-type modal --modes 12
+
 # Enable verbose output and JSON results
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
@@ -93,6 +96,9 @@ python visualize.py building_02 --screenshot result.png
 
 # Custom scale factor
 python visualize.py portal_01 --scale 500
+
+# A mode shape of a modal or buckling analysis
+python visualize.py beam_01 --mode 2
 ```
 
 ## Architecture Overview
@@ -179,7 +185,7 @@ Interactive 3D result visualization using PyVista:
 
 #### 6. Configuration (`src/ifc_structural_mechanics/config/`)
 Configuration system with three main classes:
-- `AnalysisConfig`: Analysis type (linear_static, linear_buckling), solver parameters
+- `AnalysisConfig`: Analysis type (linear_static, linear_buckling, modal), solver parameters (`num_modes` for modal)
 - `MeshingConfig`: Element sizes, element types per member type
 - `SystemConfig`: Paths to external tools (CalculiX, Gmsh)
 
@@ -628,6 +634,29 @@ here. This section only records the constraints that shape day-to-day work.
   `parsed_results["mode_shapes"]`; they are not displacements and must never
   be listed as load cases (`aiz.73`). `results.json` has the one case
   `Reference loads` and `buckling.modes` with the factors.
+- **Modal analysis** (`lon`, `--analysis-type modal`, `--modes`, default 10)
+  is one `*FREQUENCY` step and no load. Its mass is the materials' density
+  alone (a material without one stops it, `E-MAT-003`): IFC cannot say
+  which loads are mass, so none is, and `W-LOD-011` says so when the file
+  has load cases. Links, arms and springs have no mass; knots for point
+  loads are not made and the plane hold is not applied (modes out of the
+  plane are real). U1 members are refused (`E-SEC-006`): CalculiX gives
+  them no mass. `ResultsParser.parse_frequencies()` reads the frequencies,
+  participation factors and effective masses (rotations about the global
+  origin) from the .dat, the same on 2.21 and 2.23; every displacement set
+  in the .frd is a shape, mass-normalised, and goes to `mode_shapes` as
+  `Mode <n>` (buckling shapes are named so too). A mode below 0.01 Hz or
+  with a negative eigenvalue is `mechanism` (`W-CHK-003`): CalculiX solves
+  a mechanism and gives such modes rather than stopping. Measured
+  (`TestModalAnalysis`): an equivalent rectangle has the real section's mass
+  and rotary inertia, rho (Iy + Iz), and its bending modes are Timoshenko's
+  with kappa 1 on the real shear areas to 1e-3; axial modes are exact;
+  torsion of a solid rectangle is 0.8% low, of an open section 5.4 times too
+  high (30 times too stiff). A solid rectangle shears as kappa 1 rather than
+  5/6 (`aiz.101`): `cantilever_01`'s modes are 0.16 to 2.8% above
+  Timoshenko's, the higher the more. `slab_01` held in translation on four
+  edges is 1.4 to 1.7% below Mindlin's hard simply supported plate, as its
+  static deflection is 2.6 to 3.3% above Navier's.
 - **FRD/DAT parsing is duplicated on purpose** between `results_parser.py` and
   `ccxquery/parsers/`; `ccxquery` is a standalone debugging tool.
 
@@ -683,7 +712,8 @@ shear moduli cannot match two shear areas and a torsion constant, so
   and density, so its stresses stay meaningful. Shear across the width is
   27% soft for a square and 45% for 1:2; bending and shear along the depth
   do not move (measured to four figures). These mildly orthotropic rectangles
-  still follow 5/6 in shear, unlike the equivalent ones.
+  followed 5/6 in shear when that was measured, with nu = 0.2; since beams
+  have nu = 0 they shear as kappa 1, like the equivalent ones (`aiz.101`).
 
 `TestTorsion` checks all of these by reading the twist from the solver's nodes.
 Do not measure torsion from a tip deflection: it is read on element faces,

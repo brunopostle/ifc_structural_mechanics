@@ -1,18 +1,20 @@
 {
-  "schema_version": "1.11",
+  "schema_version": "1.12",
   "units": {
     "length": "m",
     "force": "N",
     "moment": "N*m",
     "stress": "Pa",
-    "displacement": "m"
+    "displacement": "m",
+    "frequency": "Hz",
+    "mass": "kg"
   },
   "model": {
     "id": "16GlpLAhr6UgLoZdff86vk",
     "name": "beam example.EDB"
   },
   "run": {
-    "created": "2026-10-18T10:54:52+00:00",
+    "created": "2026-10-18T13:17:15+00:00",
     "library": {
       "name": "ifc_structural_mechanics",
       "version": "0.1.0"

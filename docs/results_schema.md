@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.11**.
+calculation report. This page describes schema **1.12**.
 
 `results.json` is written by `ResultsExporter`
 (`src/ifc_structural_mechanics/export/results_exporter.py`) and
@@ -51,14 +51,16 @@ instance). Absent means unknown; never read it as zero.
 | 1.9 | 2026-10-18 | Elastic supports (`springs`, `moments: "springs"`) and surface supports (`type: "surface"`). |
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
+| 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.11",
+  "schema_version": "1.12",
   "units": {"length": "m", "force": "N", "moment": "N*m",
-            "stress": "Pa", "displacement": "m"},
+            "stress": "Pa", "displacement": "m",
+            "frequency": "Hz", "mass": "kg"},
   "model": {"id": "...", "name": "..."},
   "run": {
     "created": "2026-10-18T10:28:58+00:00",
@@ -69,7 +71,7 @@ instance). Absent means unknown; never read it as zero.
                  "element_order": 2, "strict_connections": false,
                  "open_sections": "equivalent", "gravity": false}
   },
-  "analysis_type": "linear_static" | "linear_buckling",
+  "analysis_type": "linear_static" | "linear_buckling" | "modal",
   "limits": {},
   "load_cases": ["Dead", "Live"],
   "load_combinations": [
@@ -170,7 +172,8 @@ says otherwise (`_in_axes`, the section force diagrams).
   `strict_connections` (true: only the connections of the file, no beams
   tied to the slabs they lie in), `open_sections` (`equivalent` or
   `user_element`) and `gravity` (a `Gravity` load case of self-weight was
-  added).
+  added); in a modal analysis, `num_modes`, how many modes were asked for
+  (schema 1.12).
 
 ## Warnings: `warnings`
 
@@ -200,7 +203,7 @@ gives none, so `limits` is `{}` and every member is `ok`: `status` says
 nothing about the member's design then. `warning` is a value the schema
 allows and the library does not give at present.
 
-## Analysis type and buckling
+## Analysis type, buckling and modes
 
 `analysis_type` (schema 1.4) says what was run. A buckling analysis has one
 set of results, named in `load_cases`: the model under all of its loads
@@ -216,6 +219,55 @@ Each `factor` is what those loads have to be multiplied by for the model to
 buckle in that mode, lowest first. The mode shapes are in the solver's result
 file and not here: they are scaled to a largest value of one, so they are not
 displacements.
+
+A modal analysis (schema 1.12) finds the natural frequencies of the model as
+it stands on its supports. It applies no load, so `load_cases` is empty,
+`members` have no results, `global_displacements` and `global_reactions` are
+empty and `supports` is empty. `modal` is then present:
+
+```json
+"modal": {
+  "mass_source": "materials",
+  "modes": [
+    {"mode": 1, "frequency_Hz": 18.54, "period_s": 0.0539,
+     "angular_frequency_rad_s": 116.5, "eigenvalue": 13571.3,
+     "mechanism": false,
+     "participation_factors": {"x": 0.0, "y": -1.072, "z": 0.0,
+                               "rx": 0.0, "ry": 0.0, "rz": -2.337},
+     "effective_mass_kg": {"x": 0.0, "y": 1.149, "z": 0.0},
+     "effective_mass_moment_kgm2": {"rx": 0.0, "ry": 0.0, "rz": 5.460}},
+    ...
+  ],
+  "total_effective_mass_kg": {"x": 1.839, "y": 1.843, "z": 1.853},
+  "total_effective_mass_moment_kgm2": {"rx": 0.031, "ry": 5.641, "rz": 5.622},
+  "mass_fraction": {"x": 0.0, "y": 0.886, "z": 0.815,
+                    "rx": 0.826, "ry": 0.996, "rz": 0.999}
+}
+```
+
+- `mass_source`: where the mass comes from. Always `materials`: the
+  density of each member's material (`Pset_MaterialCommon.MassDensity`) over
+  its section and thickness, with the rotary inertia of the section. A load
+  that stands for mass (finishes, partitions, a share of the imposed load) is
+  not counted, since nothing in IFC says which loads are mass; warning
+  `W-LOD-011` says when the file has load cases.
+- `modes`: lowest frequency first. `eigenvalue` is the square of the angular
+  frequency. `mechanism` is true for a mode with a negative eigenvalue or a
+  frequency below 0.01 Hz: something the model does not resist, which
+  warning `W-CHK-003` reports. Its `period_s` is `null` and its other values
+  mean nothing.
+- `participation_factors` and `effective_mass_kg` are along the global axes;
+  the rotations (`rx`...) are about the global axes through the origin, so
+  their effective masses are moments of inertia (kg·m²) about it.
+- `total_effective_mass_kg` is the mass of every node free to move in that
+  direction (the solver's), less what stands on rigid supports.
+  `mass_fraction` is what the modes found add up to over it; a design code
+  usually asks for 0.9 in each direction that matters. Analyse with more
+  modes (`--modes`) to reach it.
+
+The shapes are in the solver's result file and not here: each is scaled so
+that its generalised mass is one, so they are not displacements either.
+`visualize.py <model> --mode <n>` draws one.
 
 ## Load cases and combinations
 
