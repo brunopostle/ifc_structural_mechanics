@@ -143,7 +143,9 @@ def _eccentric_ends(ifc_path: str, inp_path: str):
         return tuple(c / 1000.0 for c in vertex.VertexGeometry.Coordinates)
 
     ends_at = {}
-    relations = ifcopenshell.open(ifc_path).by_type("IfcRelConnectsWithEccentricity")
+    # The file must outlive its entities, or they are deleted with it
+    model = ifcopenshell.open(ifc_path)
+    relations = model.by_type("IfcRelConnectsWithEccentricity")
     for relation in relations:
         member = relation.RelatingStructuralMember
         connection = relation.RelatedStructuralConnection

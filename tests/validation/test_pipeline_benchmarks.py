@@ -709,7 +709,8 @@ class TestMemberWithoutAxis:
 
     def test_rectangle_is_reported(self, tmp_path):
         path = self._variant(tmp_path)
-        guid = ifcopenshell.open(path).by_type("IfcStructuralCurveMember")[0].GlobalId
+        model = ifcopenshell.open(path)
+        guid = model.by_type("IfcStructuralCurveMember")[0].GlobalId
         (message,) = self._warnings(path, tmp_path)
         assert guid in message
 
@@ -3440,11 +3441,10 @@ class TestCodeAsterReferences:
             "Column_01": 0.0770,
             "Column_02": 0.0898,
         }
+        model = ifcopenshell.open(self.STRUCTURE)
         names = {
             entity.GlobalId: entity.Name
-            for entity in ifcopenshell.open(self.STRUCTURE).by_type(
-                "IfcStructuralMember"
-            )
+            for entity in model.by_type("IfcStructuralMember")
         }
         assert len(data["members"]) == 4
         for member in data["members"]:
@@ -4175,12 +4175,19 @@ def _plane_run(tmp_path, mesh_size=0.5, analysis_type="linear_static", **model):
         return json.load(fh), [w["message"] for w in result["warnings"]]
 
 
+def _member_names(path: str) -> dict:
+    """The name of each curve member of a file, by its GlobalId."""
+    # The file must outlive its entities, or they are deleted with it
+    model = ifcopenshell.open(path)
+    return {
+        member.GlobalId: member.Name
+        for member in model.by_type("IfcStructuralCurveMember")
+    }
+
+
 def _axial_forces(data: dict, path: str) -> dict:
     """Axial force of each member by its name in the file, tension positive."""
-    names = {
-        member.GlobalId: member.Name
-        for member in ifcopenshell.open(path).by_type("IfcStructuralCurveMember")
-    }
+    names = _member_names(path)
     forces = {}
     for member in data["members"]:
         envelope = member["envelope"]["section_forces"]
@@ -4431,12 +4438,7 @@ class TestPlaneFrame:
         )
 
     def _moments(self, data, tmp_path):
-        names = {
-            member.GlobalId: member.Name
-            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
-                "IfcStructuralCurveMember"
-            )
-        }
+        names = _member_names(str(tmp_path / "plane.ifc"))
         return {
             names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
             for m in data["members"]
@@ -4794,12 +4796,7 @@ class TestBeamEndingOnTheSpanOfAnother:
             hinged=False,
             mesh_size=0.25,
         )
-        names = {
-            member.GlobalId: member.Name
-            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
-                "IfcStructuralCurveMember"
-            )
-        }
+        names = _member_names(str(tmp_path / "plane.ifc"))
         forces = {
             names[member["ifc_guid"]]: member["envelope"]["section_forces"]
             for member in data["members"]
@@ -4919,12 +4916,7 @@ class TestBeamContinuousOverASupport:
 
     def test_moments(self, tmp_path):
         data = self._beam(tmp_path)
-        names = {
-            member.GlobalId: member.Name
-            for member in ifcopenshell.open(str(tmp_path / "plane.ifc")).by_type(
-                "IfcStructuralCurveMember"
-            )
-        }
+        names = _member_names(str(tmp_path / "plane.ifc"))
         moments = {
             names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
             for m in data["members"]

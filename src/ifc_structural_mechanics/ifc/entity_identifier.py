@@ -551,10 +551,12 @@ def _placement_matrix(placement):
             "and IfcGridPlacement are supported."
         )
     parent = _placement_matrix(placement.PlacementRelTo)
-    return parent @ np.array(
-        ifcopenshell.util.placement.get_axis2placement(placement.RelativePlacement),
-        dtype=float,
-    )
+    # get_placement() replaced get_axis2placement() in later IfcOpenShell
+    # releases; both give the matrix in the file's own units
+    parse = getattr(ifcopenshell.util.placement, "get_placement", None)
+    if parse is None:
+        parse = ifcopenshell.util.placement.get_axis2placement
+    return parent @ np.array(parse(placement.RelativePlacement), dtype=float)
 
 
 def get_transformation(placement, length_scale: float = 1.0):
@@ -584,10 +586,14 @@ def get_transformation(placement, length_scale: float = 1.0):
         return None
 
     try:
-        # Parallel axes divide by zero in there; that is reported below
+        # Parallel axes divide by zero in there (NaN), or in later IfcOpenShell
+        # releases leave zero axes; either is reported below
         with np.errstate(invalid="ignore", divide="ignore"):
             matrix = _placement_matrix(placement)
-        if not np.all(np.isfinite(matrix)):
+        rotation = matrix[:3, :3]
+        if not np.all(np.isfinite(matrix)) or not np.allclose(
+            rotation.T @ rotation, np.eye(3), atol=1e-6
+        ):
             raise ModelExtractionError(
                 "The axes of its placement cannot be read (Axis and "
                 "RefDirection are parallel).",
