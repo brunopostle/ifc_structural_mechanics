@@ -652,9 +652,10 @@ here. This section only records the constraints that shape day-to-day work.
   and rotary inertia, rho (Iy + Iz), and its bending modes are Timoshenko's
   with kappa 1 on the real shear areas to 1e-3; axial modes are exact;
   torsion of a solid rectangle is 0.8% low, of an open section 5.4 times too
-  high (30 times too stiff). A solid rectangle shears as kappa 1 rather than
-  5/6 (`aiz.101`): `cantilever_01`'s modes are 0.16 to 2.8% above
-  Timoshenko's, the higher the more. `slab_01` held in translation on four
+  high (30 times too stiff). `cantilever_01`'s first four vertical modes
+  are Timoshenko's with 5/6 to 1e-6 (they were 0.16 to 2.8% above before
+  its shear modulus was put right, `aiz.101`); sideways they follow the
+  width modulus written, 17% above 5/6 G, to 1e-3. `slab_01` held in translation on four
   edges is 1.4 to 1.7% below Mindlin's hard simply supported plate, as its
   static deflection is 2.6 to 3.3% above Navier's.
 - **FRD/DAT parsing is duplicated on purpose** between `results_parser.py` and
@@ -689,8 +690,9 @@ CONSTANTS` with an `*ORIENTATION` along the member): `G12` and `G13` are set
 so that `G12 a b = G A_shear,y` and `G13 a b = G A_shear,z`. Note the absence
 of 5/6. That is calibrated, not derived: with these strongly orthotropic
 materials the I-section benchmarks come out right with 1.0 and 12 to 18% short
-in shear with 5/6. An ordinary isotropic rectangle does behave as 5/6 (a
-simply supported 0.3 m square matches to 0.01%).
+in shear with 5/6. An isotropic rectangle with a Poisson's ratio behaves as
+5/6 (a simply supported 0.3 m square matched to 0.01% with nu = 0.3); with
+the nu = 0 that beams have it shears with its whole area as well (`aiz.101`).
 
 **Torsion.** CalculiX puts one solid element across a beam's section, which
 can only warp as `x2 x3`, so an `a` x `b` beam twists with
@@ -705,15 +707,21 @@ shear moduli cannot match two shear areas and a torsion constant, so
   get both moduli scaled by one number so that torsion is exact; their shear
   stiffness is then too high by that number (bar 1.1, box 1.4, thin tube
   1.9). They need `torsional_constant` on the section, else shear is matched.
-- A solid rectangle keeps the modulus of its depth and has the one of its
-  width lowered until torsion is exact (`rectangle_shear_moduli()`,
-  `aiz.53`); left alone a square is 18.5% too stiff. It is written with a
-  material of its own (`MAT_RT_<member>`) and an `*ORIENTATION`, real modulus
-  and density, so its stresses stay meaningful. Shear across the width is
-  27% soft for a square and 45% for 1:2; bending and shear along the depth
-  do not move (measured to four figures). These mildly orthotropic rectangles
-  followed 5/6 in shear when that was measured, with nu = 0.2; since beams
-  have nu = 0 they shear as kappa 1, like the equivalent ones (`aiz.101`).
+- A solid rectangle gets 5/6 of the material's shear modulus along its
+  depth, since it too shears with its whole area (`aiz.101`), and the one
+  across its width is set so that torsion is exact
+  (`rectangle_shear_moduli()`, `aiz.53`); left alone a square is 18.5% too
+  stiff in torsion and 20% in shear. It is written with a material of its
+  own (`MAT_RT_<member>`) and an `*ORIENTATION`, real modulus and density,
+  so its stresses stay meaningful. The width modulus comes out near 5/6 of
+  the material's: 3% above for a square, 4% for 1:2, 17% for 2:1 (deep).
+  Deeper than about 2.1:1 it would need more than the material's own
+  modulus and soon more than any, so it is held at G and the depth modulus
+  raised until torsion is exact: shear along the depth is then 4% stiff at
+  3:1, 9% at 5:1 and 14% at 10:1 (`W-SEC-001` gives the figures).
+  Measured: `cantilever_01` under its weight is Timoshenko's to 1e-6 at a
+  0.5, 0.25 and 0.1 m mesh (it was 0.29% stiff at all three with the
+  material's modulus), and 0.06% stiff on its side.
 
 `TestTorsion` checks all of these by reading the twist from the solver's nodes.
 Do not measure torsion from a tip deflection: it is read on element faces,
@@ -945,7 +953,8 @@ rotational degrees of freedom**. This drives everything about joints:
   it makes the section contract as it bends, which a knot (clamped end,
   joint at an angle, link, arm, point load) stops: a cantilever was 1.2,
   0.75 and 0.5% stiff at a 0.5, 0.25 and 0.1 m mesh with nu = 0.2 and is
-  0.29% at all three without; a beam with a knot at every node was 24% stiff
+  exact at all three without (once its shear modulus was put right,
+  `aiz.101`); a beam with a knot at every node was 24% stiff
   with nu = 0.3. Knots cost a beam nothing now. Shells keep theirs: a shell
   node that is a knot has its thickness held, which stiffens the slab there
   (a cantilevered slab clamped through knots along a line: 3% of its own
