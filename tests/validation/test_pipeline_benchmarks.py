@@ -4588,6 +4588,73 @@ class TestBeamOnTwoDimensionalSupports:
             )
 
 
+class TestDeflectedShape:
+    """The deflected shape of a member along it (``94g.13.2``).
+
+    A 4 m cantilever along X, 0.1 m square, clamped at A, of two members
+    meeting at M halfway. The displacements and rotations of its axis are
+    those of Timoshenko's beam at every cross-section.
+    """
+
+    LOAD, LENGTH, SIDE, TWIST = 1000.0, 4.0, 0.1, 200.0
+    KEYS = {"distance_m", "ux_m", "uy_m", "uz_m", "rx_rad", "ry_rad", "rz_rad"}
+
+    def _shapes(self, tmp_path, moments=None):
+        """``[(x of the member's start, its shape)]`` for the case ``Load``."""
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_FIXED},
+            loads={"B": (0.0, -self.LOAD)},
+            moments=moments,
+            hinged=False,
+            mesh_size=0.25,
+        )
+        names = _member_names(str(tmp_path / "plane.ifc"))
+        starts = {"AM": 0.0, "MB": 2.0}
+        return [
+            (starts[names[m["ifc_guid"]]], m["deflected_shapes"]["Load"])
+            for m in data["members"]
+        ]
+
+    def test_bending_and_shear_along_it(self, tmp_path):
+        bending = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        found = 0
+        for start, shape in self._shapes(tmp_path):
+            assert set(shape) == self.KEYS
+            assert shape["distance_m"] == sorted(shape["distance_m"])
+            for i, distance in enumerate(shape["distance_m"]):
+                x = start + distance
+                deflection = (
+                    self.LOAD * x**2 * (3 * self.LENGTH - x) / (6 * bending)
+                    + self.LOAD * x / shear
+                )
+                # Shear moves the axis and does not turn the sections
+                slope = self.LOAD * x * (2 * self.LENGTH - x) / (2 * bending)
+                assert shape["uz_m"][i] == pytest.approx(
+                    -deflection, rel=0.005, abs=1e-7
+                )
+                assert shape["ry_rad"][i] == pytest.approx(slope, rel=0.005, abs=1e-7)
+                for key in ("ux_m", "uy_m", "rx_rad", "rz_rad"):
+                    assert abs(shape[key][i]) < 1e-3 * max(deflection, 1e-6), key
+                found += 1
+        # Both ends and the middle of every 0.25 m element, each once
+        assert found == 2 * (2 * 8 + 1)
+
+    def test_twist_along_it(self, tmp_path):
+        """A torque at the tip as well: the sections turn by T x / GJ."""
+        torsion = PLANE_E / 2.6 * 0.1406 * self.SIDE**4
+        for start, shape in self._shapes(
+            tmp_path, moments={"B": (self.TWIST, 0.0, 0.0)}
+        ):
+            for distance, twist in zip(shape["distance_m"], shape["rx_rad"]):
+                assert twist == pytest.approx(
+                    self.TWIST * (start + distance) / torsion, rel=0.005, abs=1e-8
+                )
+
+
 class TestStraightRunFreeToSpin:
     """A 4 m beam of two members on ball supports, loaded down and across.
 

@@ -23,6 +23,7 @@ import numpy as np
 
 from ..analysis.boundary_condition_handling import support_displacement_values
 from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
+from ..analysis.section_forces import _stations
 from ..analysis.superposition import combine_results
 from ..utils.error_handling import ResultProcessingError
 
@@ -60,9 +61,12 @@ class ResultsExporter:
             with a step per load case.
         analysis_type: ``"linear_static"``, ``"linear_buckling"`` or
             ``"modal"``.
+        node_coordinates: Node positions from the result file
+            (``ResultsParser.node_coordinates``), for the deflected shapes of
+            curve members; without them there are none.
     """
 
-    SCHEMA_VERSION = "1.12"
+    SCHEMA_VERSION = "1.13"
 
     # A mode below this frequency (a period of 100 s) is a movement the
     # structure does not resist: no building sways that slowly, and a
@@ -78,8 +82,10 @@ class ResultsExporter:
         element_nodes: Optional[Dict[int, List[int]]] = None,
         load_combinations: Optional[List] = None,
         analysis_type: str = "linear_static",
+        node_coordinates: Optional[Dict[int, List[float]]] = None,
     ):
         self.model = domain_model
+        self.node_coordinates = node_coordinates or {}
         self.analysis_type = analysis_type
         self.parsed_results = parsed_results
         self.limits = limits or {}
@@ -326,7 +332,11 @@ class ResultsExporter:
             self._applied_load_moments,
         )
         part = ResultsExporter(
-            self.model, combined, limits=self.limits, element_nodes=self.element_nodes
+            self.model,
+            combined,
+            limits=self.limits,
+            element_nodes=self.element_nodes,
+            node_coordinates=self.node_coordinates,
         )
         part._support_node_loads = node_loads
         part._applied_load_totals = load_totals
@@ -338,11 +348,10 @@ class ResultsExporter:
             values = combined_member.get("by_load_case", {}).get(name)
             if values is not None:
                 member.setdefault("by_load_combination", {})[name] = values
-            diagram = combined_member.get("section_force_diagrams", {}).get(name)
-            if diagram is not None:
-                member.setdefault("section_force_diagrams_by_combination", {})[
-                    name
-                ] = diagram
+            for key in ("section_force_diagrams", "deflected_shapes"):
+                diagram = combined_member.get(key, {}).get(name)
+                if diagram is not None:
+                    member.setdefault(f"{key}_by_combination", {})[name] = diagram
 
         for block in ("global_displacements", "global_reactions"):
             values = result.get(block, {}).get("by_load_case", {}).get(name)
@@ -458,7 +467,115 @@ class ResultsExporter:
             if axes:
                 result["section_axes"] = axes
             result["section_force_diagrams"] = diagrams
+        shapes = self._member_deflections(member, elem_ids)
+        if shapes:
+            result["deflected_shapes"] = shapes
         return result
+
+    def _member_deflections(
+        self, member, elem_ids: set
+    ) -> Dict[str, Dict[str, List[float]]]:
+        """How a curve member's axis moves and its cross-sections turn, per case.
+
+        At each cross-section of each expanded element (both ends, and the
+        middle of a quadratic one) the movement of its nodes is fitted with
+        that of a rigid body: a translation of its centre and a rotation
+        about it, in global axes. The faces of a beam move by more than its
+        axis does when it turns, so this is the axis, not the largest
+        displacement of the member. A cross-section two elements share is
+        listed once, with the mean of the two.
+
+        A member whose elements the result file does not expand (U1 user
+        elements) has the translations of its own nodes and no rotations.
+
+        Returns:
+            ``{case: {"distance_m": [...], "ux_m": ..., "uy_m": ...,
+            "uz_m": ..., "rx_rad": ..., "ry_rad": ..., "rz_rad": ...}}``,
+            ordered by distance from the member's start; empty for a surface
+            member or without node positions.
+        """
+        if getattr(member, "entity_type", None) != "curve" or not self.node_coordinates:
+            return {}
+        geometry = getattr(member, "geometry", None)
+        try:
+            start = np.array(geometry[0], dtype=float)
+            along = np.array(geometry[-1], dtype=float) - start
+        except (TypeError, ValueError, IndexError):
+            return {}
+        length = float(np.linalg.norm(along))
+        if length < 1e-12:
+            return {}
+        along /= length
+        translations = self._translation_index()
+
+        # (distance, nodes, their offsets from the centre) per cross-section
+        sections = []
+        for elem_id in sorted(elem_ids):
+            nodes = self.element_nodes.get(elem_id)
+            if not nodes:
+                continue
+            try:
+                points = np.array([self.node_coordinates[n] for n in nodes], float)
+            except KeyError:
+                continue
+            for _, indices in _stations((points - start) @ along):
+                centre = points[indices].mean(axis=0)
+                sections.append(
+                    (
+                        float((centre - start) @ along),
+                        [nodes[i] for i in indices],
+                        points[indices] - centre,
+                    )
+                )
+        rotations = bool(sections)
+        if not sections:
+            for node in sorted(self._mesh_nodes_by_member().get(member.id, ())):
+                point = self.node_coordinates.get(node)
+                if point is not None:
+                    offset = np.array(point, float) - start
+                    sections.append((float(offset @ along), [node], np.zeros((1, 3))))
+        if not sections:
+            return {}
+
+        # The fit of a rigid movement to each cross-section's nodes
+        fits = []
+        for _, _, offsets in sections:
+            if rotations:
+                rows = np.zeros((3 * len(offsets), 6))
+                for i, (x, y, z) in enumerate(offsets):
+                    rows[3 * i : 3 * i + 3, :3] = np.eye(3)
+                    # rotation x offset, as a matrix acting on the rotation
+                    rows[3 * i : 3 * i + 3, 3:] = [[0, z, -y], [-z, 0, x], [y, -x, 0]]
+                fits.append(np.linalg.pinv(rows))
+            else:
+                fits.append(None)
+
+        by_case: Dict[str, Dict[float, List[np.ndarray]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        for (distance, nodes, _), fit in zip(sections, fits):
+            moved: Dict[str, List[List[float]]] = defaultdict(list)
+            for node in nodes:
+                for case, vector in translations.get(node, ()):
+                    moved[case].append(vector)
+            key = round(distance, 6)
+            for case, vectors in moved.items():
+                if len(vectors) != len(nodes):
+                    continue
+                values = np.array(vectors, float).ravel()
+                motion = fit @ values if fit is not None else values
+                by_case[case][key].append(motion)
+
+        names = ("ux_m", "uy_m", "uz_m", "rx_rad", "ry_rad", "rz_rad")
+        shapes: Dict[str, Dict[str, List[float]]] = {}
+        for case, stations in by_case.items():
+            ordered = sorted(stations)
+            means = [np.mean(stations[d], axis=0) for d in ordered]
+            shape: Dict[str, List[float]] = {"distance_m": [float(d) for d in ordered]}
+            for k, name in enumerate(names[: 6 if rotations else 3]):
+                shape[name] = [float(m[k]) for m in means]
+            shapes[case] = shape
+        return shapes
 
     def _member_result_nodes(self, member_id: str, elem_ids: set) -> set:
         """Return the result-file nodes that carry this member's results.

@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.12**.
+calculation report. This page describes schema **1.13**.
 
 `results.json` is written by `ResultsExporter`
 (`src/ifc_structural_mechanics/export/results_exporter.py`) and
@@ -72,12 +72,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
+| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.12",
+  "schema_version": "1.13",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m",
             "frequency": "Hz", "mass": "kg"},
@@ -118,7 +119,15 @@ instance). Absent means unknown; never read it as zero.
       "by_load_case": {
         "Dead": {"max_displacement_m": 0.001, "max_von_mises_Pa": 1.5e6,
                  "max_normal_stress_Pa": 1.4e6, "section_forces": {...}}
-      }
+      },
+      "section_axes": {"x": [1.0, 0.0, 0.0], "1": [0.0, 0.0, 1.0],
+                       "2": [0.0, -1.0, 0.0]},
+      "section_force_diagrams": {"Dead": {"distance_m": [...], "N_N": [...],
+                                          ...}},
+      "deflected_shapes": {"Dead": {"distance_m": [...], "ux_m": [...],
+                                    "uy_m": [...], "uz_m": [...],
+                                    "rx_rad": [...], "ry_rad": [...],
+                                    "rz_rad": [...]}}
     }
   ],
   "global_displacements": {
@@ -463,6 +472,27 @@ is in tension, Mf2 when the +2 side is, T is right-handed about x.
 *`ifc-analysis plot <output> --field Mf1 --reactions --loads` draws `Mf1_Nm`
 from `distance_m` along `x`, offset along `1`, so that a moment is on the
 tension side.*
+
+### Deflected shape
+
+`deflected_shapes` (schema 1.13) holds how a curve member's axis moves and
+its cross-sections turn along it, per load case, as parallel lists:
+`distance_m` from the member's start (along `x` of `section_axes`, which a
+member without section forces lacks: from the first point of its IFC edge
+to the last), the translation `ux_m`, `uy_m`, `uz_m` of the axis and the
+rotation `rx_rad`, `ry_rad`, `rz_rad` of the cross-section, both in global
+axes. There is a point at both ends and (quadratic elements) the middle of
+every element, so a viewer draws the deflected line without the solver's
+files; a point two elements share is listed once. Combinations are in
+`deflected_shapes_by_combination`.
+
+The solver reports on the faces of the solids it expands a beam into, which
+move by more than the axis where the beam turns; at each cross-section the
+movement of its nodes is fitted with that of a rigid body, which is the
+axis. A cantilever with a load at its tip agrees with Timoshenko's beam to
+1.5 in 10 000 at every point. `max_displacement_m` of a member is still
+read on the faces. A member of U1 user elements, which are not expanded,
+has the translations of its own nodes and no rotations.
 
 `max_normal_stress_Pa` is the largest of |N|/A + |Mf1| y/Iy + |Mf2| z/Iz over
 those cross-sections, with the properties of the member's real section;

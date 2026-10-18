@@ -289,7 +289,7 @@ class TestSchemaStructure:
     ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
     """
 
-    CURRENT_SCHEMA_VERSION = "1.12"
+    CURRENT_SCHEMA_VERSION = "1.13"
 
     _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
     _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}

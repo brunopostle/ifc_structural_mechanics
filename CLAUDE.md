@@ -597,7 +597,11 @@ here. This section only records the constraints that shape day-to-day work.
   26.06). A 2 m mesh is good enough for development.
 - **Member results are read on the faces of expanded elements.** A member's
   largest displacement in `results.json` includes what its rotation adds at
-  the faces: a few percent on a slender member, more on a deep one.
+  the faces: a few percent on a slender member, more on a deep one. Its
+  `deflected_shapes` (`94g.13.2`, `ResultsExporter._member_deflections()`)
+  are the axis: at each cross-section the nodes' movement is fitted with a
+  rigid body's (translation of the centre, rotation of the section), which
+  matches Timoshenko's cantilever to 1.5e-4 (`TestDeflectedShape`).
   `global_displacements` leaves out the nodes of links and arms, elements of
   no member (`ResultsExporter._link_nodes()`, `aiz.92`): their faces are up
   to 0.25 m from their axis, and one set `structure_01`'s largest Y

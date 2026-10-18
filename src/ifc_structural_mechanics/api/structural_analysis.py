@@ -296,6 +296,7 @@ def analyze_ifc(
                     element_nodes=results_parser.element_nodes,
                     load_combinations=combinations,
                     analysis_type=analysis_type,
+                    node_coordinates=results_parser.node_coordinates,
                 )
                 exported = exporter.build()
                 result["warnings"].extend(plausibility_warnings(exported, domain_model))

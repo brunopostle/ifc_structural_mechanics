@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.12",
+  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.13",
   "title": "results.json",
-  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.12: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
+  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.13: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     "supports"
   ],
   "properties": {
-    "schema_version": {"const": "1.12"},
+    "schema_version": {"const": "1.13"},
     "units": {
       "type": "object",
       "additionalProperties": false,
@@ -266,8 +266,29 @@
           }
         },
         "section_force_diagrams": {"$ref": "#/$defs/diagrams"},
-        "section_force_diagrams_by_combination": {"$ref": "#/$defs/diagrams"}
+        "section_force_diagrams_by_combination": {"$ref": "#/$defs/diagrams"},
+        "deflected_shapes": {"$ref": "#/$defs/deflected_shapes"},
+        "deflected_shapes_by_combination": {"$ref": "#/$defs/deflected_shapes"}
       }
+    },
+    "deflected_shape": {
+      "description": "How a curve member's axis moves and its cross-sections turn, in global axes, along it from its start (schema 1.13): parallel lists. No rotations for a member of user elements.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distance_m", "ux_m", "uy_m", "uz_m"],
+      "properties": {
+        "distance_m": {"$ref": "#/$defs/numbers"},
+        "ux_m": {"$ref": "#/$defs/numbers"},
+        "uy_m": {"$ref": "#/$defs/numbers"},
+        "uz_m": {"$ref": "#/$defs/numbers"},
+        "rx_rad": {"$ref": "#/$defs/numbers"},
+        "ry_rad": {"$ref": "#/$defs/numbers"},
+        "rz_rad": {"$ref": "#/$defs/numbers"}
+      }
+    },
+    "deflected_shapes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/deflected_shape"}
     },
     "displacement_summary": {
       "type": "object",
