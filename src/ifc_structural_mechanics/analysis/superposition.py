@@ -86,7 +86,8 @@ def combine_results(
         for case, factor in factors.items():
             if case not in by_case:
                 raise ResultProcessingError(
-                    f"Load combination {name}: load case {case} has no reactions."
+                    f"Load combination {name}: load case {case} has no reactions.",
+                    code="E-RES-003",
                 )
             force += factor * np.array(by_case[case].get_forces())
             moment += factor * np.array(by_case[case].get_moments())
@@ -103,7 +104,8 @@ def combine_results(
             if case not in step_of:
                 raise ResultProcessingError(
                     f"Load combination {name}: load case {case} has no "
-                    "forces at the supports."
+                    "forces at the supports.",
+                    code="E-RES-003",
                 )
             for node, nodal in steps[step_of[case]]["forces"].items():
                 forces[node] = forces.get(node, 0.0) + factor * np.array(nodal)
@@ -122,7 +124,8 @@ def combine_results(
             if case not in spring_step_of:
                 raise ResultProcessingError(
                     f"Load combination {name}: load case {case} has no "
-                    "displacements of the springs of elastic supports."
+                    "displacements of the springs of elastic supports.",
+                    code="E-RES-003",
                 )
             for node, values in springs[spring_step_of[case]]["displacements"].items():
                 moved[node] = moved.get(node, 0.0) + factor * np.array(values)
@@ -204,7 +207,8 @@ def _check_same_points(name: str, kind: str, counts: Dict[str, int], size: int) 
         raise ResultProcessingError(
             f"Load combination {name}: the {kind} results of load case "
             f"{short[0]} are not at the same points as those of the other "
-            "cases, so they cannot be added."
+            "cases, so they cannot be added.",
+            code="E-RES-003",
         )
 
 
@@ -217,7 +221,8 @@ def _combine_displacements(
     for case, results in grouped.items():
         if not results:
             raise ResultProcessingError(
-                f"Load combination {name}: load case {case} has no displacements."
+                f"Load combination {name}: load case {case} has no displacements.",
+                code="E-RES-003",
             )
         factor = factors[case]
         for result in results:
@@ -259,7 +264,8 @@ def _combine_stresses(
             except KeyError as e:
                 raise ResultProcessingError(
                     f"Load combination {name}: a stress of load case {case} "
-                    f"has no component {e}; only components can be added."
+                    f"has no component {e}; only components can be added.",
+                    code="E-RES-003",
                 ) from e
     _check_same_points(
         name, "stress", {c: len(r) for c, r in grouped.items()}, len(sums)

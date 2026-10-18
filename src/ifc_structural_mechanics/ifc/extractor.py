@@ -68,7 +68,8 @@ class Extractor:
         else:
             self.logger.error("Invalid IFC file parameter provided")
             raise ModelExtractionError(
-                "ifc_file must be a file path or an ifcopenshell.file object"
+                "ifc_file must be a file path or an ifcopenshell.file object",
+                code="E-GEN-001",
             )
 
         # Get unit scale factors for different unit types
@@ -96,7 +97,8 @@ class Extractor:
             except Exception as error:
                 raise ModelExtractionError(
                     f"The {unit_type} of the IFC file cannot be worked out, so "
-                    f"its values cannot be converted: {error}"
+                    f"its values cannot be converted: {error}",
+                    code="E-IFC-004",
                 ) from error
             unit_scales[unit_type] = scale
             self.logger.info(f"Unit scale for {unit_type}: {scale}")

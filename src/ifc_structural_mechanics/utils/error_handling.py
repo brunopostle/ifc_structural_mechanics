@@ -65,6 +65,7 @@ class StructuralAnalysisError(Exception):
         entity_type: Optional[EntityType] = None,
         entity_id: Optional[str] = None,
         domain_id: Optional[str] = None,
+        code: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -76,8 +77,11 @@ class StructuralAnalysisError(Exception):
             entity_type (Optional[EntityType]): Type of entity related to the error.
             entity_id (Optional[str]): ID of the entity in the analysis software.
             domain_id (Optional[str]): ID of the entity in the domain model.
+            code (Optional[str]): Its code in ``utils.messages.KINDS``, such as
+                ``E-SUP-002``, which users can look up in ``docs/messages.md``.
             **kwargs: Additional context information to include in the error.
         """
+        self.code = code
         self.message = message
         self.severity = severity
         self.entity_type = entity_type
@@ -93,7 +97,8 @@ class StructuralAnalysisError(Exception):
         Returns:
             str: Error message with context information.
         """
-        parts = [f"{self.severity}: {self.message}"]
+        code = f"[{self.code}] " if self.code else ""
+        parts = [f"{self.severity}: {code}{self.message}"]
 
         # Add entity information if available
         if self.entity_type:
@@ -119,6 +124,7 @@ class StructuralAnalysisError(Exception):
             Dict[str, Any]: Dictionary containing error information.
         """
         return {
+            "code": self.code,
             "message": self.message,
             "severity": str(self.severity),
             "entity_type": str(self.entity_type) if self.entity_type else None,

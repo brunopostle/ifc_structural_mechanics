@@ -81,7 +81,8 @@ class LoadsExtractor:
         else:
             self.logger.error("Invalid IFC file parameter provided")
             raise ModelExtractionError(
-                "ifc_file must be a file path or an ifcopenshell.file object"
+                "ifc_file must be a file path or an ifcopenshell.file object",
+                code="E-GEN-001",
             )
 
         # Store unit scales - only keep the ones actually used
@@ -386,12 +387,13 @@ class LoadsExtractor:
             return loads if isinstance(loads, list) else [loads]
         except ModelExtractionError as error:
             raise ModelExtractionError(
-                f"Load {load_id} cannot be analysed. {error.message}"
+                f"Load {load_id} cannot be analysed. {error.message}", code=error.code
             ) from error
         except Exception as error:
             raise ModelExtractionError(
                 f"Load {load_id} cannot be read from the IFC file: "
-                f"{type(error).__name__}: {error}"
+                f"{type(error).__name__}: {error}",
+                code="E-IFC-005",
             ) from error
 
     @staticmethod
@@ -411,7 +413,8 @@ class LoadsExtractor:
         if present:
             raise ModelExtractionError(
                 f"It applies a moment ({', '.join(present)}) {why}, which is not "
-                "supported."
+                "supported.",
+                code="E-LOD-005",
             )
 
     def _build_domain_load(self, ifc_load):
@@ -419,7 +422,7 @@ class LoadsExtractor:
         load_id = getattr(ifc_load, "GlobalId", None) or str(uuid.uuid4())
         applied_load = getattr(ifc_load, "AppliedLoad", None)
         if applied_load is None:
-            raise ModelExtractionError("It has no AppliedLoad.")
+            raise ModelExtractionError("It has no AppliedLoad.", code="E-LOD-006")
         for varying in (
             "IfcStructuralLinearActionVarying",
             "IfcStructuralPlanarActionVarying",
@@ -428,7 +431,8 @@ class LoadsExtractor:
             if ifc_load.is_a(varying):
                 raise ModelExtractionError(
                     f"It is an {varying}; the varying actions of IFC2X3 are not "
-                    "supported."
+                    "supported.",
+                    code="E-LOD-001",
                 )
 
         # For structural point actions
@@ -436,7 +440,8 @@ class LoadsExtractor:
             if not applied_load.is_a("IfcStructuralLoadSingleForce"):
                 raise ModelExtractionError(
                     f"Its applied load is an {applied_load.is_a()}; on a point "
-                    "action only IfcStructuralLoadSingleForce is supported."
+                    "action only IfcStructuralLoadSingleForce is supported.",
+                    code="E-LOD-001",
                 )
             return self._point_load(
                 ifc_load, applied_load, load_id, self._extract_load_position(ifc_load)
@@ -524,7 +529,8 @@ class LoadsExtractor:
                     if getattr(ifc_load, "ProjectedOrTrue", None) == "PROJECTED_LENGTH":
                         raise ModelExtractionError(
                             "It applies a moment per projected length, which is "
-                            "not supported."
+                            "not supported.",
+                            code="E-LOD-005",
                         )
                     line_load.moment = np.array(moment, dtype=float)
 
@@ -551,7 +557,8 @@ class LoadsExtractor:
             else:
                 raise ModelExtractionError(
                     f"Its applied load is an {applied_load.is_a()}; on a planar "
-                    "action only IfcStructuralLoadPlanarForce is supported."
+                    "action only IfcStructuralLoadPlanarForce is supported.",
+                    code="E-LOD-001",
                 )
 
             force_vector = self._in_global_axes(ifc_load, force_vector)
@@ -581,7 +588,8 @@ class LoadsExtractor:
 
         raise ModelExtractionError(
             f"It is an {ifc_load.is_a()}; only point, linear, curve and planar "
-            "actions are supported."
+            "actions are supported.",
+            code="E-LOD-001",
         )
 
     def _point_load(self, ifc_load, applied_load, load_id: str, position) -> PointLoad:
@@ -599,11 +607,12 @@ class LoadsExtractor:
                     if ifc_load.is_a("IfcStructuralPointAction")
                     else "as a point force on a curve action"
                 )
-                + " only IfcStructuralLoadSingleForce is supported."
+                + " only IfcStructuralLoadSingleForce is supported.",
+                code="E-LOD-001",
             )
         if getattr(applied_load, "WarpingMoment", None):
             raise ModelExtractionError(
-                "It applies a warping moment, which is not supported."
+                "It applies a warping moment, which is not supported.", code="E-LOD-005"
             )
         force_vector = self._in_global_axes(
             ifc_load,
@@ -663,12 +672,14 @@ class LoadsExtractor:
             if item.is_a("IfcStructuralSurfaceConnection"):
                 raise ModelExtractionError(
                     "It is given in the local axes of a surface connection, "
-                    "which is not supported."
+                    "which is not supported.",
+                    code="E-LOD-004",
                 )
             return item.GlobalId
         raise ModelExtractionError(
             "It is given in LOCAL_COORDS and is assigned to no item, whose "
-            "axes those would be."
+            "axes those would be.",
+            code="E-LOD-004",
         )
 
     def _point_loads_along(
@@ -694,15 +705,19 @@ class LoadsExtractor:
         if not applied_load.is_a("IfcStructuralLoadConfiguration"):
             raise ModelExtractionError(
                 "Its distribution is DISCRETE, which needs an "
-                f"IfcStructuralLoadConfiguration and has an {applied_load.is_a()}."
+                f"IfcStructuralLoadConfiguration and has an {applied_load.is_a()}.",
+                code="E-LOD-002",
             )
         values = list(getattr(applied_load, "Values", None) or [])
         if not values:
-            raise ModelExtractionError("Its load configuration has no values.")
+            raise ModelExtractionError(
+                "Its load configuration has no values.", code="E-LOD-002"
+            )
         if getattr(applied_load, "Locations", None) is None:
             raise ModelExtractionError(
                 f"Its load configuration has {len(values)} point force(s) and no "
-                "Locations to say where along the member they are."
+                "Locations to say where along the member they are.",
+                code="E-LOD-002",
             )
         places = [
             at * self.length_scale
@@ -743,24 +758,28 @@ class LoadsExtractor:
             if count != 2:
                 raise ModelExtractionError(
                     f"Its load configuration has {count} values and no "
-                    "Locations to say where along the member they are."
+                    "Locations to say where along the member they are.",
+                    code="E-LOD-002",
                 )
             return [0.0, length]
         if len(locations) != count or any(len(at) != 1 for at in locations):
             raise ModelExtractionError(
                 "Its load configuration does not have one location along the "
-                "member for each value."
+                "member for each value.",
+                code="E-LOD-002",
             )
         places = [float(at[0]) for at in locations]
         tolerance = 1e-6 * max(length, 1.0)
         if any(b < a for a, b in zip(places, places[1:])):
             raise ModelExtractionError(
-                f"The locations of its values are not in ascending order: {places}."
+                f"The locations of its values are not in ascending order: {places}.",
+                code="E-LOD-002",
             )
         if places[0] < -tolerance or places[-1] > length + tolerance:
             raise ModelExtractionError(
                 f"The locations of its values, {places[0]:g} to {places[-1]:g}, are "
-                f"not on its member, which is {length:g} long."
+                f"not on its member, which is {length:g} long.",
+                code="E-LOD-002",
             )
         return places
 
@@ -846,25 +865,29 @@ class LoadsExtractor:
                 raise ModelExtractionError(
                     f"Its distribution is {distribution}, which needs an "
                     "IfcStructuralLoadConfiguration and has an "
-                    f"{applied_load.is_a()}."
+                    f"{applied_load.is_a()}.",
+                    code="E-LOD-002",
                 )
             if distribution not in self._SINGLE_VALUE_DISTRIBUTIONS:
                 raise ModelExtractionError(
                     f"Its distribution is {distribution}; only CONST, LINEAR, "
-                    "POLYGONAL, DISCRETE, SINUS and PARABOLA are supported."
+                    "POLYGONAL, DISCRETE, SINUS and PARABOLA are supported.",
+                    code="E-LOD-002",
                 )
             return [(0.0, self._linear_force(applied_load))]
 
         if distribution not in self._SAMPLED_DISTRIBUTIONS:
             raise ModelExtractionError(
                 f"Its distribution is {distribution} with a list of values; only "
-                "LINEAR, POLYGONAL and DISCRETE ones have one."
+                "LINEAR, POLYGONAL and DISCRETE ones have one.",
+                code="E-LOD-002",
             )
         values = list(getattr(applied_load, "Values", None) or [])
         if len(values) < 2:
             raise ModelExtractionError(
                 f"Its load configuration has {len(values)} value(s); a load that "
-                "varies needs two or more."
+                "varies needs two or more.",
+                code="E-LOD-002",
             )
         vectors = [self._linear_force(value) for value in values]
         for value in values:
@@ -878,7 +901,8 @@ class LoadsExtractor:
         if places[-1] - places[0] <= tolerance:
             raise ModelExtractionError(
                 f"Its values are all at one location, {places[0]:g}: it has no "
-                "length to act on."
+                "length to act on.",
+                code="E-LOD-002",
             )
 
         whole_member = places[0] <= tolerance and places[-1] >= length - tolerance
@@ -892,7 +916,8 @@ class LoadsExtractor:
             raise ModelExtractionError(
                 f"Its applied load is an {applied_load.is_a()}; on a linear or "
                 "curve action only linear forces, and configurations of them, "
-                "are supported."
+                "are supported.",
+                code="E-LOD-001",
             )
         return self._components(
             applied_load, ("LinearForceX", "LinearForceY", "LinearForceZ")
@@ -910,7 +935,8 @@ class LoadsExtractor:
         if self._coordinate_system(ifc_load) == "local":
             raise ModelExtractionError(
                 "It is given per projected length and in local coordinates; only "
-                "a load in global directions can be."
+                "a load in global directions can be.",
+                code="E-LOD-004",
             )
         force = np.array(vector, dtype=float)
         size = float(np.linalg.norm(force))
@@ -956,7 +982,8 @@ class LoadsExtractor:
 
         raise ModelExtractionError(
             "It is not assigned to a structural member "
-            "(no IfcRelConnectsStructuralActivity)."
+            "(no IfcRelConnectsStructuralActivity).",
+            code="E-LOD-003",
         )
 
     def _extract_load_position(self, ifc_load) -> List[float]:
@@ -1002,7 +1029,8 @@ class LoadsExtractor:
                 )[0]
         raise ModelExtractionError(
             "Its position cannot be found: it has no vertex of its own and "
-            "is not assigned to an item that has one."
+            "is not assigned to an item that has one.",
+            code="E-LOD-003",
         )
 
     def _extract_load_line(self, ifc_load) -> Tuple[List[float], List[float]]:
@@ -1028,5 +1056,6 @@ class LoadsExtractor:
             if len(endpoints) >= 2:
                 return list(endpoints[0]), list(endpoints[1])
         raise ModelExtractionError(
-            "It is not assigned to a curve member whose ends can be read."
+            "It is not assigned to a curve member whose ends can be read.",
+            code="E-LOD-003",
         )

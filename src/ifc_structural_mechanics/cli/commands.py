@@ -344,9 +344,6 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
                 domain_id = warning.get("domain_id")
                 click.echo(f"     Reference: {entity_type} {domain_id}")
 
-    if any(warning.get("code") for warning in result.get("warnings", [])):
-        click.echo("  What each code means: docs/messages.md")
-
     # Display errors
     if result.get("errors"):
         click.echo("\nErrors:")
@@ -359,6 +356,12 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
                 entity_type = error.get("entity_type", "entity")
                 domain_id = error.get("domain_id")
                 click.echo(f"     Reference: {entity_type} {domain_id}")
+
+    if any(
+        found.get("code")
+        for found in result.get("warnings", []) + result.get("errors", [])
+    ):
+        click.echo("\nWhat each code means: docs/messages.md")
 
     # Display output files
     if result.get("output_files"):
@@ -380,6 +383,7 @@ def _handle_error(error_type: str, error: Exception, json_output: bool = False) 
         error_data = {
             "status": "failed",
             "error_type": error_type,
+            "code": getattr(error, "code", None),
             "message": str(error),
         }
 
@@ -395,6 +399,8 @@ def _handle_error(error_type: str, error: Exception, json_output: bool = False) 
     else:
         click.echo(click.style(f"\n{error_type}:", fg="red", bold=True))
         click.echo(click.style(f"  {str(error)}", fg="red"))
+        if getattr(error, "code", None):
+            click.echo("  What the code means: docs/messages.md")
 
         # Add context information for structural analysis errors
         if (

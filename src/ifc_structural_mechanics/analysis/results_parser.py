@@ -214,7 +214,7 @@ class ResultsParser:
             logger.error(f"Error parsing displacement results: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise ResultProcessingError(
-                f"Failed to parse displacement results: {str(e)}"
+                f"Failed to parse displacement results: {str(e)}", code="E-RES-001"
             ) from e
 
     def parse_node_coordinates(self, frd_file: str) -> Dict[int, List[float]]:
@@ -307,7 +307,7 @@ class ResultsParser:
             except (FileNotFoundError, IOError) as e:
                 logger.error(f"Error reading FRD file: {str(e)}")
                 raise ResultProcessingError(
-                    f"Failed to read stress results file: {str(e)}"
+                    f"Failed to read stress results file: {str(e)}", code="E-RES-001"
                 ) from e
 
             stresses = []
@@ -377,7 +377,7 @@ class ResultsParser:
         except Exception as e:
             logger.error(f"Error parsing stress results: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse stress results: {str(e)}"
+                f"Failed to parse stress results: {str(e)}", code="E-RES-001"
             ) from e
 
     def parse_strains(self, frd_file: str) -> List[StrainResult]:
@@ -403,7 +403,7 @@ class ResultsParser:
             except (FileNotFoundError, IOError) as e:
                 logger.error(f"Error reading FRD file: {str(e)}")
                 raise ResultProcessingError(
-                    f"Failed to read strain results file: {str(e)}"
+                    f"Failed to read strain results file: {str(e)}", code="E-RES-001"
                 ) from e
 
             strains = []
@@ -462,7 +462,7 @@ class ResultsParser:
         except Exception as e:
             logger.error(f"Error parsing strain results: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse strain results: {str(e)}"
+                f"Failed to parse strain results: {str(e)}", code="E-RES-001"
             ) from e
 
     def parse_reactions(self, dat_file: str) -> List[ReactionForceResult]:
@@ -591,7 +591,7 @@ class ResultsParser:
         except Exception as e:
             logger.error(f"Error parsing reaction forces: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse reaction forces: {str(e)}"
+                f"Failed to parse reaction forces: {str(e)}", code="E-RES-001"
             ) from e
 
     def parse_node_forces(self, dat_file: str) -> List[Dict]:
@@ -643,7 +643,8 @@ class ResultsParser:
                     continue
                 if len(current[node]) != 3:
                     raise ResultProcessingError(
-                        f"Cannot read the support force line {text!r} in {dat_file}"
+                        f"Cannot read the support force line {text!r} in {dat_file}",
+                        code="E-RES-001",
                     )
         return steps
 
@@ -695,7 +696,8 @@ class ResultsParser:
                 if len(values) != 3:
                     raise ResultProcessingError(
                         f"Cannot read the spring displacement line {text!r} "
-                        f"in {dat_file}"
+                        f"in {dat_file}",
+                        code="E-RES-001",
                     )
                 current[node] = values
         return steps
@@ -886,7 +888,8 @@ class ResultsParser:
                     f"Load case {step['load_case']}: the result file has no "
                     f"displacement for node(s) {sorted(missing)[:5]} of the U1 "
                     "elements at the supports, so their reactions cannot be "
-                    "worked out."
+                    "worked out.",
+                    code="E-RES-004",
                 )
             forces = {
                 node: force
@@ -1292,7 +1295,8 @@ class ResultsParser:
             if "results" not in result_files:
                 raise ResultProcessingError(
                     "CalculiX wrote no result file (.frd), so there are no "
-                    "results to read."
+                    "results to read.",
+                    code="E-RES-002",
                 )
 
             # Parse FRD file for displacements, stresses, and strains
@@ -1304,7 +1308,8 @@ class ResultsParser:
                 displacements = self.parse_displacements(frd_file)
                 if not displacements:
                     raise ResultProcessingError(
-                        f"The result file {frd_file} holds no displacements."
+                        f"The result file {frd_file} holds no displacements.",
+                        code="E-RES-002",
                     )
                 parsed_results["displacement"].extend(displacements)
 
@@ -1371,7 +1376,8 @@ class ResultsParser:
             raise
         except Exception as e:
             raise ResultProcessingError(
-                f"Failed to parse result files: {type(e).__name__}: {e}"
+                f"Failed to parse result files: {type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
     @staticmethod
@@ -1507,7 +1513,8 @@ class ResultsParser:
                 f"The loads along the U1 elements were recorded for "
                 f"{len(loads) if isinstance(loads, list) else 0} step(s) and the "
                 f"result file has {len(cases)} load case(s), so their section "
-                "forces cannot be worked out."
+                "forces cannot be worked out.",
+                code="E-RES-004",
             )
 
         owners = getattr(self.domain_model, "analysis_element_to_member", None) or {}
@@ -1518,7 +1525,8 @@ class ResultsParser:
                 raise ResultProcessingError(
                     f"Load case {case}: the result file has no displacement for "
                     f"node(s) {sorted(missing)[:5]} of U1 elements, so their "
-                    "section forces cannot be worked out."
+                    "section forces cannot be worked out.",
+                    code="E-RES-004",
                 )
             for elem, element in elements.items():
                 start, along = self._member_start_and_direction(owners.get(elem))
@@ -1589,7 +1597,7 @@ class ResultsParser:
             raise
         except Exception as e:
             raise ResultProcessingError(
-                f"Error mapping results to domain model: {str(e)}"
+                f"Error mapping results to domain model: {str(e)}", code="E-RES-001"
             ) from e
 
         if invalid:

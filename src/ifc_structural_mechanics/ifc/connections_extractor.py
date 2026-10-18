@@ -69,7 +69,8 @@ class ConnectionsExtractor:
         else:
             self.logger.error("Invalid IFC file parameter provided")
             raise ModelExtractionError(
-                "ifc_file must be a file path or an ifcopenshell.file object"
+                "ifc_file must be a file path or an ifcopenshell.file object",
+                code="E-GEN-001",
             )
 
         # Store unit scales
@@ -149,12 +150,14 @@ class ConnectionsExtractor:
             return self._build_domain_connection(ifc_connection)
         except ModelExtractionError as error:
             raise ModelExtractionError(
-                f"Connection {connection_id} cannot be analysed. {error.message}"
+                f"Connection {connection_id} cannot be analysed. {error.message}",
+                code=error.code,
             ) from error
         except Exception as error:
             raise ModelExtractionError(
                 f"Connection {connection_id} cannot be read from the IFC file: "
-                f"{type(error).__name__}: {error}"
+                f"{type(error).__name__}: {error}",
+                code="E-IFC-005",
             ) from error
 
     def _build_domain_connection(self, ifc_connection) -> StructuralConnection:
@@ -166,7 +169,8 @@ class ConnectionsExtractor:
         ):
             raise ModelExtractionError(
                 f"It is an {ifc_connection.is_a()}; only point, curve and "
-                "surface connections are supported."
+                "surface connections are supported.",
+                code="E-SUP-006",
             )
         if ifc_connection.is_a("IfcStructuralSurfaceConnection"):
             return self._build_surface_connection(ifc_connection)
@@ -210,7 +214,9 @@ class ConnectionsExtractor:
                     and len(geometry) >= 2
                     and all(isinstance(g, list) for g in geometry)
                 ):
-                    raise ModelExtractionError("The ends of its edge cannot be read.")
+                    raise ModelExtractionError(
+                        "The ends of its edge cannot be read.", code="E-SUP-005"
+                    )
                 midpoint = [(geometry[0][i] + geometry[1][i]) / 2 for i in range(3)]
 
                 connection = create_connection_from_stiffness(
@@ -227,7 +233,9 @@ class ConnectionsExtractor:
                     [float(v) for v in geometry[1]],
                 ]
             else:
-                raise ModelExtractionError("It has no edge representation.")
+                raise ModelExtractionError(
+                    "It has no edge representation.", code="E-SUP-005"
+                )
 
         for member_id in find_connected_elements(ifc_connection):
             connection.connect_member(member_id)
@@ -247,7 +255,7 @@ class ConnectionsExtractor:
             )
 
         if not connection.validate():
-            raise ModelExtractionError("It does not pass validation.")
+            raise ModelExtractionError("It does not pass validation.", code="E-SUP-007")
         return connection
 
     def _build_surface_connection(self, ifc_connection) -> StructuralConnection:
@@ -266,11 +274,14 @@ class ConnectionsExtractor:
         """
         representation = get_representation(ifc_connection, "Face")
         if not representation or not representation.Items:
-            raise ModelExtractionError("It has no face representation.")
+            raise ModelExtractionError(
+                "It has no face representation.", code="E-SUP-004"
+            )
         item = representation.Items[0]
         if not item.is_a("IfcFace"):
             raise ModelExtractionError(
-                f"Its face representation is an {item.is_a()}, not a face."
+                f"Its face representation is an {item.is_a()}, not a face.",
+                code="E-SUP-004",
             )
         corners = self._face_corners(item)
         transformation = get_item_transformation(ifc_connection, self.length_scale)
@@ -279,21 +290,24 @@ class ConnectionsExtractor:
             face = transform_vectors(face, transformation)
         face = [[float(v) for v in corner] for corner in face]
         if len(face) < 3:
-            raise ModelExtractionError("Its face has fewer than three corners.")
+            raise ModelExtractionError(
+                "Its face has fewer than three corners.", code="E-SUP-004"
+            )
         centre = np.mean(np.array(face, dtype=float), axis=0)
         normal = np.zeros(3)
         for i in range(len(face)):
             normal += np.cross(face[i], face[(i + 1) % len(face)])
         if np.linalg.norm(normal) < 1e-12:
-            raise ModelExtractionError("Its face has no area.")
+            raise ModelExtractionError("Its face has no area.", code="E-SUP-004")
         normal = normal / np.linalg.norm(normal)
         if max(abs(float(np.dot(np.array(c) - centre, normal))) for c in face) > 1e-3:
-            raise ModelExtractionError("Its face is not plane.")
+            raise ModelExtractionError("Its face is not plane.", code="E-SUP-004")
 
         if not ifc_connection.AppliedCondition:
             raise ModelExtractionError(
                 "It has no AppliedCondition, so it supports nothing; a surface "
-                "connection cannot join members."
+                "connection cannot join members.",
+                code="E-SUP-004",
             )
         stiffness = get_connection_input(
             ifc_connection, "surface", self.length_scale, self.force_scale
@@ -310,7 +324,7 @@ class ConnectionsExtractor:
         for member_id in find_connected_elements(ifc_connection):
             connection.connect_member(member_id)
         if not connection.validate():
-            raise ModelExtractionError("It does not pass validation.")
+            raise ModelExtractionError("It does not pass validation.", code="E-SUP-007")
         return connection
 
     @staticmethod
@@ -324,11 +338,12 @@ class ConnectionsExtractor:
         bounds = list(face.Bounds or [])
         outer = [b for b in bounds if b.is_a("IfcFaceOuterBound")] or bounds
         if not outer:
-            raise ModelExtractionError("Its face has no bound.")
+            raise ModelExtractionError("Its face has no bound.", code="E-SUP-004")
         if len(bounds) > 1:
             raise ModelExtractionError(
                 "Its face has an opening (more than one bound), which is not "
-                "supported."
+                "supported.",
+                code="E-SUP-004",
             )
         loop = outer[0].Bound
         if loop.is_a("IfcPolyLoop"):
@@ -342,10 +357,13 @@ class ConnectionsExtractor:
                 points.append(get_coordinate(vertex.VertexGeometry))
         else:
             raise ModelExtractionError(
-                f"The bound of its face is an {loop.is_a()}, which is not supported."
+                f"The bound of its face is an {loop.is_a()}, which is not supported.",
+                code="E-SUP-004",
             )
         if any(point is None for point in points):
-            raise ModelExtractionError("A corner of its face has no coordinates.")
+            raise ModelExtractionError(
+                "A corner of its face has no coordinates.", code="E-SUP-004"
+            )
         if not outer[0].Orientation:
             points = points[::-1]
         return [list(point) for point in points]
@@ -368,7 +386,8 @@ class ConnectionsExtractor:
             if max(values) - min(values) > 1e-9 * max(1.0, max(values)):
                 raise ModelExtractionError(
                     "Its condition differs between directions, and its face has "
-                    "no plane whose axes would give them."
+                    "no plane whose axes would give them.",
+                    code="E-SUP-004",
                 )
             return None
         position = surface.Position
@@ -391,7 +410,9 @@ class ConnectionsExtractor:
             z_axis, x_axis = rotation.dot(z_axis), rotation.dot(x_axis)
         axes = self._orthonormal_axes(x_axis, z_axis)
         if axes is None:
-            raise ModelExtractionError("The axes of its face's plane are degenerate.")
+            raise ModelExtractionError(
+                "The axes of its face's plane are degenerate.", code="E-SUP-004"
+            )
         return axes
 
     def _extract_local_axes(
@@ -453,7 +474,8 @@ class ConnectionsExtractor:
             raise
         except Exception as e:
             raise ModelExtractionError(
-                f"Could not read the local axes of connection {getattr(ifc_connection, 'GlobalId', '?')}: {e}"
+                f"Could not read the local axes of connection {getattr(ifc_connection, 'GlobalId', '?')}: {e}",
+                code="E-IFC-005",
             ) from e
 
     @staticmethod
@@ -526,7 +548,8 @@ class ConnectionsExtractor:
             raise
         except Exception as e:
             raise ModelExtractionError(
-                f"Could not read the axes of relation {getattr(relation, 'GlobalId', '?')}: {e}"
+                f"Could not read the axes of relation {getattr(relation, 'GlobalId', '?')}: {e}",
+                code="E-IFC-005",
             ) from e
 
     def _extract_end_releases(
@@ -672,7 +695,8 @@ class ConnectionsExtractor:
 
         raise ModelExtractionError(
             "Its position cannot be found: it has no vertex or edge "
-            "representation and no placement away from the origin."
+            "representation and no placement away from the origin.",
+            code="E-SUP-003",
         )
 
     def _extract_geometry(self, representation):

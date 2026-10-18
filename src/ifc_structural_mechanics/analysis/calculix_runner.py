@@ -56,7 +56,9 @@ class CalculixRunner:
         # Validate input file
         self.input_file_path = Path(input_file_path)
         if not self.input_file_path.exists():
-            raise AnalysisError(f"Input file not found: {input_file_path}")
+            raise AnalysisError(
+                f"Input file not found: {input_file_path}", code="E-SLV-006"
+            )
 
         # Initialize configurations
         self.system_config = system_config or SystemConfig()
@@ -76,7 +78,8 @@ class CalculixRunner:
         if not self.ccx_path:
             raise AnalysisError(
                 "CalculiX executable (ccx) not found. "
-                "Please install CalculiX or specify the path in the system configuration."
+                "Please install CalculiX or specify the path in the system configuration.",
+                code="E-SLV-003",
             )
 
         # Initialize result file paths
@@ -119,11 +122,14 @@ class CalculixRunner:
                 shutil.copy2(self.input_file_path, target_path)
             except OSError as e:
                 raise AnalysisError(
-                    f"Failed to copy input file to working directory: {e}"
+                    f"Failed to copy input file to working directory: {e}",
+                    code="E-SLV-006",
                 ) from e
 
         if not target_path.exists():
-            raise AnalysisError(f"Input file not found: {target_path}")
+            raise AnalysisError(
+                f"Input file not found: {target_path}", code="E-SLV-006"
+            )
 
         command = self._prepare_command()
 
@@ -136,7 +142,9 @@ class CalculixRunner:
             raise
         except Exception as e:
             self.result_files = self._collect_result_files()
-            raise AnalysisError(f"CalculiX analysis failed: {str(e)}") from e
+            raise AnalysisError(
+                f"CalculiX analysis failed: {str(e)}", code="E-SLV-002"
+            ) from e
 
         # Whatever was written is kept for inspection, failed run or not
         self.result_files = self._collect_result_files()
@@ -151,6 +159,7 @@ class CalculixRunner:
             raise AnalysisError(
                 f"CalculiX analysis failed with return code {self._process_result.return_code}",
                 error_details=errors,
+                code="E-SLV-002",
             )
 
         # Check for convergence issues using the shared OutputParser logic
@@ -158,7 +167,9 @@ class CalculixRunner:
             self._process_result.stdout
         )
         if not converged:
-            raise AnalysisError(f"CalculiX analysis did not converge: {reason}")
+            raise AnalysisError(
+                f"CalculiX analysis did not converge: {reason}", code="E-SLV-004"
+            )
 
         logger.info("CalculiX analysis completed successfully")
         return self.result_files
@@ -203,7 +214,7 @@ class CalculixRunner:
                 "shared node, so those joints act as pins and can turn a "
                 "frame into a mechanism."
             )
-        raise AnalysisError(message)
+        raise AnalysisError(message, code="E-SLV-001")
 
     @staticmethod
     def _raise_if_known_gen3delem_user_element_bug(
@@ -249,7 +260,8 @@ class CalculixRunner:
                 "to your CalculiX source and rebuild, or avoid sections "
                 "that require a U1 element (I/T/L/C profiles, or members "
                 "affected by overlapping-geometry retyping) in models that "
-                "also contain native B31/S3 elements."
+                "also contain native B31/S3 elements.",
+                code="E-SLV-005",
             )
 
     def _prepare_command(self) -> List[str]:

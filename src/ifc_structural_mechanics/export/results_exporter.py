@@ -383,7 +383,8 @@ class ResultsExporter:
         if not factors:
             raise ResultProcessingError(
                 "The buckling analysis ran but the solver reported no "
-                "buckling factors."
+                "buckling factors.",
+                code="E-RES-005",
             )
         return {
             "reference_load_case": load_cases[0] if load_cases else None,
@@ -1768,7 +1769,8 @@ class ResultsExporter:
             raise ResultProcessingError(
                 f"The solver printed no displacement for the spring node "
                 f"{spring['spring_node']} of an elastic support in load case "
-                f"{case}, so its reaction is not known."
+                f"{case}, so its reaction is not known.",
+                code="E-RES-006",
             )
         value = -float(spring["stiffness"]) * float(moved[0])
         direction = np.array(spring["direction"], dtype=float)

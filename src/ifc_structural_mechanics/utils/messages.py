@@ -1,10 +1,12 @@
-"""The warnings the analysis gives, each with a code that users can look up.
+"""The warnings and errors the analysis gives, each with a code to look up.
 
-Every warning in ``result["warnings"]`` carries a ``code`` such as
-``W-SUP-001``: W for a warning, the stage of the analysis it comes from, and
-a number. Within a stage the warnings most likely to be met come first. A code
-is never renumbered or given to another warning; one that is no longer used
-stays in the list, marked as retired.
+Every warning in ``result["warnings"]`` and every error (the ``code`` of a
+``StructuralAnalysisError``, and of each entry of ``result["errors"]``) has a
+code such as ``W-SUP-001`` or ``E-SUP-002``: W for a warning, E for an error
+that stops the analysis, the stage of the analysis it comes from, and a
+number. Within a stage the ones most likely to be met come first. A code is
+never renumbered or given to something else; one that is no longer used stays
+in the list, marked as retired.
 
 ``docs/messages.md`` is written from this module
 (``python -m ifc_structural_mechanics.utils.messages > docs/messages.md``),
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MessageKind:
-    """One kind of warning: what it says, and what to do about it."""
+    """One kind of warning or error: what it says, and what to do about it."""
 
     code: str
     title: str
@@ -39,6 +41,7 @@ STAGES = {
     "SLV": "The solver",
     "RES": "Reading the results",
     "CHK": "Plausibility of the results",
+    "GEN": "Anything else",
 }
 
 _KINDS = [
@@ -401,7 +404,356 @@ _KINDS = [
     ),
 ]
 
-KINDS: Dict[str, MessageKind] = {kind.code: kind for kind in _KINDS}
+_ERRORS = [
+    # Reading the IFC file
+    MessageKind(
+        "E-IFC-001",
+        "No structural members",
+        "The file has no IfcStructuralCurveMember or IfcStructuralSurfaceMember. "
+        "The analysis reads the structural analysis model (the analytical "
+        "view), not the building elements: create one first, in Bonsai with "
+        "the structural tools.",
+    ),
+    MessageKind(
+        "E-IFC-002",
+        "Member geometry cannot be read",
+        "A curve member needs an IfcEdge representation and a surface member an "
+        "IfcFaceSurface or IfcFace, with vertices that have coordinates. The "
+        "message names the member and what is missing.",
+    ),
+    MessageKind(
+        "E-IFC-003",
+        "Placement cannot be used",
+        "Only IfcLocalPlacement is supported, with axes that are not parallel. "
+        "Place the item with a local placement.",
+    ),
+    MessageKind(
+        "E-IFC-004",
+        "Units cannot be worked out",
+        "The project's units (IfcUnitAssignment) do not say what a value of "
+        "this kind is measured in, so it cannot be converted. Give the project "
+        "its units.",
+    ),
+    MessageKind(
+        "E-IFC-005",
+        "Entity cannot be read",
+        "Reading an entity of the file failed unexpectedly; the message gives "
+        "the entity and the error. The file may not be valid against its "
+        "schema: check it with a validator. Report it with the file if it is "
+        "valid.",
+    ),
+    # Materials
+    MessageKind(
+        "E-MAT-001",
+        "Member without a material",
+        "A surface member needs an IfcMaterial (directly, or through a layer or "
+        "constituent set). Assign one.",
+    ),
+    MessageKind(
+        "E-MAT-002",
+        "Material without a Young's modulus",
+        "The material has no Pset_MaterialMechanical.YoungModulus, and nothing "
+        "can be analysed without it. Add it.",
+    ),
+    MessageKind(
+        "E-MAT-003",
+        "Self-weight of a material without a density",
+        "A load case includes self-weight, or --gravity was given, and a "
+        "material has no Pset_MaterialCommon.MassDensity, so the weight cannot "
+        "be worked out. Give the material its density.",
+    ),
+    MessageKind(
+        "E-MAT-004",
+        "Elastic constants that do not fit together",
+        "The material has a shear modulus and no Poisson's ratio, and the two "
+        "moduli give a ratio no isotropic material has (or the shear modulus "
+        "is not positive). Check the constants.",
+    ),
+    # Sections
+    MessageKind(
+        "E-SEC-001",
+        "Curve member without a profile",
+        "A curve member needs an IfcMaterialProfileSet (usually through an "
+        "IfcMaterialProfileSetUsage) with a material and a profile. Assign "
+        "one.",
+    ),
+    MessageKind(
+        "E-SEC-002",
+        "Profile not supported",
+        "Supported profiles are the rectangle, circle, hollow rectangle, hollow "
+        "circle, I, asymmetric I, T, L and U (channel) parameterised profiles. "
+        "An arbitrary or composite profile has no section properties the "
+        "analysis can use. Use one of those, or ask for the profile.",
+    ),
+    MessageKind(
+        "E-SEC-003",
+        "Surface member without a thickness",
+        "IfcStructuralSurfaceMember.Thickness is empty. Give it.",
+    ),
+    MessageKind(
+        "E-SEC-004",
+        "Section cannot be analysed",
+        "The section's properties cannot be turned into a CalculiX section (a "
+        "dimension or stiffness of zero, or one missing for user elements). "
+        "The message says what.",
+    ),
+    MessageKind(
+        "E-SEC-005",
+        "Section direction cannot be found",
+        "A curve member of no length, or with ends that cannot be read, has no "
+        "direction to place its section by. Check its geometry.",
+    ),
+    # Meshing
+    MessageKind(
+        "E-MSH-001",
+        "Gmsh failed",
+        "Gmsh could not build or mesh the geometry; the message gives its "
+        "error. Members that cross at very small angles, or tiny edges where "
+        "members nearly meet, are the usual cause. Try another --mesh-size, "
+        "and check the geometry where the message points.",
+    ),
+    MessageKind(
+        "E-MSH-002",
+        "Members with no elements",
+        "These members have no elements in the mesh, so the model cannot be "
+        "analysed as given. A member wholly inside another loses its elements "
+        "to it; that is a warning (W-MSH-002) unless nothing is left.",
+    ),
+    MessageKind(
+        "E-MSH-003",
+        "Elements cannot be attributed to members",
+        "The mesh has no physical groups, so with more than one member of a "
+        "kind it cannot say which element belongs to which. This is an "
+        "internal error: report it.",
+    ),
+    MessageKind(
+        "E-MSH-004",
+        "Support or joint cannot be laid onto a surface",
+        "A surface support's outline, or a line joining a beam to a slab, could "
+        "not be put into the slab's geometry. Check that it lies in the "
+        "surface.",
+    ),
+    MessageKind(
+        "E-MSH-005",
+        "Unknown meshing option",
+        "A meshing option has a value Gmsh does not know; the message lists "
+        "the ones it does.",
+    ),
+    # Joints between members
+    MessageKind(
+        "E-JNT-001",
+        "Member does not reach its connection",
+        "The mesh has no node for a curve member at a connection it is joined "
+        "to, so it cannot be joined there. The connection probably lies off "
+        "the member: check both.",
+    ),
+    MessageKind(
+        "E-JNT-002",
+        "Line connection cannot be made",
+        "An IfcStructuralCurveConnection joins a beam and a slab all along "
+        "it. Here it joins two curve members, or a member that does not run "
+        "along the line or lies too far from it, or the slab's mesh has no "
+        "node where the beam's does. The message says which.",
+    ),
+    MessageKind(
+        "E-JNT-003",
+        "User elements joined to other elements",
+        "With --open-sections user-element, U1 beams pass no moment to native "
+        "beams or shells, and stock CalculiX crashes on the mix. Release every "
+        "rotation of one of the members at such joints, or analyse without "
+        "user elements.",
+    ),
+    # Supports
+    MessageKind(
+        "E-SUP-001",
+        "No supports",
+        "No connection has an AppliedCondition that restrains anything, so "
+        "nothing holds the structure. Give the supports their "
+        "IfcBoundaryNodeCondition (or edge or face condition).",
+    ),
+    MessageKind(
+        "E-SUP-002",
+        "Support with no node",
+        "The mesh has no node within 0.1 m of the support (or none on its edge "
+        "or face). It probably does not lie on its member: move it there.",
+    ),
+    MessageKind(
+        "E-SUP-003",
+        "Connection position cannot be found",
+        "A point connection needs an IfcVertexPoint representation or a "
+        "placement away from the origin. Give it one.",
+    ),
+    MessageKind(
+        "E-SUP-004",
+        "Surface connection cannot be used",
+        "A surface connection needs a plane face with one outer bound of "
+        "points and a condition; a condition that differs by direction needs "
+        "the face to be on an IfcPlane whose axes give the directions. The "
+        "message says what is missing.",
+    ),
+    MessageKind(
+        "E-SUP-005",
+        "Curve connection without an edge",
+        "A curve connection needs an IfcEdge representation whose ends can be " "read.",
+    ),
+    MessageKind(
+        "E-SUP-006",
+        "Connection of an unsupported type",
+        "Only point, curve and surface connections are supported.",
+    ),
+    MessageKind(
+        "E-SUP-007",
+        "Condition cannot be read",
+        "The boundary condition lacks a value the analysis needs, or does not "
+        "pass validation. The message says which.",
+    ),
+    MessageKind(
+        "E-SUP-008",
+        "Elastic support cannot be applied",
+        "A spring stiffness is negative, or a rotational spring lies about an "
+        "axis the analysis cannot represent there (partly released, at an "
+        "angle to the shells, in a model with user elements), or the elements "
+        "found do not cover the support's edge or face. The message says "
+        "which.",
+    ),
+    MessageKind(
+        "E-SUP-009",
+        "Skew rotation in a model with user elements",
+        "Holding a rotation about an axis that is not a global one takes a "
+        "stiff arm, and arms cannot be used beside U1 elements. Analyse "
+        "without --open-sections user-element.",
+    ),
+    # Loads
+    MessageKind(
+        "E-LOD-001",
+        "Load of an unsupported kind",
+        "Supported are point, linear, curve and planar actions with single "
+        "forces, linear forces or planar forces (and their configurations). "
+        "Temperature loads, prescribed displacements and the varying actions "
+        "of IFC2X3 are not.",
+    ),
+    MessageKind(
+        "E-LOD-002",
+        "Load distribution cannot be used",
+        "A load that varies along its member needs an "
+        "IfcStructuralLoadConfiguration with a value at each of its Locations, "
+        "in ascending order and on the member. EQUIDISTANT and USERDEFINED "
+        "distributions are not supported. The message says what is wrong.",
+    ),
+    MessageKind(
+        "E-LOD-003",
+        "Load with nothing to act on",
+        "The load is not assigned to a member (IfcRelConnectsStructuralActivity), "
+        "or has no position of its own or of the item it is assigned to. "
+        "Assign it.",
+    ),
+    MessageKind(
+        "E-LOD-004",
+        "Load in axes that cannot be used",
+        "The load is given in local coordinates of an item that has no axes "
+        "(none assigned, a surface connection), or per projected length in "
+        "local coordinates. Give it in global coordinates.",
+    ),
+    MessageKind(
+        "E-LOD-005",
+        "Moment that cannot be applied",
+        "Shells have no rotation about their normal and are not given moments; "
+        "warping moments, moments per projected length and moments that vary "
+        "along the member are not supported either.",
+    ),
+    MessageKind(
+        "E-LOD-006",
+        "Load without a value",
+        "The action has no AppliedLoad, or its force cannot be read. Give it " "one.",
+    ),
+    # The solver
+    MessageKind(
+        "E-SLV-001",
+        "The structure is a mechanism",
+        "CalculiX found the stiffness matrix singular: some part of the model "
+        "can move without resistance. Look for missing supports, members "
+        "joined by pins on all sides, and members that meet nothing. The "
+        "warnings W-SUP-003 and W-JNT-008 may point to it.",
+    ),
+    MessageKind(
+        "E-SLV-002",
+        "CalculiX failed",
+        "CalculiX stopped with an error; the message gives its output. The "
+        "input file is kept in the output directory: report it.",
+    ),
+    MessageKind(
+        "E-SLV-003",
+        "CalculiX not found",
+        "The ccx executable is not on the PATH or cannot be run. Install "
+        "CalculiX (2.21 or later; 2.23 recommended) or set its path in the "
+        "system configuration.",
+    ),
+    MessageKind(
+        "E-SLV-004",
+        "CalculiX did not converge",
+        "The solver did not reach a solution; the message gives its reason.",
+    ),
+    MessageKind(
+        "E-SLV-005",
+        "CalculiX crashed on user elements",
+        "Stock CalculiX crashes in gen3delem when U1 beams sit beside other "
+        "beam or shell elements. Analyse without --open-sections "
+        "user-element.",
+    ),
+    MessageKind(
+        "E-SLV-006",
+        "Input file cannot be written or found",
+        "The CalculiX input file could not be written to, copied to or found "
+        "in the output directory. Check the directory and the space left.",
+    ),
+    # Reading the results
+    MessageKind(
+        "E-RES-001",
+        "Results cannot be read",
+        "CalculiX ran but its result files could not be read or turned into "
+        "results.json; the message gives the error. Report it with the output "
+        "directory.",
+    ),
+    MessageKind(
+        "E-RES-002",
+        "No results",
+        "CalculiX wrote no result file, or one with no displacements. Its "
+        "output in the output directory says why.",
+    ),
+    MessageKind(
+        "E-RES-003",
+        "Load combination cannot be formed",
+        "The results of the load cases of a combination cannot be added up "
+        "(one lacks results the others have). Report it.",
+    ),
+    MessageKind(
+        "E-RES-004",
+        "Results of user elements cannot be worked out",
+        "The forces of U1 elements are worked out from their displacements and "
+        "the loads along them, and one of those is missing from the results. "
+        "Report it.",
+    ),
+    MessageKind(
+        "E-RES-005",
+        "No buckling factors",
+        "The buckling analysis ran and CalculiX reported no buckling factor.",
+    ),
+    MessageKind(
+        "E-RES-006",
+        "No displacement of a spring",
+        "The reaction of an elastic support is its stiffness times the "
+        "displacement CalculiX prints for it, and it printed none. Report it.",
+    ),
+    # Anything else
+    MessageKind(
+        "E-GEN-001",
+        "Internal error",
+        "Something the analysis does not expect happened; the message gives "
+        "the error. Report it with the IFC file and the command.",
+    ),
+]
+
+KINDS: Dict[str, MessageKind] = {kind.code: kind for kind in _ERRORS + _KINDS}
 
 
 def warning(
@@ -463,24 +815,25 @@ def record_warning(model: Any, code: str, message: str, **kwargs: Any) -> None:
 
 
 def render_markdown() -> str:
-    """The list of warnings as ``docs/messages.md`` has it."""
+    """The list of warnings and errors as ``docs/messages.md`` has it."""
     lines: List[str] = [
-        "# Warnings",
+        "# Warnings and errors",
         "",
         "<!-- Written by python -m ifc_structural_mechanics.utils.messages;"
         " do not edit. -->",
         "",
-        "Every warning the analysis gives has a code, which the command line "
-        'prints and `result["warnings"]` of `analyze_ifc()` carries as '
-        "`code`: W for a warning, the stage of the analysis it comes from, "
-        "and a number. Within a stage the warnings most likely to be met come "
-        "first. The message itself says what was found in the model; what "
-        "follows says what it means and what to do.",
+        "Every warning and error the analysis gives has a code, which the "
+        "command line prints and `analyze_ifc()` gives as `code` in "
+        '`result["warnings"]` and `result["errors"]`: W for a warning, E for '
+        "an error that stops the analysis, the stage of the analysis it comes "
+        "from, and a number. Within a stage the ones most likely to be met "
+        "come first. The message itself says what was found in the model; "
+        "what follows says what it means and what to do.",
         "",
     ]
     for stage, name in STAGES.items():
         lines += [f"## {name}", ""]
-        for kind in _KINDS:
+        for kind in _ERRORS + _KINDS:
             if kind.code.split("-")[1] != stage:
                 continue
             lines += [

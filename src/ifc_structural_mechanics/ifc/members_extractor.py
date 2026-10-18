@@ -73,7 +73,8 @@ class MembersExtractor:
         else:
             self.logger.error("Invalid IFC file parameter provided")
             raise ModelExtractionError(
-                "ifc_file must be a file path or an ifcopenshell.file object"
+                "ifc_file must be a file path or an ifcopenshell.file object",
+                code="E-GEN-001",
             )
 
         # Store unit scales
@@ -171,12 +172,14 @@ class MembersExtractor:
             return build(entity)
         except ModelExtractionError as error:
             raise ModelExtractionError(
-                f"Member {entity_id} cannot be analysed. {error.message}"
+                f"Member {entity_id} cannot be analysed. {error.message}",
+                code=error.code,
             ) from error
         except Exception as error:
             raise ModelExtractionError(
                 f"Member {entity_id} cannot be read from the IFC file: "
-                f"{type(error).__name__}: {error}"
+                f"{type(error).__name__}: {error}",
+                code="E-IFC-005",
             ) from error
 
     def _create_curve_member(self, entity) -> CurveMember:
@@ -215,7 +218,9 @@ class MembersExtractor:
         """Create a curve member; see ``_create_curve_member``."""
         representation = get_representation(entity, "Edge")
         if not representation:
-            raise ModelExtractionError("It has no edge representation.")
+            raise ModelExtractionError(
+                "It has no edge representation.", code="E-IFC-002"
+            )
 
         material_profile = self._get_material_profile(entity)
         material = getattr(material_profile, "Material", None)
@@ -223,12 +228,15 @@ class MembersExtractor:
         if material is None or profile is None:
             raise ModelExtractionError(
                 "It has no material profile (an IfcMaterialProfileSet with a "
-                "material and a profile)."
+                "material and a profile).",
+                code="E-SEC-001",
             )
 
         geometry = self._extract_geometry(representation, self.length_scale)
         if not geometry:
-            raise ModelExtractionError("The ends of its edge cannot be read.")
+            raise ModelExtractionError(
+                "The ends of its edge cannot be read.", code="E-IFC-002"
+            )
 
         orientation = None
         if getattr(entity, "Axis", None) is not None:
@@ -256,15 +264,19 @@ class MembersExtractor:
         """Create a surface member; see ``_create_surface_member``."""
         representation = get_representation(entity, "Face")
         if not representation:
-            raise ModelExtractionError("It has no face representation.")
+            raise ModelExtractionError(
+                "It has no face representation.", code="E-IFC-002"
+            )
 
         material = self._get_surface_material(entity)
         if material is None:
-            raise ModelExtractionError("It has no material.")
+            raise ModelExtractionError("It has no material.", code="E-MAT-001")
 
         geometry = self._extract_geometry(representation, self.length_scale)
         if not geometry:
-            raise ModelExtractionError("The outline of its face cannot be read.")
+            raise ModelExtractionError(
+                "The outline of its face cannot be read.", code="E-IFC-002"
+            )
 
         transformation = get_item_transformation(entity, self.length_scale)
         if transformation:
@@ -274,7 +286,7 @@ class MembersExtractor:
             getattr(entity, "Thickness", None) or 0.0, self.length_scale
         )
         if thickness_value <= 0:
-            raise ModelExtractionError("It has no thickness.")
+            raise ModelExtractionError("It has no thickness.", code="E-SEC-003")
 
         return SurfaceMember(
             id=entity.GlobalId,
@@ -316,7 +328,9 @@ class MembersExtractor:
                 for vertex in (item.EdgeStart, item.EdgeEnd)
             ]
             if any(end is None for end in ends):
-                raise ModelExtractionError("An end of its edge has no coordinates.")
+                raise ModelExtractionError(
+                    "An end of its edge has no coordinates.", code="E-IFC-002"
+                )
             return ends
 
         if item.is_a("IfcFaceSurface") and item.Bounds:
@@ -326,7 +340,9 @@ class MembersExtractor:
                 for edge in edges
             ]
             if any(corner is None for corner in corners):
-                raise ModelExtractionError("A corner of its face has no coordinates.")
+                raise ModelExtractionError(
+                    "A corner of its face has no coordinates.", code="E-IFC-002"
+                )
             return corners or None
 
         return None
@@ -474,7 +490,8 @@ class MembersExtractor:
         if elastic_modulus_raw is None:
             raise ModelExtractionError(
                 f"Its material '{name}' has no Young's modulus "
-                "(Pset_MaterialMechanical.YoungModulus)."
+                "(Pset_MaterialMechanical.YoungModulus).",
+                code="E-MAT-002",
             )
         elastic_modulus = elastic_modulus_raw * self.pressure_scale
 
@@ -496,7 +513,8 @@ class MembersExtractor:
             if not shear_modulus_raw > 0:
                 raise ModelExtractionError(
                     f"Its material '{name}' has a shear modulus of "
-                    f"{shear_modulus_raw} and no Poisson's ratio."
+                    f"{shear_modulus_raw} and no Poisson's ratio.",
+                    code="E-MAT-004",
                 )
             poisson_ratio = elastic_modulus_raw / (2.0 * shear_modulus_raw) - 1.0
             if not -1.0 < poisson_ratio < 0.5:
@@ -504,7 +522,8 @@ class MembersExtractor:
                     f"Its material '{name}' has no Poisson's ratio, and its "
                     f"Young's modulus {elastic_modulus_raw} and shear modulus "
                     f"{shear_modulus_raw} give {poisson_ratio:.4g}, which no "
-                    "isotropic material has."
+                    "isotropic material has.",
+                    code="E-MAT-004",
                 )
         elif poisson_ratio is not None and shear_modulus_raw is not None:
             implied = elastic_modulus_raw / (2.0 * (1.0 + poisson_ratio))
@@ -834,5 +853,6 @@ class MembersExtractor:
             f"Profile {getattr(profile, 'ProfileName', None)!r} is an "
             f"{profile.is_a()}, which is not supported. Supported profiles: "
             "rectangle, circle, hollow rectangle, hollow circle, I, asymmetric "
-            "I, T, L and U (channel)."
+            "I, T, L and U (channel).",
+            code="E-SEC-002",
         )

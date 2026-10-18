@@ -260,7 +260,8 @@ def support_springs(
         if value < 0.0:
             raise AnalysisError(
                 f"Support {connection.id} has a negative stiffness {key} = "
-                f"{value}, which cannot be analysed."
+                f"{value}, which cannot be analysed.",
+                code="E-SUP-008",
             )
         if value == 0.0 or value >= _RIGID_STIFFNESS_THRESHOLD:
             continue
@@ -275,7 +276,8 @@ def support_springs(
             raise AnalysisError(
                 f"Support {connection.id} has a rotational spring {key} about "
                 "an axis that is partly one its member is released about, "
-                "which cannot be analysed."
+                "which cannot be analysed.",
+                code="E-SUP-008",
             )
         rotations.append((direction, value))
     return translations, rotations
@@ -546,7 +548,8 @@ def write_boundary_conditions(
                 f"Support {connection_id} cannot be applied: the mesh has no "
                 f"node within {SUPPORT_TOLERANCE} m of its position "
                 f"{[round(float(c), 4) for c in connection.position]}. Check "
-                "that it lies on a member."
+                "that it lies on a member.",
+                code="E-SUP-002",
             )
 
         arms = (rotation_arms or {}).get(connection_id, {})
@@ -555,7 +558,8 @@ def write_boundary_conditions(
                 f"Support {connection_id} cannot be applied: it restrains "
                 "rotation about an axis that is not parallel to a global one, "
                 "which takes a stiff arm at each of its nodes, and none was "
-                "built. Arms cannot be used in a model with user elements."
+                "built. Arms cannot be used in a model with user elements.",
+                code="E-SUP-009",
             )
         equations = []
         tips: Dict[int, tuple] = {}
@@ -621,7 +625,8 @@ def write_boundary_conditions(
     if not all_bc_nodes:
         raise AnalysisError(
             "The model has no supports: no connection has an AppliedCondition "
-            "that restrains anything. It cannot be analysed."
+            "that restrains anything. It cannot be analysed.",
+            code="E-SUP-001",
         )
 
     file.write("** Combined set of all nodes with boundary conditions\n")
@@ -1890,7 +1895,8 @@ def spring_node_shares(
         raise AnalysisError(
             f"Support {connection.id} cannot be applied: it is elastic, and "
             f"the elements on it cover {covered:.4g} {unit} of its {what} of "
-            f"{expected:.4g} {unit}. Check that it lies on its members."
+            f"{expected:.4g} {unit}. Check that it lies on its members.",
+            code="E-SUP-008",
         )
     return shares
 
@@ -1994,7 +2000,8 @@ def _point_load_lines(
             raise AnalysisError(
                 f"Point load {getattr(load, 'id', '?')} applies a moment where "
                 "there is no curve member; moments on surface members are not "
-                "supported."
+                "supported.",
+                code="E-LOD-005",
             )
         lines += [
             f"{node_id}, {i + 4}, {float(component):.6e}\n"
@@ -2027,7 +2034,8 @@ def _load_to_nodal_moments(
     if turned is None:
         raise AnalysisError(
             f"Load {getattr(load, 'id', '?')} applies a moment in the local axes "
-            "of a member that has none."
+            "of a member that has none.",
+            code="E-LOD-004",
         )
     nodal = _distributed_load_to_nodal_forces(
         element_set_name, turned, element_sets, elements_data, node_coords
@@ -2035,7 +2043,8 @@ def _load_to_nodal_moments(
     if set(nodal) - _nodes_of_curve_members(elements_data):
         raise AnalysisError(
             f"Load {getattr(load, 'id', '?')} applies a moment along a surface "
-            "member; moments on surface members are not supported."
+            "member; moments on surface members are not supported.",
+            code="E-LOD-005",
         )
     return nodal
 
@@ -2159,12 +2168,14 @@ def _write_validated_loads_within_step(
                 if not element_set_name:
                     raise AnalysisError(
                         f"Load {getattr(load, 'id', '?')} is not assigned to a "
-                        "member of the model, so it cannot be applied."
+                        "member of the model, so it cannot be applied.",
+                        code="E-LOD-003",
                     )
                 if not (elements_data and node_coords):
                     raise AnalysisError(
                         "Distributed loads need the mesh to be turned into "
-                        "nodal forces, and no mesh was given."
+                        "nodal forces, and no mesh was given.",
+                        code="E-GEN-001",
                     )
 
                 if element_set_name:
@@ -2334,7 +2345,8 @@ def _write_validated_loads_within_step(
                     continue
                 raise AnalysisError(
                     "Distributed loads need the mesh to be turned into nodal "
-                    "forces, and no mesh was given."
+                    "forces, and no mesh was given.",
+                    code="E-GEN-001",
                 )
 
     # Log results
@@ -2366,11 +2378,14 @@ def _determine_load_node(load, node_coords=None, domain_model=None) -> int:
     load_id = getattr(load, "id", "?")
     position = getattr(load, "position", None)
     if position is None or not len(position):
-        raise AnalysisError(f"Point load {load_id} cannot be applied: no position.")
+        raise AnalysisError(
+            f"Point load {load_id} cannot be applied: no position.", code="E-LOD-003"
+        )
     closest = find_closest_node(position, node_coords) if node_coords else None
     if closest is None:
         raise AnalysisError(
-            f"Point load {load_id} cannot be applied: there are no mesh nodes."
+            f"Point load {load_id} cannot be applied: there are no mesh nodes.",
+            code="E-GEN-001",
         )
     distance = float(
         np.linalg.norm(np.array(position, float) - np.array(node_coords[closest]))
@@ -2401,11 +2416,13 @@ def _get_validated_force_vector(load) -> List[float]:
         force_vector = np.asarray(load.get_force_vector(), dtype=float).ravel()
     except (AttributeError, TypeError, ValueError) as error:
         raise AnalysisError(
-            f"Load {getattr(load, 'id', '?')} has no usable force vector: {error}"
+            f"Load {getattr(load, 'id', '?')} has no usable force vector: {error}",
+            code="E-LOD-006",
         ) from error
     if force_vector.size < 3 or not np.all(np.isfinite(force_vector[:3])):
         raise AnalysisError(
             f"Load {getattr(load, 'id', '?')} has no usable force vector: "
-            f"{force_vector.tolist()}"
+            f"{force_vector.tolist()}",
+            code="E-LOD-006",
         )
     return [float(component) for component in force_vector[:3]]

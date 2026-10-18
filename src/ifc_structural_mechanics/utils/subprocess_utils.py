@@ -114,13 +114,19 @@ def run_subprocess(
 
     except FileNotFoundError:
         # Executable not found
-        raise StructuralAnalysisError(f"Executable not found: {command[0]}")
+        raise StructuralAnalysisError(
+            f"Executable not found: {command[0]}", code="E-SLV-003"
+        )
     except PermissionError:
         # No permission to execute
-        raise StructuralAnalysisError(f"No permission to execute: {command[0]}")
+        raise StructuralAnalysisError(
+            f"No permission to execute: {command[0]}", code="E-SLV-003"
+        )
     except Exception as e:
         # Other errors
-        raise StructuralAnalysisError(f"Error running subprocess: {str(e)}")
+        raise StructuralAnalysisError(
+            f"Error running subprocess: {str(e)}", code="E-GEN-001"
+        )
 
 
 def capture_output(process: subprocess.Popen) -> Tuple[str, str]:

@@ -118,7 +118,9 @@ class GmshGeometryConverter:
             except MeshingError:
                 raise
             except Exception as e:
-                raise MeshingError(f"Failed to initialize Gmsh: {e}") from e
+                raise MeshingError(
+                    f"Failed to initialize Gmsh: {e}", code="E-MSH-001"
+                ) from e
 
         # A model of this name left over from an earlier run is replaced
         if "structural_model" in gmsh.model.list():
@@ -185,7 +187,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Error adding Gmsh point for member {member.id}: {e}"
+                    f"Error adding Gmsh point for member {member.id}: {e}",
+                    code="E-MSH-001",
                 ) from e
 
         line_tags = []
@@ -197,7 +200,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Error adding Gmsh line for member {member.id}: {e}"
+                    f"Error adding Gmsh line for member {member.id}: {e}",
+                    code="E-MSH-001",
                 ) from e
 
         # Accumulate for fragment
@@ -249,7 +253,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Error adding Gmsh point for member {member.id}: {e}"
+                    f"Error adding Gmsh point for member {member.id}: {e}",
+                    code="E-MSH-001",
                 ) from e
 
         # Create lines forming a closed loop
@@ -264,7 +269,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Error adding Gmsh line for member {member.id}: {e}"
+                    f"Error adding Gmsh line for member {member.id}: {e}",
+                    code="E-MSH-001",
                 ) from e
 
         # Create curve loop and surface
@@ -276,7 +282,7 @@ class GmshGeometryConverter:
             raise
         except Exception as e:
             raise MeshingError(
-                f"Error creating surface for member {member.id}: {e}"
+                f"Error creating surface for member {member.id}: {e}", code="E-MSH-001"
             ) from e
 
         # Accumulate for fragment
@@ -366,7 +372,9 @@ class GmshGeometryConverter:
             except MeshingError:
                 raise
             except Exception as e:
-                raise MeshingError(f"Curve fragment failed: {e}") from e
+                raise MeshingError(
+                    f"Curve fragment failed: {e}", code="E-MSH-001"
+                ) from e
 
         # Fragment surfaces against surfaces (and against connection points
         # and the parts of them that surface supports cover)
@@ -386,7 +394,9 @@ class GmshGeometryConverter:
             except MeshingError:
                 raise
             except Exception as e:
-                raise MeshingError(f"Surface fragment failed: {e}") from e
+                raise MeshingError(
+                    f"Surface fragment failed: {e}", code="E-MSH-001"
+                ) from e
 
         # Build combined fragment_map aligned with the combined input list
         # (curves first, then surfaces) so _remap_tags_after_fragment works
@@ -903,7 +913,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Could not lay a surface support onto the surface members: {e}"
+                    f"Could not lay a surface support onto the surface members: {e}",
+                    code="E-MSH-004",
                 ) from e
         if pieces:
             logger.info(f"Surface supports cover {len(pieces)} piece(s) of surfaces")
@@ -1057,7 +1068,8 @@ class GmshGeometryConverter:
                     raise MeshingError(
                         f"The line from {a.tolist()} to {b.tolist()}, which joins "
                         f"member {beam_id} to a surface, is not in the surface's "
-                        "geometry."
+                        "geometry.",
+                        code="E-MSH-004",
                     )
                 on_beam = [
                     tag
@@ -1141,7 +1153,8 @@ class GmshGeometryConverter:
                 raise
             except Exception as e:
                 raise MeshingError(
-                    f"Could not create physical group for {list(member_ids)}: {e}"
+                    f"Could not create physical group for {list(member_ids)}: {e}",
+                    code="E-MSH-001",
                 ) from e
 
         logger.info(f"Created {phys_tag - 1} physical groups")
@@ -1248,7 +1261,9 @@ class GmshGeometryConverter:
         except MeshingError:
             raise
         except Exception as e:
-            raise MeshingError(f"Error synchronizing Gmsh model: {e}") from e
+            raise MeshingError(
+                f"Error synchronizing Gmsh model: {e}", code="E-MSH-001"
+            ) from e
 
         # Phase 4: Remap tags + traceability
         self._remap_tags_after_fragment(domain_model)

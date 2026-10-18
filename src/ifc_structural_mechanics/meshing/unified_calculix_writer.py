@@ -136,9 +136,9 @@ class UnifiedCalculixWriter:
     def _validate_domain_model(self) -> None:
         """Validate the domain model."""
         if not self.domain_model:
-            raise AnalysisError("Domain model is missing")
+            raise AnalysisError("Domain model is missing", code="E-GEN-001")
         if not self.domain_model.members:
-            raise AnalysisError("Domain model has no members")
+            raise AnalysisError("Domain model has no members", code="E-GEN-001")
 
         logger.info(
             f"Validated domain model with {len(self.domain_model.members)} members"
@@ -201,7 +201,8 @@ class UnifiedCalculixWriter:
             end_point = np.array(curve_geometry[-1], dtype=float)
         else:
             raise AnalysisError(
-                f"Member {member.id} has no end points to place its section by."
+                f"Member {member.id} has no end points to place its section by.",
+                code="E-SEC-005",
             )
         return self._default_section_direction(end_point - start_point)
 
@@ -222,7 +223,9 @@ class UnifiedCalculixWriter:
         axis = np.array(axis, dtype=float)
         length = np.linalg.norm(axis)
         if length < 1e-10:
-            raise AnalysisError("A member of no length has no section direction.")
+            raise AnalysisError(
+                "A member of no length has no section direction.", code="E-SEC-005"
+            )
         axis = axis / length
         for candidate in (np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0])):
             direction = candidate - np.dot(candidate, axis) * axis
@@ -332,7 +335,8 @@ class UnifiedCalculixWriter:
             raise
         except Exception as e:
             raise AnalysisError(
-                f"Failed to write CalculiX input: {type(e).__name__}: {e}"
+                f"Failed to write CalculiX input: {type(e).__name__}: {e}",
+                code="E-SLV-006",
             ) from e
 
     def _process_mesh(self, mesh: meshio.Mesh) -> None:
@@ -456,7 +460,9 @@ class UnifiedCalculixWriter:
         except MeshingError:
             raise
         except Exception as e:
-            raise MeshingError(f"The mesh has no readable cell blocks: {e}") from e
+            raise MeshingError(
+                f"The mesh has no readable cell blocks: {e}", code="E-MSH-001"
+            ) from e
 
     def _map_elements_to_members(self) -> None:
         """Map mesh elements to domain model members via MeshMapper."""
@@ -531,7 +537,8 @@ class UnifiedCalculixWriter:
             except ValueError as error:
                 raise MeshingError(
                     f"Member {member.id}: section "
-                    f"{getattr(section, 'name', None)!r} cannot be analysed, {error}"
+                    f"{getattr(section, 'name', None)!r} cannot be analysed, {error}",
+                    code="E-SEC-004",
                 )
         if not self._equivalent_sections:
             return
@@ -588,7 +595,8 @@ class UnifiedCalculixWriter:
         except (KeyError, ValueError) as error:
             raise MeshingError(
                 f"Member {member.id}: section {getattr(section, 'name', None)!r} "
-                f"cannot be analysed, {error}"
+                f"cannot be analysed, {error}",
+                code="E-SEC-004",
             ) from error
 
     def _rectangle_material_name(self, member) -> str:
@@ -790,7 +798,8 @@ class UnifiedCalculixWriter:
             raise MeshingError(
                 f"The mesh has no node for {len(missing)} member end(s) at "
                 "their connection, so they cannot be joined as the model "
-                f"says. The first are {', '.join(missing[:5])}."
+                f"says. The first are {', '.join(missing[:5])}.",
+                code="E-JNT-001",
             )
 
     def _check_user_elements_join_their_own_kind(self) -> None:
@@ -851,7 +860,8 @@ class UnifiedCalculixWriter:
                 "so each would be a pin, and stock CalculiX stops on such a "
                 f"model. The first are {first}. Analyse the model without "
                 "user elements: every section is then an equivalent rectangle "
-                "on native elements."
+                "on native elements.",
+                code="E-JNT-003",
             )
 
     def _register_node_memberships(self) -> None:
@@ -1471,7 +1481,8 @@ class UnifiedCalculixWriter:
             if member.id not in self._equivalent_sections:
                 raise MeshingError(
                     f"Member {member.id}: section_type={stype!r} has neither a "
-                    "CalculiX shape nor an equivalent rectangle"
+                    "CalculiX shape nor an equivalent rectangle",
+                    code="E-SEC-004",
                 )
             depth, width, _ = self._equivalent_sections[member.id]
             # The scaled material is orthotropic: its 1 axis runs along the
@@ -1565,7 +1576,8 @@ class UnifiedCalculixWriter:
         if section is None or material is None:
             raise AnalysisError(
                 f"Member {member.id} cannot be analysed with user elements: "
-                "it has no section or no material."
+                "it has no section or no material.",
+                code="E-SEC-004",
             )
 
         A = getattr(section, "area", None)
@@ -1577,7 +1589,8 @@ class UnifiedCalculixWriter:
             raise AnalysisError(
                 f"Member {member.id} cannot be analysed with user elements: "
                 f"its section has A={A}, Iy={xi11}, Iz={xi22}, and needs all "
-                "three."
+                "three.",
+                code="E-SEC-004",
             )
 
         # Shear correction factor k_s (dimensionless)
@@ -2615,13 +2628,15 @@ class UnifiedCalculixWriter:
                 raise AnalysisError(
                     f"Support {conn.id} cannot be applied: it has a rotational "
                     "spring, which takes a stiff arm, and arms cannot be used "
-                    "in a model with user elements."
+                    "in a model with user elements.",
+                    code="E-SUP-008",
                 )
             nodes = find_connection_support_nodes(conn, structure, member_nodes)
             if not nodes:
                 raise AnalysisError(
                     f"Support {conn.id} cannot be applied: the mesh has no node "
-                    "on it. Check that it lies on a member."
+                    "on it. Check that it lies on a member.",
+                    code="E-SUP-002",
                 )
             shares = spring_node_shares(conn, nodes, self.elements, self.nodes)
             springs = self._support_springs.setdefault(conn.id, [])
@@ -2669,7 +2684,8 @@ class UnifiedCalculixWriter:
                                 f"Support {conn.id} cannot be applied: it has a "
                                 "rotational spring about an axis that is neither "
                                 "in the plane of the shells at node "
-                                f"{node} nor across it."
+                                f"{node} nor across it.",
+                                code="E-SUP-008",
                             )
                         arm = np.cross(axis, drilling)
                     else:
@@ -3125,7 +3141,8 @@ class UnifiedCalculixWriter:
                 raise AnalysisError(
                     f"Line connection {conn.id} joins curve members "
                     f"{', '.join(beams)}. Curve members can only be joined along "
-                    "a line to a surface member; join them at points instead."
+                    "a line to a surface member; join them at points instead.",
+                    code="E-JNT-002",
                 )
             if not beams or not plates:
                 continue
@@ -3144,7 +3161,8 @@ class UnifiedCalculixWriter:
                 ):
                     raise AnalysisError(
                         f"Line connection {conn.id} joins curve member {beam_id}, "
-                        "which does not run along the line."
+                        "which does not run along the line.",
+                        code="E-JNT-002",
                     )
             on_line = []
             for node in member_nodes(beam_id):
@@ -3157,14 +3175,16 @@ class UnifiedCalculixWriter:
                 if gap > self._MAX_RIGID_LINK:
                     raise AnalysisError(
                         f"Line connection {conn.id}: curve member {beam_id} lies "
-                        f"{gap:.2f} m from the line, too far for a rigid link."
+                        f"{gap:.2f} m from the line, too far for a rigid link.",
+                        code="E-JNT-002",
                     )
                 on_line.append((node, foot))
             if len(on_line) < 2:
                 raise AnalysisError(
                     f"Line connection {conn.id}: curve member {beam_id} has "
                     f"{len(on_line)} node(s) along the line, so it cannot be "
-                    "joined there."
+                    "joined there.",
+                    code="E-JNT-002",
                 )
 
             for plate_id in plates:
@@ -3183,7 +3203,8 @@ class UnifiedCalculixWriter:
                             f"member {plate_id} has no node at "
                             f"({foot[0]:.3f}, {foot[1]:.3f}, {foot[2]:.3f}), "
                             f"the foot of a node of {beam_id}. Is the line in "
-                            "the surface?"
+                            "the surface?",
+                            code="E-JNT-002",
                         )
                     pairs.append((node, shell[nearest]))
                 joints.append(
@@ -3953,7 +3974,8 @@ class UnifiedCalculixWriter:
         if conn_pos is None:
             raise MeshingError(
                 f"Connection {conn.id} has no position, so the nodes it joins "
-                "cannot be found."
+                "cannot be found.",
+                code="E-SUP-003",
             )
 
         # Build member node sets lazily (cached for repeated lookups)
@@ -4271,7 +4293,7 @@ def run_complete_analysis_workflow(
         success = gmsh_runner.run_meshing()
 
         if not success:
-            raise MeshingError("Gmsh meshing failed")
+            raise MeshingError("Gmsh meshing failed", code="E-MSH-001")
 
         # Determine mesh file path
         if intermediate_files_dir:

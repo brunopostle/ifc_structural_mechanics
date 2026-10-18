@@ -50,7 +50,7 @@ def is_structural_member(entity: Optional[ifcopenshell.entity_instance]) -> bool
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural member: {e}"
+            f"Error checking if entity is structural member: {e}", code="E-IFC-005"
         ) from e
 
 
@@ -77,7 +77,8 @@ def is_structural_curve_member(entity: Optional[ifcopenshell.entity_instance]) -
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural curve member: {e}"
+            f"Error checking if entity is structural curve member: {e}",
+            code="E-IFC-005",
         ) from e
 
 
@@ -106,7 +107,8 @@ def is_structural_surface_member(
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural surface member: {e}"
+            f"Error checking if entity is structural surface member: {e}",
+            code="E-IFC-005",
         ) from e
 
 
@@ -137,7 +139,7 @@ def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> 
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural connection: {e}"
+            f"Error checking if entity is structural connection: {e}", code="E-IFC-005"
         ) from e
 
 
@@ -187,7 +189,9 @@ def get_coordinate(point, unit_scale: float = 1.0):
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error extracting coordinates: {e}") from e
+        raise ModelExtractionError(
+            f"Error extracting coordinates: {e}", code="E-IFC-005"
+        ) from e
 
 
 def get_representation(element, rep_type):
@@ -327,7 +331,9 @@ def find_connected_elements(
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error finding connected elements: {e}") from e
+        raise ModelExtractionError(
+            f"Error finding connected elements: {e}", code="E-IFC-005"
+        ) from e
 
 
 def find_member_endpoints(
@@ -388,7 +394,8 @@ def get_transformation(placement, length_scale: float = 1.0):
         if not placement.is_a("IfcLocalPlacement"):
             raise ModelExtractionError(
                 f"Its placement is an {placement.is_a()}; only "
-                "IfcLocalPlacement is supported."
+                "IfcLocalPlacement is supported.",
+                code="E-IFC-003",
             )
 
         import ifcopenshell.util.placement
@@ -402,7 +409,8 @@ def get_transformation(placement, length_scale: float = 1.0):
         if not np.all(np.isfinite(matrix)):
             raise ModelExtractionError(
                 "The axes of its placement cannot be read (Axis and "
-                "RefDirection are parallel)."
+                "RefDirection are parallel).",
+                code="E-IFC-003",
             )
         if np.allclose(matrix, np.eye(4)):
             return None
@@ -413,7 +421,9 @@ def get_transformation(placement, length_scale: float = 1.0):
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error getting transformation: {e}") from e
+        raise ModelExtractionError(
+            f"Error getting transformation: {e}", code="E-IFC-005"
+        ) from e
 
 
 def get_item_transformation(item, length_scale: float = 1.0):
@@ -465,7 +475,9 @@ def transform_vectors(geometry, transformation, include_translation=True):
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error transforming vectors: {e}") from e
+        raise ModelExtractionError(
+            f"Error transforming vectors: {e}", code="E-IFC-005"
+        ) from e
 
 
 def get_1D_orientation(geometry, zAxis):
@@ -573,14 +585,14 @@ def get_1D_orientation(geometry, zAxis):
             raise
         except Exception as e:
             raise ModelExtractionError(
-                f"Unexpected error in cross product calculation: {e}"
+                f"Unexpected error in cross product calculation: {e}", code="E-IFC-005"
             ) from e
 
     except ModelExtractionError:
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Unexpected error in 1D orientation calculation: {e}"
+            f"Unexpected error in 1D orientation calculation: {e}", code="E-IFC-005"
         ) from e
 
 
@@ -620,7 +632,9 @@ def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) 
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error analyzing connection type: {e}") from e
+        raise ModelExtractionError(
+            f"Error analyzing connection type: {e}", code="E-IFC-005"
+        ) from e
 
 
 def _ifc_stiffness_to_float(
@@ -687,7 +701,8 @@ def get_connection_input(
                 value = getattr(condition, attribute)
                 if value is None:
                     raise ModelExtractionError(
-                        f"Its {condition.is_a()} gives no {attribute}."
+                        f"Its {condition.is_a()} gives no {attribute}.",
+                        code="E-SUP-007",
                     )
                 result[key] = _ifc_stiffness_to_float(
                     getattr(value, "wrappedValue", value),
@@ -699,4 +714,6 @@ def get_connection_input(
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Error extracting connection input: {e}") from e
+        raise ModelExtractionError(
+            f"Error extracting connection input: {e}", code="E-IFC-005"
+        ) from e

@@ -115,7 +115,8 @@ class MeshMapper:
             raise MeshingError(
                 f"{len(unmapped_members)} member(s) have no elements in the "
                 "mesh, so the model cannot be analysed as given. The first are "
-                f"{', '.join(unmapped_members[:5])}."
+                f"{', '.join(unmapped_members[:5])}.",
+                code="E-MSH-002",
             )
 
         logger.info(f"Mapped elements to {len(self.element_sets)} members total")
@@ -153,7 +154,8 @@ class MeshMapper:
             raise MeshingError(
                 f"The mesh carries no physical groups, so its {len(elements)} "
                 f"{member_type} elements cannot be attributed to the "
-                f"{len(members)} {member_type} members."
+                f"{len(members)} {member_type} members.",
+                code="E-MSH-003",
             )
         per = len(elements) // len(members)
         rem = len(elements) % len(members)

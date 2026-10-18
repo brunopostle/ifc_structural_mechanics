@@ -131,7 +131,9 @@ def analyze_ifc(
         # Check if the model has any members
         if not domain_model.members:
             logger.error("No structural members found in the IFC file")
-            raise ModelExtractionError("No structural members found in the IFC file")
+            raise ModelExtractionError(
+                "No structural members found in the IFC file", code="E-IFC-001"
+            )
 
         logger.info(
             f"Extracted structural model with {len(domain_model.members)} members"
@@ -159,7 +161,8 @@ def analyze_ifc(
                 )
                 raise ModelExtractionError(
                     f"{asked}, but these materials have no mass density "
-                    "(Pset_MaterialCommon.MassDensity): " + ", ".join(weightless) + "."
+                    "(Pset_MaterialCommon.MassDensity): " + ", ".join(weightless) + ".",
+                    code="E-MAT-003",
                 )
         if gravity and weighed:
             result["warnings"].append(
@@ -284,7 +287,8 @@ def analyze_ifc(
             except Exception as e:
                 raise ResultProcessingError(
                     f"The analysis ran but its results could not be read: "
-                    f"{type(e).__name__}: {e}"
+                    f"{type(e).__name__}: {e}",
+                    code="E-RES-001",
                 ) from e
 
         # Step 7: Copy output files to output directory and organize them
@@ -361,6 +365,7 @@ def analyze_ifc(
         logger.error(f"Analysis workflow error: {str(e)}")
         result["errors"].append(
             {
+                "code": e.code,
                 "message": str(e),
                 "severity": "critical",
                 "entity_type": None,
@@ -374,7 +379,9 @@ def analyze_ifc(
     except Exception as e:
         # Handle unexpected errors
         logger.error(f"Unexpected error in analysis workflow: {str(e)}")
-        raise StructuralAnalysisError(f"Analysis workflow failed: {str(e)}") from e
+        raise StructuralAnalysisError(
+            f"Analysis workflow failed: {str(e)}", code="E-GEN-001"
+        ) from e
 
 
 def extract_model(ifc_path: str) -> StructuralModel:
@@ -401,7 +408,9 @@ def extract_model(ifc_path: str) -> StructuralModel:
     except ModelExtractionError:
         raise
     except Exception as e:
-        raise ModelExtractionError(f"Failed to extract model from IFC file: {str(e)}")
+        raise ModelExtractionError(
+            f"Failed to extract model from IFC file: {str(e)}", code="E-IFC-005"
+        )
 
 
 def create_analysis_config(

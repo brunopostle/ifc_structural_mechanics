@@ -1,11 +1,13 @@
-"""The warnings' codes: registered, used, documented (94g.12)."""
+"""The codes of warnings and errors: registered, used, documented (94g.12)."""
 
+import ast
 import re
 import shutil
 from pathlib import Path
 
 import pytest
 
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
 from ifc_structural_mechanics.utils.messages import (
     KINDS,
     STAGES,
@@ -15,7 +17,14 @@ from ifc_structural_mechanics.utils.messages import (
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "src" / "ifc_structural_mechanics"
-CODE = re.compile(r"\"(W-[A-Z]{3}-\d{3})\"")
+CODE = re.compile(r"\"([WE]-[A-Z]{3}-\d{3})\"")
+ERRORS = {
+    "AnalysisError",
+    "MeshingError",
+    "ModelExtractionError",
+    "ResultProcessingError",
+    "StructuralAnalysisError",
+}
 
 
 def _codes_used():
@@ -37,9 +46,39 @@ def test_every_registered_code_is_used():
 
 def test_codes_are_numbered_from_one_in_each_stage():
     for stage in STAGES:
-        numbers = [int(code[-3:]) for code in KINDS if code.split("-")[1] == stage]
-        assert numbers == list(range(1, len(numbers) + 1)), stage
+        for kind in "WE":
+            numbers = [
+                int(code[-3:]) for code in KINDS if code.startswith(f"{kind}-{stage}-")
+            ]
+            assert numbers == list(range(1, len(numbers) + 1)), (kind, stage)
     assert {code.split("-")[1] for code in KINDS} <= set(STAGES)
+
+
+def test_every_error_raised_has_a_code():
+    """A wrapper passes on the code of the error it wraps."""
+    missing = []
+    for path in SOURCE.rglob("*.py"):
+        source = path.read_text()
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+                continue
+            func = node.exc.func
+            if getattr(func, "id", getattr(func, "attr", None)) not in ERRORS:
+                continue
+            code = next((k.value for k in node.exc.keywords if k.arg == "code"), None)
+            if isinstance(code, ast.Constant) and code.value in KINDS:
+                continue
+            if ast.unparse(code or ast.Constant(None)) == "error.code":
+                continue
+            missing.append(f"{path.relative_to(SOURCE)}:{node.lineno}")
+    assert missing == []
+
+
+def test_an_error_shows_its_code():
+    error = AnalysisError("Support s cannot be applied.", code="E-SUP-002")
+    assert error.code == "E-SUP-002"
+    assert "[E-SUP-002] Support s" in str(error)
+    assert error.to_dict()["code"] == "E-SUP-002"
 
 
 def test_docs_are_up_to_date():

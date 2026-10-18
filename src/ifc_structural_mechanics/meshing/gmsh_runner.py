@@ -93,7 +93,7 @@ class GmshRunner:
         except MeshingError:
             raise
         except Exception as e:
-            raise MeshingError(f"Meshing failed: {str(e)}") from e
+            raise MeshingError(f"Meshing failed: {str(e)}", code="E-MSH-001") from e
 
     def generate_mesh_file(self, output_file: str) -> str:
         """
@@ -113,10 +113,12 @@ class GmshRunner:
             os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
             gmsh.write(output_file)
         except Exception as e:
-            raise MeshingError(f"Error generating mesh file: {str(e)}") from e
+            raise MeshingError(
+                f"Error generating mesh file: {str(e)}", code="E-MSH-001"
+            ) from e
 
         if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
-            raise MeshingError(f"Gmsh wrote no mesh to {output_file}")
+            raise MeshingError(f"Gmsh wrote no mesh to {output_file}", code="E-MSH-001")
         return output_file
 
     def _get_algorithm_code(self, algorithm: str) -> int:
@@ -143,7 +145,8 @@ class GmshRunner:
         if algorithm not in algo_map:
             raise MeshingError(
                 f"Unknown meshing algorithm {algorithm!r}; choose one of "
-                f"{', '.join(algo_map)}."
+                f"{', '.join(algo_map)}.",
+                code="E-MSH-005",
             )
         return algo_map[algorithm]
 
