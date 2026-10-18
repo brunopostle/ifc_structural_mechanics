@@ -323,10 +323,3 @@ def get_native_section(section_type: Optional[str]) -> Optional[SectionProfile]:
     if profile and not profile.use_general:
         return profile
     return None
-
-
-def is_supported(section_type: Optional[str]) -> bool:
-    """Return True if the section type is in the registry."""
-    if not section_type:
-        return False
-    return section_type.lower() in SECTION_REGISTRY

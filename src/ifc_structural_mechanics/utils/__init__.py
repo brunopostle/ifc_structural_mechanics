@@ -13,9 +13,7 @@ from .error_handling import (
     StructuralAnalysisError,
 )
 from .subprocess_utils import (
-    capture_output,
     check_executable,
-    parse_error_output,
     run_subprocess,
     terminate_gracefully,
 )
@@ -29,8 +27,6 @@ __all__ = [
     "ResultProcessingError",
     # Subprocess utilities
     "run_subprocess",
-    "capture_output",
     "terminate_gracefully",
     "check_executable",
-    "parse_error_output",
 ]

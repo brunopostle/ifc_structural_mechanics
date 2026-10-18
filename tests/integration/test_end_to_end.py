@@ -23,11 +23,10 @@ from ifc_structural_mechanics.meshing.unified_calculix_writer import (
 )
 from ifc_structural_mechanics.utils.temp_dir import (
     cleanup_temp_dir,
-    create_temp_file,
     create_temp_subdir,
     setup_temp_dir,
 )
-from tests.helpers import fixed_support
+from tests.helpers import fixed_support, temp_file
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -244,7 +243,7 @@ def test_unified_writer_writes_correct_element_types():
     analysis_config = AnalysisConfig()
 
     # Use temp_dir utility for the output file
-    output_file = create_temp_file(prefix="test_unified_writer_", suffix=".inp")
+    output_file = temp_file(prefix="test_unified_writer_", suffix=".inp")
 
     # Initialize unified writer with correct parameters
     writer = UnifiedCalculixWriter(
@@ -338,7 +337,7 @@ def test_unified_writer_element_preservation():
     # Create analysis configuration
     analysis_config = AnalysisConfig()
 
-    output_file = create_temp_file(prefix="test_element_preservation_", suffix=".inp")
+    output_file = temp_file(prefix="test_element_preservation_", suffix=".inp")
 
     # Create unified writer with correct parameters
     writer = UnifiedCalculixWriter(

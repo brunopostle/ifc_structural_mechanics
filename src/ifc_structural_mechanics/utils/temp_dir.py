@@ -80,36 +80,6 @@ def get_temp_dir() -> str:
     return _SHARED_TEMP_DIR
 
 
-def create_temp_file(
-    suffix: str = None, prefix: str = None, content: str = None
-) -> str:
-    """
-    Create a temporary file in the shared temporary directory.
-
-    Args:
-        suffix (str, optional): File suffix (extension).
-        prefix (str, optional): File prefix.
-        content (str, optional): Content to write to the file.
-
-    Returns:
-        str: Path to the created temporary file.
-    """
-    temp_dir = get_temp_dir()
-    fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=temp_dir)
-
-    try:
-        if content is not None:
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-        else:
-            os.close(fd)
-    except Exception:
-        os.close(fd)
-        raise
-
-    return temp_path
-
-
 def create_temp_subdir(prefix: str = "subdir_") -> str:
     """
     Create a subdirectory within the shared temporary directory.

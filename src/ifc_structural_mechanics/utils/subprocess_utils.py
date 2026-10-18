@@ -7,9 +7,8 @@ capturing their output, and handling errors.
 
 import logging
 import os
-import re
 import subprocess
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .error_handling import StructuralAnalysisError
 
@@ -129,27 +128,6 @@ def run_subprocess(
         )
 
 
-def capture_output(process: subprocess.Popen) -> Tuple[str, str]:
-    """
-    Capture and parse subprocess output.
-
-    Args:
-        process (subprocess.Popen): The subprocess to capture output from.
-
-    Returns:
-        Tuple[str, str]: The stdout and stderr output from the subprocess.
-    """
-    stdout, stderr = process.communicate()
-
-    # Convert bytes to string if needed
-    if isinstance(stdout, bytes):
-        stdout = stdout.decode("utf-8", errors="replace")
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode("utf-8", errors="replace")
-
-    return stdout, stderr
-
-
 def terminate_gracefully(process: subprocess.Popen, timeout: int = 5) -> None:
     """
     Terminate a subprocess gracefully.
@@ -199,32 +177,3 @@ def check_executable(executable: str) -> bool:
             return True
 
     return False
-
-
-def parse_error_output(output: str) -> List[str]:
-    """
-    Parse error messages from subprocess output.
-
-    Args:
-        output (str): The output to parse.
-
-    Returns:
-        List[str]: A list of error messages found in the output.
-    """
-    error_messages = []
-
-    # Look for common error patterns
-    error_patterns = [
-        r"[Ee]rror:.*",
-        r"[Ff]atal:.*",
-        r"[Cc]ritical:.*",
-        r"Exception:.*",
-        r".*failed.*",
-    ]
-
-    # Extract error messages
-    for pattern in error_patterns:
-        matches = re.findall(pattern, output)
-        error_messages.extend(matches)
-
-    return error_messages

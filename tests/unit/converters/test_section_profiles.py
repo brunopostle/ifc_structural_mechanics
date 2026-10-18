@@ -7,7 +7,6 @@ from ifc_structural_mechanics.converters.section_profiles import (
     SectionProfile,
     expanded_rectangle_torsion_stiffness,
     get_native_section,
-    is_supported,
     rectangle_shear_moduli,
     uses_user_element,
 )
@@ -117,25 +116,6 @@ class TestFormatDataLines:
         line = self._fmt("rectangular", {"width": 0.2, "height": 0.3})
         assert "2.000000e-01" in line
         assert "3.000000e-01" in line
-
-
-# ---------------------------------------------------------------------------
-# is_supported()
-# ---------------------------------------------------------------------------
-
-
-class TestIsSupported:
-    def test_rectangular_is_supported(self):
-        assert is_supported("rectangular")
-
-    def test_i_is_supported(self):
-        assert is_supported("i")
-
-    def test_unknown_is_not_supported(self):
-        assert not is_supported("unknown_exotic_shape")
-
-    def test_none_is_not_supported(self):
-        assert not is_supported(None)
 
 
 class TestRectangleShearModuli:

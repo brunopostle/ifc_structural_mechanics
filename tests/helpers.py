@@ -1,6 +1,10 @@
 """Helpers shared by tests that build a domain model by hand."""
 
+import os
+import tempfile
+
 from ifc_structural_mechanics.domain.structural_connection import RigidConnection
+from ifc_structural_mechanics.utils.temp_dir import get_temp_dir
 
 RIGID = 1e20
 
@@ -17,6 +21,15 @@ def fixed_support(position, member_id, connection_id="support"):
     )
     support.connect_member(member_id)
     return support
+
+
+def temp_file(suffix="", prefix="tmp", content=None):
+    """A new file in the shared temporary directory, with ``content`` if given."""
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=get_temp_dir())
+    with os.fdopen(fd, "w") as fh:
+        if content is not None:
+            fh.write(content)
+    return path
 
 
 def _ifcopenshell():

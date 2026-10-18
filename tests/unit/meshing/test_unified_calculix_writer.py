@@ -35,11 +35,10 @@ from src.ifc_structural_mechanics.utils.error_handling import (
 )
 from src.ifc_structural_mechanics.utils.temp_dir import (
     cleanup_temp_dir,
-    create_temp_file,
     set_keep_temp_files,
     setup_temp_dir,
 )
-from tests.helpers import fixed_support
+from tests.helpers import fixed_support, temp_file
 
 # Configure for debugging
 set_keep_temp_files(keep_files=True)
@@ -285,8 +284,8 @@ class TestUnifiedCalculixWriter:
     def test_write_calculix_input_from_mesh(self, mock_meshio_read):
         """Test the main method that writes CalculiX input from mesh."""
         # Create temporary files
-        mesh_file = create_temp_file(prefix="test_mesh", suffix=".msh")
-        output_file = create_temp_file(prefix="unified_output", suffix=".inp")
+        mesh_file = temp_file(prefix="test_mesh", suffix=".msh")
+        output_file = temp_file(prefix="unified_output", suffix=".inp")
 
         # Create mock mesh object to return from meshio.read
         mock_mesh = self._create_test_mesh()
@@ -525,8 +524,8 @@ class TestUnifiedWorkflowFunctions:
     def test_generate_calculix_input_function(self, mock_read):
         """Test the generate_calculix_input convenience function."""
         # Create temporary files
-        mesh_file = create_temp_file(prefix="workflow_mesh", suffix=".msh")
-        output_file = create_temp_file(prefix="workflow_output", suffix=".inp")
+        mesh_file = temp_file(prefix="workflow_mesh", suffix=".msh")
+        output_file = temp_file(prefix="workflow_output", suffix=".inp")
 
         # Mock mesh reading
         mock_mesh = self._create_mock_mesh()

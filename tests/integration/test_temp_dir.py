@@ -12,12 +12,12 @@ import unittest
 
 from ifc_structural_mechanics.utils.temp_dir import (
     cleanup_temp_dir,
-    create_temp_file,
     create_temp_subdir,
     get_temp_dir,
     set_keep_temp_files,
     setup_temp_dir,
 )
+from tests.helpers import temp_file
 
 
 class TestTempDirManagement(unittest.TestCase):
@@ -56,22 +56,6 @@ class TestTempDirManagement(unittest.TestCase):
         self.assertEqual(temp_dir, self.__class__.temp_dir)
         self.assertTrue(os.path.exists(temp_dir))
 
-    def test_create_temp_file(self):
-        """Test creating a temporary file within the shared directory."""
-        # Create a temp file with content
-        content = "Test content"
-        temp_file = create_temp_file(suffix=".txt", prefix="test_", content=content)
-
-        # Verify the file exists and has the correct content
-        self.assertTrue(os.path.exists(temp_file))
-        self.assertTrue(os.path.isfile(temp_file))
-
-        with open(temp_file, "r") as f:
-            self.assertEqual(f.read(), content)
-
-        # Verify the file is within our shared temp directory
-        self.assertTrue(temp_file.startswith(get_temp_dir()))
-
     def test_create_temp_subdir(self):
         """Test creating a subdirectory within the shared directory."""
         # Create a temp subdirectory
@@ -100,13 +84,13 @@ class TestTempDirManagement(unittest.TestCase):
         set_keep_temp_files(True)
 
         # Create a temp file
-        temp_file = create_temp_file(suffix=".txt", prefix="keep_test_")
+        kept = temp_file(suffix=".txt", prefix="keep_test_")
 
         # Clean up, but it shouldn't delete because keep_files is True
         cleanup_temp_dir()
 
         # Verify the file still exists
-        self.assertTrue(os.path.exists(temp_file))
+        self.assertTrue(os.path.exists(kept))
 
         # Now force cleanup
         cleanup_temp_dir(force=True)
@@ -133,7 +117,7 @@ class TestTempDirIntegration(unittest.TestCase):
     def test_analysis_workflow(self):
         """Test a simplified analysis workflow."""
         # Create a mock input file
-        input_file = create_temp_file(
+        input_file = temp_file(
             suffix=".inp",
             prefix="model_",
             content="""

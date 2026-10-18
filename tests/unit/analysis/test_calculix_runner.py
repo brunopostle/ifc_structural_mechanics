@@ -15,10 +15,10 @@ from ifc_structural_mechanics.config.system_config import SystemConfig
 from ifc_structural_mechanics.utils.error_handling import AnalysisError
 from ifc_structural_mechanics.utils.temp_dir import (
     cleanup_temp_dir,
-    create_temp_file,
     create_temp_subdir,
     setup_temp_dir,
 )
+from tests.helpers import temp_file
 
 # Rest of the existing imports...
 
@@ -38,7 +38,7 @@ def is_calculix_available():
             return False
 
         # Create a minimal test file using the new temp_dir utility
-        temp_inp = create_temp_file(
+        temp_inp = temp_file(
             suffix=".inp",
             content="""\
 *HEADING
@@ -125,7 +125,7 @@ class TestCalculixRunner:
             pytest.skip("CalculiX not available")
 
         # Use temp_dir utility to create input file
-        with open(create_temp_file(suffix=".inp"), "w") as temp_inp:
+        with open(temp_file(suffix=".inp"), "w") as temp_inp:
             temp_inp.write(
                 """\
 *HEADING
@@ -224,7 +224,7 @@ S
             pytest.skip("CalculiX not available")
 
         # Use temp_dir utility to create input file
-        with open(create_temp_file(suffix=".inp"), "w") as temp_inp:
+        with open(temp_file(suffix=".inp"), "w") as temp_inp:
             temp_inp.write(
                 """\
 *HEADING
