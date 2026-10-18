@@ -1178,6 +1178,87 @@ class ResultsParser:
         logger.info(f"Parsed {len(eigenvalues)} buckling eigenvalues from {dat_file}")
         return eigenvalues
 
+    # The blocks of a *FREQUENCY step in the .dat file, by their headings
+    _FREQUENCY_BLOCKS = {
+        "E I G E N V A L U E   O U T P U T": "eigenvalues",
+        "P A R T I C I P A T I O N   F A C T O R S": "participation",
+        "E F F E C T I V E   M O D A L   M A S S": "effective_mass",
+        "T O T A L   E F F E C T I V E   M A S S": "total_effective_mass",
+        "F R A C T I O N   O F   T O T A L S": "fraction",
+    }
+
+    def parse_frequencies(self, dat_file: str) -> Dict[str, Any]:
+        """Read the modes of a ``*FREQUENCY`` step from a CalculiX .dat file.
+
+        CalculiX prints, mode by mode, the eigenvalue (omega squared), the
+        angular frequency and the frequency (real parts; a negative
+        eigenvalue has an imaginary angular frequency instead), then the
+        participation factors and the effective modal masses for the three
+        translations and the three rotations about the global origin, and
+        the total effective mass, which is the mass of every node free to
+        move that way.
+
+        Args:
+            dat_file: Path to the .dat file produced by CalculiX.
+
+        Returns:
+            ``{"modes": [...], "total_effective_mass": [6 values]}``, each
+            mode a dict with ``mode``, ``eigenvalue``, ``angular_frequency``
+            (rad/s), ``frequency`` (Hz), ``imaginary_angular_frequency``,
+            ``participation`` and ``effective_mass`` (6 values each, where
+            printed). Empty when the file has no eigenvalue output.
+        """
+        modes: Dict[int, Dict[str, Any]] = {}
+        totals: List[float] = []
+        block = None
+        with open(dat_file) as f:
+            for line in f:
+                heading = next(
+                    (
+                        name
+                        for text, name in self._FREQUENCY_BLOCKS.items()
+                        if text in line
+                    ),
+                    None,
+                )
+                if heading is not None:
+                    block = heading
+                    continue
+                if "S T E P" in line:
+                    block = None
+                    continue
+                parts = line.split()
+                if block is None or not parts:
+                    continue
+                try:
+                    values = [float(v) for v in parts[1:]]
+                    number = int(parts[0])
+                except ValueError:
+                    if block == "total_effective_mass" and len(parts) == 6:
+                        try:
+                            totals = [float(v) for v in parts]
+                        except ValueError:
+                            pass
+                    continue
+                if block == "eigenvalues" and len(values) == 4:
+                    modes[number] = {
+                        "mode": number,
+                        "eigenvalue": values[0],
+                        "angular_frequency": values[1],
+                        "frequency": values[2],
+                        "imaginary_angular_frequency": values[3],
+                    }
+                elif block in ("participation", "effective_mass") and len(values) == 6:
+                    if number in modes:
+                        modes[number][block] = values
+        logger.info(f"Parsed {len(modes)} modes from {dat_file}")
+        if not modes:
+            return {}
+        return {
+            "modes": [modes[n] for n in sorted(modes)],
+            "total_effective_mass": totals,
+        }
+
     def parse_beam_section_forces(self, dat_file: str) -> List[Dict]:
         """Parse beam section forces from the CalculiX DAT file.
 
@@ -1300,6 +1381,7 @@ class ResultsParser:
             "strain": [],
             "reaction": [],
             "buckling": [],
+            "modal": {},
             "mode_shapes": [],
             "section_forces": [],
             "support_node_forces": [],
@@ -1370,6 +1452,13 @@ class ResultsParser:
                 if eigenvalues:
                     self._set_mode_shapes_apart(parsed_results)
 
+                # The modes of a modal analysis: every set of displacements
+                # in the result file is the shape of one
+                modal = self.parse_frequencies(dat_file)
+                if modal:
+                    parsed_results["modal"] = modal
+                    self._take_mode_shapes(parsed_results, modal["modes"])
+
                 # Parse beam section forces (written by *EL PRINT, SF)
                 section_forces = self.parse_beam_section_forces(dat_file)
                 parsed_results["section_forces"].extend(section_forces)
@@ -1405,7 +1494,8 @@ class ResultsParser:
         The result file of a ``*BUCKLE`` step has the displacements under the
         loads of the step first, and then one set per mode: its shape, scaled
         to a largest value of one. Those are not displacements, and read as
-        load cases they are a structure moving by a metre.
+        load cases they are a structure moving by a metre. They are named
+        ``Mode <n>``, as those of a modal analysis are.
         """
         displacements = parsed_results["displacement"]
         if not displacements:
@@ -1414,9 +1504,29 @@ class ResultsParser:
         parsed_results["displacement"] = [
             r for r in displacements if r.metadata.get("load_case") == under_load
         ]
-        parsed_results["mode_shapes"] = [
-            r for r in displacements if r.metadata.get("load_case") != under_load
-        ]
+        shapes = [r for r in displacements if r.metadata.get("load_case") != under_load]
+        names: Dict[Any, str] = {}
+        for result in shapes:
+            step = result.metadata.get("load_case")
+            names.setdefault(step, f"Mode {len(names) + 1}")
+            result.add_metadata("load_case", names[step])
+        parsed_results["mode_shapes"] = shapes
+
+    @staticmethod
+    def _take_mode_shapes(parsed_results: Dict[str, Any], modes: List[Dict]) -> None:
+        """Move the displacements of a modal analysis to its mode shapes.
+
+        The result file of a ``*FREQUENCY`` step has one set of
+        displacements per mode, in mode order, each scaled so that its
+        generalised mass is one. They are shapes, not displacements, and
+        are named ``Mode <n>``.
+        """
+        names = {f"step_{i + 1}": f"Mode {m['mode']}" for i, m in enumerate(modes)}
+        for result in parsed_results["displacement"]:
+            step = result.metadata.get("load_case")
+            result.add_metadata("load_case", names.get(step, step))
+        parsed_results["mode_shapes"] = parsed_results["displacement"]
+        parsed_results["displacement"] = []
 
     def compute_beam_section_forces(self, stresses: List[StressResult]) -> List[Dict]:
         """Integrate section forces for every beam element with a known frame.

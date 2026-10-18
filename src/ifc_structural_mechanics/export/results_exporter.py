@@ -42,10 +42,17 @@ class ResultsExporter:
         load_combinations: The ``LoadCombination`` objects to give results
             for, by adding up their load cases. Only for a linear analysis
             with a step per load case.
-        analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
+        analysis_type: ``"linear_static"``, ``"linear_buckling"`` or
+            ``"modal"``.
     """
 
-    SCHEMA_VERSION = "1.11"
+    SCHEMA_VERSION = "1.12"
+
+    # A mode below this frequency (a period of 100 s) is a movement the
+    # structure does not resist: no building sways that slowly, and a
+    # mechanism comes out of the solver at a ten-thousandth of a hertz or
+    # with a negative eigenvalue (measured)
+    MECHANISM_FREQUENCY_HZ = 0.01
 
     def __init__(
         self,
@@ -116,6 +123,8 @@ class ResultsExporter:
                 "moment": "N*m",
                 "stress": "Pa",
                 "displacement": "m",
+                "frequency": "Hz",
+                "mass": "kg",
             },
             "model": {
                 "id": self.model.id,
@@ -131,8 +140,80 @@ class ResultsExporter:
         }
         if self.analysis_type == "linear_buckling":
             data["buckling"] = self._buckling(load_cases)
+        if self.analysis_type == "modal":
+            data["modal"] = self._modal()
         self._add_load_combinations(data)
         return data
+
+    _TRANSLATIONS = ("x", "y", "z")
+    _ROTATIONS = ("rx", "ry", "rz")
+
+    def _modal(self) -> Dict[str, Any]:
+        """Return the modes of a modal analysis, lowest frequency first.
+
+        Effective masses about the rotations are moments of inertia about
+        the global axes through the origin, as CalculiX gives them. The mass
+        fraction is what the modes found add up to, over the total
+        effective mass: the mass of every node free to move that way.
+        """
+        modal = self.parsed_results.get("modal") or {}
+        if not modal.get("modes"):
+            raise ResultProcessingError(
+                "The modal analysis ran but the solver reported no modes.",
+                code="E-RES-007",
+            )
+
+        def split(values) -> Tuple[Dict[str, float], Dict[str, float]]:
+            values = [float(v) for v in values or ()]
+            if len(values) != 6:
+                return {}, {}
+            return (
+                dict(zip(self._TRANSLATIONS, values[:3])),
+                dict(zip(self._ROTATIONS, values[3:])),
+            )
+
+        modes = []
+        sums = np.zeros(6)
+        for mode in modal["modes"]:
+            frequency = float(mode["frequency"])
+            mechanism = (
+                float(mode["eigenvalue"]) <= 0.0
+                or frequency < self.MECHANISM_FREQUENCY_HZ
+            )
+            entry: Dict[str, Any] = {
+                "mode": int(mode["mode"]),
+                "frequency_Hz": frequency,
+                "period_s": None if mechanism else 1.0 / frequency,
+                "angular_frequency_rad_s": float(mode["angular_frequency"]),
+                "eigenvalue": float(mode["eigenvalue"]),
+                "mechanism": mechanism,
+            }
+            factors = mode.get("participation")
+            if factors:
+                entry["participation_factors"] = {
+                    name: float(v)
+                    for name, v in zip(self._TRANSLATIONS + self._ROTATIONS, factors)
+                }
+            masses, inertias = split(mode.get("effective_mass"))
+            if masses:
+                entry["effective_mass_kg"] = masses
+                entry["effective_mass_moment_kgm2"] = inertias
+                sums += np.array(mode["effective_mass"], dtype=float)
+            modes.append(entry)
+
+        result: Dict[str, Any] = {"mass_source": "materials", "modes": modes}
+        totals = [float(v) for v in modal.get("total_effective_mass") or ()]
+        if len(totals) == 6:
+            masses, inertias = split(totals)
+            result["total_effective_mass_kg"] = masses
+            result["total_effective_mass_moment_kgm2"] = inertias
+            result["mass_fraction"] = {
+                name: (float(found / total) if total > 0 else None)
+                for name, found, total in zip(
+                    self._TRANSLATIONS + self._ROTATIONS, sums, totals
+                )
+            }
+        return result
 
     def _buckling(self, load_cases: List[str]) -> Dict[str, Any]:
         """Return the buckling factors, lowest first."""

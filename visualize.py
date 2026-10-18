@@ -11,6 +11,7 @@ Examples:
     python visualize.py building_02 --field stress --screenshot result.png
     python visualize.py beam_01 --html beam_result.html
     python visualize.py structure_01 --output-dir /path/to/results
+    python visualize.py portal_01 --mode 2   (a modal or buckling analysis)
 
 Models are looked up in _analysis_output/<model_name>/ by default,
 with IFC files from examples/analysis-models/ifcFiles/<model_name>.ifc.
@@ -112,6 +113,13 @@ def main():
         default=None,
         help="Load case / step name to visualize (default: all steps combined)",
     )
+    parser.add_argument(
+        "--mode",
+        type=int,
+        default=None,
+        help="Mode shape to visualize, of a modal or buckling analysis "
+        "(default: mode 1 when there are no displacements)",
+    )
 
     args = parser.parse_args()
 
@@ -140,8 +148,24 @@ def main():
     n_stress = len(parsed.get("stress", []))
     print(f"  {n_disp} displacement results, {n_stress} stress results")
 
+    # A mode shape, of a modal analysis (which has nothing else) or a
+    # buckling one: a shape, so its size means nothing
+    shapes = parsed.get("mode_shapes", [])
+    mode = args.mode if args.mode is not None else (1 if not n_disp else None)
+    if mode is not None:
+        filtered = [r for r in shapes if r.get_metadata("load_case") == f"Mode {mode}"]
+        if not filtered:
+            available = sorted(
+                {r.get_metadata("load_case") for r in shapes},
+                key=lambda name: int(name.split()[-1]),
+            )
+            sys.exit(f"No shape for mode {mode}. Available: {available or 'none'}")
+        parsed["displacement"] = filtered
+        n_disp = len(filtered)
+        print(f"  Mode {mode}: its shape, at an arbitrary scale")
+
     # Filter by step/load-case name if requested
-    if args.step:
+    if args.step and mode is None:
         filtered = [
             r
             for r in parsed.get("displacement", [])
@@ -174,15 +198,13 @@ def main():
     print(f"  {viz.mesh.n_points} mesh nodes, {mapped} mapped to FRD results")
 
     # Determine scale factor
-    from ifc_structural_mechanics.domain.result import DisplacementResult
-
-    disp_results = [r for r in model.results if isinstance(r, DisplacementResult)]
+    disp_results = parsed["displacement"]
     scale = args.scale if args.scale is not None else auto_scale(disp_results)
     print(f"  Scale factor: {scale:.1f}x")
 
     # Apply displacement field
     print("Applying displacements...")
-    viz.apply_displacement_field(scale_factor=scale)
+    viz.apply_displacement_field(scale_factor=scale, displacement_results=disp_results)
 
     # Apply stress field if requested and available
     field_name = "Displacement (mm)"

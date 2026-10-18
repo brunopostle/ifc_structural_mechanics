@@ -228,3 +228,29 @@ def test_analysis_config_save_config():
     finally:
         # Clean up the temporary file
         os.unlink(temp_config_path)
+
+
+def test_modal_analysis_asks_for_ten_modes_by_default():
+    config = AnalysisConfig()
+    config.set_analysis_type("modal")
+    config.validate()
+    assert config.get_num_modes() == 10
+    config.set_num_modes(4)
+    assert config.get_num_modes() == 4
+
+
+def test_modal_analysis_needs_a_mode():
+    config = AnalysisConfig()
+    config.set_analysis_type("modal")
+    with pytest.raises(ValueError):
+        config.set_num_modes(0)
+
+
+def test_choosing_modes_leaves_the_defaults_alone():
+    """The parameters are a copy: one analysis does not change the next."""
+    config = AnalysisConfig()
+    config.set_analysis_type("modal")
+    config.set_num_modes(3)
+    assert AnalysisConfig.ANALYSIS_TYPES["modal"]["default_solver_params"] == {
+        "num_modes": 10
+    }

@@ -290,6 +290,7 @@ class UnifiedCalculixWriter:
             self._resolve_overlapping_element_sets()
             self._check_members_reach_their_connections()
             self._check_user_elements_join_their_own_kind()
+            self._check_user_elements_have_no_modes()
 
             # Step 2c2: Give members hinged along an edge their own edge nodes
             self._release_hinged_edges()
@@ -809,6 +810,30 @@ class UnifiedCalculixWriter:
                 ifc_guids=self._ifc_guids(concerned),
             )
 
+    def _check_user_elements_have_no_modes(self) -> None:
+        """Stop a modal analysis of U1 members: CalculiX gives them no mass.
+
+        Their weight is put on their nodes as forces for a load case
+        (``_u1_node_masses``), which a modal analysis cannot use.
+
+        Raises:
+            AnalysisError: If the analysis is modal and a member is of U1
+                elements.
+        """
+        if not self._u1_members or self.analysis_config.get_analysis_type() != (
+            "modal"
+        ):
+            return
+        members = sorted(self._u1_members)
+        raise AnalysisError(
+            f"{len(members)} member(s) are CalculiX user elements "
+            f"(--open-sections user-element), the first {members[0]}, and "
+            "CalculiX gives them no mass, so a modal analysis cannot be made "
+            "of them. Analyse the model with equivalent sections instead.",
+            code="E-SEC-006",
+            ifc_guids=guids_of(self.domain_model, members),
+        )
+
     def _check_user_elements_join_their_own_kind(self) -> None:
         """Stop when a U1 member is joined to a beam or shell of another type.
 
@@ -991,6 +1016,7 @@ class UnifiedCalculixWriter:
                 u1_element_sets=self._u1_element_sets,
                 elements_data=dict(self.elements),
                 temperatures=temperatures,
+                num_modes=self.analysis_config.get_num_modes(),
             )
 
     def _temperature_loads(self) -> List[Tuple[Any, Any]]:
@@ -2782,7 +2808,8 @@ class UnifiedCalculixWriter:
         from ..domain.load import PointLoad
 
         self._knot_links: List[Tuple[int, int, int]] = []
-        if self._u1_members:
+        if self._u1_members or self.analysis_config.get_analysis_type() == "modal":
+            # A modal analysis applies no load
             return
         loads = [
             load

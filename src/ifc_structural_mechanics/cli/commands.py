@@ -57,7 +57,7 @@ def cli():
 @click.option(
     "--analysis-type",
     "-t",
-    type=click.Choice(["linear_static", "linear_buckling"]),
+    type=click.Choice(["linear_static", "linear_buckling", "modal"]),
     default="linear_static",
     show_default=True,
     help="Type of structural analysis to perform",
@@ -119,6 +119,14 @@ def cli():
     "CalculiX U1 elements, which stock CalculiX cannot mix with other beams "
     "or shells",
 )
+@click.option(
+    "--modes",
+    "num_modes",
+    type=click.IntRange(min=1),
+    default=10,
+    show_default=True,
+    help="How many modes a modal analysis finds, lowest frequency first",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -132,6 +140,7 @@ def analyze(
     element_order: str = "2",
     strict_connections: bool = False,
     open_sections: str = "equivalent",
+    num_modes: int = 10,
 ):
     """
     Run structural analysis on an IFC file.
@@ -151,6 +160,7 @@ def analyze(
         int(element_order),
         strict_connections,
         open_sections.replace("-", "_"),
+        num_modes,
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -169,6 +179,7 @@ def run_analyze(
     element_order: int = 2,
     strict_connections: bool = False,
     open_sections: str = "equivalent",
+    num_modes: int = 10,
 ) -> int:
     """
     Run the analysis and return the appropriate exit code.
@@ -186,6 +197,7 @@ def run_analyze(
         element_order (int): 2 for quadratic elements, 1 for linear ones.
         strict_connections (bool): Analyse only the connections in the file.
         open_sections (str): "equivalent" or "user_element".
+        num_modes (int): How many modes a modal analysis finds.
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -239,6 +251,7 @@ def run_analyze(
             element_order=element_order,
             strict_connections=strict_connections,
             open_sections=open_sections,
+            num_modes=num_modes,
         )
 
         # Format and display results

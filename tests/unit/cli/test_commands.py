@@ -108,6 +108,7 @@ class TestEnhancedCLICommands:
                 element_order=2,
                 strict_connections=False,
                 open_sections="equivalent",
+                num_modes=10,
             )
 
     def test_analyze_custom_params(
@@ -142,6 +143,7 @@ class TestEnhancedCLICommands:
                 element_order=2,
                 strict_connections=False,
                 open_sections="equivalent",
+                num_modes=10,
             )
 
     def test_analyze_strict_connections(
@@ -175,6 +177,23 @@ class TestEnhancedCLICommands:
             )
             assert exit_code == 0
             assert mock_analyze_ifc.call_args.kwargs["open_sections"] == "user_element"
+
+    def test_analyze_modal(self, mock_analyze_ifc, temp_ifc_file, temp_output_dir):
+        """A modal analysis and its number of modes reach the analysis."""
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            exit_code = run_analyze(
+                ifc_file=temp_ifc_file,
+                output_dir=temp_output_dir,
+                analysis_type="modal",
+                num_modes=4,
+            )
+            assert exit_code == 0
+            kwargs = mock_analyze_ifc.call_args.kwargs
+            assert kwargs["analysis_type"] == "modal"
+            assert kwargs["num_modes"] == 4
 
     def test_analyze_with_warnings(
         self, mock_analyze_ifc, temp_ifc_file, temp_output_dir

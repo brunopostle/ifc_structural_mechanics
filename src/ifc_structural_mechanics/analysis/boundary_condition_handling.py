@@ -1429,6 +1429,7 @@ def write_analysis_steps(
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
     temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]] = None,
+    num_modes: int = 10,
 ) -> None:
     """
     Write the analysis steps, and record the loads they put on support nodes.
@@ -1477,6 +1478,7 @@ def write_analysis_steps(
             u1_element_sets,
             elements_data,
             temperatures,
+            num_modes,
         )
     finally:
         moved = getattr(domain_model, "_moved_point_loads", None) or {}
@@ -1609,6 +1611,25 @@ def _note_user_element_loads(
         note(shares)
 
 
+def _write_frequency_step(file: TextIO, num_modes: int) -> None:
+    """Write the one step of a modal analysis: its lowest ``num_modes`` modes.
+
+    The mass is that of the elements, from the densities of their
+    materials; the links, arms and springs the writer adds have none. No
+    load of the file is written. CalculiX prints the frequencies, the
+    participation factors and the effective modal masses in the .dat file,
+    and puts one set of displacements per mode, its shape, in the .frd.
+    The writer refuses U1 elements in a modal analysis: CalculiX gives them
+    no mass.
+    """
+    file.write("*STEP\n")
+    file.write("*FREQUENCY\n")
+    file.write(f"{int(num_modes)}\n\n")
+    file.write("*NODE FILE\n")
+    file.write("U\n")
+    file.write("*END STEP\n\n")
+
+
 def _write_analysis_steps(
     file: TextIO,
     domain_model: Optional[StructuralModel] = None,
@@ -1622,13 +1643,15 @@ def _write_analysis_steps(
     u1_element_sets: Optional[set] = None,
     elements_data: Optional[Dict[int, Dict]] = None,
     temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]] = None,
+    num_modes: int = 10,
 ) -> None:
     """
     Write analysis step definitions to the CalculiX input file.
 
     When explicit load cases are present, writes one *STEP per load case plus
     an optional gravity step. Falls back to a single combined step when there
-    are no load cases or for buckling analysis.
+    are no load cases or for buckling analysis. A modal analysis has one
+    *FREQUENCY step and no load.
 
     Args:
         file (TextIO): The file object to write to.
@@ -1647,6 +1670,11 @@ def _write_analysis_steps(
             work-equivalent *CLOAD nodal forces instead of being dropped.
         temperatures: ``{group id: {node: (T, gradient, gradient)}}``, the
             *TEMPERATURE values of each load group's temperature loads.
+        num_modes: How many modes a modal analysis asks for.
+
+    Raises:
+        AnalysisError: For a buckling analysis with support displacements or
+            temperature loads.
     """
     file.write("** Analysis Steps\n")
 
@@ -1662,6 +1690,10 @@ def _write_analysis_steps(
         "springs" in record
         for record in (getattr(domain_model, "support_nodes", None) or {}).values()
     )
+
+    if analysis_type == "modal":
+        _write_frequency_step(file, num_modes)
+        return
 
     displacements = support_displacement_values(domain_model)
 

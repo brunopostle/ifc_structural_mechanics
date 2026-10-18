@@ -110,7 +110,8 @@ _KINDS = [
         "out from the section forces and the real section "
         "(max_normal_stress_Pa), and the solver's own stresses are not given. "
         "An open section is far too stiff in torsion: do not rely on results "
-        "where such members carry torsion. Closed and round sections have "
+        "where such members carry torsion, nor on modes in which they "
+        "twist. Closed and round sections have "
         "their torsion right and are up to twice too stiff in shear.",
     ),
     MessageKind(
@@ -311,9 +312,10 @@ _KINDS = [
     ),
     MessageKind(
         "W-LOD-006",
-        "Load combinations in a buckling analysis",
+        "Load combinations outside a linear static analysis",
         "Combinations are only formed in a linear static analysis, by adding "
-        "up the results of their load cases. A buckling analysis has none.",
+        "up the results of their load cases. A buckling or modal analysis has "
+        "none.",
     ),
     MessageKind(
         "W-LOD-007",
@@ -347,6 +349,17 @@ _KINDS = [
         "and shrinks as the mesh is refined; a gradient at a joint between "
         "members at an angle is the least accurate. The message counts the "
         "nodes and names the members.",
+    ),
+    MessageKind(
+        "W-LOD-011",
+        "Loads are not mass in a modal analysis",
+        "A modal analysis takes its mass from the density of the members' "
+        "materials and applies no load. A load that stands for mass "
+        "(finishes, partitions, a share of the imposed load) is not counted, "
+        "since nothing in IFC says which loads are mass, and the frequencies "
+        "are those of the bare structure. Where that mass matters, the "
+        "frequencies are too high by about the square root of the ratio of "
+        "the masses.",
     ),
     # The solver
     MessageKind(
@@ -416,6 +429,15 @@ _KINDS = [
         "model is probably a mechanism. Check the supports and the "
         "connections between members.",
     ),
+    MessageKind(
+        "W-CHK-003",
+        "Modes that are mechanisms",
+        "A modal analysis found modes with no frequency (below 0.01 Hz, or a "
+        "negative eigenvalue): some part of the model can move without "
+        "straining, which a static analysis would stop at. Their "
+        "frequencies, participation factors and shapes mean nothing. Check "
+        "the supports and the connections between members.",
+    ),
 ]
 
 _ERRORS = [
@@ -475,8 +497,9 @@ _ERRORS = [
     MessageKind(
         "E-MAT-003",
         "Self-weight of a material without a density",
-        "A load case includes self-weight, or --gravity was given, and a "
-        "material has no Pset_MaterialCommon.MassDensity, so the weight cannot "
+        "A load case includes self-weight, --gravity was given, or the "
+        "analysis is modal, and a material has no "
+        "Pset_MaterialCommon.MassDensity, so the weight or the mass cannot "
         "be worked out. Give the material its density.",
     ),
     MessageKind(
@@ -519,6 +542,13 @@ _ERRORS = [
         "Section direction cannot be found",
         "A curve member of no length, or with ends that cannot be read, has no "
         "direction to place its section by. Check its geometry.",
+    ),
+    MessageKind(
+        "E-SEC-006",
+        "User elements in a modal analysis",
+        "CalculiX gives its U1 elements no mass, so a modal analysis cannot be "
+        "made of members analysed with them (--open-sections user-element). "
+        "Analyse the model with equivalent sections.",
     ),
     # Meshing
     MessageKind(
@@ -799,6 +829,12 @@ _ERRORS = [
         "No displacement of a spring",
         "The reaction of an elastic support is its stiffness times the "
         "displacement CalculiX prints for it, and it printed none. Report it.",
+    ),
+    MessageKind(
+        "E-RES-007",
+        "No modes",
+        "The modal analysis ran and CalculiX reported no frequency. Its "
+        "output in the output directory says why.",
     ),
     # Anything else
     MessageKind(

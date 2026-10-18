@@ -23,6 +23,10 @@ class AnalysisConfig(BaseConfig):
             "description": "Linear buckling analysis",
             "default_solver_params": {"num_eigenvalues": 5, "solver_method": "lanczos"},
         },
+        "modal": {
+            "description": "Natural frequencies and mode shapes",
+            "default_solver_params": {"num_modes": 10},
+        },
     }
 
     def _get_default_config(self) -> Dict[str, Any]:
@@ -34,9 +38,9 @@ class AnalysisConfig(BaseConfig):
         """
         return {
             "analysis_type": "linear_static",
-            "solver_params": self.ANALYSIS_TYPES["linear_static"][
-                "default_solver_params"
-            ],
+            "solver_params": dict(
+                self.ANALYSIS_TYPES["linear_static"]["default_solver_params"]
+            ),
             "result_output": {
                 "displacement": True,
                 "stress": True,
@@ -195,9 +199,26 @@ class AnalysisConfig(BaseConfig):
                 f"Supported types: {list(self.ANALYSIS_TYPES.keys())}"
             )
         self._config["analysis_type"] = analysis_type
-        self._config["solver_params"] = self.ANALYSIS_TYPES[analysis_type][
-            "default_solver_params"
-        ]
+        # A copy: validate() fills in and converts the parameters in place
+        self._config["solver_params"] = dict(
+            self.ANALYSIS_TYPES[analysis_type]["default_solver_params"]
+        )
+
+    def get_num_modes(self) -> int:
+        """Get how many modes a modal analysis asks the solver for."""
+        return int(self._config.get("solver_params", {}).get("num_modes", 10))
+
+    def set_num_modes(self, num_modes: int) -> None:
+        """Set how many modes a modal analysis asks the solver for.
+
+        Raises:
+            ValueError: If ``num_modes`` is less than one.
+        """
+        if int(num_modes) < 1:
+            raise ValueError(
+                f"A modal analysis needs one mode or more, not {num_modes}"
+            )
+        self._config.setdefault("solver_params", {})["num_modes"] = int(num_modes)
 
     def get_strict_connections(self) -> bool:
         """Get whether only the connections in the IFC file are analysed."""

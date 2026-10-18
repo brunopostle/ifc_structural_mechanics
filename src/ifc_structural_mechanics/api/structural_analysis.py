@@ -11,7 +11,7 @@ import os
 import re
 import shutil
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .. import __version__
 from ..analysis.calculix_runner import CalculixRunner
@@ -50,6 +50,7 @@ def analyze_ifc(
     element_order: int = 2,
     strict_connections: bool = False,
     open_sections: str = "equivalent",
+    num_modes: int = 10,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -62,7 +63,8 @@ def analyze_ifc(
         ifc_path (str): Path to the IFC file to analyze.
         output_dir (str): Directory where the output files will be written.
         analysis_type (str, optional): Type of analysis to perform.
-            Currently supported: "linear_static", "linear_buckling".
+            Currently supported: "linear_static", "linear_buckling" and
+            "modal" (natural frequencies and mode shapes).
             Defaults to "linear_static".
         mesh_size (float, optional): Default mesh size for the finite element mesh.
             Defaults to 0.1.
@@ -80,6 +82,8 @@ def analyze_ifc(
             element with a rectangle of the same axial, bending and shear
             stiffness. "user_element": CalculiX's U1 element, which stock
             CalculiX cannot mix with other beam or shell elements.
+        num_modes (int, optional): How many modes a modal analysis finds,
+            lowest frequency first. Defaults to 10.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -149,7 +153,8 @@ def analyze_ifc(
             for g in domain_model.load_groups
             if g.is_load_case and g.includes_self_weight
         ]
-        if gravity or weighed:
+        modal = analysis_type == "modal"
+        if gravity or weighed or modal:
             weightless = sorted(
                 {
                     member.material.name
@@ -158,17 +163,22 @@ def analyze_ifc(
                 }
             )
             if weightless:
-                asked = (
-                    "Load case " + ", ".join(weighed[:3]) + " includes self-weight"
-                    if weighed
-                    else "Self-weight was asked for (--gravity)"
-                )
+                if modal:
+                    asked = "A modal analysis takes its mass from the materials"
+                elif weighed:
+                    asked = (
+                        "Load case " + ", ".join(weighed[:3]) + " includes self-weight"
+                    )
+                else:
+                    asked = "Self-weight was asked for (--gravity)"
                 raise ModelExtractionError(
                     f"{asked}, but these materials have no mass density "
                     "(Pset_MaterialCommon.MassDensity): " + ", ".join(weightless) + ".",
                     code="E-MAT-003",
                 )
-        if gravity and weighed:
+        if modal:
+            result["warnings"].extend(_loads_are_not_mass(domain_model, gravity))
+        elif gravity and weighed:
             result["warnings"].append(
                 warning(
                     "W-LOD-003",
@@ -182,7 +192,7 @@ def analyze_ifc(
             )
 
         # Step 1b: Pre-analysis model validation
-        validation_warnings = _validate_model(domain_model, gravity)
+        validation_warnings = _validate_model(domain_model, gravity, modal=modal)
         result["warnings"].extend(validation_warnings)
 
         # Step 2: Create configurations
@@ -191,6 +201,7 @@ def analyze_ifc(
             gravity=gravity,
             strict_connections=strict_connections,
             open_sections=open_sections,
+            num_modes=num_modes,
         )
         meshing_config = create_meshing_config(mesh_size, element_order)
         system_config = SystemConfig()
@@ -250,6 +261,9 @@ def analyze_ifc(
                 if analysis_type == "linear_buckling":
                     # One step, with the loads of every case in it
                     load_case_names = [BUCKLING_REFERENCE_CASE]
+                elif modal:
+                    # One step, its results are modes
+                    load_case_names = None
                 results_parser = ResultsParser(
                     domain_model, load_case_names=load_case_names
                 )
@@ -296,6 +310,7 @@ def analyze_ifc(
                         strict_connections=strict_connections,
                         open_sections=open_sections,
                         gravity=gravity,
+                        **({"num_modes": num_modes} if modal else {}),
                     ),
                     warnings=result["warnings"],
                 )
@@ -439,6 +454,7 @@ def create_analysis_config(
     gravity: bool = False,
     strict_connections: bool = False,
     open_sections: str = "equivalent",
+    num_modes: int = 10,
 ) -> AnalysisConfig:
     """
     Create an analysis configuration for the specified analysis type.
@@ -448,6 +464,7 @@ def create_analysis_config(
         gravity (bool): Whether to include self-weight gravity loads.
         strict_connections (bool): Analyse only the connections in the file.
         open_sections (str): "equivalent" or "user_element".
+        num_modes (int): How many modes a modal analysis finds.
 
     Returns:
         AnalysisConfig: The analysis configuration.
@@ -467,6 +484,8 @@ def create_analysis_config(
     config.set_gravity(gravity)
     config.set_strict_connections(strict_connections)
     config.set_open_sections(open_sections)
+    if analysis_type == "modal":
+        config.set_num_modes(num_modes)
     config.validate()
     return config
 
@@ -500,7 +519,7 @@ def _first_ids(members, count: int = 5) -> str:
     return ids
 
 
-def _validate_model(domain_model, gravity: bool) -> list:
+def _validate_model(domain_model, gravity: bool, modal: bool = False) -> list:
     """
     Validate the extracted structural model and return a list of warnings.
 
@@ -512,6 +531,7 @@ def _validate_model(domain_model, gravity: bool) -> list:
     Args:
         domain_model: The extracted StructuralModel.
         gravity: Whether gravity self-weight was requested.
+        modal: Whether the analysis is modal, which applies no load.
 
     Returns:
         List of warning dicts (same format as result["warnings"]).
@@ -591,7 +611,8 @@ def _validate_model(domain_model, gravity: bool) -> list:
         and bool(g.temperature_loads)
         for g in load_groups
     )
-    if not has_explicit_loads and not gravity:
+    # A modal analysis applies no load
+    if not has_explicit_loads and not gravity and not modal:
         _warn(
             "W-LOD-001",
             "No explicit loads found in the model and --gravity was not requested. "
@@ -600,6 +621,32 @@ def _validate_model(domain_model, gravity: bool) -> list:
         )
 
     return warnings
+
+
+def _loads_are_not_mass(domain_model, gravity: bool) -> List[Dict[str, Any]]:
+    """The warning that a modal analysis leaves the loads of the file out.
+
+    The mass of a modal analysis is that of the members, from the density
+    of their materials. A load may stand for mass (finishes, partitions, a
+    share of the imposed load), but nothing in IFC says which, so none is
+    counted.
+    """
+    loaded = [
+        g.name for g in domain_model.load_groups if g.is_load_case and g.has_actions
+    ]
+    if gravity:
+        loaded.append("Gravity (--gravity)")
+    if not loaded:
+        return []
+    return [
+        warning(
+            "W-LOD-011",
+            f"{len(loaded)} load case(s) are not part of the modal analysis: "
+            + ", ".join(loaded[:3])
+            + (" ..." if len(loaded) > 3 else "")
+            + ". The mass is that of the members' materials alone.",
+        )
+    ]
 
 
 def _run_record(ifc_path: str, solver_output: str, **settings) -> Dict[str, Any]:

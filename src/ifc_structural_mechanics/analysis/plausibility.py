@@ -149,19 +149,38 @@ def _has_user_elements(domain_model) -> bool:
     return isinstance(recorded, dict) and bool(recorded)
 
 
+def _mechanism_mode_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A warning for the modes of a modal analysis that are mechanisms."""
+    modes = (results.get("modal") or {}).get("modes") or []
+    loose = [m["mode"] for m in modes if m.get("mechanism")]
+    if not loose:
+        return []
+    return [
+        warning(
+            "W-CHK-003",
+            f"{len(loose)} of the {len(modes)} modes found have no stiffness "
+            f"(mode {', '.join(str(n) for n in loose[:5])}"
+            + (" ..." if len(loose) > 5 else "")
+            + "): the model can move that way without straining. Check the "
+            "supports and the connections between members.",
+        )
+    ]
+
+
 def plausibility_warnings(
     results: Dict[str, Any], domain_model
 ) -> List[Dict[str, Any]]:
     """Return a warning for each load case whose results are not believable.
 
-    Two checks, per load case:
+    Two checks, per load case, and in a modal analysis one on the modes:
 
     * the largest displacement against the size of the model (``MODEL_LIMIT``):
       beyond it the model is probably a mechanism;
     * each member's distortion, the largest difference in displacement between
       its own points, against its own size (``MEMBER_LIMIT``): beyond it the
       member is probably not connected or supported as intended. The worst
-      member is named and the others counted.
+      member is named and the others counted;
+    * modes with no frequency to speak of, which are mechanisms.
 
     Args:
         results: The dict written to ``results.json``.
@@ -183,6 +202,7 @@ def plausibility_warnings(
     warnings: List[Dict[str, Any]] = balance_warnings(
         results, _has_user_elements(domain_model)
     )
+    warnings.extend(_mechanism_mode_warnings(results))
     members = results.get("members", [])
     by_case = results.get("global_displacements", {}).get("by_load_case", {})
     for case in results.get("load_cases", []) or list(by_case):

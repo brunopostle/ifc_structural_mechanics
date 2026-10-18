@@ -20,6 +20,9 @@ Reference values use Timoshenko beam theory (bending plus shear deflection):
 * Simply supported rectangular plate under uniform load: Navier's double
   sine series, plus the Mindlin shear term ``M / (kappa G t)`` where ``M`` is
   the moment sum
+* Natural frequencies: Timoshenko's beam and Mindlin's plate, simply
+  supported, in closed form; a Timoshenko cantilever by finite elements
+  (``_timoshenko_cantilever_frequencies``); rods in tension and torsion
 """
 
 import functools
@@ -41,7 +44,9 @@ from ifc_structural_mechanics.analysis.results_parser import (  # noqa: E402
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc  # noqa: E402
 from ifc_structural_mechanics.converters.section_profiles import (  # noqa: E402
     expanded_rectangle_torsion_stiffness,
+    rectangle_shear_moduli,
 )
+from ifc_structural_mechanics.domain.property import Section  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
 )
@@ -649,6 +654,16 @@ class TestMaterialWithoutDensity:
                 mesh_size=MESH_SIZE,
                 gravity=True,
             )
+
+    def test_modal_analysis_is_refused(self, tmp_path):
+        with pytest.raises(ModelExtractionError, match="no mass density") as raised:
+            analyze_ifc(
+                ifc_path=self._variant(tmp_path),
+                output_dir=str(tmp_path / "out"),
+                mesh_size=MESH_SIZE,
+                analysis_type="modal",
+            )
+        assert raised.value.code == "E-MAT-003"
 
 
 class TestMemberWithoutAxis:
@@ -6169,3 +6184,302 @@ class TestTemperatureLoads:
         )
         assert result["status"] == "failed"
         assert result["errors"][0]["code"] == "E-LOD-008"
+
+
+def _frequency_pair_root(bending, shear, mass, rotary, k) -> float:
+    """The lower frequency (Hz) of a Timoshenko beam or Mindlin plate wave.
+
+    Per unit length (or width): bending stiffness, shear stiffness, mass and
+    rotary inertia; the deflection is sin(k x). The two equations of motion
+    give a quadratic in omega squared, whose lower root is the bending mode.
+    """
+    a = mass * rotary
+    b = -(mass * (bending * k**2 + shear) + rotary * shear * k**2)
+    c = shear * k**2 * (bending * k**2 + shear) - (shear * k) ** 2
+    omega2 = (-b - math.sqrt(b * b - 4 * a * c)) / (2 * a)
+    return math.sqrt(omega2) / (2 * math.pi)
+
+
+def _timoshenko_cantilever_frequencies(
+    E, G, kappa, rho, area, inertia, length, count, elements=400
+):
+    """Bending frequencies (Hz) of a clamped-free Timoshenko beam.
+
+    Finite elements, since the cantilever has no closed form: two nodes,
+    linear shape functions, one-point shear integration and a consistent
+    mass with rotary inertia. They converge as h^2, to a few parts in a
+    million with 400 elements (checked against the closed form of the
+    simply supported beam).
+    """
+    from scipy.linalg import eigh
+
+    h = length / elements
+    size = 2 * (elements + 1)
+    K = np.zeros((size, size))
+    M = np.zeros((size, size))
+    bending = np.array([0.0, -1 / h, 0.0, 1 / h])
+    shear = np.array([-1 / h, -0.5, 1 / h, -0.5])
+    pair = np.array([[2.0, 1.0], [1.0, 2.0]]) * h / 6
+    for e in range(elements):
+        dofs = [2 * e, 2 * e + 1, 2 * e + 2, 2 * e + 3]  # w, theta at each end
+        K[np.ix_(dofs, dofs)] += E * inertia * h * np.outer(bending, bending)
+        K[np.ix_(dofs, dofs)] += kappa * G * area * h * np.outer(shear, shear)
+        M[np.ix_(dofs[0::2], dofs[0::2])] += rho * area * pair
+        M[np.ix_(dofs[1::2], dofs[1::2])] += rho * inertia * pair
+    free = slice(2, size)
+    omega2 = eigh(K[free, free], M[free, free], eigvals_only=True)
+    return [math.sqrt(w) / (2 * math.pi) for w in sorted(omega2)[:count]]
+
+
+def _modes_along(data: dict, direction: str) -> list:
+    """Frequencies of the modes that move mass mostly along ``direction``.
+
+    A mode goes with the translation in which its effective mass is largest,
+    or with a rotation (``rx``...) when it moves no mass in translation: a
+    twist about the member's axis.
+    """
+    modal = data["modal"]
+    totals = modal["total_effective_mass_kg"]
+    found = []
+    for mode in modal["modes"]:
+        masses = mode["effective_mass_kg"]
+        along = max(masses, key=masses.get)
+        if masses[along] < 1e-6 * totals[along]:
+            moments = mode["effective_mass_moment_kgm2"]
+            along = max(moments, key=moments.get)
+        if along == direction:
+            found.append(mode["frequency_Hz"])
+    return found
+
+
+class TestModalAnalysis:
+    """Natural frequencies against Timoshenko's beam and Mindlin's plate (lon).
+
+    The mass is the materials' (``Pset_MaterialCommon.MassDensity``), with
+    the rotary inertia of the section: an equivalent rectangle has that of
+    the real section, rho (Iy + Iz), as well as its mass per length.
+    """
+
+    C = TestFixedFixedBeamPointLoad
+
+    def _run(self, path, tmp_path, mesh_size, modes=10, **kwargs) -> dict:
+        data = _run(
+            path,
+            tmp_path,
+            mesh_size=mesh_size,
+            analysis_type="modal",
+            num_modes=modes,
+            **kwargs,
+        )
+        assert data["analysis_type"] == "modal"
+        return data
+
+    @staticmethod
+    def _closest(frequencies, target) -> float:
+        return min(frequencies, key=lambda f: abs(f - target))
+
+    def test_cantilever_bends_as_a_timoshenko_beam(self, tmp_path):
+        """cantilever_01 (L/h = 7.5 vertically, 15 sideways), modes 1 to 4.
+
+        The expanded rectangle shears as if kappa were 1, not 5/6
+        (aiz.101), with the moduli it is given, the
+        lowered one across its width included; against that every mode
+        agrees to 1e-3. Timoshenko's own beam is lower by 0.16 to 2.8 %
+        over these modes, the higher ones the more.
+        """
+        data = self._run(CANTILEVER, tmp_path, 0.1, modes=12)
+        area = 0.2 * 0.4
+        vertical_inertia, side_inertia = 0.2 * 0.4**3 / 12, 0.4 * 0.2**3 / 12
+        _, across_width = rectangle_shear_moduli(
+            0.4,
+            0.2,
+            CANT_G,
+            Section.create_rectangular_section("s", "s", 0.2, 0.4).torsional_constant,
+        )
+        for direction, shear_modulus, inertia in (
+            ("z", CANT_G, vertical_inertia),
+            ("y", across_width, side_inertia),
+        ):
+            found = _modes_along(data, direction)[:4]
+            assert len(found) == 4, (direction, data["modal"]["modes"])
+            expected = _timoshenko_cantilever_frequencies(
+                CANT_E, shear_modulus, 1.0, CANT_RHO, area, inertia, CANT_L, 4
+            )
+            assert found == pytest.approx(expected, rel=1e-3), direction
+            # Within reach of the beam's own theory, the first mode closest
+            (truth,) = _timoshenko_cantilever_frequencies(
+                CANT_E, shear_modulus, 5 / 6, CANT_RHO, area, inertia, CANT_L, 1
+            )
+            assert found[0] == pytest.approx(truth, rel=0.002), direction
+
+    def test_cantilever_stretches_and_twists_as_a_rod(self, tmp_path):
+        """Axial modes are exact; torsion is as good as the static benchmark (1 %)."""
+        data = self._run(CANTILEVER, tmp_path, 0.1, modes=12)
+        (axial,) = _modes_along(data, "x")
+        assert axial == pytest.approx(
+            math.sqrt(CANT_E / CANT_RHO) / (4 * CANT_L), rel=1e-4
+        )
+        torsion = Section.create_rectangular_section("s", "s", 0.2, 0.4)
+        polar = torsion.moment_of_inertia_y + torsion.moment_of_inertia_z
+        speed = math.sqrt(CANT_G * torsion.torsional_constant / (CANT_RHO * polar))
+        twisting = _modes_along(data, "rx")[:2]
+        assert twisting == pytest.approx(
+            [speed / (4 * CANT_L), 3 * speed / (4 * CANT_L)], rel=0.01
+        )
+
+    def test_mass_of_the_cantilever(self, tmp_path):
+        """The effective masses: of the first mode, and of all the modes."""
+        data = self._run(CANTILEVER, tmp_path, 0.1, modes=12)
+        mass = CANT_RHO * 0.2 * 0.4 * CANT_L
+        modal = data["modal"]
+        assert modal["mass_source"] == "materials"
+        # Every node but those of the clamped root is free to move
+        for direction in "xyz":
+            assert modal["total_effective_mass_kg"][direction] == pytest.approx(
+                mass, rel=0.01
+            )
+        # Euler's cantilever puts 61.3 % of its mass in its first mode
+        first = next(m for m in modal["modes"] if m["frequency_Hz"] > 0)
+        assert first["effective_mass_kg"]["y"] / mass == pytest.approx(0.613, rel=0.01)
+        assert modal["mass_fraction"]["y"] > 0.9
+        assert modal["modes"][0]["period_s"] == pytest.approx(
+            1 / modal["modes"][0]["frequency_Hz"]
+        )
+
+    def test_simply_supported_beam(self, tmp_path):
+        """beam_01 on a pin and a roller, 4 m of 0.3 m square: modes 1 to 3."""
+        pin = (True, True, True, False, False, False)
+        roller = (False, True, True, False, False, False)
+        data = self._run(_beam_on_supports(tmp_path, pin, roller), tmp_path, 0.1)
+        frequencies = [m["frequency_Hz"] for m in data["modal"]["modes"]]
+        shear_modulus = self.C.E / (2 * (1 + self.C.NU))
+        for n, tolerance in ((1, 0.001), (2, 0.003), (3, 0.006)):
+            expected = _frequency_pair_root(
+                self.C.E * self.C.INERTIA,
+                5 / 6 * shear_modulus * self.C.AREA,
+                self.C.DENSITY * self.C.AREA,
+                self.C.DENSITY * self.C.INERTIA,
+                n * math.pi / self.C.LENGTH,
+            )
+            assert self._closest(frequencies, expected) == pytest.approx(
+                expected, rel=tolerance
+            ), n
+        # A half sine holds 8 / pi^2 of the mass
+        vertical = max(
+            data["modal"]["modes"], key=lambda m: m["effective_mass_kg"]["z"]
+        )
+        mass = self.C.DENSITY * self.C.AREA * self.C.LENGTH
+        assert vertical["effective_mass_kg"]["z"] / mass == pytest.approx(
+            8 / math.pi**2, rel=0.01
+        )
+
+    def test_simply_supported_plate(self, tmp_path):
+        """slab_01 held in translation along its four edges: modes (1,1) to (1,2).
+
+        Mindlin's plate with its edges held against twisting is the closed
+        form. Held in translation only, the slab is 1.4 % lower at a 0.5 m
+        mesh and 1.7 % at 0.25 m, as its static deflection under its weight
+        is 2.6 and 3.3 % larger than Navier's (TestSimplySupportedPlateSelfWeight).
+        """
+        plate = TestSimplySupportedPlateSelfWeight
+        path = plate()._plate(tmp_path)
+        data = self._run(path, tmp_path, 0.5, modes=6)
+        frequencies = [m["frequency_Hz"] for m in data["modal"]["modes"]]
+        rigidity = plate.E * plate.T**3 / (12 * (1 - plate.NU**2))
+        shear = 5 / 6 * plate.E / (2 * (1 + plate.NU)) * plate.T
+        for m, n in ((1, 1), (2, 1), (3, 1), (1, 2)):
+            k = math.hypot(m * math.pi / plate.A, n * math.pi / plate.B)
+            expected = _frequency_pair_root(
+                rigidity, shear, plate.RHO * plate.T, plate.RHO * plate.T**3 / 12, k
+            )
+            assert self._closest(frequencies, expected) == pytest.approx(
+                expected, rel=0.02
+            ), (m, n)
+
+    def test_i_section_as_its_equivalent_rectangle(self, tmp_path):
+        """Shear areas of the web and the flanges, rotary inertia of the real section.
+
+        The equivalent rectangle is calibrated with a shear coefficient of
+        1 on the shear area of the real section; its bending modes are
+        Timoshenko's with that to 1e-3, about both axes. Its torsion is far
+        too stiff: the first torsional mode is 5.4 times Saint-Venant's.
+        """
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        data = self._run(path, tmp_path, 0.1)
+        section = Section.create_i_section("s", "s", I_B, I_H, I_TW, I_TF)
+        for direction, inertia, shear_area in (
+            ("z", I_STRONG, section.shear_area_y),
+            ("y", I_WEAK, section.shear_area_z),
+        ):
+            found = _modes_along(data, direction)[:2]
+            expected = _timoshenko_cantilever_frequencies(
+                CANT_E,
+                CANT_G * shear_area / I_AREA,
+                1.0,
+                CANT_RHO,
+                I_AREA,
+                inertia,
+                CANT_L,
+                len(found),
+            )
+            assert found and found == pytest.approx(expected, rel=1e-3), direction
+        polar = I_STRONG + I_WEAK
+        saint_venant = math.sqrt(
+            CANT_G * section.torsional_constant / (CANT_RHO * polar)
+        ) / (4 * CANT_L)
+        assert _modes_along(data, "rx")[0] > 5 * saint_venant
+
+    def test_a_mechanism_is_reported(self, tmp_path):
+        """Rollers at both ends: nothing holds the beam along its axis."""
+        roller = (False, True, True, False, False, False)
+        path = _beam_on_supports(tmp_path, roller, roller)
+        result = analyze_ifc(
+            path,
+            str(tmp_path / "out"),
+            analysis_type="modal",
+            mesh_size=0.25,
+            num_modes=4,
+        )
+        assert result["status"] == "success", result["errors"]
+        with open(tmp_path / "out" / "results.json") as fh:
+            modes = json.load(fh)["modal"]["modes"]
+        assert modes[0]["mechanism"] and modes[0]["period_s"] is None
+        assert modes[0]["effective_mass_kg"]["x"] > 0.9 * (
+            self.C.DENSITY * self.C.AREA * self.C.LENGTH
+        )
+        assert not any(m["mechanism"] for m in modes[1:])
+        (warned,) = [w for w in result["warnings"] if w["code"] == "W-CHK-003"]
+        assert "1 of the 4 modes" in warned["message"]
+
+    def test_loads_of_the_file_are_not_mass(self, tmp_path):
+        """beam_01 as shipped: its load case is left out, and said to be."""
+        result = analyze_ifc(
+            BEAM, str(tmp_path / "out"), analysis_type="modal", mesh_size=0.5
+        )
+        assert result["status"] == "success", result["errors"]
+        codes = [w["code"] for w in result["warnings"]]
+        assert "W-LOD-011" in codes
+        assert "W-LOD-001" not in codes
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        assert data["load_cases"] == []
+        assert data["run"]["settings"]["num_modes"] == 10
+        assert len(data["modal"]["modes"]) == 10
+        frequencies = [m["frequency_Hz"] for m in data["modal"]["modes"]]
+        assert frequencies == sorted(frequencies)
+        with open(tmp_path / "out" / "analysis.inp") as fh:
+            text = fh.read()
+        assert "*FREQUENCY" in text and "*CLOAD" not in text and "*DLOAD" not in text
+
+    def test_user_elements_are_refused(self, tmp_path):
+        """CalculiX gives U1 elements no mass."""
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        result = analyze_ifc(
+            path,
+            str(tmp_path / "out"),
+            analysis_type="modal",
+            mesh_size=0.5,
+            open_sections="user_element",
+        )
+        assert result["status"] == "failed"
+        assert [e["code"] for e in result["errors"]] == ["E-SEC-006"]
