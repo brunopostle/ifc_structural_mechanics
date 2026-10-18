@@ -5244,16 +5244,17 @@ SBB_BEAM_B, SBB_BEAM_H = 0.3, 0.5
 SBB_OVERHANG = 0.5
 
 
-def _slab_between_beams(tmp_path, released: bool = False, drop: float = 0.0) -> str:
+def _slab_between_beams(
+    tmp_path, released: bool = False, drop: float = 0.0, overhang: float = SBB_OVERHANG
+) -> str:
     """Write a slab spanning between two beams it is joined to along line connections.
 
     The slab is 4 m along x, spans 3 m along y and is 0.2 m thick, at z = 0,
     with nu = 0 and free at x = 0 and x = 4, so that it bends as a strip. The
-    beams run along its long edges, ``drop`` below them and 0.5 m past its
-    ends, clamped at both ends and a thousand times as stiff as the slab's
+    beams run along its long edges, ``drop`` below them and ``overhang`` past
+    its ends, clamped at both ends and a thousand times as stiff as the slab's
     material: the edges of the slab do not move, and they turn only as the
-    joint lets them. (A support at a corner of the slab would hold the slab's
-    node there as well.) Each line
+    joint lets them. The supports hold the beams only. Each line
     connection runs along an edge of the slab and joins slab and beam; with
     ``released`` the slab is free to rotate about it. A uniform load acts on
     the slab, in a load case of its own.
@@ -5431,15 +5432,15 @@ def _slab_between_beams(tmp_path, released: bool = False, drop: float = 0.0) -> 
                 "Edge",
                 create(
                     "IfcEdge",
-                    vertex(-SBB_OVERHANG, y, -drop),
-                    vertex(SBB_L + SBB_OVERHANG, y, -drop),
+                    vertex(-overhang, y, -drop),
+                    vertex(SBB_L + overhang, y, -drop),
                 ),
             ),
             "RIGID_JOINED_MEMBER",
             up,
         )
         beams.append(beam)
-        for x in (-SBB_OVERHANG, SBB_L + SBB_OVERHANG):
+        for x in (-overhang, SBB_L + overhang):
             support = create(
                 "IfcStructuralPointConnection",
                 guid(),
@@ -5557,6 +5558,14 @@ class TestSlabJoinedToBeamsAlongALine:
     def test_released_joint_hinges_the_slab(self, tmp_path):
         """Once the slab hung from a point in the middle of each line."""
         path = _slab_between_beams(tmp_path, released=True)
+        _run(path, tmp_path, mesh_size=self.MESH)
+        sag = _sag_across(tmp_path / f"out_{self.MESH}")
+        assert sag == pytest.approx(self._expected(clamped=False), rel=0.01)
+
+    def test_supports_at_its_corners_hold_the_beams_only(self, tmp_path):
+        """A support of a beam at a corner of the slab once clamped the slab's
+        own node there too, and the hinged slab came out 15% stiff (aiz.97)."""
+        path = _slab_between_beams(tmp_path, released=True, overhang=0.0)
         _run(path, tmp_path, mesh_size=self.MESH)
         sag = _sag_across(tmp_path / f"out_{self.MESH}")
         assert sag == pytest.approx(self._expected(clamped=False), rel=0.01)

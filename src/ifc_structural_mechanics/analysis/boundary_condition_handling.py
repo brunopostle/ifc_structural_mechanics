@@ -6,7 +6,7 @@ from IFC structural models to CalculiX.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Optional, TextIO, Tuple
 
 import numpy as np
 
@@ -463,6 +463,7 @@ def write_boundary_conditions(
     node_coords: Dict[int, Tuple[float, float, float]],
     rotation_arms: Optional[Dict[str, Dict[int, tuple]]] = None,
     springs: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    member_nodes: Optional[Dict[str, Collection[int]]] = None,
 ) -> set:
     """
     Write the supports of the model to the CalculiX input file.
@@ -491,6 +492,8 @@ def write_boundary_conditions(
             They are recorded with the support for its reactions, and their
             nodes are support nodes, so a model held by springs alone has
             supports.
+        member_nodes: The nodes of the members each support holds, by
+            support (see ``find_connection_support_nodes``).
 
     Returns:
         The ``(node, dof)`` pairs the equations make depend on others, which
@@ -532,7 +535,7 @@ def write_boundary_conditions(
             continue
         dofs_to_fix = get_constrained_dofs(connection)
 
-        bc_nodes = find_connection_support_nodes(connection, node_coords)
+        bc_nodes = find_connection_support_nodes(connection, node_coords, member_nodes)
         if not bc_nodes and not getattr(connection, "connected_members", None):
             # It holds no member and lies on none: it supports nothing
             unattached.append(str(connection_id))
@@ -1625,6 +1628,7 @@ def find_support_nodes(
     node_coords: Dict[int, Tuple[float, float, float]],
     tolerance: float = 0.1,
     coincidence: float = 1e-3,
+    member_nodes: Optional[Collection[int]] = None,
 ) -> List[int]:
     """Find the mesh node(s) that a point support at *position* acts on.
 
@@ -1632,6 +1636,9 @@ def find_support_nodes(
     *tolerance*, together with any node coincident with it (within
     *coincidence*). Beam and shell meshes keep separate nodes at the same
     location, so a support where a column meets a slab restrains both.
+    Given *member_nodes*, the nodes of the members the support holds, only
+    those of them are kept (``_held_by``): a support of a beam at the corner
+    of a slab hinged to it does not clamp the slab's corner too.
 
     Unlike ``find_nodes_at_position`` this never returns a neighbouring mesh
     node. Taking every node inside the tolerance radius restrained two adjacent
@@ -1643,6 +1650,7 @@ def find_support_nodes(
         node_coords: Dictionary of node coordinates.
         tolerance: Largest accepted distance from *position* to the nearest node.
         coincidence: Distance within which other nodes count as the same point.
+        member_nodes: The nodes of the members the support holds, if known.
 
     Returns:
         Node IDs sorted ascending; empty if no node is within *tolerance*.
@@ -1656,7 +1664,23 @@ def find_support_nodes(
     if distances[nearest] > tolerance:
         return []
     coincident = np.linalg.norm(coords - coords[nearest], axis=1) <= coincidence
-    return sorted(int(i) for i in ids[coincident])
+    return _held_by(ids[coincident], member_nodes)
+
+
+def _held_by(
+    nodes: Iterable[int], member_nodes: Optional[Collection[int]]
+) -> List[int]:
+    """The *nodes* of the members a support holds, or all if none of them is.
+
+    A support connected to no member, or to members none of whose nodes is
+    there (one stopping short of it, the joint taken by a link), keeps every
+    node it finds.
+    """
+    found = sorted(int(i) for i in nodes)
+    if not member_nodes:
+        return found
+    held = [n for n in found if n in member_nodes]
+    return held or found
 
 
 def find_nodes_on_segment(
@@ -1721,7 +1745,9 @@ def find_nodes_in_face(
 
 
 def find_connection_support_nodes(
-    connection: Any, node_coords: Dict[int, Tuple[float, float, float]]
+    connection: Any,
+    node_coords: Dict[int, Tuple[float, float, float]],
+    member_nodes: Optional[Dict[str, Collection[int]]] = None,
 ) -> List[int]:
     """Return the mesh nodes a support connection restrains.
 
@@ -1730,17 +1756,25 @@ def find_connection_support_nodes(
     surface support (``IfcStructuralSurfaceConnection``) has its outline in
     ``connection.face`` and restrains every node on it. A point support
     restrains the node at its position.
+
+    Beam and shell meshes keep nodes of their own at one point, so a support
+    finds the nodes of members it does not hold as well. Given
+    *member_nodes*, ``{connection id: nodes of the members it holds}``, it
+    keeps only those (``aiz.97``).
     """
+    held = (member_nodes or {}).get(getattr(connection, "id", None))
     face = getattr(connection, "face", None)
     if face is not None:
-        return find_nodes_in_face(face, node_coords)
+        return _held_by(find_nodes_in_face(face, node_coords), held)
     edge = getattr(connection, "edge", None)
     if edge is not None and len(edge) == 2:
         # No node on the edge is no support; its midpoint is not a substitute
-        return find_nodes_on_segment(edge[0], edge[1], node_coords)
+        return _held_by(find_nodes_on_segment(edge[0], edge[1], node_coords), held)
     position = getattr(connection, "position", None)
     if position is not None and len(position) == 3:
-        return find_support_nodes(position, node_coords, tolerance=SUPPORT_TOLERANCE)
+        return find_support_nodes(
+            position, node_coords, tolerance=SUPPORT_TOLERANCE, member_nodes=held
+        )
     return []
 
 

@@ -104,3 +104,34 @@ class TestLineSupport:
         assert find_connection_support_nodes(support, NODES) == []
         with pytest.raises(AnalysisError, match="cannot be applied"):
             _write(support)
+
+
+class TestSupportHoldsItsOwnMembers:
+    """Beam and shell meshes keep a node each at one point (aiz.97)."""
+
+    # Node 4 is a slab's, at the beam's end node 1
+    COINCIDENT = {**NODES, 4: (0.0, 0.0, 0.0), 5: (1.0, 0.0, 0.0)}
+
+    def test_point_support_leaves_other_members_alone(self):
+        support = fixed_support((0, 0, 0), "m1")
+        held = {support.id: {1, 2, 3}}
+        assert find_connection_support_nodes(support, self.COINCIDENT, held) == [1]
+
+    def test_without_its_members_nodes_it_holds_all(self):
+        support = fixed_support((0, 0, 0), "m1")
+        assert find_connection_support_nodes(support, self.COINCIDENT) == [1, 4]
+        # A member stopping short of it, joined by a link, has no node there
+        held = {support.id: {2, 3}}
+        assert find_connection_support_nodes(support, self.COINCIDENT, held) == [
+            1,
+            4,
+        ]
+
+    def test_line_support_leaves_other_members_alone(self):
+        support = fixed_support((1, 0, 0), "m1")
+        support.edge = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+        held = {support.id: {4, 5}}
+        assert find_connection_support_nodes(support, self.COINCIDENT, held) == [
+            4,
+            5,
+        ]

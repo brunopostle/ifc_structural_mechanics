@@ -806,7 +806,12 @@ the edge, whichever way the edge runs.
 Support nodes: `find_support_nodes()` returns the single mesh node nearest the
 connection position (within 0.1 m) plus any node coincident with it (beam and
 shell meshes keep separate nodes at one point). It never returns a neighbouring
-node; doing so fixed two adjacent nodes on fine meshes. Point loads go to the
+node; doing so fixed two adjacent nodes on fine meshes. Of coincident nodes a
+support keeps those of the members it holds (`aiz.97`,
+`UnifiedCalculixWriter._support_member_nodes()`, edges and faces too): a
+support of a beam at the corner of a slab hinged to it once clamped the
+slab's corner, and the slab came out 15% stiff. With none of its members'
+nodes there (one stopping short of it) it keeps them all. Point loads go to the
 single nearest node.
 
 ## Connections

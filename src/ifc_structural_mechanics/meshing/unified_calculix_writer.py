@@ -925,6 +925,7 @@ class UnifiedCalculixWriter:
                 self._structure_nodes(),
                 rotation_arms=getattr(self, "_support_arms", None),
                 springs=getattr(self, "_support_springs", None),
+                member_nodes=self._support_member_nodes(),
             )
             self._record_support_node_elements()
             # What an equation of a skew support already decides is not
@@ -1804,6 +1805,7 @@ class UnifiedCalculixWriter:
         # support holds a combination of them (see _write_line_bearings)
         self._supported_node_dofs: set = set()
         node_coords = self._structure_nodes()
+        member_nodes = self._support_member_nodes()
         arms = getattr(self, "_support_arms", {})
 
         from ..analysis.boundary_condition_handling import (
@@ -1815,7 +1817,9 @@ class UnifiedCalculixWriter:
         for conn in self.domain_model.connections:
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
-                bc_nodes = find_connection_support_nodes(conn, node_coords)
+                bc_nodes = find_connection_support_nodes(
+                    conn, node_coords, member_nodes
+                )
                 dofs = get_constrained_dofs(conn)
 
                 for node in bc_nodes:
@@ -1883,6 +1887,38 @@ class UnifiedCalculixWriter:
         """
         helpers = getattr(self, "_helper_nodes", set())
         return {n: xyz for n, xyz in self.nodes.items() if n not in helpers}
+
+    def _support_member_nodes(self) -> Dict[str, set]:
+        """The nodes of the members each support holds, by support id.
+
+        Beam and shell meshes keep nodes of their own at one point, and a
+        support takes only those of its members (``aiz.97``,
+        ``find_connection_support_nodes``). Members are found by the elements
+        in their geometry, so one overlapped by another still has its nodes.
+        """
+        geometry_sets = getattr(self, "_geometry_element_sets", {})
+        nodes_of: Dict[str, set] = {}
+        result: Dict[str, set] = {}
+        for conn in self.domain_model.connections:
+            if not conn.has_stiffness_properties():
+                continue
+            held: set = set()
+            for member_id in conn.connected_members:
+                if member_id not in nodes_of:
+                    member_set = f"MEMBER_{self._get_short_id(member_id)}"
+                    elems = geometry_sets.get(member_set) or self.element_sets.get(
+                        member_set, []
+                    )
+                    nodes_of[member_id] = {
+                        n
+                        for elem_id in elems
+                        if elem_id in self.elements
+                        for n in self.elements[elem_id]["nodes"]
+                    }
+                held |= nodes_of[member_id]
+            if held:
+                result[conn.id] = held
+        return result
 
     # Largest gap between two nodes that are treated as the same point.
     _COINCIDENT_TOL = 1e-3
@@ -2323,6 +2359,7 @@ class UnifiedCalculixWriter:
         for elem_id, elem in self.elements.items():
             for node in elem["nodes"]:
                 elements_at.setdefault(node, []).append(elem_id)
+        member_nodes = self._support_member_nodes()
         links = list(getattr(self, "_rigid_links", []))
         helpers = set(getattr(self, "_helper_nodes", set()))
         next_node = max(self.nodes.keys(), default=0) + 1
@@ -2337,7 +2374,9 @@ class UnifiedCalculixWriter:
             restraint = support_restraint(conn)
             if restraint is None or rotation_arm(restraint[1]) is None:
                 continue
-            nodes = find_connection_support_nodes(conn, self._structure_nodes())
+            nodes = find_connection_support_nodes(
+                conn, self._structure_nodes(), member_nodes
+            )
             linked = {n for _, a, b in links for n in (a, b)}
             for node in nodes:
                 drilling = (
@@ -2435,9 +2474,12 @@ class UnifiedCalculixWriter:
                 self.nodes[nodes[0]]
             )
         skip = {n for _, a, b in getattr(self, "_rigid_links", []) for n in (a, b)}
+        member_nodes = self._support_member_nodes()
         for conn in self.domain_model.connections:
             if conn.has_stiffness_properties():
-                skip.update(find_connection_support_nodes(conn, structure))
+                skip.update(
+                    find_connection_support_nodes(conn, structure, member_nodes)
+                )
 
         helpers = set(getattr(self, "_helper_nodes", set()))
         next_node = max(self.nodes.keys(), default=0) + 1
@@ -2537,6 +2579,7 @@ class UnifiedCalculixWriter:
             + 1
         )
         structure = self._structure_nodes()
+        member_nodes = self._support_member_nodes()
         drilling_left_out: List[str] = []
 
         def new_node(position) -> int:
@@ -2554,7 +2597,7 @@ class UnifiedCalculixWriter:
                     "spring, which takes a stiff arm, and arms cannot be used "
                     "in a model with user elements."
                 )
-            nodes = find_connection_support_nodes(conn, structure)
+            nodes = find_connection_support_nodes(conn, structure, member_nodes)
             if not nodes:
                 raise AnalysisError(
                     f"Support {conn.id} cannot be applied: the mesh has no node "
