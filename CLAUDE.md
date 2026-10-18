@@ -140,7 +140,7 @@ Generates finite element meshes:
 
 **Conforming Mesh Pipeline** (`gmsh_geometry.py` `convert_model()`):
 1. Create all geometry with shared points (no per-member synchronize)
-2. Call `fragment()` separately for curves and surfaces, so beams share nodes with beams and shells with shells. Support points on beam interiors and connection points landing on a slab are passed as fragment tools so the mesh has a node there. Beam and shell nodes are joined later, in the writer (see Connections)
+2. Call `fragment()` separately for curves and surfaces, so beams share nodes with beams and shells with shells. Support points on beam interiors and connection points landing on a slab are passed as fragment tools so the mesh has a node there, and so are line connections joining a beam and a slab, which are meshed node for node with the beam. Beam and shell nodes are joined later, in the writer (see Connections)
 3. Single `synchronize()` call
 4. Remap entity tags after fragmentation
 5. Apply mesh sizes (minimum size for shared points)
@@ -887,8 +887,27 @@ rotational degrees of freedom**. This drives everything about joints:
   on a slab or passing through it) is pinned to it there by the same code,
   unless a connection of the file already joins them at that point.
   `_seed_crossings()` in the geometry stage puts a node there in both meshes.
-  A line connection of the file joining a beam and a slab is tied the same
-  way, with no warning and under strict connections too.
+- **A line connection of the file joining a beam and a slab joins them all
+  along it** (`aiz.51`, `_line_joints()`), under strict connections too.
+  It was once taken for a point at its midpoint: a knot there, or one rigid
+  link from a downstand beam, and the slab hung from it. The geometry stage
+  meshes the line into the slab and the beam with the same nodes along it
+  (`_seed_line_joints()`, `_conform_line_joints()`: the beam is split at the
+  line's ends and at the image of every point on either, and each pair of
+  pieces is transfinite with one count). Rigid (neither member released
+  about the line): the nodes are merged, or joined by a rigid link where the
+  beam is eccentric (a downstand beam; `IfcRelConnectsWithEccentricity` is
+  taken from the geometry, as at points), in `_merge_rigid_connection_nodes()`.
+  Released: each beam node is tied in DOF 1-3 to the slab node at its foot,
+  through a link where eccentric (`_build_line_joints()`). **Not with arms
+  or equations**: tying a slab's middle surface reaches neither its normals
+  nor its rotation, and a slab clamped that way to a beam held against
+  twisting came out 40% too flexible in its own share. A line connection
+  joining two curve members raises `AnalysisError`. `TestSlabJoinedToBeamsAlongALine`
+  has a strip between stiff beams against q B^4 / 384 D and 5 q B^4 / 384 D
+  (0.5% and 0.14% at a 0.25 m mesh). A surface member hinged about such a
+  line is a hinge with the beam only: `_release_hinged_edges()` takes the
+  surface members of a connection alone.
 - **A member nothing stops spinning about its own axis is held**
   (`_hold_spinning_members()`): rotation about its axis is restrained at one
   of its supports, with a warning. Ball supports at both ends of a beam are
