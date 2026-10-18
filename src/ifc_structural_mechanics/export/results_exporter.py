@@ -21,7 +21,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..analysis.boundary_condition_handling import support_displacement_values
+from ..analysis.boundary_condition_handling import (
+    released_rotation_axes,
+    support_displacement_values,
+)
 from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from ..analysis.section_forces import _stations
 from ..analysis.superposition import combine_results
@@ -166,7 +169,124 @@ class ResultsExporter:
         if self.analysis_type == "modal":
             data["modal"] = self._modal()
         self._add_load_combinations(data)
+        data["load_case_ifc_guids"] = self._load_case_guids(load_cases)
+        data["ifc_result_group"] = {
+            "theory_type": self._IFC_THEORY.get(self.analysis_type, "NOTDEFINED"),
+            "is_linear": True,
+        }
+        connections = self._connections(data["members"])
+        if connections:
+            data["connections"] = connections
         return data
+
+    # IfcAnalysisTheoryTypeEnum of the results. A buckling analysis's results
+    # are the displacements under its reference loads, which are first order;
+    # its factors are not results of a load group. A modal analysis has none.
+    _IFC_THEORY = {
+        "linear_static": "FIRST_ORDER_THEORY",
+        "linear_buckling": "FIRST_ORDER_THEORY",
+    }
+
+    def _load_case_guids(self, load_cases: List[str]) -> Dict[str, Optional[str]]:
+        """The GlobalId of the ``IfcStructuralLoadCase`` of each load case.
+
+        None for one the analysis made itself (``Gravity``, the reference
+        loads of a buckling analysis).
+        """
+        groups = {
+            group.name: group.id
+            for group in getattr(self.model, "load_groups", [])
+            if getattr(group, "is_load_case", False)
+        }
+        return {case: groups.get(case) for case in load_cases}
+
+    def _connections(self, members: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """How each point connection moves, per load case and combination.
+
+        Taken from the deflected shapes of the curve members joined there:
+        the point of each member's axis nearest the connection, carried out
+        to the connection as a rigid body (a member that stops short of its
+        joint is joined to it by a stiff link). The translation is the mean
+        over those members; the rotation that of the members not released
+        there, absent where every member is (a pin has no one rotation). A
+        connection with no curve member that has a deflected shape is left
+        out.
+        """
+        shapes_of = {
+            member.id: (member, entry)
+            for member, entry in zip(self.model.members, members)
+            if entry.get("deflected_shapes")
+        }
+        listed = []
+        for conn in self.model.connections:
+            if getattr(conn, "edge", None) is not None:
+                continue
+            if getattr(conn, "face", None) is not None:
+                continue
+            try:
+                point = np.array([float(v) for v in conn.position])
+            except (TypeError, ValueError):
+                continue
+            joined = [
+                shapes_of[m] for m in (conn.connected_members or []) if m in shapes_of
+            ]
+            if not joined:
+                continue
+            entry: Dict[str, Any] = {
+                "ifc_guid": getattr(conn, "ifc_guid", None),
+                "id": conn.id,
+                "position_m": [float(v) for v in point],
+            }
+            for key, target in (
+                ("deflected_shapes", "by_load_case"),
+                ("deflected_shapes_by_combination", "by_load_combination"),
+            ):
+                cases = sorted({c for _, e in joined for c in e.get(key, {})})
+                values = {}
+                for case in cases:
+                    moved = self._connection_movement(conn, point, joined, key, case)
+                    if moved is not None:
+                        values[case] = moved
+                if values:
+                    entry[target] = values
+            if "by_load_case" in entry:
+                listed.append(entry)
+        return listed
+
+    @staticmethod
+    def _connection_movement(
+        conn, point: np.ndarray, joined: list, key: str, case: str
+    ) -> Optional[Dict[str, List[float]]]:
+        """The translation and rotation of a connection in one case."""
+        translations, rotations = [], []
+        for member, entry in joined:
+            shape = entry.get(key, {}).get(case)
+            geometry = getattr(member, "geometry", None)
+            if not shape or not isinstance(geometry, (list, tuple)):
+                continue
+            start = np.array(geometry[0], dtype=float)
+            along = np.array(geometry[-1], dtype=float) - start
+            along /= np.linalg.norm(along)
+            places = [start + d * along for d in shape["distance_m"]]
+            i = int(np.argmin([np.linalg.norm(point - p) for p in places]))
+            u = np.array([shape[k][i] for k in ("ux_m", "uy_m", "uz_m")])
+            if "rx_rad" in shape:
+                turn = np.array([shape[k][i] for k in ("rx_rad", "ry_rad", "rz_rad")])
+                u = u + np.cross(turn, point - places[i])
+                released = (
+                    conn.entity_type == "hinge" and len(conn.connected_members) > 1
+                ) or len(released_rotation_axes(conn, member.id))
+                if not released:
+                    rotations.append(turn)
+            elif np.linalg.norm(point - places[i]) > 1e-6:
+                continue  # no rotation to carry it out to the connection
+            translations.append(u)
+        if not translations:
+            return None
+        moved = {"translation_m": [float(v) for v in np.mean(translations, axis=0)]}
+        if rotations:
+            moved["rotation_rad"] = [float(v) for v in np.mean(rotations, axis=0)]
+        return moved
 
     @staticmethod
     def _scale_buckling_shapes(members: List[Dict[str, Any]]) -> None:

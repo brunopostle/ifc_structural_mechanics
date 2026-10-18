@@ -72,7 +72,7 @@ instance). Absent means unknown; never read it as zero.
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
-| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. |
+| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. |
 
 ## Outline
 
@@ -172,6 +172,14 @@ instance). Absent means unknown; never read it as zero.
       }
     }
   ],
+  "connections": [
+    {"ifc_guid": "...", "id": "...", "position_m": [0.0, 0.0, 3.0],
+     "by_load_case": {"Dead": {"translation_m": [0.0, 0.0, -0.001],
+                               "rotation_rad": [0.0, 0.0002, 0.0]}},
+     "by_load_combination": {...}}
+  ],
+  "load_case_ifc_guids": {"Dead": "...", "Gravity": null},
+  "ifc_result_group": {"theory_type": "FIRST_ORDER_THEORY", "is_linear": true},
   "warnings": [
     {"code": "W-SEC-002", "title": "Sections analysed as equivalent rectangles",
      "message": "3 member(s) whose section is not a solid rectangle ...",
@@ -442,6 +450,35 @@ warns in both cases.
 `axes`, `restrained_in_axes` and `by_load_case_in_axes` are present when
 the support has axes of its own (a `ConditionCoordinateSystem`, or the edge
 of a line support); the last gives the same reactions along them.
+
+## For an export as IFC structural results
+
+(schema 1.13) What writing the results back into the IFC file as an
+`IfcStructuralResultGroup` per load case needs, beside what is above:
+
+- `connections` lists every point connection that joins a curve member,
+  support or not, with how it moves in each load case and combination:
+  `translation_m` and `rotation_rad`, in global axes, the
+  `IfcStructuralLoadSingleDisplacement` of an `IfcStructuralPointReaction`.
+  They are taken from the `deflected_shapes` of the curve members joined
+  there: the point of each member's axis nearest the connection, carried out
+  to it as a rigid body (a member that stops short of its joint is joined to
+  it by a stiff link). The translation is the mean over those members, which
+  agree to 3 in 10 000 in `building_01`. The rotation is that of the members
+  not released at the connection, and is absent where every member is: a
+  pin has no one rotation. Line and surface connections, and point
+  connections that join surface members only, are not listed.
+- `load_case_ifc_guids` gives the GlobalId of the `IfcStructuralLoadCase`
+  of each load case, by its name, or `null` for one the analysis made itself
+  (`Gravity`, the `Reference loads` of a buckling analysis). Load
+  combinations have theirs in `load_combinations`.
+- `ifc_result_group` is what the result group says of the results:
+  `theory_type` (`IfcAnalysisTheoryTypeEnum`) is `FIRST_ORDER_THEORY` for a
+  linear static analysis and for the displacements of a buckling analysis
+  under its reference loads, `NOTDEFINED` for a modal one, and `is_linear`
+  is true.
+- The members' section force diagrams are in the axes of `section_axes`,
+  as vectors.
 
 ## Members: `members[]`
 

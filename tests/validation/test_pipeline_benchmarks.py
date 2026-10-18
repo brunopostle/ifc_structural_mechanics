@@ -4670,6 +4670,42 @@ class TestDeflectedShape:
         # Both ends and the middle of every 0.25 m element, each once
         assert found == 2 * (2 * 8 + 1)
 
+    def test_connections_move_with_it(self, tmp_path):
+        """The clamp, the joint and the tip, and what an IFC export needs.
+
+        Each point connection has the translation and rotation of the
+        members' axis there (94g.13.3).
+        """
+        self._shapes(tmp_path)
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        bending = PLANE_E * self.SIDE**4 / 12
+        shear = PLANE_E / 2.6 * self.SIDE**2 * 5 / 6
+        model = ifcopenshell.open(str(tmp_path / "plane.ifc"))
+        names = {c.GlobalId: c.Name for c in model.by_type("IfcStructuralConnection")}
+        found = {}
+        for connection in data["connections"]:
+            found[names[connection["ifc_guid"]]] = connection["by_load_case"]["Load"]
+        assert sorted(found) == ["A", "B", "M"]
+        for name, x in (("A", 0.0), ("M", 2.0), ("B", 4.0)):
+            deflection = (
+                self.LOAD * x**2 * (3 * self.LENGTH - x) / (6 * bending)
+                + self.LOAD * x / shear
+            )
+            slope = self.LOAD * x * (2 * self.LENGTH - x) / (2 * bending)
+            ux, uy, uz = found[name]["translation_m"]
+            rx, ry, rz = found[name]["rotation_rad"]
+            assert uz == pytest.approx(-deflection, rel=1e-3, abs=1e-9), name
+            assert ry == pytest.approx(slope, rel=1e-3, abs=1e-9), name
+            assert max(abs(ux), abs(uy), abs(rx), abs(rz)) < 1e-9 + 1e-4 * deflection
+
+        (case,) = model.by_type("IfcStructuralLoadCase")
+        assert data["load_case_ifc_guids"] == {"Load": case.GlobalId}
+        assert data["ifc_result_group"] == {
+            "theory_type": "FIRST_ORDER_THEORY",
+            "is_linear": True,
+        }
+
     def test_twist_along_it(self, tmp_path):
         """A torque at the tip as well: the sections turn by T x / GJ."""
         torsion = PLANE_E / 2.6 * 0.1406 * self.SIDE**4

@@ -601,7 +601,10 @@ here. This section only records the constraints that shape day-to-day work.
   `deflected_shapes` (`94g.13.2`, `ResultsExporter._member_deflections()`)
   are the axis: at each cross-section the nodes' movement is fitted with a
   rigid body's (translation of the centre, rotation of the section), which
-  matches Timoshenko's cantilever to 1.5e-4 (`TestDeflectedShape`).
+  matches Timoshenko's cantilever to 1.5e-4 (`TestDeflectedShape`). The
+  movement of each point connection (`connections`, `94g.13.3`, for an IFC
+  result export) is taken from them, carried out to the connection as a
+  rigid body; no rotation where every member there is released.
   `global_displacements` leaves out the nodes of links and arms, elements of
   no member (`ResultsExporter._link_nodes()`, `aiz.92`): their faces are up
   to 0.25 m from their axis, and one set `structure_01`'s largest Y

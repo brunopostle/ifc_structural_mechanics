@@ -14,7 +14,7 @@
     "name": "beam example.EDB"
   },
   "run": {
-    "created": "2026-10-18T19:51:59+00:00",
+    "created": "2026-10-18T20:07:03+00:00",
     "library": {
       "name": "ifc_structural_mechanics",
       "version": "0.1.0"
@@ -1235,6 +1235,113 @@
       "cases_without_loads": [
         "Live"
       ]
+    }
+  ],
+  "load_case_ifc_guids": {
+    "Dead": "08tKSyf3fFlx_x4dJiiQcU"
+  },
+  "ifc_result_group": {
+    "theory_type": "FIRST_ORDER_THEORY",
+    "is_linear": true
+  },
+  "connections": [
+    {
+      "ifc_guid": "3WO_dPG_D85e93$T8UVZYm",
+      "id": "3WO_dPG_D85e93$T8UVZYm",
+      "position_m": [
+        0.0,
+        4.0,
+        4.0
+      ],
+      "by_load_case": {
+        "Dead": {
+          "translation_m": [
+            0.0,
+            1.249999997945315e-27,
+            -7.500000000310805e-26
+          ],
+          "rotation_rad": [
+            1.0555555552014067e-25,
+            4.81482486096809e-35,
+            1.2028982409730363e-34
+          ]
+        }
+      },
+      "by_load_combination": {
+        "DCon1": {
+          "translation_m": [
+            0.0,
+            1.874999999927238e-27,
+            -1.125000000106806e-25
+          ],
+          "rotation_rad": [
+            1.583333332756971e-25,
+            2.407412430484045e-35,
+            1.9247179829837563e-34
+          ]
+        },
+        "DCon2": {
+          "translation_m": [
+            0.0,
+            1.874999999927238e-27,
+            -1.125000000106806e-25
+          ],
+          "rotation_rad": [
+            1.583333332756971e-25,
+            2.407412430484045e-35,
+            1.9247179829837563e-34
+          ]
+        }
+      }
+    },
+    {
+      "ifc_guid": "0LwrJu9VLDyg2U$$_u2LZU",
+      "id": "0LwrJu9VLDyg2U$$_u2LZU",
+      "position_m": [
+        4.0,
+        4.0,
+        4.0
+      ],
+      "by_load_case": {
+        "Dead": {
+          "translation_m": [
+            0.0,
+            1.1249999999864355e-25,
+            -7.52316384526264e-36
+          ],
+          "rotation_rad": [
+            -6.111111110989873e-25,
+            1.2037062152420224e-35,
+            -8.224413514359841e-35
+          ]
+        }
+      },
+      "by_load_combination": {
+        "DCon1": {
+          "translation_m": [
+            0.0,
+            1.6874999999646069e-25,
+            -4.513898307157584e-36
+          ],
+          "rotation_rad": [
+            -9.16666666660518e-25,
+            0.0,
+            -1.1132914056297736e-34
+          ]
+        },
+        "DCon2": {
+          "translation_m": [
+            0.0,
+            1.6874999999646069e-25,
+            -4.513898307157584e-36
+          ],
+          "rotation_rad": [
+            -9.16666666660518e-25,
+            0.0,
+            -1.1132914056297736e-34
+          ]
+        }
+      }
     }
   ],
   "warnings": [

@@ -104,6 +104,26 @@
       }
     },
     "modal": {"$ref": "#/$defs/modal"},
+    "load_case_ifc_guids": {
+      "description": "The GlobalId of the IfcStructuralLoadCase of each load case; null for one the analysis made itself (schema 1.13).",
+      "type": "object",
+      "additionalProperties": {"type": ["string", "null"]}
+    },
+    "ifc_result_group": {
+      "description": "What an IfcStructuralResultGroup of these results says of them (schema 1.13).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["theory_type", "is_linear"],
+      "properties": {
+        "theory_type": {"enum": ["FIRST_ORDER_THEORY", "SECOND_ORDER_THEORY", "THIRD_ORDER_THEORY", "FULL_NONLINEAR_THEORY", "USERDEFINED", "NOTDEFINED"]},
+        "is_linear": {"type": "boolean"}
+      }
+    },
+    "connections": {
+      "description": "How each point connection joining curve members moves (schema 1.13).",
+      "type": "array",
+      "items": {"$ref": "#/$defs/connection"}
+    },
     "warnings": {
       "type": "array",
       "items": {"$ref": "#/$defs/warning"}
@@ -273,6 +293,31 @@
           "description": "The shape of each mode of a buckling or modal analysis along the member, by its name (Mode <n>), as a deflected shape (schema 1.13). Shapes, not displacements: each buckling mode is scaled to a largest translation of one along any member, each modal one to a generalised mass of one.",
           "$ref": "#/$defs/deflected_shapes"
         }
+      }
+    },
+    "connection_movement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translation_m"],
+      "properties": {
+        "translation_m": {"$ref": "#/$defs/vector"},
+        "rotation_rad": {"$ref": "#/$defs/vector"}
+      }
+    },
+    "connection_movements": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/connection_movement"}
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ifc_guid", "id", "position_m", "by_load_case"],
+      "properties": {
+        "ifc_guid": {"type": ["string", "null"]},
+        "id": {"type": "string"},
+        "position_m": {"$ref": "#/$defs/vector"},
+        "by_load_case": {"$ref": "#/$defs/connection_movements"},
+        "by_load_combination": {"$ref": "#/$defs/connection_movements"}
       }
     },
     "deflected_shape": {
