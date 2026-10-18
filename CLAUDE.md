@@ -834,8 +834,10 @@ q L^4 / 8 D, as that predicts). `TestElasticSupports` and `TestSurfaceSupports`
 check them against closed forms.
 
 `results.json` lists what a support holds along global axes in `restrained` and along
-its own in `restrained_in_axes`. `TestSkewSupports` has the incline and a clamp about a
-skew axis against statics; `TestPlacedModel.test_turned_off_the_global_axes` runs
+its own in `restrained_in_axes`. `TestSkewSupports` has the incline, a clamp about a
+skew axis, a clamp sliding on the incline (arm tip tied to a node with an
+equation of its own) and `slab_01` tilted 30 degrees (skew edges, drilling)
+against statics; `TestPlacedModel.test_turned_off_the_global_axes` runs
 `slab_01` and `structure_01` turned 30 degrees about Z against the files as shipped.
 
 **Support displacements** (`aiz.58`): a point action whose applied load is an

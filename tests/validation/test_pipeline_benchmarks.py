@@ -3570,13 +3570,15 @@ class TestCodeAsterReferences:
         assert 600 < reaction < 700
 
 
-def _placed_variant(tmp_path, name: str, x_axis=(1.0, 0.0, 0.0)) -> str:
+def _placed_variant(
+    tmp_path, name: str, x_axis=(1.0, 0.0, 0.0), z_axis=(0.0, 0.0, 1.0)
+) -> str:
     """An example with every item under a placement that moves and turns it.
 
     The placement is nested: its parent is 12, -7, 3 m away and a quarter
     turn about Z, and it adds 1.5, 2.5, -0.5 m in the parent's axes, turned
-    again so that its x is along ``x_axis``. Offsets are written in the
-    file's own length unit.
+    again so that its x is along ``x_axis`` and its z along ``z_axis``.
+    Offsets are written in the file's own length unit.
     """
     import ifcopenshell
     import ifcopenshell.util.unit
@@ -3584,13 +3586,13 @@ def _placed_variant(tmp_path, name: str, x_axis=(1.0, 0.0, 0.0)) -> str:
     model = ifcopenshell.open(os.path.join(IFC_DIR, f"{name}.ifc"))
     scale = ifcopenshell.util.unit.calculate_unit_scale(model)
 
-    def axes(offset, x_axis):
+    def axes(offset, x_axis, z_axis=(0.0, 0.0, 1.0)):
         return model.create_entity(
             "IfcAxis2Placement3D",
             Location=model.create_entity(
                 "IfcCartesianPoint", [c / scale for c in offset]
             ),
-            Axis=model.create_entity("IfcDirection", (0.0, 0.0, 1.0)),
+            Axis=model.create_entity("IfcDirection", z_axis),
             RefDirection=model.create_entity("IfcDirection", x_axis),
         )
 
@@ -3600,7 +3602,7 @@ def _placed_variant(tmp_path, name: str, x_axis=(1.0, 0.0, 0.0)) -> str:
     placement = model.create_entity(
         "IfcLocalPlacement",
         PlacementRelTo=parent,
-        RelativePlacement=axes((1.5, 2.5, -0.5), x_axis),
+        RelativePlacement=axes((1.5, 2.5, -0.5), x_axis, z_axis),
     )
     for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
         for entity in model.by_type(kind):
@@ -5002,6 +5004,117 @@ class TestSkewSupports:
         envelope = data["global_displacements"]["envelope"]
         assert envelope["max_tz_m"] == pytest.approx((simply + propped) / 2, rel=0.02)
         assert envelope["max_ty_m"] == pytest.approx((simply - propped) / 2, rel=0.05)
+
+    def test_clamp_that_slides_on_an_incline(self, tmp_path):
+        """A free translation and skew rotations at one support (``aiz.75``).
+
+        The end at C slides up and down the incline and is held in every
+        rotation but the one about the incline's normal, so the arm that
+        holds its rotations is tied to the node, whose own translations are
+        tied by an equation. A is a vertical roller and B has P s along the
+        beam as well as P down, s and c the sine and cosine of the incline.
+
+        Statically determinate: the incline pushes P along its normal, A
+        carries P (1 - c), C a moment P L (c - 1/2), and B-C is in
+        compression P s. The beam is a cantilever from C, which slides until
+        A is back at its height: up the incline by -w_A / s, w_A being the
+        cantilever's deflection at A under P (1 - c) there and P at B.
+        """
+        s, c = math.sin(INCLINE), math.cos(INCLINE)
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (2, 0), "C": (4, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={
+                "A": PLANE_ROLLER,
+                "C": (False, True, True, True, True, False),
+            },
+            loads={"B": (self.LOAD * s, -self.LOAD)},
+            hinged=False,
+            mesh_size=0.25,
+            support_axes={"C": ON_AN_INCLINE},
+        )
+        load, span = self.LOAD, self.SPAN
+
+        sliding = _support_at(data, (span, 0.0, 0.0))
+        assert sliding["restrained_in_axes"] == ["ty", "tz", "rx", "ry"]
+        assert sliding["moments"] in MOMENT_SOURCES
+        in_axes = sliding["by_load_case_in_axes"]["Load"]
+        assert in_axes["fz_N"] == pytest.approx(load, rel=1e-4)
+        assert abs(in_axes["fx_N"]) < 1e-4 * load
+        assert abs(in_axes["my_Nm"]) == pytest.approx(
+            load * span * (c - 0.5), rel=FORCE_TOLERANCE
+        )
+        reaction = sliding["by_load_case"]["Load"]
+        assert reaction["fx_N"] == pytest.approx(-load * s, rel=1e-4)
+        assert reaction["fz_N"] == pytest.approx(load * c, rel=1e-4)
+
+        roller = _support_at(data, (0.0, 0.0, 0.0))["by_load_case"]["Load"]
+        assert roller["fz_N"] == pytest.approx(load * (1 - c), rel=1e-4)
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["imbalance_N"] < 1e-6 * load
+
+        forces = [m["envelope"]["section_forces"] for m in data["members"]]
+        assert max(f["max_compression_N"] for f in forces) == pytest.approx(
+            load * s, rel=FORCE_TOLERANCE
+        )
+        assert max(f["max_Mf2_Nm"] for f in forces) == pytest.approx(
+            load * span * (c - 0.5), rel=FORCE_TOLERANCE
+        )
+
+        stiffness = PLANE_E * 0.1**4 / 12
+        at_a = (1 - c) / 3 - 5.0 / 48.0  # w_A in P L^3 / EI, upwards
+        rise = -at_a * load * span**3 / stiffness
+        # Read where the beam does not turn, so on no face of it
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(rise, rel=0.01)
+
+    def test_line_support_on_a_tilted_slab(self, tmp_path):
+        """slab_01 tilted by 30 degrees about X under its weight.
+
+        Its edges and the normals of its supports are then skew, and every
+        node of the edges is of shells alone, whose rotation about the
+        normal is held through the arm too. The weight w has w cos 30 across
+        the slab, which the edges carry as they do the whole of it when the
+        slab is level, and w sin 30 down the slope, along the edges, half
+        on each.
+        """
+        angle = math.radians(30.0)
+        runs = {
+            "level": SLAB,
+            "tilted": _placed_variant(
+                tmp_path,
+                "slab_01",
+                z_axis=(0.0, -math.sin(angle), math.cos(angle)),
+            ),
+        }
+        level, tilted = (
+            _run(path, tmp_path / label, mesh_size=0.25, gravity=True)
+            for label, path in runs.items()
+        )
+
+        weight = level["global_reactions"]["by_load_case"]["Gravity"]["fz_N"]
+        total = tilted["global_reactions"]["by_load_case"]["Gravity"]
+        assert total["fz_N"] == pytest.approx(weight, rel=1e-6)
+        assert total["imbalance_N"] < 1e-6 * weight
+
+        before = level["global_displacements"]["envelope"]["max_displacement_m"]
+        after = tilted["global_displacements"]["envelope"]["max_displacement_m"]
+        assert after == pytest.approx(before * math.cos(angle), rel=0.005)
+
+        assert len(tilted["supports"]) == len(level["supports"]) == 2
+        for original, moved in zip(level["supports"], tilted["supports"]):
+            assert moved["restrained_in_axes"] == original.get(
+                "restrained_in_axes", original["restrained"]
+            )
+            expected = original.get("by_load_case_in_axes", original["by_load_case"])
+            found = moved["by_load_case_in_axes"]["Gravity"]
+            assert found["fz_N"] == pytest.approx(
+                expected["Gravity"]["fz_N"] * math.cos(angle), rel=1e-3
+            )
+            assert abs(found["fx_N"]) == pytest.approx(
+                weight * math.sin(angle) / 2, rel=1e-3
+            )
 
 
 def _node_condition(model, values):
