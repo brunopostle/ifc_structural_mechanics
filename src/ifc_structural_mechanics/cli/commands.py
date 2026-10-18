@@ -335,13 +335,17 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
         click.echo("\nWarnings:")
         for i, warning in enumerate(result["warnings"], 1):
             message = warning.get("message", "Unknown warning")
-            click.echo(click.style(f"  {i}. {message}", fg="yellow"))
+            code = f"[{warning['code']}] " if warning.get("code") else ""
+            click.echo(click.style(f"  {i}. {code}{message}", fg="yellow"))
 
             # Add entity reference if available and mapping is enabled
             if map_entities and warning.get("domain_id"):
                 entity_type = warning.get("entity_type", "entity")
                 domain_id = warning.get("domain_id")
                 click.echo(f"     Reference: {entity_type} {domain_id}")
+
+    if any(warning.get("code") for warning in result.get("warnings", [])):
+        click.echo("  What each code means: docs/messages.md")
 
     # Display errors
     if result.get("errors"):

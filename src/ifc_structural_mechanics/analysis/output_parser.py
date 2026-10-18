@@ -4,6 +4,8 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..utils.messages import warning
+
 logger = logging.getLogger(__name__)
 
 # Most warnings CalculiX can repeat before they are counted and not listed
@@ -48,27 +50,18 @@ def solver_warnings(output_text: str) -> List[Dict[str, Any]]:
     warnings = []
     for key, text in list(first.items())[:_LISTED]:
         times = f" ({counts[key]} times)" if counts[key] > 1 else ""
-        warnings.append(_warning(f"CalculiX{times}: *WARNING {text}"))
+        warnings.append(warning("W-SLV-001", f"CalculiX{times}: *WARNING {text}"))
     if len(first) > _LISTED:
         warnings.append(
-            _warning(
+            warning(
+                "W-SLV-002",
                 f"CalculiX gave {len(first) - _LISTED} more kinds of warning; "
-                "see its output."
+                "see its output.",
             )
         )
     if warnings:
         logger.warning(f"CalculiX printed {sum(counts.values())} warning(s)")
     return warnings
-
-
-def _warning(message: str) -> Dict[str, Any]:
-    return {
-        "message": message,
-        "severity": "warning",
-        "entity_type": None,
-        "ccx_id": None,
-        "domain_id": None,
-    }
 
 
 class OutputParser:

@@ -7,7 +7,7 @@ members from IFC files and converts them to domain model objects.
 
 import logging
 import uuid
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import ifcopenshell
 
@@ -21,6 +21,7 @@ from ..ifc.entity_identifier import (
     transform_vectors,
 )
 from ..utils.error_handling import ModelExtractionError
+from ..utils.messages import warning
 from ..utils.units import (
     convert_area,
     convert_density,
@@ -84,7 +85,8 @@ class MembersExtractor:
 
         # What the analysis will not do exactly as the file says; the
         # Extractor passes these on to the results
-        self.warnings: List[str] = []
+        # Warnings for the results (``utils.messages.warning``)
+        self.warnings: List[Dict[str, Any]] = []
 
     def extract_all_members(self) -> List[StructuralMember]:
         """
@@ -329,11 +331,11 @@ class MembersExtractor:
 
         return None
 
-    def _warn_once(self, message: str) -> None:
+    def _warn_once(self, code: str, message: str) -> None:
         """Record a warning for the results, once however many members share it."""
-        if message not in self.warnings:
-            self.logger.warning(message)
-            self.warnings.append(message)
+        if all(found["message"] != message for found in self.warnings):
+            self.logger.warning(f"[{code}] {message}")
+            self.warnings.append(warning(code, message))
 
     def _get_surface_material(self, element):
         """Return the IfcMaterial of a surface member, or None.
@@ -483,9 +485,10 @@ class MembersExtractor:
             density = convert_density(density_raw, self.length_scale, self.mass_scale)
         else:
             self._warn_once(
+                "W-MAT-001",
                 f"Material '{name}' has no mass density "
                 "(Pset_MaterialCommon.MassDensity); its members are analysed "
-                "as weightless."
+                "as weightless.",
             )
         # An isotropic material has G = E / 2(1 + nu): a shear modulus given
         # in place of Poisson's ratio is the same information
@@ -507,17 +510,19 @@ class MembersExtractor:
             implied = elastic_modulus_raw / (2.0 * (1.0 + poisson_ratio))
             if abs(implied - shear_modulus_raw) > 0.01 * abs(implied):
                 self._warn_once(
+                    "W-MAT-003",
                     f"Material '{name}' has a shear modulus of "
                     f"{shear_modulus_raw}, where its Young's modulus and "
                     f"Poisson's ratio {poisson_ratio} give {implied:.6g}; the "
-                    "material is analysed as isotropic with the Poisson's ratio."
+                    "material is analysed as isotropic with the Poisson's ratio.",
                 )
         if poisson_ratio is None:
             poisson_ratio = 0.3
             self._warn_once(
+                "W-MAT-002",
                 f"Material '{name}' has no Poisson's ratio "
                 "(Pset_MaterialMechanical.PoissonRatio) and no shear modulus; "
-                "0.3 is assumed."
+                "0.3 is assumed.",
             )
 
         # Yield stress, where the file gives one (Pset_MaterialSteel). A

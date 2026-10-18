@@ -228,7 +228,8 @@ class TestValidateModelSectionApproximations:
         assert any("3AbCdEfGhI" in w["message"] for w in approx_warns)
         assert any("asymmetric" in w["message"].lower() for w in approx_warns)
         assert approx_warns[0]["domain_id"] == "beam_asym"
-        assert approx_warns[0]["ifc_guid"] == "3AbCdEfGhI"
+        assert approx_warns[0]["ifc_guids"] == ["3AbCdEfGhI"]
+        assert approx_warns[0]["code"] == "W-SEC-004"
 
     def test_l_section_warning_reaches_result(self):
         model = _empty_model()

@@ -22,6 +22,7 @@ from ..domain.result import (
 )
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
+from ..utils.messages import record_warning
 from .plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from .section_forces import element_section_forces
 from .user_element_forces import u1_nodal_forces, u1_section_forces
@@ -909,27 +910,30 @@ class ResultsParser:
         solver = [self._balances(i, totals, np.zeros(3)) for i in range(len(steps))]
         if not all(ours) and all(solver):
             self._warn(
+                "W-RES-004",
                 "The solver's own forces at the supports of U1 elements "
                 "balance the loads and those worked out from the U1 stiffness "
                 "do not: this version of CalculiX has changed its U1 element, "
                 "and the solver's forces are given, with no moments. Report "
-                "it: analysis/user_element_forces.py needs bringing up to date."
+                "it: analysis/user_element_forces.py needs bringing up to date.",
             )
             return
         if not all(ours):
             self._warn(
+                "W-RES-003",
                 "The forces at the supports of U1 elements, worked out from "
                 "the U1 stiffness of CalculiX 2.23 because the solver's are "
                 "wrong, do not balance the loads (nor do the solver's): this "
                 "version of CalculiX may have a different U1 element. Do not "
-                "rely on the reactions."
+                "rely on the reactions.",
             )
         elif all(solver):
             self._warn(
+                "W-RES-005",
                 "The solver's own forces at the supports of U1 elements "
                 "balance the loads: this version of CalculiX has put right "
                 "what 2.23 gets wrong there. The reactions given are worked "
-                "out from the U1 stiffness and agree with them."
+                "out from the U1 stiffness and agree with them.",
             )
         for index, step in enumerate(steps):
             for node, force in worked_out[index].items():
@@ -960,20 +964,9 @@ class ResultsParser:
             BALANCE_NOISE_N, BALANCE_LIMIT * size
         )
 
-    def _warn(self, message: str) -> None:
-        """A warning for the results."""
-        logger.warning(message)
-        if not hasattr(self.domain_model, "analysis_warnings"):
-            self.domain_model.analysis_warnings = []
-        self.domain_model.analysis_warnings.append(
-            {
-                "message": message,
-                "severity": "warning",
-                "entity_type": None,
-                "ccx_id": None,
-                "domain_id": None,
-            }
-        )
+    def _warn(self, code: str, message: str) -> None:
+        """A warning for the results; ``code`` is one of ``utils.messages.KINDS``."""
+        record_warning(self.domain_model, code, message)
 
     def _parse_total_reactions(self, lines: List[str]) -> List[ReactionForceResult]:
         """
@@ -1605,15 +1598,4 @@ class ResultsParser:
                 f"Results the solver wrote that do not pass validation were "
                 f"left out: {counts}."
             )
-            logger.warning(message)
-            if not hasattr(self.domain_model, "analysis_warnings"):
-                self.domain_model.analysis_warnings = []
-            self.domain_model.analysis_warnings.append(
-                {
-                    "message": message,
-                    "severity": "warning",
-                    "entity_type": None,
-                    "ccx_id": None,
-                    "domain_id": None,
-                }
-            )
+            self._warn("W-RES-002", message)

@@ -14,7 +14,7 @@ responsible for writing elements to CalculiX input files.
 import logging
 import math
 import os
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import Any, Dict, Iterable, List, Optional, TextIO, Tuple
 
 import meshio
 import numpy as np
@@ -41,6 +41,7 @@ from ..utils.error_handling import (
     MeshingError,
     StructuralAnalysisError,
 )
+from ..utils.messages import guids_of, record_warning
 from ..utils.temp_dir import create_temp_subdir, get_temp_dir
 from .mesh_mapper import BEAM_ELEMENT_TYPES, SHELL_ELEMENT_TYPES, MeshMapper
 
@@ -558,7 +559,7 @@ class UnifiedCalculixWriter:
                 "and a torsional stiffness tens of times too high: do not rely "
                 "on results where they carry torsion."
             )
-        self._warn_user(message)
+        self._warn_user("W-SEC-002", message)
 
     def _rectangle_moduli(self, member) -> Optional[Tuple[float, float]]:
         """Shear moduli of a solid rectangular member's own material, if any.
@@ -608,10 +609,11 @@ class UnifiedCalculixWriter:
             softest = min(softest, moduli[1] / moduli[0])
         if count:
             self._warn_user(
+                "W-SEC-001",
                 f"{count} member(s) with a solid rectangular section are given "
                 "their torsional stiffness by lowering the shear stiffness "
                 f"across their width, by up to {100 * (1 - softest):.0f} %. Bending, "
-                "and shear along their depth, are not affected."
+                "and shear along their depth, are not affected.",
             )
 
     def _identify_and_retype_u1_members(self) -> None:
@@ -756,11 +758,13 @@ class UnifiedCalculixWriter:
             already_claimed.update(remaining)
         if overlapping:
             self._warn_user(
+                "W-MSH-001",
                 f"{len(overlapping)} member(s) overlap another member. Where "
                 "two overlap, the mesh has one layer of elements and it is "
                 "analysed with the material and thickness or section of the "
                 "member that comes first in the file, not with both. The first "
-                f"are {', '.join(overlapping[:5])}."
+                f"are {', '.join(overlapping[:5])}.",
+                ifc_guids=self._ifc_guids(overlapping),
             )
 
     def _check_members_reach_their_connections(self) -> None:
@@ -892,7 +896,7 @@ class UnifiedCalculixWriter:
 
             # Pre-analysis stability check
             for warning in self._detect_mechanism_risk():
-                self._warn_user(warning)
+                self._warn_user("W-SUP-003", warning)
                 f.write(f"** *** STABILITY WARNING: {warning}\n")
                 f.write("**\n")
 
@@ -1767,10 +1771,12 @@ class UnifiedCalculixWriter:
 
         if without_elements:
             self._warn_user(
+                "W-MSH-002",
                 f"{len(without_elements)} member(s) have no finite elements and "
                 "take no part in the analysis: their geometry is covered by a "
                 "member they overlap, whose stiffness is used there. The first "
-                f"are {', '.join(without_elements[:5])}."
+                f"are {', '.join(without_elements[:5])}.",
+                ifc_guids=self._ifc_guids(without_elements),
             )
         listed = sorted(
             member.id
@@ -1780,11 +1786,13 @@ class UnifiedCalculixWriter:
         )
         if listed:
             self._warn_user(
+                "W-SEC-003",
                 f"{len(listed)} curve member(s) have no usable Axis in the IFC "
                 "file, so the orientation of their section about the member "
                 "is a guess: its depth as near vertical as the member allows, "
                 "and along global X for a vertical member. Strong and weak "
-                f"axis may be interchanged. The first are {', '.join(listed[:5])}."
+                f"axis may be interchanged. The first are {', '.join(listed[:5])}.",
+                ifc_guids=self._ifc_guids(listed),
             )
 
     def _collect_boundary_condition_dofs(self) -> set:
@@ -1923,20 +1931,28 @@ class UnifiedCalculixWriter:
     # Largest gap between two nodes that are treated as the same point.
     _COINCIDENT_TOL = 1e-3
 
-    def _warn_user(self, message: str, domain_id: Optional[str] = None) -> None:
-        """Log a warning and record it on the model for ``result["warnings"]``."""
-        logger.warning(message)
-        if not hasattr(self.domain_model, "analysis_warnings"):
-            self.domain_model.analysis_warnings = []
-        self.domain_model.analysis_warnings.append(
-            {
-                "message": message,
-                "severity": "warning",
-                "entity_type": None,
-                "ccx_id": None,
-                "domain_id": domain_id,
-            }
+    def _warn_user(
+        self,
+        code: str,
+        message: str,
+        domain_id: Optional[str] = None,
+        ifc_guids: Iterable[str] = (),
+    ) -> None:
+        """Log a warning and record it on the model for ``result["warnings"]``.
+
+        ``code`` is one of ``utils.messages.KINDS``.
+        """
+        record_warning(
+            self.domain_model,
+            code,
+            message,
+            domain_id=domain_id,
+            ifc_guids=ifc_guids,
         )
+
+    def _ifc_guids(self, ids: Iterable[str]) -> List[str]:
+        """The IFC GlobalIds of the members and connections with these ids."""
+        return guids_of(self.domain_model, ids)
 
     # Longest rigid end zone that is bridged with a stiff link element.
     _MAX_RIGID_LINK = 2.0
@@ -2028,11 +2044,13 @@ class UnifiedCalculixWriter:
                     links.append((node, joint_node))
                 else:
                     self._warn_user(
+                        "W-JNT-006",
                         f"Connection {conn.id}: member {member_id} ends "
                         f"{gap:.2f} m from the connection, too far for a rigid "
                         "link; it is tied in translation only and transfers "
                         "no moment there.",
                         domain_id=conn.id,
+                        ifc_guids=self._ifc_guids([conn.id]),
                     )
 
         # Members joined rigidly along a line connection of the file
@@ -2269,11 +2287,13 @@ class UnifiedCalculixWriter:
                     add_link(joint, anchor)
                 elif gap > self._MAX_RIGID_LINK:
                     self._warn_user(
+                        "W-JNT-006",
                         f"Connection {conn.id}: member {member_id} ends "
                         f"{gap:.2f} m from the connection, too far for a rigid "
                         "link; its end is tied to the connection in translation "
                         "with no lever arm.",
                         domain_id=conn.id,
+                        ifc_guids=self._ifc_guids([conn.id]),
                     )
 
                 equations = [
@@ -2720,11 +2740,13 @@ class UnifiedCalculixWriter:
         if drilling_left_out:
             names = sorted(set(drilling_left_out))
             self._warn_user(
+                "W-SUP-006",
                 f"{len(names)} elastic support(s) have a rotational spring about "
                 "the normal of the shells they hold, which have no rotation "
                 "about it: it holds nothing and is left out: "
                 + ", ".join(names[:5])
-                + (", ..." if len(names) > 5 else "")
+                + (", ..." if len(names) > 5 else ""),
+                ifc_guids=self._ifc_guids(names),
             )
         logger.info(
             f"Built {len(self._spring_elements)} springs at "
@@ -3008,12 +3030,15 @@ class UnifiedCalculixWriter:
             )
             if strict:
                 self._warn_user(
+                    "W-JNT-004",
                     found + "Strict connections were requested, so they are left "
                     "unconnected there; a slab connected only at its corners spans "
-                    "between them."
+                    "between them.",
+                    ifc_guids=self._ifc_guids(sorted(lying)),
                 )
             else:
                 self._warn_user(
+                    "W-JNT-001",
                     found + "They are tied to it in translation along the line (a "
                     "hinge line), as a slab bearing on its beams. Their section "
                     "forces are what is left to them with the surface taking its "
@@ -3021,7 +3046,8 @@ class UnifiedCalculixWriter:
                     "end of a wall, a column in a wall) they change abruptly "
                     "from one cross-section to the next and their largest values "
                     "depend on the mesh size. Use strict connections to analyse "
-                    "only the connections in the file."
+                    "only the connections in the file.",
+                    ifc_guids=self._ifc_guids(sorted(lying)),
                 )
         if meeting:
             found = (
@@ -3030,14 +3056,18 @@ class UnifiedCalculixWriter:
             )
             if strict:
                 self._warn_user(
+                    "W-JNT-005",
                     found + "Strict connections were requested, so they are left "
-                    "unconnected there."
+                    "unconnected there.",
+                    ifc_guids=self._ifc_guids(sorted(meeting)),
                 )
             else:
                 self._warn_user(
+                    "W-JNT-003",
                     found + "They are tied to it in translation there, as a "
                     "column bearing on or passing through a slab. Use strict "
-                    "connections to analyse only the connections in the file."
+                    "connections to analyse only the connections in the file.",
+                    ifc_guids=self._ifc_guids(sorted(meeting)),
                 )
 
     def _line_joints(self) -> List[dict]:
@@ -3327,11 +3357,13 @@ class UnifiedCalculixWriter:
                 if member_id not in named:
                     named.append(member_id)
         self._warn_user(
+            "W-JNT-002",
             f"Curve members touch at {len(pairs)} place(s) where the model has no "
             "connection between them (a member ending on the span of another, "
             "or two that cross). They are meshed with one node there, which "
             "joins them rigidly, with strict connections as well: "
-            f"{', '.join(named[:5])}{' ...' if len(named) > 5 else ''}"
+            f"{', '.join(named[:5])}{' ...' if len(named) > 5 else ''}",
+            ifc_guids=self._ifc_guids(named),
         )
 
     def _hold_spinning_members(self) -> None:
@@ -3512,18 +3544,22 @@ class UnifiedCalculixWriter:
 
         if held:
             self._warn_user(
+                "W-SUP-001",
                 f"{len(held)} member(s) are free to spin about their own axis: no "
                 "support or joint restrains that rotation. Each, or the straight "
                 "run of members it is part of, is held in torsion at one of its "
                 "supports so that the results are "
-                f"defined: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''}"
+                f"defined: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''}",
+                ifc_guids=self._ifc_guids(held),
             )
         if loose:
             self._warn_user(
+                "W-SUP-004",
                 f"{len(loose)} member(s) are free to spin about their own axis and "
                 "could not be held automatically; their displacements include "
                 f"an arbitrary rotation: {', '.join(loose[:5])}"
-                f"{' ...' if len(loose) > 5 else ''}"
+                f"{' ...' if len(loose) > 5 else ''}",
+                ifc_guids=self._ifc_guids(loose),
             )
 
     def _hold_plane_structure(self) -> None:
@@ -3570,13 +3606,14 @@ class UnifiedCalculixWriter:
         self._plane_normal = normal
         in_plane = [AXIS_NAMES[axis] for axis in range(3) if axis != normal]
         self._warn_user(
+            "W-SUP-002",
             f"The model is a plane structure: every member lies in a plane "
             f"parallel to global {in_plane[0]} and {in_plane[1]} and every load "
             f"acts in it. Nothing holds it there ({freedoms} movement(s) out "
             "of the plane are unrestrained), so it is analysed as a plane "
             f"frame: every node is held along {AXIS_NAMES[normal]}, and "
             "members free to spin about their own axis are held against it. "
-            "Forces and displacements in the plane are not affected."
+            "Forces and displacements in the plane are not affected.",
         )
 
     def _plane_hold_dofs(self) -> List[Tuple[int, int]]:
@@ -3719,10 +3756,13 @@ class UnifiedCalculixWriter:
                 )
                 connections_written += 1
             elif conn.entity_type == "spring":
-                self._warn_user(f"Spring connections not yet implemented: {conn.id}")
+                self._warn_user(
+                    "W-JNT-009", f"Spring connections not yet implemented: {conn.id}"
+                )
             else:
                 self._warn_user(
-                    f"Unknown connection type '{conn.entity_type}' for {conn.id}"
+                    "W-JNT-010",
+                    f"Unknown connection type '{conn.entity_type}' for {conn.id}",
                 )
 
         self._write_line_bearings(file, constrained_node_dofs, bc_node_dofs)
@@ -3762,7 +3802,9 @@ class UnifiedCalculixWriter:
                     f"Connection {conn.id}: single shared node {sole_node}, no equations needed"
                 )
             else:
-                self._warn_user(f"Connection {conn.id}: Found no connection nodes")
+                self._warn_user(
+                    "W-JNT-008", f"Connection {conn.id}: Found no connection nodes"
+                )
             return
 
         released = released_dofs_by_member or {}
@@ -3834,10 +3876,12 @@ class UnifiedCalculixWriter:
                 continue
             if dofs and not {4, 5, 6}.issubset(set(dofs)):
                 self._warn_user(
+                    "W-JNT-007",
                     f"Connection {conn.id}: member {member_id} has a partial "
                     f"rotational release (DOF {sorted(dofs)}); it is analysed as "
                     "a full pin, releasing all three rotations.",
                     domain_id=conn.id,
+                    ifc_guids=self._ifc_guids([conn.id]),
                 )
 
         if equations_skipped > 0:

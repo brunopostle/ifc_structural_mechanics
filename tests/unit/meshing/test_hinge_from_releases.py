@@ -184,7 +184,8 @@ class TestPartialRelease:
     def test_user_is_warned(self):
         writer, _ = self._write({"m1": [6]})
         writer._warn_user.assert_called_once()
-        message = writer._warn_user.call_args[0][0]
+        code, message = writer._warn_user.call_args[0][:2]
+        assert code == "W-JNT-007"
         assert "m1" in message and "partial" in message
 
     def test_full_release_does_not_warn(self):

@@ -118,7 +118,11 @@ class TestResolveOverlappingElementSets:
         assert writer.element_sets["MEMBER_ma"] == [10, 11]
         assert writer.element_sets["MEMBER_mb"] == []
         # The user is told, in the results and not only in the log
-        (message,) = [call.args[0] for call in writer._warn_user.call_args_list]
+        (message,) = [
+            call.args[1]
+            for call in writer._warn_user.call_args_list
+            if call.args[0] == "W-MSH-001"
+        ]
         assert "1 member(s) overlap another member" in message
         assert "mb" in message
 

@@ -13,6 +13,7 @@ import numpy as np
 from ..domain.load import HALF_WAVES, PointLoad
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError
+from ..utils.messages import guids_of, record_warning
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -609,10 +610,12 @@ def write_boundary_conditions(
     if unattached:
         _warn_model(
             domain_model,
+            "W-SUP-005",
             f"{len(unattached)} support(s) are connected to no member and lie "
             "on none; they support nothing and are left out: "
             + ", ".join(unattached[:5])
             + (", ..." if len(unattached) > 5 else ""),
+            ifc_guids=guids_of(domain_model, unattached),
         )
 
     if not all_bc_nodes:
@@ -1056,20 +1059,14 @@ def _to_global_axes(
     return axes.T.dot(vector)
 
 
-def _warn_model(domain_model: StructuralModel, message: str) -> None:
-    """Log a warning and record it on the model for ``result["warnings"]``."""
-    logger.warning(message)
-    if not hasattr(domain_model, "analysis_warnings"):
-        domain_model.analysis_warnings = []
-    domain_model.analysis_warnings.append(
-        {
-            "message": message,
-            "severity": "warning",
-            "entity_type": None,
-            "ccx_id": None,
-            "domain_id": None,
-        }
-    )
+def _warn_model(
+    domain_model: StructuralModel, code: str, message: str, **kwargs: Any
+) -> None:
+    """Log a warning and record it on the model for ``result["warnings"]``.
+
+    ``code`` is one of ``utils.messages.KINDS``.
+    """
+    record_warning(domain_model, code, message, **kwargs)
 
 
 def _write_load_reset(file: TextIO) -> None:
@@ -1978,8 +1975,10 @@ def _point_load_lines(
     if turned is None:
         _warn_model(
             domain_model,
+            "W-LOD-008",
             f"Load {getattr(load, 'id', '?')} is given in the local axes of an "
             "item that has none; it is applied in global axes.",
+            ifc_guids=guids_of(domain_model, [getattr(load, "id", "?")]),
         )
     else:
         force = turned
@@ -2177,10 +2176,14 @@ def _write_validated_loads_within_step(
                     if element_sets and not element_sets.get(element_set_name):
                         _warn_model(
                             domain_model,
+                            "W-LOD-009",
                             f"Load {getattr(load, 'id', 'unknown')} is not "
                             f"applied: its member ({element_set_name}) has no "
                             "elements, having lost its geometry to a member "
                             "it overlaps.",
+                            ifc_guids=guids_of(
+                                domain_model, [getattr(load, "id", "?")]
+                            ),
                         )
                     elif elements_data and node_coords:
                         # Global-direction nodal forces, written after this block
@@ -2195,9 +2198,13 @@ def _write_validated_loads_within_step(
                         if without_axes:
                             _warn_model(
                                 domain_model,
+                                "W-LOD-008",
                                 f"Load {getattr(load, 'id', '?')} is given in the "
                                 "local axes of a member that has none; it is "
                                 "applied in global axes.",
+                                ifc_guids=guids_of(
+                                    domain_model, [getattr(load, "id", "?")]
+                                ),
                             )
                         _add_nodal(u1_extra_cloads, partial)
                         _note_user_element_loads(
@@ -2274,9 +2281,11 @@ def _write_validated_loads_within_step(
             if element_sets and not element_sets.get(element_set_name):
                 _warn_model(
                     domain_model,
+                    "W-LOD-009",
                     f"The distributed loads on member {member.id} are not "
                     "applied: it has no elements, having lost its geometry to "
                     "a member it overlaps.",
+                    ifc_guids=guids_of(domain_model, [member.id]),
                 )
             else:
                 if elements_data and node_coords:
@@ -2369,8 +2378,10 @@ def _determine_load_node(load, node_coords=None, domain_model=None) -> int:
     if distance > _POINT_LOAD_SNAP and domain_model is not None:
         _warn_model(
             domain_model,
+            "W-LOD-007",
             f"Point load {load_id} is applied at the nearest mesh node, "
             f"{distance:.2f} m from its position.",
+            ifc_guids=guids_of(domain_model, [load_id]),
         )
     return closest
 

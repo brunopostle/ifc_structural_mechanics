@@ -29,6 +29,7 @@ from ..utils.error_handling import (
     StructuralAnalysisError,
 )
 from ..utils.file_utils import ensure_directory
+from ..utils.messages import guids_of, warning
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -162,20 +163,15 @@ def analyze_ifc(
                 )
         if gravity and weighed:
             result["warnings"].append(
-                {
-                    "message": (
-                        "Self-weight was asked for (--gravity) and "
-                        f"{len(weighed)} load case(s) of the file already include "
-                        f"it: {', '.join(weighed[:3])}"
-                        + (" ..." if len(weighed) > 3 else "")
-                        + ". It is analysed again as a load case of its own, "
-                        "Gravity, which no combination includes."
-                    ),
-                    "severity": "warning",
-                    "entity_type": None,
-                    "ccx_id": None,
-                    "domain_id": None,
-                }
+                warning(
+                    "W-LOD-003",
+                    "Self-weight was asked for (--gravity) and "
+                    f"{len(weighed)} load case(s) of the file already include "
+                    f"it: {', '.join(weighed[:3])}"
+                    + (" ..." if len(weighed) > 3 else "")
+                    + ". It is analysed again as a load case of its own, "
+                    "Gravity, which no combination includes.",
+                )
             )
 
         # Step 1b: Pre-analysis model validation
@@ -265,17 +261,12 @@ def analyze_ifc(
                 combinations = list(domain_model.load_combinations)
                 if combinations and analysis_type != "linear_static":
                     result["warnings"].append(
-                        {
-                            "message": (
-                                f"{len(combinations)} load combination(s) of "
-                                "the file have no results: combinations are "
-                                "only formed in a linear static analysis."
-                            ),
-                            "severity": "warning",
-                            "entity_type": None,
-                            "ccx_id": None,
-                            "domain_id": None,
-                        }
+                        warning(
+                            "W-LOD-006",
+                            f"{len(combinations)} load combination(s) of "
+                            "the file have no results: combinations are "
+                            "only formed in a linear static analysis.",
+                        )
                     )
                     combinations = []
                 exporter = ResultsExporter(
@@ -488,15 +479,11 @@ def _validate_model(domain_model, gravity: bool) -> list:
     """
     warnings = []
 
-    def _warn(msg):
+    def _warn(code, msg, members=()):
         warnings.append(
-            {
-                "message": msg,
-                "severity": "warning",
-                "entity_type": None,
-                "ccx_id": None,
-                "domain_id": None,
-            }
+            warning(
+                code, msg, ifc_guids=guids_of(domain_model, [m.id for m in members])
+            )
         )
 
     # Check every member has a material
@@ -511,8 +498,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
             else ""
         )
         _warn(
+            "W-IFC-002",
             f"{len(members_missing_material)} member(s) have no material assigned "
-            f"— CalculiX will reject them: {ids}{suffix}"
+            f"— CalculiX will reject them: {ids}{suffix}",
+            members_missing_material,
         )
 
     # Check every curve member has a section (a surface member has a thickness)
@@ -530,8 +519,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
             else ""
         )
         _warn(
+            "W-IFC-003",
             f"{len(members_missing_section)} member(s) have no section assigned "
-            f"— CalculiX will reject them: {ids}{suffix}"
+            f"— CalculiX will reject them: {ids}{suffix}",
+            members_missing_section,
         )
 
     # Warn about section approximations that affect analysis fidelity
@@ -543,21 +534,21 @@ def _validate_model(domain_model, gravity: bool) -> list:
             ifc_guid = getattr(member, "ifc_guid", None)
             guid_part = f" (IFC {ifc_guid})" if ifc_guid else ""
             warnings.append(
-                {
-                    "message": f"Member {member.id}{guid_part}: {approx}",
-                    "severity": "warning",
-                    "entity_type": "StructuralMember",
-                    "ccx_id": None,
-                    "domain_id": member.id,
-                    "ifc_guid": ifc_guid,
-                }
+                warning(
+                    "W-SEC-004",
+                    f"Member {member.id}{guid_part}: {approx}",
+                    domain_id=member.id,
+                    entity_type="StructuralMember",
+                    ifc_guids=[ifc_guid or member.id],
+                )
             )
 
     # Check that at least one boundary condition (support) exists
     if not domain_model.connections:
         _warn(
+            "W-SUP-007",
             "No structural connections found — the model has no supports and CalculiX "
-            "will produce a singular stiffness matrix."
+            "will produce a singular stiffness matrix.",
         )
 
     # Check that loads exist; warn when gravity is the likely missing ingredient
@@ -568,9 +559,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
     )
     if not has_explicit_loads and not gravity:
         _warn(
+            "W-LOD-001",
             "No explicit loads found in the model and --gravity was not requested. "
             "The analysis will run with zero applied loads. "
-            "If self-weight is the intended load, rerun with --gravity."
+            "If self-weight is the intended load, rerun with --gravity.",
         )
 
     return warnings

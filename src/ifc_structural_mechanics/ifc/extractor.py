@@ -9,13 +9,14 @@ different parts of the model.
 import logging
 import os
 import uuid
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.unit
 
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ModelExtractionError
+from ..utils.messages import warning
 from .connections_extractor import ConnectionsExtractor
 from .entity_identifier import (
     is_structural_connection,
@@ -49,7 +50,8 @@ class Extractor:
         self.logger = logging.getLogger(__name__)
         # What the analysis will not do exactly as the file says. They end
         # up in ``model.analysis_warnings`` and from there in the results
-        self.warnings: List[str] = []
+        # Warnings for the results (``utils.messages.warning``)
+        self.warnings: List[Dict[str, Any]] = []
 
         # Handle different input types
         if isinstance(ifc_file, str):
@@ -160,10 +162,14 @@ class Extractor:
             analysis_model = analysis_models[0]
             if len(analysis_models) > 1:
                 self.warnings.append(
-                    f"The file has {len(analysis_models)} structural analysis "
-                    f"models; only the first, "
-                    f"'{analysis_model.Name or analysis_model.GlobalId}', is "
-                    "analysed."
+                    warning(
+                        "W-IFC-001",
+                        f"The file has {len(analysis_models)} structural analysis "
+                        f"models; only the first, "
+                        f"'{analysis_model.Name or analysis_model.GlobalId}', is "
+                        "analysed.",
+                        ifc_guids=[m.GlobalId for m in analysis_models[1:]],
+                    )
                 )
             model = StructuralModel(
                 model_id or analysis_model.GlobalId,
@@ -195,21 +201,13 @@ class Extractor:
             messages.extend(getattr(extractor, "warnings", None) or [])
         if not hasattr(model, "analysis_warnings"):
             model.analysis_warnings = []
-        seen = {warning["message"] for warning in model.analysis_warnings}
-        for message in messages:
-            if message in seen:
+        seen = {recorded["message"] for recorded in model.analysis_warnings}
+        for found in messages:
+            if found["message"] in seen:
                 continue
-            seen.add(message)
-            self.logger.warning(message)
-            model.analysis_warnings.append(
-                {
-                    "message": message,
-                    "severity": "warning",
-                    "entity_type": None,
-                    "ccx_id": None,
-                    "domain_id": None,
-                }
-            )
+            seen.add(found["message"])
+            self.logger.warning(f"[{found['code']}] {found['message']}")
+            model.analysis_warnings.append(found)
 
     def _add_member(self, entity, model) -> None:
         """Add the member an IFC entity describes; an error if it cannot be."""
@@ -298,9 +296,13 @@ class Extractor:
         ]
         if loose:
             self.warnings.append(
-                f"{len(loose)} load(s) of the file belong to no load group or "
-                "load case and are not applied (the first is "
-                f"{loose[0].GlobalId})."
+                warning(
+                    "W-LOD-002",
+                    f"{len(loose)} load(s) of the file belong to no load group or "
+                    "load case and are not applied (the first is "
+                    f"{loose[0].GlobalId}).",
+                    ifc_guids=[action.GlobalId for action in loose],
+                )
             )
 
         for combo in self.loads_extractor.extract_load_combinations():

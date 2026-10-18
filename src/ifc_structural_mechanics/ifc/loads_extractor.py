@@ -24,6 +24,7 @@ from ..domain.load import (
     PointLoad,
 )
 from ..utils.error_handling import ModelExtractionError
+from ..utils.messages import warning
 from .entity_identifier import (
     find_member_endpoints,
     get_item_transformation,
@@ -93,7 +94,8 @@ class LoadsExtractor:
 
         # What the analysis will not do exactly as the file says; the
         # Extractor passes these on to the results
-        self.warnings: List[str] = []
+        # Warnings for the results (``utils.messages.warning``)
+        self.warnings: List[Dict[str, Any]] = []
 
     def extract_all_loads(self) -> List[Load]:
         """
@@ -339,18 +341,24 @@ class LoadsExtractor:
 
         if empty:
             self.warnings.append(
-                f"{len(empty)} load combination(s) name no load case and have "
-                f"no results: {', '.join(empty[:3])}"
-                + (" ..." if len(empty) > 3 else "")
-                + "."
+                warning(
+                    "W-LOD-004",
+                    f"{len(empty)} load combination(s) name no load case and "
+                    f"have no results: {', '.join(empty[:3])}"
+                    + (" ..." if len(empty) > 3 else "")
+                    + ".",
+                )
             )
         if not_cases:
             self.warnings.append(
-                f"{len(not_cases)} load combination(s) include something that "
-                "is not a load case and have no results (the combination and "
-                f"what it includes): {'; '.join(not_cases[:3])}"
-                + (" ..." if len(not_cases) > 3 else "")
-                + "."
+                warning(
+                    "W-LOD-005",
+                    f"{len(not_cases)} load combination(s) include something "
+                    "that is not a load case and have no results (the "
+                    f"combination and what it includes): {'; '.join(not_cases[:3])}"
+                    + (" ..." if len(not_cases) > 3 else "")
+                    + ".",
+                )
             )
 
         self.logger.info(f"Extracted {len(load_combinations)} load combinations")

@@ -10,6 +10,8 @@ far above what a working structure does.
 import math
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..utils.messages import guids_of, warning
+
 # A member that distorts by more than this fraction of its own size.
 MEMBER_LIMIT = 1.0 / 100.0
 # A displacement larger than this fraction of the size of the whole model.
@@ -45,16 +47,6 @@ def _extent(points: List[Sequence[float]]) -> Optional[float]:
             for i in range(3)
         )
     )
-
-
-def _warning(message: str, domain_id: Optional[str] = None) -> Dict[str, Any]:
-    return {
-        "message": message,
-        "severity": "warning",
-        "entity_type": None,
-        "ccx_id": None,
-        "domain_id": domain_id,
-    }
 
 
 def _length(value: float) -> str:
@@ -143,7 +135,7 @@ def balance_warnings(
             "holds a rotation; 2.23 does not."
         )
     message += " Displacements and member forces are not affected."
-    return [_warning(message)]
+    return [warning("W-RES-001", message)]
 
 
 def _has_user_elements(domain_model) -> bool:
@@ -200,12 +192,14 @@ def plausibility_warnings(
             )
             name = f", at member {where['id']}" if where else ""
             warnings.append(
-                _warning(
+                warning(
+                    "W-CHK-002",
                     f"Load case {case}: the largest displacement is "
                     f"{_length(largest)}{name}, in a model {_length(model_size)} "
                     "across. The model is probably a mechanism: check the "
                     "supports and the connections between members.",
-                    where["id"] if where else None,
+                    domain_id=where["id"] if where else None,
+                    ifc_guids=guids_of(domain_model, [where["id"]]) if where else (),
                 )
             )
 
@@ -229,12 +223,14 @@ def plausibility_warnings(
                 else ""
             )
             warnings.append(
-                _warning(
+                warning(
+                    "W-CHK-001",
                     f"Load case {case}: member {member_id} distorts by "
                     f"{_length(relative)} over its {_length(size)} ({fraction}), "
                     f"more than 1/{1 / MEMBER_LIMIT:.0f}. It is probably not "
                     f"connected or supported as intended.{others}",
-                    member_id,
+                    domain_id=member_id,
+                    ifc_guids=guids_of(domain_model, [d[3] for d in distorted]),
                 )
             )
     return warnings
