@@ -216,7 +216,7 @@ Command-line interface:
    - **Never leave an entity out and carry on.** A model with a member, support or load missing is another structure.
    - **`except Exception` may only re-raise as a typed error.** Put `except <TypedError>: raise` in front of it so an inner message is not wrapped twice. The only exceptions are cleanup (`gmsh.finalize()`, temp files, `__del__`). Results that cannot be read or exported fail the analysis (`ResultProcessingError`).
    - **An approximation the user did not ask for is a warning in the results**, not a log line: `_warn_user()` in the writer, `_warn_model()` in the load writer, `self.warnings` in the extractors (`Extractor._pass_on_warnings()` moves them to `model.analysis_warnings`). One warning for the whole model with a count and the first few ids, never one per member.
-   - **Every warning and error has a code** (`94g.12`), `W-<stage>-<nnn>`, registered in `utils/messages.py` with a title and an explanation of what it means and what to do; `docs/messages.md` is generated from it and `tests/unit/utils/test_messages.py` fails if it is stale or a code is unregistered or unused. The call sites pass the code first (`_warn_user("W-SUP-001", ...)`, `_warn_model(model, "W-LOD-007", ...)`, `warning(code, ...)` in the extractors) and `ifc_guids=` with every entity concerned. Stages are grouped so related warnings sit together, numbered most likely first; a new kind takes the next number of its stage, and a code is never renumbered or reused. Errors have codes too, `E-<stage>-<nnn>`, in the same registry: every `raise` of a typed error passes `code=` (a wrapper passes on `code=error.code`), the code shows in `str(error)` and in `result["errors"]`, and the test fails on a raise without one. Regenerate the docs with `python -m ifc_structural_mechanics.utils.messages > docs/messages.md`.
+   - **Every warning and error has a code** (`94g.12`), `W-<stage>-<nnn>`, registered in `utils/messages.py` with a title and an explanation of what it means and what to do; `docs/messages.md` is generated from it and `tests/unit/utils/test_messages.py` fails if it is stale or a code is unregistered or unused. The call sites pass the code first (`_warn_user("W-SUP-001", ...)`, `_warn_model(model, "W-LOD-007", ...)`, `warning(code, ...)` in the extractors) and `ifc_guids=` with every entity concerned. Stages are grouped so related warnings sit together, numbered most likely first; a new kind takes the next number of its stage, and a code is never renumbered or reused: one no longer given stays registered with `retired=True` (its explanation says what replaced it), and the test fails if it is used. Errors have codes too, `E-<stage>-<nnn>`, in the same registry: every `raise` of a typed error passes `code=` (a wrapper passes on `code=error.code`), the code shows in `str(error)` and in `result["errors"]`, and the test fails on a raise without one. An error about particular entities passes `ifc_guids=` as well (the extractor wrappers add their entity's GlobalId to the inner error's), which goes into `result["errors"]`. A warning that says an entity was left out or something was assumed in its place is an error instead: a joint that joins nothing, a load in axes the item does not have. Regenerate the docs with `python -m ifc_structural_mechanics.utils.messages > docs/messages.md`.
    - **Mocks that say yes to everything hide this.** `mock.is_a.return_value = "IfcX"` makes `is_a("IfcEdge")` true, and a bare `MagicMock` has every attribute. Prefer real `ifcopenshell` entities (see `tests/unit/ifc/test_extraction_fails_loudly.py`), or give the mock a truthful `is_a` and a `spec`.
    - Do not add code paths that detect a test environment. `LoadsExtractor` once returned invented loads when its file was a mock.
 
@@ -584,8 +584,11 @@ here. This section only records the constraints that shape day-to-day work.
   2026-10-17: at 2 m `ccx` alone needs 60 s and 2.08 GB (SPOOLES, the only
   direct solver of stock builds); `SOLVER=ITERATIVE CHOLESKY` does not
   converge on expanded shells, and S8R quads instead of S6 save 17% of
-  memory on a plate. A 1 m mesh needs a machine with more memory or a
-  CalculiX built with PaStiX or PARDISO.
+  memory on a plate. Measured 2026-10-18 on a machine with 6.7 GB and as
+  much zram: at 1 m the whole run takes 24 min, `ccx` about 5 to 5.5 GB,
+  reactions balance to 1e-7, and the largest displacements are 2 to 6%
+  above those at 2 m (Dead 17.81 against 16.81 mm, Live 26.64 against
+  26.06). A 2 m mesh is good enough for development.
 - **Member results are read on the faces of expanded elements.** A member's
   largest displacement in `results.json` includes what its rotation adds at
   the faces: a few percent on a slender member, more on a deep one.
@@ -696,7 +699,9 @@ channel is `IfcUShapeProfileDef`. A profile with no handler raises
 **Area loads follow the member's outline.** Where one surface member lies
 inside another (a landing on a floor slab), fragmenting gives each element to
 one of them. `_load_element_sets()` applies an area load to every shell
-element within the loaded member's outline, whoever owns it.
+element within the loaded member's outline, whoever owns it, and a load on a
+curve member to the elements in its geometry (`_geometry_element_sets`): a
+beam lying inside another once had its loads left out with a warning.
 
 ## Boundary Condition Handling
 
