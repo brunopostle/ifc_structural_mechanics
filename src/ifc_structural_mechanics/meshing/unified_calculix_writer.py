@@ -941,6 +941,17 @@ class UnifiedCalculixWriter:
                 self.domain_model.set_analysis_elements(member.id, elem_ids)
             if node_ids:
                 self.domain_model.register_node_memberships(node_ids, member.id)
+            if isinstance(member, SurfaceMember):
+                for elem_id in elem_ids:
+                    element = self.elements[elem_id]
+                    if element["type"] not in SHELL_ELEMENT_TYPES:
+                        continue
+                    nodes = tuple(int(n) for n in element["nodes"])
+                    self.domain_model.shell_elements[elem_id] = (member.id, nodes)
+                    for node in nodes:
+                        self.domain_model.shell_node_positions[node] = tuple(
+                            float(v) for v in self.nodes[node]
+                        )
 
     def _write_calculix_input_file(self, output_file: str) -> None:
         """

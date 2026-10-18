@@ -72,7 +72,7 @@ instance). Absent means unknown; never read it as zero.
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
-| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. |
+| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
 
 ## Outline
 
@@ -513,6 +513,48 @@ is in tension, Mf2 when the +2 side is, T is right-handed about x.
 *`ifc-analysis plot <output> --field Mf1 --reactions --loads` draws `Mf1_Nm`
 from `distance_m` along `x`, offset along `1`, so that a moment is on the
 tension side.*
+
+### Surface members: fields for contours
+
+(schema 1.13) A surface member has its mesh, `surface_mesh`: `points_m`
+and `triangles`, each the indices of three points. A six-node shell element
+is four linear triangles through all its nodes. `surface_fields` gives, per
+load case, a value at each point:
+
+- `ux_m`, `uy_m`, `uz_m`: the translation of the middle surface, in global
+  axes.
+- `nx_N_per_m`, `ny_N_per_m`, `nxy_N_per_m`: membrane forces per length,
+  tension positive.
+- `mx_Nm_per_m`, `my_Nm_per_m`, `mxy_Nm_per_m`: plate moments per length,
+  positive when the side `z` points to is in tension (`mx` bends about `y`,
+  with the stress along `x`).
+- `vx_N_per_m`, `vy_N_per_m`: transverse shear per length.
+
+Forces and moments are in `surface_axes`: `z` the member's normal, `x`
+global X laid onto the surface (global Y where it is nearly at right angles
+to X), `y = z × x`. A slab has the global axes, z up; a wall in a vertical
+plane has `y` up or down depending on which way its normal points.
+
+They come from the solids the solver expands each shell into. At each point
+the stresses of the solid nodes over it are turned into those axes, fitted
+with a straight line through the thickness and integrated over it. The
+shears are found from the moments by equilibrium (`vx = dmx/dx + dmxy/dy`,
+`vy = dmxy/dx + dmy/dy`): the solver's own transverse shear stress was too
+large next to a clamped edge (12 % over the reaction along `slab_01`'s, where
+these give 1.7 % under at a 0.25 m mesh). Checked: `slab_01` clamped along
+two edges is a fixed-ended strip to 1.1 % at the clamps and 2 to 3 % at
+midspan, where its free edges take some of the moment; a wall's membrane
+forces along its foot add up to the reaction of the line support there to
+0.3 %. A point where two surface members meet appears in each, with each
+member's own values. Values have six significant figures, as the solver's
+file does.
+
+Fields are given for load cases only: everything in them is linear in the
+load, so a combination's are its cases' times the factors in
+`load_combinations`. Given for each of `building_02`'s 16 combinations they
+would have been six times the size. In a buckling or modal analysis
+`surface_mode_shapes` has the translation at each point in each mode,
+scaled as `mode_shapes` are.
 
 ### Deflected shape
 

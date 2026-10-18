@@ -3612,6 +3612,107 @@ def _placed_variant(
     return path
 
 
+class TestSurfaceFields:
+    """Forces and moments of surface members on their mesh (``94g.13.5``).
+
+    ``slab_01`` as shipped is clamped along its two edges 5 m apart and
+    free along the others: under its weight its middle is close to a strip
+    with fixed ends, q L^2 / 12 at the clamps, q L^2 / 24 at midspan and
+    q L / 2 of shear. The moments do not depend on the plate's stiffness.
+    """
+
+    SPAN, WIDTH = 5.0, 3.0
+
+    def _slab(self, tmp_path):
+        data = _run(SLAB, tmp_path, mesh_size=0.25, gravity=True)
+        (member,) = [m for m in data["members"] if m["type"] == "surface"]
+        points = np.array(member["surface_mesh"]["points_m"])
+        fields = {
+            k: np.array(v) for k, v in member["surface_fields"]["Gravity"].items()
+        }
+        weight = data["global_reactions"]["by_load_case"]["Gravity"]["fz_N"]
+        return data, member, points, fields, weight / (self.SPAN * self.WIDTH)
+
+    def _along_edge(self, points, values, x):
+        on = np.where(np.abs(points[:, 0] - x) < 1e-6)[0]
+        on = on[np.argsort(points[on, 1])]
+        y = points[on, 1]
+        return float(np.sum((values[on][1:] + values[on][:-1]) / 2 * np.diff(y)))
+
+    def test_mesh_and_axes(self, tmp_path):
+        _, member, points, fields, _ = self._slab(tmp_path)
+        assert member["surface_axes"] == {
+            "x": [1.0, 0.0, 0.0],
+            "y": [0.0, 1.0, 0.0],
+            "z": [0.0, 0.0, 1.0],
+        }
+        triangles = np.array(member["surface_mesh"]["triangles"])
+        assert triangles.min() == 0 and triangles.max() == len(points) - 1
+        # The triangles cover the slab once
+        a, b, c = (points[triangles[:, i]] for i in range(3))
+        area = np.linalg.norm(np.cross(b - a, c - a), axis=1).sum() / 2
+        assert area == pytest.approx(self.SPAN * self.WIDTH, rel=1e-9)
+        for values in fields.values():
+            assert len(values) == len(points)
+
+    def test_moments_and_shear_of_a_clamped_strip(self, tmp_path):
+        """Within 2 % at the clamps (1.1 % measured) and 4 % at midspan
+        (2.1 to 3.2 %), where the free edges of a plate take some of it."""
+        _, _, points, fields, q = self._slab(tmp_path)
+        L = self.SPAN
+        middle = np.abs(points[:, 1] - self.WIDTH / 2) < 0.4
+        for x in (0.0, L):
+            at_clamp = middle & (np.abs(points[:, 0] - x) < 1e-6)
+            # z is up: hogging puts the side it points to in tension
+            assert fields["mx_Nm_per_m"][at_clamp] == pytest.approx(
+                q * L**2 / 12, rel=0.02
+            )
+        midspan = middle & (np.abs(points[:, 0] - L / 2) < 0.15)
+        assert fields["mx_Nm_per_m"][midspan] == pytest.approx(-q * L**2 / 24, rel=0.04)
+        # Inside the span the shear is that of statics to 4 % of q L / 2
+        inside = middle & (points[:, 0] > 0.3) & (points[:, 0] < L - 0.3)
+        statics = -q * (L / 2 - points[inside, 0])
+        assert np.abs(fields["vx_N_per_m"][inside] - statics).max() < 0.04 * q * L / 2
+        assert np.abs(fields["nx_N_per_m"]).max() < 1e-3 * q * L
+        assert np.abs(fields["ny_N_per_m"]).max() < 1e-3 * q * L
+
+    def test_edges_carry_the_weight(self, tmp_path):
+        """Shear and moment added up along each clamped edge, against statics."""
+        _, _, points, fields, q = self._slab(tmp_path)
+        L, B = self.SPAN, self.WIDTH
+        for x, sign in ((0.0, -1.0), (L, 1.0)):
+            shear = self._along_edge(points, fields["vx_N_per_m"], x)
+            moment = self._along_edge(points, fields["mx_Nm_per_m"], x)
+            assert shear == pytest.approx(sign * q * L * B / 2, rel=0.03)
+            assert moment == pytest.approx(q * L**2 / 12 * B, rel=0.01)
+
+    def test_wall_foot_carries_its_reaction(self, tmp_path):
+        """structure_01's wall on a line support: its membrane forces along
+        the foot add up to the support's reaction."""
+        data = _run(
+            os.path.join(IFC_DIR, "structure_01.ifc"), tmp_path, 0.25, gravity=True
+        )
+        (support,) = [s for s in data["supports"] if s["type"] == "line"]
+        reaction = support["by_load_case"]["Gravity"]
+        (wall,) = [
+            m
+            for m in data["members"]
+            if m["type"] == "surface" and m["surface_axes"]["y"] == [0.0, 0.0, 1.0]
+        ]
+        points = np.array(wall["surface_mesh"]["points_m"])
+        fields = {k: np.array(v) for k, v in wall["surface_fields"]["Gravity"].items()}
+        foot = np.where(np.abs(points[:, 2]) < 1e-6)[0]
+        foot = foot[np.argsort(points[foot, 1])]
+        along = points[foot, 1]
+
+        def integral(key):
+            values = fields[key][foot]
+            return float(np.sum((values[1:] + values[:-1]) / 2 * np.diff(along)))
+
+        assert integral("ny_N_per_m") == pytest.approx(-reaction["fz_N"], rel=0.01)
+        assert integral("nxy_N_per_m") == pytest.approx(-reaction["fy_N"], rel=0.02)
+
+
 class TestPlacedModel:
     """A model moved and turned by its placements is the same structure.
 
@@ -6750,6 +6851,15 @@ class TestModalAnalysis:
             assert self._closest(frequencies, expected) == pytest.approx(
                 expected, rel=0.02
             ), (m, n)
+        # The first mode over the slab's mesh is sin sin (94g.13.5)
+        (slab,) = [m for m in data["members"] if m["type"] == "surface"]
+        points = np.array(slab["surface_mesh"]["points_m"])
+        lowest = min(data["modal"]["modes"], key=lambda m: m["frequency_Hz"])
+        shape = np.array(slab["surface_mode_shapes"][f"Mode {lowest['mode']}"]["uz_m"])
+        expected = np.sin(math.pi * points[:, 0] / plate.A) * np.sin(
+            math.pi * points[:, 1] / plate.B
+        )
+        assert np.abs(shape / shape[np.argmax(np.abs(shape))] - expected).max() < 0.02
 
     def test_i_section_as_its_equivalent_rectangle(self, tmp_path):
         """Shear areas of the web and the flanges, rotary inertia of the real section.

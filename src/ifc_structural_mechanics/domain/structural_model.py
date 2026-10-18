@@ -70,6 +70,12 @@ class StructuralModel:
         # analysis element ID → (member axis, section 1-direction) as written
         # on its beam section card; set by the input writer
         self.beam_section_frames: Dict[int, tuple] = {}
+        # analysis element ID → (member id, its nodes in CalculiX's order)
+        # for every shell element, and the position of each of their nodes:
+        # the exporter gives surface members' fields on this mesh; set by
+        # the input writer
+        self.shell_elements: Dict[int, tuple] = {}
+        self.shell_node_positions: Dict[int, tuple] = {}
         # analysis element ID → its nodes, their positions, section,
         # 1-direction and material, as written, for every U1 element: the
         # results parser works out their nodal forces; set by the input writer

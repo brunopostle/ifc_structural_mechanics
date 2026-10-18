@@ -292,7 +292,75 @@
         "mode_shapes": {
           "description": "The shape of each mode of a buckling or modal analysis along the member, by its name (Mode <n>), as a deflected shape (schema 1.13). Shapes, not displacements: each buckling mode is scaled to a largest translation of one along any member, each modal one to a generalised mass of one.",
           "$ref": "#/$defs/deflected_shapes"
+        },
+        "surface_mesh": {
+          "description": "A surface member's mesh as linear triangles (schema 1.13): points and, for each triangle, the indices of its three points.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["points_m", "triangles"],
+          "properties": {
+            "points_m": {"type": "array", "items": {"$ref": "#/$defs/vector"}},
+            "triangles": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0},
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        },
+        "surface_axes": {
+          "description": "The axes a surface member's forces and moments are in: z its normal, x global X laid onto it (global Y where it is nearly at right angles to X), y = z cross x.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "z"],
+          "properties": {
+            "x": {"$ref": "#/$defs/vector"},
+            "y": {"$ref": "#/$defs/vector"},
+            "z": {"$ref": "#/$defs/vector"}
+          }
+        },
+        "surface_fields": {
+          "description": "Values at each point of surface_mesh, per load case (schema 1.13); a combination's are its cases' times their factors.",
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/surface_field"}
+        },
+        "surface_mode_shapes": {
+          "description": "The translation at each point of surface_mesh in each mode, scaled as mode_shapes are.",
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/surface_displacement"}
         }
+      }
+    },
+    "surface_displacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ux_m", "uy_m", "uz_m"],
+      "properties": {
+        "ux_m": {"$ref": "#/$defs/numbers"},
+        "uy_m": {"$ref": "#/$defs/numbers"},
+        "uz_m": {"$ref": "#/$defs/numbers"}
+      }
+    },
+    "surface_field": {
+      "description": "Translation of the middle surface in global axes; membrane forces, moments and transverse shears per length in surface_axes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ux_m", "uy_m", "uz_m"],
+      "properties": {
+        "ux_m": {"$ref": "#/$defs/numbers"},
+        "uy_m": {"$ref": "#/$defs/numbers"},
+        "uz_m": {"$ref": "#/$defs/numbers"},
+        "nx_N_per_m": {"$ref": "#/$defs/numbers"},
+        "ny_N_per_m": {"$ref": "#/$defs/numbers"},
+        "nxy_N_per_m": {"$ref": "#/$defs/numbers"},
+        "mx_Nm_per_m": {"$ref": "#/$defs/numbers"},
+        "my_Nm_per_m": {"$ref": "#/$defs/numbers"},
+        "mxy_Nm_per_m": {"$ref": "#/$defs/numbers"},
+        "vx_N_per_m": {"$ref": "#/$defs/numbers"},
+        "vy_N_per_m": {"$ref": "#/$defs/numbers"}
       }
     },
     "connection_movement": {

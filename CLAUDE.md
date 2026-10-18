@@ -605,6 +605,14 @@ here. This section only records the constraints that shape day-to-day work.
   movement of each point connection (`connections`, `94g.13.3`, for an IFC
   result export) is taken from them, carried out to the connection as a
   rigid body; no rotation where every member there is released.
+  Surface members have `surface_mesh` and `surface_fields`
+  (`export/surface_fields.py`, `94g.13.5`): membrane forces and plate
+  moments from a straight-line fit through the thickness of the expanded
+  solid's stresses, shears from the moments by equilibrium (the solver's
+  own transverse shear was 12% high at a clamped edge), for load cases only
+  (linear: a combination is its cases times their factors). The writer
+  records the shell mesh for it (`StructuralModel.shell_elements`).
+  `ResultsExporter.write()` puts lists of numbers on one line.
   `global_displacements` leaves out the nodes of links and arms, elements of
   no member (`ResultsExporter._link_nodes()`, `aiz.92`): their faces are up
   to 0.25 m from their axis, and one set `structure_01`'s largest Y

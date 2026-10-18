@@ -16,6 +16,7 @@ added by ``api.structural_analysis.analyze_ifc()``.
 import json
 import logging
 import math
+import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,8 +30,14 @@ from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from ..analysis.section_forces import _stations
 from ..analysis.superposition import combine_results
 from ..utils.error_handling import ResultProcessingError
+from .surface_fields import DISPLACEMENT_KEYS, FORCE_KEYS, SurfaceMesh, rounded
 
 logger = logging.getLogger(__name__)
+
+# A JSON list of numbers (or null) as json.dumps indents it
+_NUMBER_LIST = re.compile(
+    r"\[\s*((?:-?[\d.eE+-]+|null|NaN|-?Infinity)(?:,\s*(?:-?[\d.eE+-]+|null|NaN|-?Infinity))*)\s*\]"
+)
 
 
 def results_schema() -> Dict[str, Any]:
@@ -104,6 +111,10 @@ class ResultsExporter:
         self._translations: Dict[str, Dict[int, List[Tuple[str, List[float]]]]] = {}
         self._section_force_records: Optional[Dict[int, List[Dict]]] = None
         self._member_record_cache: Dict[frozenset, Dict[str, List[Dict]]] = {}
+        self._surface_meshes: Dict[str, Optional[SurfaceMesh]] = {}
+        # Off for the exporter of a combination, which gives none
+        self._with_surface_fields = True
+        self._by_case_cache: Dict[str, Dict[str, Dict[int, List[float]]]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -128,9 +139,18 @@ class ResultsExporter:
 
     @staticmethod
     def write(data: Dict[str, Any], output_path: str) -> None:
-        """Write a results dict to *output_path* as JSON."""
+        """Write a results dict to *output_path* as JSON.
+
+        Indented, but a list of numbers on one line: the diagrams, shapes
+        and fields are long lists, and a number on a line of its own took
+        23 bytes.
+        """
+        text = _NUMBER_LIST.sub(
+            lambda found: "[" + re.sub(r"\s+", " ", found.group(1)) + "]",
+            json.dumps(data, indent=2),
+        )
         with open(output_path, "w") as fh:
-            json.dump(data, fh, indent=2)
+            fh.write(text)
         logger.info(f"Wrote results JSON: {output_path}")
 
     # ------------------------------------------------------------------
@@ -295,21 +315,25 @@ class ResultsExporter:
         CalculiX gives the shapes of a buckling analysis a scale of its own,
         which means nothing to a reader (measured: 5.6e-4 for the first mode
         of a column, 2.3e-5 for its tenth). Each mode is divided by its
-        largest translation along any member, so that its shapes can be
-        drawn and compared.
+        largest translation along any curve member or over any surface
+        member, so that its shapes can be drawn and compared.
         """
+        keys = ("mode_shapes", "surface_mode_shapes")
         largest: Dict[str, float] = defaultdict(float)
         for member in members:
-            for mode, shape in member.get("mode_shapes", {}).items():
-                for x, y, z in zip(shape["ux_m"], shape["uy_m"], shape["uz_m"]):
-                    largest[mode] = max(largest[mode], math.sqrt(x * x + y * y + z * z))
+            for key in keys:
+                for mode, shape in member.get(key, {}).items():
+                    for x, y, z in zip(shape["ux_m"], shape["uy_m"], shape["uz_m"]):
+                        size = math.sqrt(x * x + y * y + z * z)
+                        largest[mode] = max(largest[mode], size)
         for member in members:
-            for mode, shape in member.get("mode_shapes", {}).items():
-                if largest[mode] <= 0.0:
-                    continue
-                for key, values in shape.items():
-                    if key != "distance_m":
-                        shape[key] = [v / largest[mode] for v in values]
+            for key in keys:
+                for mode, shape in member.get(key, {}).items():
+                    if largest[mode] <= 0.0:
+                        continue
+                    for name, values in shape.items():
+                        if name != "distance_m":
+                            shape[name] = [v / largest[mode] for v in values]
 
     _TRANSLATIONS = ("x", "y", "z")
     _ROTATIONS = ("rx", "ry", "rz")
@@ -486,12 +510,17 @@ class ResultsExporter:
         part._applied_load_totals = load_totals
         part._applied_load_moments = load_moments
         part._mesh_nodes = self._mesh_nodes
+        part._surface_meshes = self._surface_meshes
+        part._with_surface_fields = False
         result = part._build()
 
         for member, combined_member in zip(data["members"], result["members"]):
             values = combined_member.get("by_load_case", {}).get(name)
             if values is not None:
                 member.setdefault("by_load_combination", {})[name] = values
+            # Surface fields are not given for combinations: they are linear
+            # in the load, and for building_02 they would be 19 sets where
+            # its load cases are 3
             for key in ("section_force_diagrams", "deflected_shapes"):
                 diagram = combined_member.get(key, {}).get(name)
                 if diagram is not None:
@@ -617,7 +646,98 @@ class ResultsExporter:
         modes = self._member_deflections(member, elem_ids, kind="mode_shapes")
         if modes:
             result["mode_shapes"] = modes
+        if getattr(member, "entity_type", None) == "surface" and (
+            self._with_surface_fields
+        ):
+            result.update(self._surface_entry(member))
         return result
+
+    def _surface_mesh(self, member) -> Optional[SurfaceMesh]:
+        """A surface member's mesh with its solid nodes placed, built once."""
+        if member.id not in self._surface_meshes:
+            shells = getattr(self.model, "shell_elements", None) or {}
+            elements = {
+                elem: nodes
+                for elem, (owner, nodes) in shells.items()
+                if owner == member.id
+            }
+            mesh = None
+            if elements and self.node_coordinates:
+                mesh = SurfaceMesh(
+                    elements,
+                    self.model.shell_node_positions,
+                    self.element_nodes,
+                    self.node_coordinates,
+                    getattr(member, "normal", None),
+                )
+                if mesh.axes is None or not len(mesh.solid):
+                    mesh = None
+            self._surface_meshes[member.id] = mesh
+        return self._surface_meshes[member.id]
+
+    def _by_case(self, kind: str) -> Dict[str, Dict[int, List[float]]]:
+        """``{case: {node: values}}``: translations of ``"displacement"`` or
+        ``"mode_shapes"``, or the six stress components of ``"stress"``."""
+        if kind not in self._by_case_cache:
+            cases: Dict[str, Dict[int, List[float]]] = defaultdict(dict)
+            components = ("sxx", "syy", "szz", "sxy", "syz", "sxz")
+            for r in self.parsed_results.get(kind, []):
+                try:
+                    node = int(r.reference_element)
+                except (TypeError, ValueError):
+                    continue
+                case = r.metadata.get("load_case", "_combined")
+                if kind == "stress":
+                    cases[case][node] = [r.values.get(c, 0.0) for c in components]
+                else:
+                    cases[case][node] = r.get_translations()
+            self._by_case_cache[kind] = cases
+        return self._by_case_cache[kind]
+
+    def _surface_entry(self, member) -> Dict[str, Any]:
+        """The mesh, axes and fields of a surface member (schema 1.13).
+
+        See ``export/surface_fields.py``. Values have six significant
+        figures, as the result file does.
+        """
+        mesh = self._surface_mesh(member)
+        if mesh is None:
+            return {}
+        entry: Dict[str, Any] = {
+            "surface_mesh": {
+                "points_m": [rounded(p) for p in mesh.points],
+                "triangles": [list(t) for t in mesh.triangles],
+            },
+            "surface_axes": {
+                axis: [float(v) for v in row] for axis, row in zip("xyz", mesh.axes)
+            },
+        }
+        stresses = self._by_case("stress")
+        fields: Dict[str, Dict[str, List[float]]] = {}
+        for case, translations in self._by_case("displacement").items():
+            moved = mesh.displacements(translations)
+            if moved is None:
+                continue
+            values = {k: rounded(moved[:, i]) for i, k in enumerate(DISPLACEMENT_KEYS)}
+            forces = mesh.forces(stresses.get(case, {}))
+            if forces is not None:
+                values.update(
+                    {k: rounded(forces[:, i]) for i, k in enumerate(FORCE_KEYS)}
+                )
+            fields[case] = values
+        if fields:
+            entry["surface_fields"] = fields
+        shapes: Dict[str, Dict[str, List[float]]] = {}
+        for mode, translations in self._by_case("mode_shapes").items():
+            moved = mesh.displacements(translations)
+            if moved is not None:
+                shapes[mode] = {
+                    k: [float(v) for v in moved[:, i]]
+                    for i, k in enumerate(DISPLACEMENT_KEYS)
+                }
+        if shapes:
+            entry["surface_mode_shapes"] = shapes
+        return entry
 
     def _member_deflections(
         self, member, elem_ids: set, kind: str = "displacement"
