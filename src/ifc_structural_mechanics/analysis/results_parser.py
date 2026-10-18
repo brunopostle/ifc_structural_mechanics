@@ -210,11 +210,15 @@ class ResultsParser:
             logger.info(f"Parsed {len(displacements)} displacement results")
             return displacements
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing displacement results: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise ResultProcessingError(
-                f"Failed to parse displacement results: {str(e)}", code="E-RES-001"
+                f"The displacements cannot be read from the result file: "
+                f"{type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
     def parse_node_coordinates(self, frd_file: str) -> Dict[int, List[float]]:
@@ -307,7 +311,8 @@ class ResultsParser:
             except (FileNotFoundError, IOError) as e:
                 logger.error(f"Error reading FRD file: {str(e)}")
                 raise ResultProcessingError(
-                    f"Failed to read stress results file: {str(e)}", code="E-RES-001"
+                    f"The result file with the stresses cannot be read: {e}",
+                    code="E-RES-001",
                 ) from e
 
             stresses = []
@@ -374,10 +379,14 @@ class ResultsParser:
             logger.info(f"Parsed {len(stresses)} stress results")
             return stresses
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing stress results: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse stress results: {str(e)}", code="E-RES-001"
+                f"The stresses cannot be read from the result file: "
+                f"{type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
     def parse_strains(self, frd_file: str) -> List[StrainResult]:
@@ -403,7 +412,8 @@ class ResultsParser:
             except (FileNotFoundError, IOError) as e:
                 logger.error(f"Error reading FRD file: {str(e)}")
                 raise ResultProcessingError(
-                    f"Failed to read strain results file: {str(e)}", code="E-RES-001"
+                    f"The result file with the strains cannot be read: {e}",
+                    code="E-RES-001",
                 ) from e
 
             strains = []
@@ -459,10 +469,14 @@ class ResultsParser:
             logger.info(f"Parsed {len(strains)} strain results")
             return strains
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing strain results: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse strain results: {str(e)}", code="E-RES-001"
+                f"The strains cannot be read from the result file: "
+                f"{type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
     def parse_reactions(self, dat_file: str) -> List[ReactionForceResult]:
@@ -588,10 +602,14 @@ class ResultsParser:
             logger.info(f"Parsed {len(reactions)} reaction force results")
             return reactions
 
+        except ResultProcessingError:
+            raise
         except Exception as e:
             logger.error(f"Error parsing reaction forces: {str(e)}")
             raise ResultProcessingError(
-                f"Failed to parse reaction forces: {str(e)}", code="E-RES-001"
+                f"The support forces cannot be read from the result file: "
+                f"{type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
     def parse_node_forces(self, dat_file: str) -> List[Dict]:
@@ -1376,7 +1394,7 @@ class ResultsParser:
             raise
         except Exception as e:
             raise ResultProcessingError(
-                f"Failed to parse result files: {type(e).__name__}: {e}",
+                f"The result files cannot be read: {type(e).__name__}: {e}",
                 code="E-RES-001",
             ) from e
 
@@ -1597,7 +1615,9 @@ class ResultsParser:
             raise
         except Exception as e:
             raise ResultProcessingError(
-                f"Error mapping results to domain model: {str(e)}", code="E-RES-001"
+                f"The results cannot be given to the members they belong to: "
+                f"{type(e).__name__}: {e}",
+                code="E-RES-001",
             ) from e
 
         if invalid:

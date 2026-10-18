@@ -19,6 +19,18 @@ from ..utils.units import (
 logger = logging.getLogger(__name__)
 
 
+def _unreadable(entity, what: str, error: Exception) -> str:
+    """The message of an E-IFC-005: which entity, what was being read, why."""
+    if isinstance(entity, ifcopenshell.entity_instance):
+        name = f"#{entity.id()} {entity.is_a()}"
+        guid = getattr(entity, "GlobalId", None)
+        if guid:
+            name += f" {guid}"
+    else:
+        name = type(entity).__name__
+    return f"{name}: {what} cannot be read. {type(error).__name__}: {error}"
+
+
 def is_structural_member(entity: Optional[ifcopenshell.entity_instance]) -> bool:
     """
     Check if the given entity is a structural member.
@@ -50,7 +62,8 @@ def is_structural_member(entity: Optional[ifcopenshell.entity_instance]) -> bool
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural member: {e}", code="E-IFC-005"
+            _unreadable(entity, "whether it is a structural member", e),
+            code="E-IFC-005",
         ) from e
 
 
@@ -77,7 +90,7 @@ def is_structural_curve_member(entity: Optional[ifcopenshell.entity_instance]) -
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural curve member: {e}",
+            _unreadable(entity, "whether it is a structural curve member", e),
             code="E-IFC-005",
         ) from e
 
@@ -107,7 +120,7 @@ def is_structural_surface_member(
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural surface member: {e}",
+            _unreadable(entity, "whether it is a structural surface member", e),
             code="E-IFC-005",
         ) from e
 
@@ -139,7 +152,8 @@ def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> 
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error checking if entity is structural connection: {e}", code="E-IFC-005"
+            _unreadable(entity, "whether it is a structural connection", e),
+            code="E-IFC-005",
         ) from e
 
 
@@ -190,7 +204,7 @@ def get_coordinate(point, unit_scale: float = 1.0):
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error extracting coordinates: {e}", code="E-IFC-005"
+            _unreadable(point, "its coordinates", e), code="E-IFC-005"
         ) from e
 
 
@@ -332,7 +346,7 @@ def find_connected_elements(
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error finding connected elements: {e}", code="E-IFC-005"
+            _unreadable(entity, "the members it connects", e), code="E-IFC-005"
         ) from e
 
 
@@ -422,7 +436,7 @@ def get_transformation(placement, length_scale: float = 1.0):
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error getting transformation: {e}", code="E-IFC-005"
+            _unreadable(placement, "its placement", e), code="E-IFC-005"
         ) from e
 
 
@@ -476,7 +490,8 @@ def transform_vectors(geometry, transformation, include_translation=True):
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error transforming vectors: {e}", code="E-IFC-005"
+            f"Coordinates cannot be moved by their placement: {type(e).__name__}: {e}",
+            code="E-IFC-005",
         ) from e
 
 
@@ -585,14 +600,18 @@ def get_1D_orientation(geometry, zAxis):
             raise
         except Exception as e:
             raise ModelExtractionError(
-                f"Unexpected error in cross product calculation: {e}", code="E-IFC-005"
+                f"A member's local axes cannot be worked out from its Axis: "
+                f"{type(e).__name__}: {e}",
+                code="E-IFC-005",
             ) from e
 
     except ModelExtractionError:
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Unexpected error in 1D orientation calculation: {e}", code="E-IFC-005"
+            f"A member's local axes cannot be worked out from its Axis: "
+            f"{type(e).__name__}: {e}",
+            code="E-IFC-005",
         ) from e
 
 
@@ -633,7 +652,8 @@ def analyze_connection_type(connection: Optional[ifcopenshell.entity_instance]) 
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error analyzing connection type: {e}", code="E-IFC-005"
+            _unreadable(connection, "what kind of connection it is", e),
+            code="E-IFC-005",
         ) from e
 
 
@@ -715,5 +735,5 @@ def get_connection_input(
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Error extracting connection input: {e}", code="E-IFC-005"
+            _unreadable(connection, "its AppliedCondition", e), code="E-IFC-005"
         ) from e

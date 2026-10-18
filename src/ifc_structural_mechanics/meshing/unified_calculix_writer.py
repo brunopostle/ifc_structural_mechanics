@@ -788,18 +788,21 @@ class UnifiedCalculixWriter:
                 connections.
         """
         missing: List[str] = []
+        concerned: List[str] = []
         for conn in self.domain_model.connections:
             for member_id in conn.connected_members:
                 if self._get_member_endpoints(member_id) is None:
                     continue
                 if not self._find_connection_nodes_at_location(conn, [member_id]):
                     missing.append(f"{member_id} at {conn.id}")
+                    concerned += [member_id, conn.id]
         if missing:
             raise MeshingError(
                 f"The mesh has no node for {len(missing)} member end(s) at "
                 "their connection, so they cannot be joined as the model "
                 f"says. The first are {', '.join(missing[:5])}.",
                 code="E-JNT-001",
+                ifc_guids=self._ifc_guids(concerned),
             )
 
     def _check_user_elements_join_their_own_kind(self) -> None:
@@ -986,14 +989,29 @@ class UnifiedCalculixWriter:
         covers, or none. Stiffness and weight are right like that, counted
         once, but an area load belongs to the whole outline of its member.
 
+        A curve member lying inside another one (a short beam along a longer
+        one) is the same: its loads go on the elements in its geometry
+        (``_geometry_element_sets``), whoever they belong to. Its loads were
+        once left out with a warning.
+
         Returns:
             ``self.element_sets``, with the entry of every surface member
             whose elements do not cover its outline replaced by the shell
-            elements lying within the outline, whoever they belong to.
+            elements lying within the outline, and that of every curve member
+            by the elements in its geometry.
         """
         sets = dict(self.element_sets)
+        geometry_sets = getattr(self, "_geometry_element_sets", {})
         shells = None
         for member in self.domain_model.members:
+            if isinstance(member, CurveMember):
+                member_set = f"MEMBER_{self._get_short_id(member.id)}"
+                in_geometry = [
+                    e for e in geometry_sets.get(member_set, []) if e in self.elements
+                ]
+                if in_geometry and set(in_geometry) != set(sets.get(member_set, [])):
+                    sets[member_set] = in_geometry
+                continue
             if not isinstance(member, SurfaceMember):
                 continue
             geometry = member.geometry
@@ -2012,6 +2030,7 @@ class UnifiedCalculixWriter:
         """
         parent: Dict[int, int] = {}
         links: List[Tuple[int, int]] = []
+        far: List[Tuple[str, str, float]] = []
 
         def find(node: int) -> int:
             while node in parent:
@@ -2056,15 +2075,10 @@ class UnifiedCalculixWriter:
                 elif gap <= self._MAX_RIGID_LINK:
                     links.append((node, joint_node))
                 else:
-                    self._warn_user(
-                        "W-JNT-006",
-                        f"Connection {conn.id}: member {member_id} ends "
-                        f"{gap:.2f} m from the connection, too far for a rigid "
-                        "link; it is tied in translation only and transfers "
-                        "no moment there.",
-                        domain_id=conn.id,
-                        ifc_guids=self._ifc_guids([conn.id]),
-                    )
+                    far.append((conn.id, member_id, gap))
+        self._warn_far_member_ends(
+            far, "they are tied in translation only and carry no moment there"
+        )
 
         # Members joined rigidly along a line connection of the file
         for joint in self._line_joints():
@@ -2249,6 +2263,7 @@ class UnifiedCalculixWriter:
             pairs = self._find_connection_nodes_at_location(conn, [member_id])
             return pairs[0][1] if pairs else None
 
+        far: List[Tuple[str, str, float]] = []
         for conn in self.domain_model.connections:
             members = list(conn.connected_members)
             if len(members) < 2 or getattr(conn, "edge", None) is not None:
@@ -2299,15 +2314,7 @@ class UnifiedCalculixWriter:
                     anchor = add_node(position)
                     add_link(joint, anchor)
                 elif gap > self._MAX_RIGID_LINK:
-                    self._warn_user(
-                        "W-JNT-006",
-                        f"Connection {conn.id}: member {member_id} ends "
-                        f"{gap:.2f} m from the connection, too far for a rigid "
-                        "link; its end is tied to the connection in translation "
-                        "with no lever arm.",
-                        domain_id=conn.id,
-                        ifc_guids=self._ifc_guids([conn.id]),
-                    )
+                    far.append((conn.id, member_id, gap))
 
                 equations = [
                     [(node, dof, 1.0), (anchor, dof, -1.0)] for dof in (1, 2, 3)
@@ -2352,6 +2359,9 @@ class UnifiedCalculixWriter:
 
                 self._release_hinges.setdefault(conn.id, {})[member_id] = equations
 
+        self._warn_far_member_ends(
+            far, "they are tied to it in translation with no lever arm"
+        )
         if self._release_hinges:
             self._rigid_links = links
             self._helper_nodes = getattr(self, "_helper_nodes", set()) | helpers
@@ -2359,6 +2369,28 @@ class UnifiedCalculixWriter:
             logger.info(
                 f"Built release hinges at {len(self._release_hinges)} connections"
             )
+
+    def _warn_far_member_ends(
+        self, far: List[Tuple[str, str, float]], consequence: str
+    ) -> None:
+        """One W-JNT-006 for the member ends too far from their connection.
+
+        Args:
+            far: (connection id, member id, distance in metres) of each.
+            consequence: What is done instead, said of the members.
+        """
+        if not far:
+            return
+        first = ", ".join(f"{m} at {c} ({gap:.2f} m)" for c, m, gap in far[:5])
+        self._warn_user(
+            "W-JNT-006",
+            f"{len(far)} member end(s) lie further than {self._MAX_RIGID_LINK} "
+            f"m from their connection, too far for a rigid link; {consequence}. "
+            f"The first are {first}.",
+            ifc_guids=self._ifc_guids(
+                list(dict.fromkeys([c for c, _, _ in far] + [m for _, m, _ in far]))
+            ),
+        )
 
     def _build_support_arms(self) -> None:
         """Fix a stiff arm to every node of a support that holds skew rotations.
@@ -3776,19 +3808,56 @@ class UnifiedCalculixWriter:
                     released_dofs_by_member=released,
                 )
                 connections_written += 1
-            elif conn.entity_type == "spring":
-                self._warn_user(
-                    "W-JNT-009", f"Spring connections not yet implemented: {conn.id}"
-                )
             else:
-                self._warn_user(
-                    "W-JNT-010",
-                    f"Unknown connection type '{conn.entity_type}' for {conn.id}",
+                # A spring joint between members, or a type of a model built
+                # by hand: leaving it out would analyse members apart
+                raise AnalysisError(
+                    f"Connection {conn.id} joins {len(real_members)} members "
+                    f"as a '{conn.entity_type}' connection, which cannot be "
+                    "modelled; the members would be analysed apart.",
+                    code="E-JNT-004",
+                    ifc_guids=self._ifc_guids([conn.id, *real_members]),
                 )
 
         self._write_line_bearings(file, constrained_node_dofs, bc_node_dofs)
+        self._warn_partial_releases()
 
         logger.info(f"Wrote {connections_written} structural connections")
+
+    def _warn_partial_releases(self) -> None:
+        """One W-JNT-007 for partial releases analysed as full pins.
+
+        A member released about some rotations at a joint has the others
+        taken away again by a release hinge (``_build_release_hinges``),
+        except a U1 member, which has none: it is tied in translation only
+        and released about all three.
+        """
+        hinges = getattr(self, "_release_hinges", None)
+        hinges = hinges if isinstance(hinges, dict) else {}
+        partial: List[Tuple[str, str]] = []
+        for conn in self.domain_model.connections:
+            if len(conn.connected_members) < 2 or conn.entity_type == "hinge":
+                continue
+            if getattr(conn, "edge", None) is not None:
+                continue
+            released = getattr(conn, "released_dofs_by_member", None) or {}
+            for member_id, dofs in released.items():
+                if member_id in hinges.get(conn.id, {}):
+                    continue
+                if dofs and not {4, 5, 6}.issubset(set(dofs)):
+                    partial.append((conn.id, member_id))
+        if not partial:
+            return
+        self._warn_user(
+            "W-JNT-007",
+            f"{len(partial)} member end(s) are released about some rotations "
+            "only, which cannot be represented there; they are analysed as "
+            "pins, released about all three. The first are "
+            f"{', '.join(f'{m} at {c}' for c, m in partial[:5])}.",
+            ifc_guids=self._ifc_guids(
+                list(dict.fromkeys([c for c, _ in partial] + [m for _, m in partial]))
+            ),
+        )
 
     def _write_point_connection(
         self,
@@ -3823,8 +3892,11 @@ class UnifiedCalculixWriter:
                     f"Connection {conn.id}: single shared node {sole_node}, no equations needed"
                 )
             else:
-                self._warn_user(
-                    "W-JNT-008", f"Connection {conn.id}: Found no connection nodes"
+                raise MeshingError(
+                    f"The mesh has no node of members {', '.join(member_ids)} "
+                    f"at connection {conn.id}, so it joins nothing.",
+                    code="E-JNT-001",
+                    ifc_guids=self._ifc_guids([conn.id, *member_ids]),
                 )
             return
 
@@ -3891,19 +3963,8 @@ class UnifiedCalculixWriter:
         # of beam and shell nodes, so a member reaching this point through a
         # separate node is pinned. Members meant to be rigid already share one
         # node (_merge_rigid_connection_nodes); what is left are members with
-        # an end release, and a partial release cannot be represented.
-        for member_id, dofs in released.items():
-            if member_id in hinges:
-                continue
-            if dofs and not {4, 5, 6}.issubset(set(dofs)):
-                self._warn_user(
-                    "W-JNT-007",
-                    f"Connection {conn.id}: member {member_id} has a partial "
-                    f"rotational release (DOF {sorted(dofs)}); it is analysed as "
-                    "a full pin, releasing all three rotations.",
-                    domain_id=conn.id,
-                    ifc_guids=self._ifc_guids([conn.id]),
-                )
+        # an end release, and a partial release with no hinge is reported by
+        # _warn_partial_releases.
 
         if equations_skipped > 0:
             logger.info(
@@ -4119,13 +4180,13 @@ class UnifiedCalculixWriter:
                         abs(float(vec[0])) > 1e-3 or abs(float(vec[1])) > 1e-3
                     ):
                         return [
-                            "Possible kinematic mechanism: all supports provide translational "
-                            "fixity only (DOF 1-3) with no rotational restraint (DOF 4-6), "
-                            "and no moment-resisting connections between members were detected. "
-                            "Under lateral loads the structure may be kinematically unstable "
-                            "and CalculiX may report a zero pivot or very large displacements. "
-                            "Check IfcBoundaryNodeCondition drx/dry/drz entries and connection "
-                            "types."
+                            "Possible mechanism: no support holds a rotation, "
+                            "every joint between members is a pin, and the model "
+                            "has sideways loads. The structure may be free to "
+                            "sway: CalculiX may report a zero pivot or very large "
+                            "displacements. Check the rotations of the supports' "
+                            "IfcBoundaryNodeCondition and the releases at the "
+                            "joints."
                         ]
                 except (AttributeError, TypeError, ValueError):
                     continue  # a load with no vector says nothing here

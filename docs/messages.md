@@ -30,19 +30,19 @@ Reading an entity of the file failed unexpectedly; the message gives the entity 
 
 The file has several IfcStructuralAnalysisModel and only the first is analysed. Split the file, or put the model to analyse first.
 
-### W-IFC-002: Members without a material
+### W-IFC-002: Members without a material (retired)
 
-Members of the model have no material. CalculiX cannot analyse them and the analysis will fail. Assign an IfcMaterial with Pset_MaterialMechanical to each structural member.
+No longer given: such members stop the analysis (E-MAT-001).
 
-### W-IFC-003: Curve members without a section
+### W-IFC-003: Curve members without a section (retired)
 
-Curve members of the model have no profile. CalculiX cannot analyse them and the analysis will fail. Assign an IfcMaterialProfileSet with a profile to each curve member.
+No longer given: such members stop the analysis (E-SEC-001).
 
 ## Materials
 
 ### E-MAT-001: Member without a material
 
-A surface member needs an IfcMaterial (directly, or through a layer or constituent set). Assign one.
+A surface member needs an IfcMaterial (directly, or through a layer or constituent set), and a curve member gets its material with its profile (E-SEC-001). Assign one.
 
 ### E-MAT-002: Material without a Young's modulus
 
@@ -140,7 +140,7 @@ These members lie wholly inside others (see W-MSH-001) and have no elements of t
 
 ### E-JNT-001: Member does not reach its connection
 
-The mesh has no node for a curve member at a connection it is joined to, so it cannot be joined there. The connection probably lies off the member: check both.
+The mesh has no node for a member at a connection it is joined to, so it cannot be joined there. The connection probably lies off the member: check both.
 
 ### E-JNT-002: Line connection cannot be made
 
@@ -149,6 +149,10 @@ An IfcStructuralCurveConnection joins a beam and a slab all along it. Here it jo
 ### E-JNT-003: User elements joined to other elements
 
 With --open-sections user-element, U1 beams pass no moment to native beams or shells, and stock CalculiX crashes on the mix. Release every rotation of one of the members at such joints, or analyse without user elements.
+
+### E-JNT-004: Joint of a kind that cannot be modelled
+
+The connection between members is of a type the writer does not model: a spring joint between members, or a type it does not know. A model read from an IFC file has neither (members are joined rigidly unless their relation releases them, and springs act against the ground); one built by hand can. Report it.
 
 ### W-JNT-001: Curve members tied to the surface members they lie in
 
@@ -178,17 +182,17 @@ The member ends further from the connection than a rigid link can bridge, so it 
 
 The member is released about some rotations at the connection, which cannot be represented where it is, and it is released about all three. The joint is more flexible than the file says.
 
-### W-JNT-008: Connection with no nodes
+### W-JNT-008: Connection with no nodes (retired)
 
-No mesh node of the connected members was found at the connection, so it joins nothing. Check that the connection lies on its members.
+No longer given: a connection whose members have no node at it stops the analysis (E-JNT-001).
 
-### W-JNT-009: Spring connection between members not implemented
+### W-JNT-009: Spring connection between members not implemented (retired)
 
-A connection between members with spring stiffness is not modelled and joins nothing. Springs at supports are.
+No longer given: such a connection stops the analysis (E-JNT-004).
 
-### W-JNT-010: Connection of an unknown type
+### W-JNT-010: Connection of an unknown type (retired)
 
-The connection is of a type the writer does not know and joins nothing. Report it.
+No longer given: such a connection stops the analysis (E-JNT-004).
 
 ## Supports
 
@@ -272,7 +276,7 @@ The load is not assigned to a member (IfcRelConnectsStructuralActivity), or has 
 
 ### E-LOD-004: Load in axes that cannot be used
 
-The load is given in local coordinates of an item that has no axes (none assigned, a surface connection), or per projected length in local coordinates. Give it in global coordinates.
+The load is given in local coordinates of an item that has no axes (none assigned, a surface connection, a curve member with no usable Axis), or per projected length in local coordinates. Give it in global coordinates.
 
 ### E-LOD-005: Moment that cannot be applied
 
@@ -310,13 +314,13 @@ Combinations are only formed in a linear static analysis, by adding up the resul
 
 The point load is further than 0.1 m from any mesh node and is applied at the nearest one. Check that it lies on a member.
 
-### W-LOD-008: Load in the local axes of an item that has none
+### W-LOD-008: Load in the local axes of an item that has none (retired)
 
-The load is given in local coordinates, but the member or connection it is assigned to has no axes of its own, so it is applied in global axes. Check its direction.
+No longer given: such a load stops the analysis (E-LOD-004), since its direction is not known.
 
-### W-LOD-009: Load on a member with no elements
+### W-LOD-009: Load on a member with no elements (retired)
 
-The member lost its elements to a member it overlaps (W-MSH-002), so its loads are not applied. Assign them to the member that remains.
+No longer given: the loads of a member that another one overlaps are applied to the elements lying in its own geometry, whoever they belong to.
 
 ## The solver
 

@@ -41,7 +41,13 @@ def test_every_code_used_is_registered():
 
 
 def test_every_registered_code_is_used():
-    assert set(KINDS) - _codes_used() == set()
+    current = {code for code, kind in KINDS.items() if not kind.retired}
+    assert current - _codes_used() == set()
+
+
+def test_no_retired_code_is_used():
+    retired = {code for code, kind in KINDS.items() if kind.retired}
+    assert retired & _codes_used() == set()
 
 
 def test_codes_are_numbered_from_one_in_each_stage():
@@ -98,6 +104,11 @@ def test_a_warning_carries_its_code_and_title():
 def test_an_unregistered_code_is_refused():
     with pytest.raises(KeyError):
         warning("W-SUP-999", "...")
+
+
+def test_a_retired_code_is_refused():
+    with pytest.raises(KeyError):
+        warning("W-JNT-008", "...")
 
 
 def test_every_warning_of_an_analysis_has_a_code(tmp_path):

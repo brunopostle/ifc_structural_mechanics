@@ -121,7 +121,7 @@ def test_extract_model_error(mock_extractor_class):
     with pytest.raises(ModelExtractionError) as excinfo:
         extract_model("path/to/test.ifc")
 
-    assert "Failed to extract model from IFC file" in str(excinfo.value)
+    assert "The model cannot be extracted from the IFC file" in str(excinfo.value)
 
 
 # Test the create_analysis_config function

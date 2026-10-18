@@ -1,5 +1,6 @@
 """Tests for which of two overlapping members keeps the elements they share."""
 
+import io
 import logging
 import sys
 import types
@@ -41,7 +42,10 @@ from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (  # noqa: E402
     UnifiedCalculixWriter,
 )
-from ifc_structural_mechanics.utils.error_handling import MeshingError  # noqa: E402
+from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
+    AnalysisError,
+    MeshingError,
+)
 
 _NODES = {
     1: np.array([0.0, 0.0, 0.0]),
@@ -246,6 +250,50 @@ class TestMembersReachTheirConnections:
         writer.element_sets[f"MEMBER_{short['mb']}"] = []
         assert writer._find_connection_nodes_at_location(joint, ["mb"]) == [("mb", 2)]
         writer._check_members_reach_their_connections()
+
+
+class TestJointsThatJoinNothing:
+    """A joint is made or the analysis stops (`94g.12`); it once warned."""
+
+    def test_connection_with_no_node_of_its_members_stops_the_analysis(self):
+        writer, joint, short = _joint_of_two_beams()
+        for member in ("ma", "mb"):
+            writer.element_sets[f"MEMBER_{short[member]}"] = []
+        with pytest.raises(MeshingError) as raised:
+            writer._write_point_connection(io.StringIO(), joint, ["ma", "mb"], set())
+        assert raised.value.code == "E-JNT-001"
+        assert set(raised.value.ifc_guids) == {"joint", "ma", "mb"}
+
+    def test_joint_of_a_kind_that_cannot_be_modelled_stops_the_analysis(self):
+        writer, joint, _ = _joint_of_two_beams()
+        joint.entity_type = "spring"
+        with pytest.raises(AnalysisError) as raised:
+            writer._write_connections(io.StringIO(), set())
+        assert raised.value.code == "E-JNT-004"
+
+
+class TestLoadsOfAnOverlappedMember:
+    """Its loads go on the elements in its geometry (`94g.12`).
+
+    They were once left out with a warning (W-LOD-009).
+    """
+
+    def test_curve_member_gets_the_elements_in_its_geometry(self):
+        writer, _, short = _joint_of_two_beams()
+        writer._geometry_element_sets = {
+            name: list(elements) for name, elements in writer.element_sets.items()
+        }
+        writer.element_sets[f"MEMBER_{short['mb']}"] = []
+        sets = writer._load_element_sets()
+        assert sets[f"MEMBER_{short['mb']}"] == [11]
+        assert writer.element_sets[f"MEMBER_{short['mb']}"] == []
+
+    def test_member_with_its_own_elements_keeps_them(self):
+        writer, _, short = _joint_of_two_beams()
+        writer._geometry_element_sets = {
+            name: list(elements) for name, elements in writer.element_sets.items()
+        }
+        assert writer._load_element_sets() == writer.element_sets
 
 
 class TestU1RetypeStripsSharedElements:

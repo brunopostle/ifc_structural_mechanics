@@ -7,7 +7,7 @@ the structural analysis extension.
 """
 
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 class ErrorSeverity(Enum):
@@ -66,6 +66,7 @@ class StructuralAnalysisError(Exception):
         entity_id: Optional[str] = None,
         domain_id: Optional[str] = None,
         code: Optional[str] = None,
+        ifc_guids: Iterable[str] = (),
         **kwargs,
     ):
         """
@@ -79,9 +80,12 @@ class StructuralAnalysisError(Exception):
             domain_id (Optional[str]): ID of the entity in the domain model.
             code (Optional[str]): Its code in ``utils.messages.KINDS``, such as
                 ``E-SUP-002``, which users can look up in ``docs/messages.md``.
+            ifc_guids (Iterable[str]): The IFC GlobalIds of the entities it is
+                about, for a viewer to highlight; a wrapper passes them on.
             **kwargs: Additional context information to include in the error.
         """
         self.code = code
+        self.ifc_guids = list(dict.fromkeys(g for g in ifc_guids if g and g != "?"))
         self.message = message
         self.severity = severity
         self.entity_type = entity_type
@@ -126,6 +130,7 @@ class StructuralAnalysisError(Exception):
         return {
             "code": self.code,
             "message": self.message,
+            "ifc_guids": self.ifc_guids,
             "severity": str(self.severity),
             "entity_type": str(self.entity_type) if self.entity_type else None,
             "entity_id": self.entity_id,

@@ -9,6 +9,8 @@ import sys
 import types
 from unittest.mock import MagicMock
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Stub out modules that import gmsh so the api module can be loaded without
 # a full Gmsh installation (libGLU.so.1 is not available in the test env).
@@ -50,6 +52,9 @@ from ifc_structural_mechanics.domain.property import Material, Section  # noqa: 
 from ifc_structural_mechanics.domain.structural_model import (  # noqa: E402
     StructuralModel,
 )
+from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
+    ModelExtractionError,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,29 +92,28 @@ _SECTION = Section.create_rectangular_section(id="s1", name="R", width=0.1, heig
 
 
 class TestValidateModelMaterial:
-    def test_warns_members_missing_material(self):
+    def test_member_missing_material_stops_the_analysis(self):
         model = _empty_model()
         model.add_member(_make_member("beam_no_mat", material=None, section=_SECTION))
         model.add_member(_make_member("beam_ok", material=_MATERIAL, section=_SECTION))
-        warnings = _validate_model(model, gravity=True)
-        messages = [w["message"] for w in warnings]
-        assert any("no material" in m for m in messages)
-        assert any("beam_no_mat" in m for m in messages)
+        with pytest.raises(ModelExtractionError) as raised:
+            _validate_model(model, gravity=True)
+        assert raised.value.code == "E-MAT-001"
+        assert "beam_no_mat" in raised.value.message
+        assert "beam_ok" not in raised.value.message
 
-    def test_no_warning_all_members_have_material(self):
+    def test_no_error_when_all_members_have_material(self):
         model = _empty_model()
         model.add_member(_make_member("ok", material=_MATERIAL, section=_SECTION))
-        warnings = _validate_model(model, gravity=True)
-        assert not any("no material" in w["message"] for w in warnings)
+        _validate_model(model, gravity=True)
 
     def test_truncates_long_list_at_five(self):
         model = _empty_model()
         for i in range(7):
             model.add_member(_make_member(f"b{i}", material=None, section=_SECTION))
-        warnings = _validate_model(model, gravity=True)
-        mat_w = [w for w in warnings if "no material" in w["message"]]
-        assert mat_w
-        assert "and 2 more" in mat_w[0]["message"]
+        with pytest.raises(ModelExtractionError) as raised:
+            _validate_model(model, gravity=True)
+        assert "and 2 more" in raised.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -118,19 +122,18 @@ class TestValidateModelMaterial:
 
 
 class TestValidateModelSection:
-    def test_warns_members_missing_section(self):
+    def test_member_missing_section_stops_the_analysis(self):
         model = _empty_model()
         model.add_member(_make_member("beam_no_sec", material=_MATERIAL, section=None))
-        warnings = _validate_model(model, gravity=True)
-        messages = [w["message"] for w in warnings]
-        assert any("no section" in m for m in messages)
-        assert any("beam_no_sec" in m for m in messages)
+        with pytest.raises(ModelExtractionError) as raised:
+            _validate_model(model, gravity=True)
+        assert raised.value.code == "E-SEC-001"
+        assert "beam_no_sec" in raised.value.message
 
-    def test_no_warning_all_members_have_section(self):
+    def test_no_error_when_all_members_have_section(self):
         model = _empty_model()
         model.add_member(_make_member("ok", material=_MATERIAL, section=_SECTION))
-        warnings = _validate_model(model, gravity=True)
-        assert not any("no section" in w["message"] for w in warnings)
+        _validate_model(model, gravity=True)
 
 
 # ---------------------------------------------------------------------------

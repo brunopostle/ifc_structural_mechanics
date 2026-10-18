@@ -967,59 +967,64 @@ def _load_to_nodal_forces(
     element_sets: Dict[str, List[int]],
     elements_data: Dict[int, Dict],
     node_coords: Dict,
-) -> Tuple[Dict[int, List[float]], bool]:
-    """The nodal forces of a line or area load, in global axes.
+) -> Dict[int, List[float]]:
+    """The nodal forces of a line or area load, in global axes, by node.
 
-    Returns:
-        The forces by node, and whether the load is in the local axes of a
-        member that has none (it is then taken as given in global axes).
+    Raises:
+        AnalysisError: If the load is in the local axes of a member that has
+            none (it was once applied in global axes, with a warning).
     """
     half_wave = getattr(load, "half_wave", None)
     if half_wave:
-        peak = _to_global_axes(load, load.peak, domain_model)
-        return (
-            _half_wave_load_to_nodal_forces(
-                element_set_name,
-                half_wave,
-                np.array(load.peak if peak is None else peak, dtype=float),
-                load.start_position,
-                load.end_position,
-                element_sets,
-                elements_data,
-                node_coords,
-            ),
-            peak is None,
-        )
-    samples = getattr(load, "samples", None)
-    if samples:
-        turned = [_to_global_axes(load, vector, domain_model) for _, vector in samples]
-        without_axes = any(vector is None for vector in turned)
-        return (
-            _varying_line_load_to_nodal_forces(
-                element_set_name,
-                [
-                    (float(at), np.array(given if vector is None else vector, float))
-                    for (at, given), vector in zip(samples, turned)
-                ],
-                load.start_position,
-                load.end_position,
-                element_sets,
-                elements_data,
-                node_coords,
-            ),
-            without_axes,
-        )
-    vector = _global_force_vector(load, domain_model)
-    return (
-        _distributed_load_to_nodal_forces(
+        return _half_wave_load_to_nodal_forces(
             element_set_name,
-            _get_validated_force_vector(load) if vector is None else vector,
+            half_wave,
+            _in_global_axes(load, load.peak, domain_model),
+            load.start_position,
+            load.end_position,
             element_sets,
             elements_data,
             node_coords,
-        ),
-        vector is None,
+        )
+    samples = getattr(load, "samples", None)
+    if samples:
+        return _varying_line_load_to_nodal_forces(
+            element_set_name,
+            [
+                (float(at), _in_global_axes(load, vector, domain_model))
+                for at, vector in samples
+            ],
+            load.start_position,
+            load.end_position,
+            element_sets,
+            elements_data,
+            node_coords,
+        )
+    return _distributed_load_to_nodal_forces(
+        element_set_name,
+        _in_global_axes(load, _get_validated_force_vector(load), domain_model),
+        element_sets,
+        elements_data,
+        node_coords,
     )
+
+
+def _in_global_axes(load, vector, domain_model: StructuralModel) -> np.ndarray:
+    """``_to_global_axes``, for a load that is to be applied.
+
+    Raises:
+        AnalysisError: If the load is in the local axes of an item that has
+            none: its direction is not known.
+    """
+    turned = _to_global_axes(load, vector, domain_model)
+    if turned is None:
+        raise AnalysisError(
+            f"Load {getattr(load, 'id', '?')} is given in the local axes of "
+            "an item that has none, so its direction is not known.",
+            code="E-LOD-004",
+            ifc_guids=guids_of(domain_model, [getattr(load, "id", "?")]),
+        )
+    return turned
 
 
 def _global_force_vector(load, domain_model: StructuralModel) -> Optional[np.ndarray]:
@@ -1318,19 +1323,37 @@ def write_analysis_steps(
             if dof >= 4
         }
     recorder = _StepLoadRecorder(file, held_rotations)
-    _write_analysis_steps(
-        recorder,  # type: ignore[arg-type]
-        domain_model,
-        analysis_type,
-        short_id_map,
-        element_sets,
-        node_coords,
-        gravity,
-        gravity_direction,
-        u1_node_masses,
-        u1_element_sets,
-        elements_data,
-    )
+    # Point loads moved to a node, gathered over the steps for one warning
+    if domain_model is not None:
+        domain_model._moved_point_loads = {}
+    try:
+        _write_analysis_steps(
+            recorder,  # type: ignore[arg-type]
+            domain_model,
+            analysis_type,
+            short_id_map,
+            element_sets,
+            node_coords,
+            gravity,
+            gravity_direction,
+            u1_node_masses,
+            u1_element_sets,
+            elements_data,
+        )
+    finally:
+        moved = getattr(domain_model, "_moved_point_loads", None) or {}
+        if domain_model is not None:
+            del domain_model._moved_point_loads
+    if moved:
+        _warn_model(
+            domain_model,
+            "W-LOD-007",
+            f"{len(moved)} point load(s) are further than {_POINT_LOAD_SNAP} m "
+            "from any mesh node and are applied at the nearest one, up to "
+            f"{max(moved.values()):.2f} m from where the file puts them. The "
+            f"first are {', '.join(list(moved)[:5])}.",
+            ifc_guids=guids_of(domain_model, moved),
+        )
     recorder.finish()
     _record_user_element_loads(domain_model, recorder.steps)
     if not isinstance(supports, dict):
@@ -1433,7 +1456,7 @@ def _note_user_element_loads(
         if element not in elements:
             continue
         alone = {element_set_name: [element]}
-        forces, _ = _load_to_nodal_forces(
+        forces = _load_to_nodal_forces(
             load, element_set_name, domain_model, alone, elements_data, node_coords
         )
         moments = _load_to_nodal_moments(
@@ -1969,7 +1992,8 @@ def _point_load_lines(
     shells alone has no rotation about their normal.
 
     Raises:
-        AnalysisError: For a moment at a node of no curve member.
+        AnalysisError: For a moment at a node of no curve member, or a load
+            in the local axes of an item that has none.
     """
     node_id = _determine_load_node(
         load, node_coords=node_coords, domain_model=domain_model
@@ -1977,19 +2001,9 @@ def _point_load_lines(
     force = _get_validated_force_vector(load)
     moment = getattr(load, "moment", None)
     # In LOCAL_COORDS it is in the axes of the item it is assigned to
-    turned = _to_global_axes(load, force, domain_model)
-    if turned is None:
-        _warn_model(
-            domain_model,
-            "W-LOD-008",
-            f"Load {getattr(load, 'id', '?')} is given in the local axes of an "
-            "item that has none; it is applied in global axes.",
-            ifc_guids=guids_of(domain_model, [getattr(load, "id", "?")]),
-        )
-    else:
-        force = turned
-        if moment is not None:
-            moment = _to_global_axes(load, moment, domain_model)
+    force = _in_global_axes(load, force, domain_model)
+    if moment is not None:
+        moment = _in_global_axes(load, moment, domain_model)
     lines = [
         f"{node_id}, {i + 1}, {component:.6e}\n"
         for i, component in enumerate(force)
@@ -2179,26 +2193,19 @@ def _write_validated_loads_within_step(
                     )
 
                 if element_set_name:
-                    # Check if this element set actually exists and is
-                    # non-empty (may be empty if the member was merged during
-                    # fragment, or lost all its elements to an overlapping
-                    # member during overlap resolution) — an empty set has no
-                    # corresponding *ELSET card in the file.
+                    # A member another one overlaps has the elements in its
+                    # geometry here (UnifiedCalculixWriter._load_element_sets),
+                    # and a member with none stops the meshing
                     if element_sets and not element_sets.get(element_set_name):
-                        _warn_model(
-                            domain_model,
-                            "W-LOD-009",
-                            f"Load {getattr(load, 'id', 'unknown')} is not "
+                        raise AnalysisError(
+                            f"Load {getattr(load, 'id', '?')} cannot be "
                             f"applied: its member ({element_set_name}) has no "
-                            "elements, having lost its geometry to a member "
-                            "it overlaps.",
-                            ifc_guids=guids_of(
-                                domain_model, [getattr(load, "id", "?")]
-                            ),
+                            "elements in the mesh.",
+                            code="E-GEN-001",
                         )
                     elif elements_data and node_coords:
                         # Global-direction nodal forces, written after this block
-                        partial, without_axes = _load_to_nodal_forces(
+                        partial = _load_to_nodal_forces(
                             load,
                             element_set_name,
                             domain_model,
@@ -2206,17 +2213,6 @@ def _write_validated_loads_within_step(
                             elements_data,
                             node_coords,
                         )
-                        if without_axes:
-                            _warn_model(
-                                domain_model,
-                                "W-LOD-008",
-                                f"Load {getattr(load, 'id', '?')} is given in the "
-                                "local axes of a member that has none; it is "
-                                "applied in global axes.",
-                                ifc_guids=guids_of(
-                                    domain_model, [getattr(load, "id", "?")]
-                                ),
-                            )
                         _add_nodal(u1_extra_cloads, partial)
                         _note_user_element_loads(
                             file,
@@ -2287,23 +2283,18 @@ def _write_validated_loads_within_step(
             else:
                 element_set_name = f"MEMBER_{member.id}"
 
-            # Skip if element set doesn't exist or is empty (member merged
-            # during fragment, or lost all elements during overlap resolution)
             if element_sets and not element_sets.get(element_set_name):
-                _warn_model(
-                    domain_model,
-                    "W-LOD-009",
-                    f"The distributed loads on member {member.id} are not "
-                    "applied: it has no elements, having lost its geometry to "
-                    "a member it overlaps.",
-                    ifc_guids=guids_of(domain_model, [member.id]),
+                raise AnalysisError(
+                    f"The distributed loads on member {member.id} cannot be "
+                    "applied: it has no elements in the mesh.",
+                    code="E-GEN-001",
                 )
             else:
                 if elements_data and node_coords:
                     member_cloads: Dict[int, List[float]] = {}
                     member_moments: Dict[int, List[float]] = {}
                     for load in distributed_loads:
-                        partial, _ = _load_to_nodal_forces(
+                        partial = _load_to_nodal_forces(
                             load,
                             element_set_name,
                             domain_model,
@@ -2391,13 +2382,17 @@ def _determine_load_node(load, node_coords=None, domain_model=None) -> int:
         np.linalg.norm(np.array(position, float) - np.array(node_coords[closest]))
     )
     if distance > _POINT_LOAD_SNAP and domain_model is not None:
-        _warn_model(
-            domain_model,
-            "W-LOD-007",
-            f"Point load {load_id} is applied at the nearest mesh node, "
-            f"{distance:.2f} m from its position.",
-            ifc_guids=guids_of(domain_model, [load_id]),
-        )
+        moved = getattr(domain_model, "_moved_point_loads", None)
+        if isinstance(moved, dict):
+            moved[load_id] = distance
+        else:
+            _warn_model(
+                domain_model,
+                "W-LOD-007",
+                f"Point load {load_id} is applied at the nearest mesh node, "
+                f"{distance:.2f} m from its position.",
+                ifc_guids=guids_of(domain_model, [load_id]),
+            )
     return closest
 
 

@@ -6,7 +6,7 @@ code such as ``W-SUP-001`` or ``E-SUP-002``: W for a warning, E for an error
 that stops the analysis, the stage of the analysis it comes from, and a
 number. Within a stage the ones most likely to be met come first. A code is
 never renumbered or given to something else; one that is no longer used stays
-in the list, marked as retired.
+in the list with ``retired=True``.
 
 ``docs/messages.md`` is written from this module
 (``python -m ifc_structural_mechanics.utils.messages > docs/messages.md``),
@@ -27,6 +27,7 @@ class MessageKind:
     code: str
     title: str
     explanation: str
+    retired: bool = False
 
 
 # The stages of the analysis, in the order they run
@@ -55,16 +56,14 @@ _KINDS = [
     MessageKind(
         "W-IFC-002",
         "Members without a material",
-        "Members of the model have no material. CalculiX cannot analyse them "
-        "and the analysis will fail. Assign an IfcMaterial with "
-        "Pset_MaterialMechanical to each structural member.",
+        "No longer given: such members stop the analysis (E-MAT-001).",
+        retired=True,
     ),
     MessageKind(
         "W-IFC-003",
         "Curve members without a section",
-        "Curve members of the model have no profile. CalculiX cannot analyse "
-        "them and the analysis will fail. Assign an IfcMaterialProfileSet "
-        "with a profile to each curve member.",
+        "No longer given: such members stop the analysis (E-SEC-001).",
+        retired=True,
     ),
     # Materials
     MessageKind(
@@ -207,20 +206,21 @@ _KINDS = [
     MessageKind(
         "W-JNT-008",
         "Connection with no nodes",
-        "No mesh node of the connected members was found at the connection, "
-        "so it joins nothing. Check that the connection lies on its members.",
+        "No longer given: a connection whose members have no node at it stops "
+        "the analysis (E-JNT-001).",
+        retired=True,
     ),
     MessageKind(
         "W-JNT-009",
         "Spring connection between members not implemented",
-        "A connection between members with spring stiffness is not modelled "
-        "and joins nothing. Springs at supports are.",
+        "No longer given: such a connection stops the analysis (E-JNT-004).",
+        retired=True,
     ),
     MessageKind(
         "W-JNT-010",
         "Connection of an unknown type",
-        "The connection is of a type the writer does not know and joins "
-        "nothing. Report it.",
+        "No longer given: such a connection stops the analysis (E-JNT-004).",
+        retired=True,
     ),
     # Supports
     MessageKind(
@@ -324,15 +324,17 @@ _KINDS = [
     MessageKind(
         "W-LOD-008",
         "Load in the local axes of an item that has none",
-        "The load is given in local coordinates, but the member or connection "
-        "it is assigned to has no axes of its own, so it is applied in global "
-        "axes. Check its direction.",
+        "No longer given: such a load stops the analysis (E-LOD-004), since "
+        "its direction is not known.",
+        retired=True,
     ),
     MessageKind(
         "W-LOD-009",
         "Load on a member with no elements",
-        "The member lost its elements to a member it overlaps (W-MSH-002), so "
-        "its loads are not applied. Assign them to the member that remains.",
+        "No longer given: the loads of a member that another one overlaps are "
+        "applied to the elements lying in its own geometry, whoever they "
+        "belong to.",
+        retired=True,
     ),
     # The solver
     MessageKind(
@@ -447,7 +449,8 @@ _ERRORS = [
         "E-MAT-001",
         "Member without a material",
         "A surface member needs an IfcMaterial (directly, or through a layer or "
-        "constituent set). Assign one.",
+        "constituent set), and a curve member gets its material with its "
+        "profile (E-SEC-001). Assign one.",
     ),
     MessageKind(
         "E-MAT-002",
@@ -543,9 +546,9 @@ _ERRORS = [
     MessageKind(
         "E-JNT-001",
         "Member does not reach its connection",
-        "The mesh has no node for a curve member at a connection it is joined "
-        "to, so it cannot be joined there. The connection probably lies off "
-        "the member: check both.",
+        "The mesh has no node for a member at a connection it is joined to, "
+        "so it cannot be joined there. The connection probably lies off the "
+        "member: check both.",
     ),
     MessageKind(
         "E-JNT-002",
@@ -562,6 +565,15 @@ _ERRORS = [
         "beams or shells, and stock CalculiX crashes on the mix. Release every "
         "rotation of one of the members at such joints, or analyse without "
         "user elements.",
+    ),
+    MessageKind(
+        "E-JNT-004",
+        "Joint of a kind that cannot be modelled",
+        "The connection between members is of a type the writer does not "
+        "model: a spring joint between members, or a type it does not know. "
+        "A model read from an IFC file has neither (members are joined "
+        "rigidly unless their relation releases them, and springs act "
+        "against the ground); one built by hand can. Report it.",
     ),
     # Supports
     MessageKind(
@@ -651,8 +663,9 @@ _ERRORS = [
         "E-LOD-004",
         "Load in axes that cannot be used",
         "The load is given in local coordinates of an item that has no axes "
-        "(none assigned, a surface connection), or per projected length in "
-        "local coordinates. Give it in global coordinates.",
+        "(none assigned, a surface connection, a curve member with no usable "
+        "Axis), or per projected length in local coordinates. Give it in "
+        "global coordinates.",
     ),
     MessageKind(
         "E-LOD-005",
@@ -775,9 +788,11 @@ def warning(
         ifc_guids: The IFC GlobalIds of every entity it is about.
 
     Raises:
-        KeyError: For a code that is not registered.
+        KeyError: For a code that is not registered or is retired.
     """
     kind = KINDS[code]
+    if kind.retired:
+        raise KeyError(f"{code} is retired")
     return {
         "code": code,
         "title": kind.title,
@@ -836,8 +851,9 @@ def render_markdown() -> str:
         for kind in _ERRORS + _KINDS:
             if kind.code.split("-")[1] != stage:
                 continue
+            retired = " (retired)" if kind.retired else ""
             lines += [
-                f"### {kind.code}: {kind.title}",
+                f"### {kind.code}: {kind.title}{retired}",
                 "",
                 kind.explanation,
                 "",

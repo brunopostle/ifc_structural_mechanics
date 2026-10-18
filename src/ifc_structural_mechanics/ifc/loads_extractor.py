@@ -387,13 +387,16 @@ class LoadsExtractor:
             return loads if isinstance(loads, list) else [loads]
         except ModelExtractionError as error:
             raise ModelExtractionError(
-                f"Load {load_id} cannot be analysed. {error.message}", code=error.code
+                f"Load {load_id} cannot be analysed. {error.message}",
+                code=error.code,
+                ifc_guids=[load_id, *error.ifc_guids],
             ) from error
         except Exception as error:
             raise ModelExtractionError(
                 f"Load {load_id} cannot be read from the IFC file: "
                 f"{type(error).__name__}: {error}",
                 code="E-IFC-005",
+                ifc_guids=[load_id],
             ) from error
 
     @staticmethod

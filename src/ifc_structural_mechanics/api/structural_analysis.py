@@ -367,6 +367,7 @@ def analyze_ifc(
             {
                 "code": e.code,
                 "message": str(e),
+                "ifc_guids": list(e.ifc_guids),
                 "severity": "critical",
                 "entity_type": None,
                 "ccx_id": None,
@@ -409,8 +410,10 @@ def extract_model(ifc_path: str) -> StructuralModel:
         raise
     except Exception as e:
         raise ModelExtractionError(
-            f"Failed to extract model from IFC file: {str(e)}", code="E-IFC-005"
-        )
+            f"The model cannot be extracted from the IFC file: "
+            f"{type(e).__name__}: {e}",
+            code="E-IFC-005",
+        ) from e
 
 
 def create_analysis_config(
@@ -471,11 +474,20 @@ def create_meshing_config(mesh_size: float, element_order: int = 2) -> MeshingCo
     return config
 
 
+def _first_ids(members, count: int = 5) -> str:
+    """The ids of the first few members, and how many more there are."""
+    ids = ", ".join(str(m.id) for m in members[:count])
+    if len(members) > count:
+        ids += f" (and {len(members) - count} more)"
+    return ids
+
+
 def _validate_model(domain_model, gravity: bool) -> list:
     """
     Validate the extracted structural model and return a list of warnings.
 
-    Checks that members have materials/sections, that boundary conditions exist,
+    Checks that members have materials/sections (an error if not), that
+    boundary conditions exist,
     and that loads are present (warning when gravity is the only likely source
     but --gravity was not passed).
 
@@ -485,6 +497,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
 
     Returns:
         List of warning dicts (same format as result["warnings"]).
+
+    Raises:
+        ModelExtractionError: If a member has no material, or a curve member
+            no section.
     """
     warnings = []
 
@@ -495,43 +511,29 @@ def _validate_model(domain_model, gravity: bool) -> list:
             )
         )
 
-    # Check every member has a material
-    members_missing_material = [
+    # The extractor refuses these; a model built by hand may still lack them
+    without_material = [
         m for m in domain_model.members if not getattr(m, "material", None)
     ]
-    if members_missing_material:
-        ids = ", ".join(str(m.id) for m in members_missing_material[:5])
-        suffix = (
-            f" (and {len(members_missing_material) - 5} more)"
-            if len(members_missing_material) > 5
-            else ""
+    if without_material:
+        raise ModelExtractionError(
+            f"{len(without_material)} member(s) have no material, so they cannot "
+            f"be analysed. The first are {_first_ids(without_material)}.",
+            code="E-MAT-001",
+            ifc_guids=[getattr(m, "ifc_guid", None) for m in without_material],
         )
-        _warn(
-            "W-IFC-002",
-            f"{len(members_missing_material)} member(s) have no material assigned "
-            f"— CalculiX will reject them: {ids}{suffix}",
-            members_missing_material,
-        )
-
-    # Check every curve member has a section (a surface member has a thickness)
-    members_missing_section = [
+    without_section = [
         m
         for m in domain_model.members
         if getattr(m, "entity_type", None) == "curve"
         and not getattr(m, "section", None)
     ]
-    if members_missing_section:
-        ids = ", ".join(str(m.id) for m in members_missing_section[:5])
-        suffix = (
-            f" (and {len(members_missing_section) - 5} more)"
-            if len(members_missing_section) > 5
-            else ""
-        )
-        _warn(
-            "W-IFC-003",
-            f"{len(members_missing_section)} member(s) have no section assigned "
-            f"— CalculiX will reject them: {ids}{suffix}",
-            members_missing_section,
+    if without_section:
+        raise ModelExtractionError(
+            f"{len(without_section)} curve member(s) have no section, so they "
+            f"cannot be analysed. The first are {_first_ids(without_section)}.",
+            code="E-SEC-001",
+            ifc_guids=[getattr(m, "ifc_guid", None) for m in without_section],
         )
 
     # Warn about section approximations that affect analysis fidelity

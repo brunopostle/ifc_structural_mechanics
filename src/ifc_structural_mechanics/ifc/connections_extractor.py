@@ -152,12 +152,14 @@ class ConnectionsExtractor:
             raise ModelExtractionError(
                 f"Connection {connection_id} cannot be analysed. {error.message}",
                 code=error.code,
+                ifc_guids=[connection_id, *error.ifc_guids],
             ) from error
         except Exception as error:
             raise ModelExtractionError(
                 f"Connection {connection_id} cannot be read from the IFC file: "
                 f"{type(error).__name__}: {error}",
                 code="E-IFC-005",
+                ifc_guids=[connection_id],
             ) from error
 
     def _build_domain_connection(self, ifc_connection) -> StructuralConnection:

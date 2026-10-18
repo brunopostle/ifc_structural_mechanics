@@ -55,6 +55,7 @@ class TestMembers:
             Extractor(model).extract_model()
         assert member.GlobalId in str(error.value)
         assert "no edge representation" in str(error.value)
+        assert error.value.ifc_guids == [member.GlobalId]
 
     def test_material_without_stiffness_is_an_error(self):
         """It used to be analysed as steel."""
@@ -150,6 +151,7 @@ class TestConnections:
             Extractor(model).extract_model()
         assert connection.GlobalId in str(error.value)
         assert "position cannot be found" in str(error.value)
+        assert error.value.ifc_guids == [connection.GlobalId]
 
     def test_unset_stiffness_is_an_error(self):
         """An optional stiffness left out is not taken as free."""
@@ -307,6 +309,7 @@ class TestLoads:
             Extractor(model).extract_model()
         assert action.GlobalId in str(error.value)
         assert "assigned to no item" in str(error.value)
+        assert error.value.ifc_guids == [action.GlobalId]
 
     def test_moment_that_varies_along_a_member_is_an_error(self):
         model = _open("portal_01")

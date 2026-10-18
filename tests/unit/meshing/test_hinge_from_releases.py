@@ -181,15 +181,33 @@ class TestPartialRelease:
         _, text = self._write({"m1": [4]})
         assert set(_extract_equation_dofs(text)) == {1, 2, 3}
 
-    def test_user_is_warned(self):
-        writer, _ = self._write({"m1": [6]})
+    def _warn(self, released):
+        writer = _make_writer_stub()
+        writer.domain_model = MagicMock()
+        writer.domain_model.connections = [_conn(released_dofs_by_member=released)]
+        writer._release_hinges = {}
+        writer._ifc_guids = lambda ids: list(ids)
+        UnifiedCalculixWriter._warn_partial_releases(writer)
+        return writer
+
+    def test_user_is_warned_once(self):
+        writer = self._warn({"m1": [6], "m2": [4]})
         writer._warn_user.assert_called_once()
         code, message = writer._warn_user.call_args[0][:2]
         assert code == "W-JNT-007"
-        assert "m1" in message and "partial" in message
+        assert message.startswith("2 member end(s)")
+        assert "m1 at conn1" in message and "m2 at conn1" in message
 
     def test_full_release_does_not_warn(self):
-        writer, _ = self._write({"m1": [4, 5, 6]})
+        writer = self._warn({"m1": [4, 5, 6]})
+        writer._warn_user.assert_not_called()
+
+    def test_member_with_a_hinge_does_not_warn(self):
+        writer = _make_writer_stub()
+        writer.domain_model = MagicMock()
+        writer.domain_model.connections = [_conn(released_dofs_by_member={"m1": [6]})]
+        writer._release_hinges = {"conn1": {"m1": []}}
+        UnifiedCalculixWriter._warn_partial_releases(writer)
         writer._warn_user.assert_not_called()
 
 
@@ -257,7 +275,8 @@ class TestMergeRigidConnectionNodes:
         writer = _merge_stub(positions, [("m1", 1), ("m2", 2)])
         writer._merge_rigid_connection_nodes()
         assert writer._rigid_links == []
-        writer._warn_user.assert_called_once()
+        far, _ = writer._warn_far_member_ends.call_args[0]
+        assert [(m, round(gap, 3)) for _, m, gap in far] == [("m2", 5.0)]
 
     def test_released_member_is_not_merged(self):
         writer = _merge_stub(

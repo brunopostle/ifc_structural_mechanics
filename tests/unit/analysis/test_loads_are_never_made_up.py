@@ -80,6 +80,36 @@ class TestPointLoadNode:
         (warning,) = model.analysis_warnings
         assert "3.00 m from its position" in warning["message"]
 
+    def test_loads_moved_are_reported_once_for_the_model(self):
+        """Once, with a count, however many loads and steps (`94g.12`)."""
+        far = [
+            PointLoad(id=f"p{i}", magnitude=1.0, direction=[0, 0, -1], position=p)
+            for i, p in enumerate(([1, 3, 0], [2, 0.5, 0]))
+        ]
+        model = _model(*far)
+        second = LoadGroup(id="lc2", name="Second", is_load_case=True)
+        second.add_load(far[0])
+        model.load_groups.append(second)
+        write_analysis_steps(io.StringIO(), model, node_coords=NODES)
+        (warning,) = model.analysis_warnings
+        assert warning["code"] == "W-LOD-007"
+        assert warning["message"].startswith("2 point load(s)")
+        assert "up to 3.00 m" in warning["message"]
+        assert warning["ifc_guids"] == ["p0", "p1"]
+        assert not hasattr(model, "_moved_point_loads")
+
+    def test_load_in_the_axes_of_a_member_with_none_is_an_error(self):
+        """It used to be applied in global axes, with a warning."""
+        load = PointLoad(
+            id="p", magnitude=1.0, direction=[0, 0, -1], position=[1, 0, 0]
+        )
+        load.coordinate_system = "local"
+        load.member_reference = "m1"
+        with pytest.raises(AnalysisError) as raised:
+            write_analysis_steps(io.StringIO(), _model(load), node_coords=NODES)
+        assert raised.value.code == "E-LOD-004"
+        assert raised.value.ifc_guids == ["p"]
+
     def test_load_at_a_node_is_not_reported(self):
         model = _model()
         load = PointLoad(
@@ -134,6 +164,21 @@ class TestDistributedLoads:
         with pytest.raises(AnalysisError, match="need the mesh"):
             write_analysis_steps(
                 io.StringIO(), _model(self._line_load("m1")), node_coords=NODES
+            )
+
+    def test_line_load_in_the_axes_of_a_member_with_none_is_an_error(self):
+        load = self._line_load("m1")
+        load.coordinate_system = "local"
+        with pytest.raises(AnalysisError, match="direction is not known"):
+            write_analysis_steps(
+                io.StringIO(),
+                _model(load),
+                node_coords=NODES,
+                element_sets={"MEMBER_m1": [1, 2]},
+                elements_data={
+                    1: {"type": "B31", "nodes": [1, 2]},
+                    2: {"type": "B31", "nodes": [2, 3]},
+                },
             )
 
     def test_no_dload_is_written(self):
