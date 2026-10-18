@@ -267,7 +267,7 @@ empty and `supports` is empty. `modal` is then present:
 
 The shapes are in the solver's result file and not here: each is scaled so
 that its generalised mass is one, so they are not displacements either.
-`visualize.py <model> --mode <n>` draws one.
+`ifc-analysis plot <output directory> --mode <n>` draws one.
 
 ## Load cases and combinations
 
@@ -437,6 +437,13 @@ the section's first direction (the profile's depth) and `2 = x cross 1`.
 Each force is what the part of the member beyond the cross-section exerts on
 the part before it: N is positive in tension, Mf1 is positive when the +1 side
 is in tension, Mf2 when the +2 side is, T is right-handed about x.
+
+![The bending moment of portal_01 drawn from its section_force_diagrams](images/portal_01_moments.png)
+
+*`ifc-analysis plot <output> --field Mf1 --reactions --loads` draws `Mf1_Nm`
+from `distance_m` along `x`, offset along `1`, so that a moment is on the
+tension side.*
+
 `max_normal_stress_Pa` is the largest of |N|/A + |Mf1| y/Iy + |Mf2| z/Iz over
 those cross-sections, with the properties of the member's real section;
 `utilisation_ratio` divides it by the material's yield strength when one is

@@ -290,14 +290,14 @@ def test_analyze_ifc_success_unified(
 
 
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
-def test_analyze_ifc_extraction_error(mock_extract_model):
+def test_analyze_ifc_extraction_error(mock_extract_model, tmp_path):
     """Test model extraction error in unified workflow."""
     # Set up mock to raise an exception
     mock_extract_model.side_effect = ModelExtractionError("Test extraction error")
 
     # Call the function and expect exception
     with pytest.raises(ModelExtractionError):
-        analyze_ifc(ifc_path="path/to/test.ifc", output_dir="output_dir")
+        analyze_ifc(ifc_path="path/to/test.ifc", output_dir=str(tmp_path))
 
 
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
@@ -499,7 +499,7 @@ def test_validation_warnings_not_dropped_by_parse_step(
 
 
 @patch("ifc_structural_mechanics.api.structural_analysis.extract_model")
-def test_analyze_ifc_empty_model(mock_extract_model):
+def test_analyze_ifc_empty_model(mock_extract_model, tmp_path):
     """Test analysis with empty model."""
     # Create an empty model
     empty_model = StructuralModel(id="empty", name="Empty Model")
@@ -507,7 +507,7 @@ def test_analyze_ifc_empty_model(mock_extract_model):
 
     # Call the function and expect exception
     with pytest.raises(ModelExtractionError):
-        analyze_ifc(ifc_path="path/to/test.ifc", output_dir="output_dir")
+        analyze_ifc(ifc_path="path/to/test.ifc", output_dir=str(tmp_path))
 
 
 def test_analyze_ifc_unsupported_analysis_type():
@@ -532,7 +532,7 @@ def test_analyze_ifc_unsupported_analysis_type():
     "ifc_structural_mechanics.api.structural_analysis.run_complete_analysis_workflow"
 )
 def test_unexpected_error_handling(
-    mock_unified_workflow, mock_extract_model, mock_domain_model
+    mock_unified_workflow, mock_extract_model, mock_domain_model, tmp_path
 ):
     """Test handling of unexpected errors."""
     mock_extract_model.return_value = mock_domain_model
@@ -541,7 +541,7 @@ def test_unexpected_error_handling(
     mock_unified_workflow.side_effect = RuntimeError("Unexpected error")
 
     with pytest.raises(StructuralAnalysisError) as excinfo:
-        analyze_ifc(ifc_path="path/to/test.ifc", output_dir="output_dir")
+        analyze_ifc(ifc_path="path/to/test.ifc", output_dir=str(tmp_path))
 
     assert "Analysis workflow failed" in str(excinfo.value)
     assert "Unexpected error" in str(excinfo.value)

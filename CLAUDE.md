@@ -85,20 +85,20 @@ ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 
 ### Visualization
 ```bash
-# Visualize displacement results (auto-scales)
-python visualize.py building_02
+# Deformed shape of the first load case (needs the viz extra)
+ifc-analysis plot ./results
 
-# Visualize stress results
-python visualize.py slab_01 --field stress
+# Stress, a combination, mesh edges
+ifc-analysis plot ./results --field von-mises --combination ULS --edges
 
-# Save screenshot (non-interactive)
-python visualize.py building_02 --screenshot result.png
-
-# Custom scale factor
-python visualize.py portal_01 --scale 500
+# Section force diagram with loads and reactions, to a PNG
+ifc-analysis plot ./results --field Mf1 --loads --reactions --screenshot moments.png
 
 # A mode shape of a modal or buckling analysis
-python visualize.py beam_01 --mode 2
+ifc-analysis plot ./results --mode 2
+
+# The pictures of README.md and docs/ (building_02 takes about 12 minutes)
+python docs/images/make_images.py [model ...] [--work DIR]
 ```
 
 ## Architecture Overview
@@ -180,8 +180,10 @@ Runs CalculiX and processes results:
 - `plane_structure.py`: Recognises plane trusses and frames and what holds them in their plane (see Connections)
 
 #### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
-Interactive 3D result visualization using PyVista:
-- `result_visualizer.py`: `ResultVisualizer` class that loads mesh from FRD+INP files, maps displacement/stress results to mesh nodes via coordinate-based KDTree matching, and renders with PyVista. Displacement field displayed in mm.
+Pictures of an output directory (`ifc-analysis plot`, vi9):
+- `output_files.py`: `AnalysisOutput` reads `analysis.inp` (the mesh as written; a `** Member <id>` comment the writer puts before each member's set gives its id; `BC_<id>` node sets; `*CLOAD` per step), `analysis.frd` and `results.json`. No PyVista. Each node of an expanded solid belongs to the node of its own input element it is nearest to (the rule of `parse_support_node_moments()`); a node's displacement is the mean over its cross-section, its stress the largest. **Never match nodes by distance alone**: a 0.15 m tolerance once left 4 of `beam_01`'s 10 nodes undeformed (`aiz.102`). Combinations are their cases times their factors; load case n is the n-th `DISP` block, mode n of a buckling analysis the (n+1)-th.
+- `plot.py`: `render()` and `plot()` with PyVista: deformed shapes (viridis), section force diagrams from `results.json` along `section_axes` (moments on the tension side, diverging colours), supports, reactions, loads, mode shapes. Quadratic cells are split into linear ones through all their nodes. Draw many things as one mesh: a mesh per member took 39 s on `building_02`.
+- `docs/images/make_images.py` makes the pictures of README.md and docs/ from the example models; run it again when a change shows in them.
 
 #### 6. Configuration (`src/ifc_structural_mechanics/config/`)
 Configuration system with three main classes:
@@ -272,7 +274,7 @@ Command-line interface:
 
 ### Python Packages
 Core: numpy, scipy, ifcopenshell, gmsh, meshio, click, pyyaml, pandas
-Visualization: pyvista (optional, for result visualization)
+Visualization: pyvista (optional, `viz` extra; `ifc-analysis plot`). CI runs `tests/unit/visualization` under Xvfb in the Python 3.10 job and fails if a picture test is skipped
 Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 
 ## Key File Locations
@@ -283,9 +285,7 @@ Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 - Configuration: `src/ifc_structural_mechanics/config/`
 - Traceability: `src/ifc_structural_mechanics/domain/structural_model.py` (see `register_*` and `trace_error_to_ifc` methods)
 - Equivalent sections: `src/ifc_structural_mechanics/converters/section_profiles.py`
-- Result visualization: `src/ifc_structural_mechanics/visualization/result_visualizer.py`
-- Visualization CLI: `visualize.py` (general-purpose: any model, displacement/stress, screenshot/interactive)
-- FRD-only visualization: `visualize_from_frd.py` (reads mesh+results directly from FRD, no IFC needed)
+- Pictures: `src/ifc_structural_mechanics/visualization/` (`ifc-analysis plot`); documentation images: `docs/images/make_images.py`
 - Test utilities: `tests/conftest.py`
 - Warning and error codes: `src/ifc_structural_mechanics/utils/messages.py` (list in `docs/messages.md`)
 

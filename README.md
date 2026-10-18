@@ -7,6 +7,24 @@ A Python library for structural analysis of IFC (Industry Foundation Classes) bu
 See [VISION.md](VISION.md) for the project roadmap and intended architecture.
 See [docs/validation_report.md](docs/validation_report.md) for numerical accuracy benchmarks.
 
+## In pictures
+
+Every picture here is drawn by `ifc-analysis plot` from an analysis of one of
+the example models, at the settings in
+[`docs/images/make_images.py`](docs/images/make_images.py), which makes them all
+again.
+
+| | |
+|---|---|
+| ![building_02 under 1.4 Dead + 1.6 Live](docs/images/building_02_combination.png) | ![building_02, first mode](docs/images/building_02_mode_1.png) |
+| **`building_02`**: a 60 m tower on a podium, 1,304 members (beams, columns, slabs and walls) on one conforming mesh of 36,767 nodes. Its three load cases are solved in one run (7 minutes and 1.9 GB at a 2 m mesh) and its 17 load combinations are added up from them. Shown: 1.4 Dead + 1.6 Live, 55 mm at most. | **Modal analysis** of the same model: the first of six modes, the tower swaying at 0.41 Hz (4 minutes), with the mass of its materials. |
+| ![portal_01 bending moments](docs/images/portal_01_moments.png) | ![beam_01 shear force](docs/images/beam_01_shear.png) |
+| **Section force diagrams** along every member, here the bending moment of `portal_01` on the tension side, with the load on half of its beam and the reactions at its clamped feet, which balance the load to six figures. | **Shear force** of `beam_01`: the jump of 20 kN under the point load at midspan, and the slope of its own weight on either side. |
+| ![structure_01 under self-weight](docs/images/structure_01_displacement.png) | ![building_01 under live load](docs/images/building_01_live.png) |
+| **Beams and shells together**: `structure_01`, a slab hinged on a wall and carried by two columns, under self-weight, within 2% of Code_Aster. | **`building_01`**: masonry walls, floor slabs and a landing on I-section columns, which stop short of the walls and are joined to them by rigid links. Live load on the floor; mesh edges shown. |
+| ![grid_of_beams bending moments](docs/images/grid_of_beams_moments.png) | ![building_01, first mode](docs/images/building_01_mode_1.png) |
+| **A grid of beams** in three dimensions: secondary beams hinged onto two clamped main beams, with the hogging moment over the supports. | **`building_01`'s first mode**, 0.72 Hz: the heavy masonry box sways on its columns. |
+
 ## Overview
 
 IFC Structural Mechanics provides a workflow for performing structural analysis on IFC building models. The library extracts structural information from IFC files, generates finite element meshes using Gmsh, performs structural analysis with CalculiX, and provides tools for visualizing results.
@@ -19,7 +37,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge), whether or not those are parallel to the global ones: a roller on an incline reacts along its normal, and a line support along a diagonal wall can hold rotation about its edge alone. Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
-- **Result Visualization**: 3D visualization of deformed meshes and stress fields using PyVista; filter by load case with `--step`
+- **Pictures of the results**: `ifc-analysis plot` draws deformed shapes coloured by displacement or von Mises stress, section force diagrams along the members, supports, reactions, loads and mode shapes, for any load case, combination or mode (PyVista, optional)
 
 ### Known Limitations
 
@@ -326,46 +344,42 @@ else:
     print(f"Errors: {result['errors']}")
 ```
 
-### Visualization
+### Pictures
 
-Results can be visualized using the `visualize.py` script. This requires PyVista (`pip install -e ".[viz]"`). Results must be in the `_analysis_output/<model_name>/` directory (the default output location when running the CLI).
+`ifc-analysis plot` draws the results in an output directory of `ifc-analysis
+analyze`. It needs PyVista (`pip install -e ".[viz]"`).
 
 ```bash
-# Visualize displacement (interactive, auto-scaled)
-python visualize.py slab_01
+# Deformed shape of the first load case, in a window
+ifc-analysis plot ./results
 
-# Visualize stress distribution
-python visualize.py structure_01 --field stress
+# A load combination, coloured by von Mises stress, with the mesh edges
+ifc-analysis plot ./results --combination ULS --field von-mises --edges
 
-# Save screenshot (non-interactive)
-python visualize.py portal_01 --screenshot result.png
+# Bending moment along the members, with loads and reactions, to a PNG
+ifc-analysis plot ./results --field Mf1 --loads --reactions --screenshot moments.png
 
-# Custom displacement scale factor
-python visualize.py beam_01 --scale 500
-
-# Use a different output directory
-python visualize.py mymodel --output-dir /path/to/results
-
-# Export to interactive HTML
-python visualize.py slab_01 --html slab_results.html
+# The second mode of a modal or buckling analysis
+ifc-analysis plot ./results --mode 2
 ```
-
-**Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--field {displacement,stress}` | Field to visualize | `displacement` |
-| `--scale FACTOR` | Displacement scale factor | auto |
-| `--step NAME` | Filter results to a specific load case / step name | all steps |
-| `--screenshot FILE` | Save screenshot and exit | — |
-| `--html FILE` | Export interactive HTML | — |
-| `--output-dir DIR` | Override results directory | `_analysis_output/<model>` |
-| `--no-undeformed` | Hide undeformed wireframe overlay | off |
-| `--cmap COLORMAP` | Matplotlib colormap name | `jet` |
+| `--case NAME`, `--combination NAME`, `--mode N` | What to draw | the first load case, or mode 1 |
+| `--field` | `displacement`, `von-mises`, or a section force diagram: `N`, `Vf1`, `Vf2`, `T`, `Mf1`, `Mf2` | `displacement` |
+| `--scale X` | Deformation scale factor, or diagram length per unit force | automatic, stated on the picture |
+| `--loads`, `--reactions` | Draw the nodal loads given to the solver and the support reactions | off |
+| `--edges` | Draw the edges of the shell elements | off |
+| `--no-supports` | Leave the supports out | drawn |
+| `--view` | `auto`, `iso`, `xy`, `xz`, `yz`; `auto` looks across a plane model | `auto` |
+| `--screenshot FILE`, `--html FILE` | Save a PNG, or an interactive page (needs `trame`), instead of opening a window | — |
+| `--size WxH` | Size of the picture in pixels | `1600x1000` |
 
-The script expects:
-- IFC file at `examples/analysis-models/ifcFiles/<model_name>.ifc`
-- Analysis results at `_analysis_output/<model_name>/analysis.frd` and `analysis.inp`
+A diagram is drawn from `results.json` on the side of each member given by its
+section axes: a bending moment on the tension side, the other forces on the
+side of the section's 1 or 2 axis where positive. A displacement is the
+movement of a member's axis, the mean over the cross-section the solver
+expands it into; a stress is the largest over that cross-section.
 
 ## Example Models
 
@@ -395,12 +409,12 @@ To run an example:
 # Model with explicit load cases — no --gravity needed
 ifc-analysis analyze examples/analysis-models/ifcFiles/portal_01.ifc \
     --output _analysis_output/portal_01
-python visualize.py portal_01
+ifc-analysis plot _analysis_output/portal_01 --field Mf1 --reactions
 
 # Model with self-weight only — requires --gravity
 ifc-analysis analyze examples/analysis-models/ifcFiles/slab_01.ifc \
     --output _analysis_output/slab_01 --gravity --mesh-size 0.5
-python visualize.py slab_01
+ifc-analysis plot _analysis_output/slab_01
 ```
 
 ## Testing

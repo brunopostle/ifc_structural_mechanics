@@ -89,8 +89,8 @@ geometry. A wrapper panel:
 The overlay is temporary session state — the IFC file is never modified. When the model
 changes, the user reruns the analysis. This is the correct Native IFC pattern.
 
-The existing PyVista visualiser (`visualize.py`) is a developer/debugging tool and is not
-the production UI.
+The PyVista pictures (`ifc-analysis plot`) are for checking results and for
+documentation; they are not the production UI.
 
 ## Architecture boundaries
 

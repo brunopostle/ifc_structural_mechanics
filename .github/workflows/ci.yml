@@ -65,6 +65,17 @@ jobs:
         run: pytest -m slow -v
         continue-on-error: true
 
+      # The pictures need PyVista and a display: Xvfb gives one. Without
+      # them the tests that render skip, so check that none did here
+      - name: Run plot tests
+        if: matrix.python-version == '3.10'
+        run: |
+          set -o pipefail
+          sudo apt-get install -y xvfb
+          pip install -e ".[dev,viz]"
+          xvfb-run -a pytest tests/unit/visualization -v -rs | tee plot.log
+          ! grep -E 'SKIPPED' plot.log
+
       - name: Upload coverage
         if: matrix.python-version == '3.10'
         uses: actions/upload-artifact@v4

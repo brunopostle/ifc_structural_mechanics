@@ -1500,9 +1500,16 @@ class UnifiedCalculixWriter:
     def _write_element_sets(self, file: TextIO) -> None:
         """Write element set definitions."""
         written_sets = set()
+        # Set names are short; a comment gives the member's own id, by which
+        # results.json knows it (the plot command reads it)
+        member_of = {
+            f"MEMBER_{short}": full_id for full_id, short in self.short_id_map.items()
+        }
 
         for set_name, element_ids in self.element_sets.items():
             if element_ids and set_name not in written_sets:
+                if set_name in member_of:
+                    file.write(f"** Member {member_of[set_name]}\n")
                 file.write(f"*ELSET, ELSET={set_name}\n")
                 for i in range(0, len(element_ids), 8):
                     line_elements = element_ids[i : i + 8]

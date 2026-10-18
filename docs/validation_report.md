@@ -245,6 +245,12 @@ beam's largest end shear is the same 32.56 kN, while the column shear and the be
 axial force are both 6.21 kN. In `structure_01` the pin-ended column has an axial force
 and no moment.
 
+![Shear force of beam_01 under its load case Dead](images/beam_01_shear.png)
+
+*`beam_01`, `Dead` at a 0.25 m mesh: the shear jumps by the 20 kN point load at midspan,
+rebuilt from the middle cross-sections, and slopes with the beam's own weight on either
+side. The reactions are 14.4 kN each.*
+
 Until 2026-10-11 the reaction under self-weight came out low by the load on the
 restrained node itself (a sixth of an element's weight for a quadratic element), because
 CalculiX does not report the share of a load that lands there. The results now add it

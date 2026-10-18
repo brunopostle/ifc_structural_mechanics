@@ -631,7 +631,7 @@ class TestSimplifiedWorkflow:
         assert stats["nodes"] == 4
         assert stats["elements"] == 2
 
-    def test_workflow_configuration_options(self):
+    def test_workflow_configuration_options(self, tmp_path):
         """
         Test that workflow accepts various configuration options.
         """
@@ -661,7 +661,7 @@ class TestSimplifiedWorkflow:
                     analysis_config=analysis_config,
                     meshing_config=meshing_config,
                     system_config=system_config,
-                    intermediate_files_dir="temp_dir",
+                    intermediate_files_dir=str(tmp_path / "temp_dir"),
                 )
                 # Test passes if we get here without exceptions
                 assert True

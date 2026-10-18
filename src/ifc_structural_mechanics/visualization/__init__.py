@@ -1,10 +1,12 @@
 """
-Visualization module for structural analysis results.
+Pictures of analysis results.
 
-This module provides tools for visualizing finite element meshes and
-analysis results using PyVista.
+``output_files.AnalysisOutput`` reads an output directory of ``analyze_ifc()``
+(no PyVista needed); ``plot.render()`` and ``plot.plot()`` draw it with PyVista
+(``pip install 'ifc_structural_mechanics[viz]'``). ``ifc-analysis plot`` is the
+command for it.
 """
 
-from .result_visualizer import ResultVisualizer
+from .output_files import AnalysisOutput
 
-__all__ = ["ResultVisualizer"]
+__all__ = ["AnalysisOutput"]

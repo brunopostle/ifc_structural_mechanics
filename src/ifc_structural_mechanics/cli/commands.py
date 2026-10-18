@@ -37,6 +37,8 @@ def cli():
         ifc-analysis analyze path/to/model.ifc --output ./results
 
         ifc-analysis analyze path/to/model.ifc --output ./results --mesh-size 0.2
+
+        ifc-analysis plot ./results --field Mf1 --reactions
     """
     pass
 
@@ -444,6 +446,124 @@ def _handle_error(error_type: str, error: Exception, json_output: bool = False) 
                     entity_type = detail.get("entity_type", "entity")
                     domain_id = detail.get("domain_id")
                     click.echo(f"     Reference: {entity_type} {domain_id}")
+
+
+@cli.command()
+@click.argument(
+    "output_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True),
+)
+@click.option("--case", "-c", help="Load case to draw (default: the first)")
+@click.option("--combination", help="Load combination to draw")
+@click.option(
+    "--mode",
+    type=click.IntRange(min=1),
+    help="Mode shape to draw, of a modal or buckling analysis (default: 1)",
+)
+@click.option(
+    "--field",
+    "-f",
+    type=click.Choice(
+        ["displacement", "von-mises", "N", "Vf1", "Vf2", "T", "Mf1", "Mf2"]
+    ),
+    default="displacement",
+    show_default=True,
+    help="Colour a deformed shape by displacement or von Mises stress, or draw "
+    "a section force diagram along the curve members",
+)
+@click.option(
+    "--scale",
+    "-s",
+    type=float,
+    help="Deformation scale factor, or diagram length per unit force "
+    "(default: automatic, stated on the picture)",
+)
+@click.option("--reactions", is_flag=True, help="Draw the support reactions")
+@click.option("--loads", is_flag=True, help="Draw the nodal loads")
+@click.option("--edges", is_flag=True, help="Draw the edges of shell elements")
+@click.option(
+    "--no-supports", "no_supports", is_flag=True, help="Leave the supports out"
+)
+@click.option(
+    "--view",
+    type=click.Choice(["auto", "iso", "xy", "xz", "yz"]),
+    default="auto",
+    show_default=True,
+    help="Direction of view; auto looks across a plane model",
+)
+@click.option(
+    "--screenshot",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Save a PNG instead of opening a window",
+)
+@click.option(
+    "--html",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Save an interactive HTML page (needs trame)",
+)
+@click.option(
+    "--size",
+    default="1600x1000",
+    show_default=True,
+    help="Picture size in pixels, WIDTHxHEIGHT",
+)
+def plot(
+    output_dir: str,
+    case,
+    combination,
+    mode,
+    field,
+    scale,
+    reactions,
+    loads,
+    edges,
+    no_supports,
+    view,
+    screenshot,
+    html,
+    size,
+):
+    """Draw the results of an analysis.
+
+    OUTPUT_DIR is the --output directory of `ifc-analysis analyze`. Needs
+    PyVista: pip install 'ifc_structural_mechanics[viz]'.
+
+    Examples:
+        ifc-analysis plot ./results --reactions --loads
+
+        ifc-analysis plot ./results --field Mf1 --combination ULS
+
+        ifc-analysis plot ./results --mode 2 --screenshot mode_2.png
+    """
+    try:
+        from ifc_structural_mechanics.visualization.plot import plot as draw
+    except ImportError as error:  # pragma: no cover - depends on the environment
+        raise click.ClickException(str(error))
+    try:
+        width, height = (int(v) for v in size.lower().split("x"))
+    except ValueError:
+        raise click.BadParameter("WIDTHxHEIGHT, such as 1600x1000", param_hint="--size")
+    try:
+        written = draw(
+            output_dir,
+            screenshot=screenshot,
+            html=html,
+            case=case,
+            combination=combination,
+            mode=mode,
+            field=field.replace("-", "_"),
+            scale=scale,
+            supports=not no_supports,
+            reactions=reactions,
+            loads=loads,
+            edges=edges,
+            view=view,
+            window_size=(width, height),
+        )
+    except (FileNotFoundError, ValueError, ImportError) as error:
+        raise click.ClickException(str(error))
+    if written:
+        click.echo(f"Written: {written}")
 
 
 if __name__ == "__main__":
