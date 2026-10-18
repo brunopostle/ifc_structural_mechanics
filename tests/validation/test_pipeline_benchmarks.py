@@ -4369,6 +4369,33 @@ class TestBucklingResults:
         assert [mode["mode"] for mode in modes] == list(range(1, len(modes) + 1))
         assert modes[0]["factor"] == pytest.approx(euler / self.LOAD, rel=0.02)
 
+    def test_mode_shapes_along_the_member(self, tmp_path):
+        """A half sine sideways, and every mode the factors name (94g.13.4).
+
+        The section is square, so the first mode may lean any way across.
+        Each mode is scaled to a largest translation of one: the solver's
+        own scale was 5.6e-4 for the first mode and 2.3e-5 for the tenth.
+        """
+        data, _ = self._column(tmp_path)
+        (member,) = data["members"]
+        shapes = member["mode_shapes"]
+        modes = data["buckling"]["modes"]
+        assert sorted(shapes) == sorted(f"Mode {m['mode']}" for m in modes)
+        first = shapes["Mode 1"]
+        across = [math.hypot(x, y) for x, y in zip(first["ux_m"], first["uy_m"])]
+        largest = max(across)
+        assert largest == pytest.approx(1.0)
+        for shape in shapes.values():
+            assert max(
+                math.sqrt(x * x + y * y + z * z)
+                for x, y, z in zip(shape["ux_m"], shape["uy_m"], shape["uz_m"])
+            ) == pytest.approx(1.0)
+        for distance, value in zip(first["distance_m"], across):
+            assert value / largest == pytest.approx(
+                math.sin(math.pi * distance / self.HEIGHT), abs=2e-3
+            )
+        assert max(abs(v) for v in first["uz_m"]) < 1e-2 * largest
+
     def test_mode_shapes_are_not_load_cases(self, tmp_path):
         data, warnings = self._column(tmp_path)
         (case,) = data["load_cases"]
@@ -6650,6 +6677,20 @@ class TestModalAnalysis:
         assert vertical["effective_mass_kg"]["z"] / mass == pytest.approx(
             8 / math.pi**2, rel=0.01
         )
+        # Its shape along the beam is that half sine (94g.13.4), to 3e-4 of
+        # the peak on the side of the pin. Towards the roller the solver's
+        # expanded section sits up to 2e-3 of the peak off it, and at the
+        # roller itself 1e-3: under a static load too (7.5e-4 at the roller,
+        # where beam theory agrees to 7e-4 on the other side)
+        (member,) = data["members"]
+        shape = member["mode_shapes"][f"Mode {vertical['mode']}"]
+        largest = max(shape["uz_m"], key=abs)
+        for distance, value in zip(shape["distance_m"], shape["uz_m"]):
+            expected = math.sin(math.pi * distance / self.C.LENGTH)
+            near_the_roller = distance > self.C.LENGTH / 2
+            assert value / largest == pytest.approx(
+                expected, abs=2.5e-3 if near_the_roller else 5e-4
+            )
 
     def test_simply_supported_plate(self, tmp_path):
         """slab_01 held in translation along its four edges: modes (1,1) to (1,2).

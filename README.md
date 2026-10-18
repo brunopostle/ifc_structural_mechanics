@@ -251,8 +251,8 @@ the ones a user needs to know before trusting a result.
 - **Linear buckling** is validated for one Euler column only. Its
   `results.json` (schema 1.4) has the buckling factors of all the loads of
   the model together (`buckling.modes`) and the displacements under those
-  loads; mode shapes are in the solver's result file only, and there are no
-  stresses, reactions or load combinations.
+  loads, and (schema 1.13) the shape of each mode along each curve member;
+  there are no stresses, reactions or load combinations.
 - **Members without an IFC `Axis`** are given a default section orientation,
   which for a non-square section may not be the one intended. A warning says
   how many and names the first.

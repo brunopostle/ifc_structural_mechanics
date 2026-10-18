@@ -98,7 +98,7 @@ class ResultsExporter:
         self._applied_load_moments = getattr(domain_model, "applied_load_moments", None)
         self._node_index_cache: Dict[str, Dict[int, List[Tuple[str, float]]]] = {}
         self._mesh_nodes: Optional[Dict[str, set]] = None
-        self._translations: Optional[Dict[int, List[Tuple[str, List[float]]]]] = None
+        self._translations: Dict[str, Dict[int, List[Tuple[str, List[float]]]]] = {}
         self._section_force_records: Optional[Dict[int, List[Dict]]] = None
         self._member_record_cache: Dict[frozenset, Dict[str, List[Dict]]] = {}
 
@@ -162,10 +162,34 @@ class ResultsExporter:
         }
         if self.analysis_type == "linear_buckling":
             data["buckling"] = self._buckling(load_cases)
+            self._scale_buckling_shapes(data["members"])
         if self.analysis_type == "modal":
             data["modal"] = self._modal()
         self._add_load_combinations(data)
         return data
+
+    @staticmethod
+    def _scale_buckling_shapes(members: List[Dict[str, Any]]) -> None:
+        """Scale each buckling mode to a largest translation of one.
+
+        CalculiX gives the shapes of a buckling analysis a scale of its own,
+        which means nothing to a reader (measured: 5.6e-4 for the first mode
+        of a column, 2.3e-5 for its tenth). Each mode is divided by its
+        largest translation along any member, so that its shapes can be
+        drawn and compared.
+        """
+        largest: Dict[str, float] = defaultdict(float)
+        for member in members:
+            for mode, shape in member.get("mode_shapes", {}).items():
+                for x, y, z in zip(shape["ux_m"], shape["uy_m"], shape["uz_m"]):
+                    largest[mode] = max(largest[mode], math.sqrt(x * x + y * y + z * z))
+        for member in members:
+            for mode, shape in member.get("mode_shapes", {}).items():
+                if largest[mode] <= 0.0:
+                    continue
+                for key, values in shape.items():
+                    if key != "distance_m":
+                        shape[key] = [v / largest[mode] for v in values]
 
     _TRANSLATIONS = ("x", "y", "z")
     _ROTATIONS = ("rx", "ry", "rz")
@@ -470,12 +494,18 @@ class ResultsExporter:
         shapes = self._member_deflections(member, elem_ids)
         if shapes:
             result["deflected_shapes"] = shapes
+        modes = self._member_deflections(member, elem_ids, kind="mode_shapes")
+        if modes:
+            result["mode_shapes"] = modes
         return result
 
     def _member_deflections(
-        self, member, elem_ids: set
+        self, member, elem_ids: set, kind: str = "displacement"
     ) -> Dict[str, Dict[str, List[float]]]:
         """How a curve member's axis moves and its cross-sections turn, per case.
+
+        With ``kind="mode_shapes"`` the same for each mode shape of a
+        buckling or modal analysis, by its name (``Mode <n>``).
 
         At each cross-section of each expanded element (both ends, and the
         middle of a quadratic one) the movement of its nodes is fitted with
@@ -506,7 +536,9 @@ class ResultsExporter:
         if length < 1e-12:
             return {}
         along /= length
-        translations = self._translation_index()
+        translations = self._translation_index(kind)
+        if not translations:
+            return {}
 
         # (distance, nodes, their offsets from the centre) per cross-section
         sections = []
@@ -647,11 +679,17 @@ class ResultsExporter:
                     maxima[lc] = value
         return maxima
 
-    def _translation_index(self) -> Dict[int, List[Tuple[str, List[float]]]]:
-        """Return ``{node_id: [(load_case, [tx, ty, tz]), ...]}``, built once."""
-        if self._translations is None:
+    def _translation_index(
+        self, kind: str = "displacement"
+    ) -> Dict[int, List[Tuple[str, List[float]]]]:
+        """Return ``{node_id: [(load_case, [tx, ty, tz]), ...]}``, built once.
+
+        ``kind`` is ``"displacement"`` or ``"mode_shapes"``, whose sets are
+        named by mode.
+        """
+        if kind not in self._translations:
             index: Dict[int, List[Tuple[str, List[float]]]] = defaultdict(list)
-            for r in self.parsed_results.get("displacement", []):
+            for r in self.parsed_results.get(kind, []):
                 try:
                     nid = int(r.reference_element)
                 except (ValueError, TypeError):
@@ -659,8 +697,8 @@ class ResultsExporter:
                 index[nid].append(
                     (r.metadata.get("load_case", "_combined"), r.get_translations())
                 )
-            self._translations = index
-        return self._translations
+            self._translations[kind] = index
+        return self._translations[kind]
 
     def _member_displacements(self, node_ids: set) -> Dict[str, Dict[str, float]]:
         """Return per-load-case displacement stats for the given node set.

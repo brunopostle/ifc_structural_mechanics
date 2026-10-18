@@ -72,7 +72,7 @@ instance). Absent means unknown; never read it as zero.
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
-| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members. |
+| 1.13 | 2026-10-18 | `deflected_shapes` and `deflected_shapes_by_combination` of curve members; their `mode_shapes` in a buckling or modal analysis. |
 
 ## Outline
 
@@ -245,14 +245,17 @@ stresses. `buckling` is then present:
 ```
 
 Each `factor` is what those loads have to be multiplied by for the model to
-buckle in that mode, lowest first. The mode shapes are in the solver's result
-file and not here: they are scaled to a largest value of one, so they are not
-displacements.
+buckle in that mode, lowest first. The shape of each mode along each curve
+member is in its `mode_shapes` (schema 1.13), as a deflected shape is, by the
+name `Mode <n>`. Each mode is scaled so that its largest translation along any
+member is one: a shape, not displacements. (The solver's own scale means
+nothing; it was 5.6e-4 for the first mode of a column and 2.3e-5 for its
+tenth.)
 
 A modal analysis (schema 1.12) finds the natural frequencies of the model as
 it stands on its supports. It applies no load, so `load_cases` is empty,
-`members` have no results, `global_displacements` and `global_reactions` are
-empty and `supports` is empty. `modal` is then present:
+`members` have no results but their `mode_shapes`, `global_displacements` and
+`global_reactions` are empty and `supports` is empty. `modal` is then present:
 
 ```json
 "modal": {
@@ -294,8 +297,9 @@ empty and `supports` is empty. `modal` is then present:
   usually asks for 0.9 in each direction that matters. Analyse with more
   modes (`--modes`) to reach it.
 
-The shapes are in the solver's result file and not here: each is scaled so
-that its generalised mass is one, so they are not displacements either.
+The shape of each mode along each curve member is in its `mode_shapes`
+(schema 1.13), as for buckling, but as the solver scales it: so that its
+generalised mass is one. They are not displacements either.
 `ifc-analysis plot <output directory> --mode <n>` draws one.
 
 ## Load cases and combinations

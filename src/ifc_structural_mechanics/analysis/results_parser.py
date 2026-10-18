@@ -1492,10 +1492,10 @@ class ResultsParser:
         """Move the mode shapes of a buckling analysis out of the displacements.
 
         The result file of a ``*BUCKLE`` step has the displacements under the
-        loads of the step first, and then one set per mode: its shape, scaled
-        to a largest value of one. Those are not displacements, and read as
-        load cases they are a structure moving by a metre. They are named
-        ``Mode <n>``, as those of a modal analysis are.
+        loads of the step first, and then one set per mode: its shape, on a
+        scale of the solver's own. Those are not displacements, and read as
+        load cases they are a structure moving by some arbitrary amount.
+        They are named ``Mode <n>``, as those of a modal analysis are.
         """
         displacements = parsed_results["displacement"]
         if not displacements:

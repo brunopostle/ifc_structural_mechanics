@@ -633,11 +633,17 @@ here. This section only records the constraints that shape day-to-day work.
   loads. CalculiX scales only loads defined inside that step; a preceding
   `*STATIC` step is a fixed preload. Validated for one Euler column only.
   The result file has the displacements under those loads first (the same
-  as a static run, measured) and then a shape per mode scaled to a largest
-  value of one. `ResultsParser._set_mode_shapes_apart()` moves the shapes to
+  as a static run, measured) and then a shape per mode, on a scale of the
+  solver's own (the largest translation 5.6e-4 for a column's first mode,
+  2.3e-5 for its tenth; it was once documented as one, which it is not).
+  `ResultsParser._set_mode_shapes_apart()` moves the shapes to
   `parsed_results["mode_shapes"]`; they are not displacements and must never
   be listed as load cases (`aiz.73`). `results.json` has the one case
-  `Reference loads` and `buckling.modes` with the factors.
+  `Reference loads`, `buckling.modes` with the factors, and each curve
+  member's `mode_shapes` (`94g.13.4`), each mode scaled by
+  `ResultsExporter._scale_buckling_shapes()` to a largest translation of
+  one along any member. A modal analysis's `mode_shapes` keep the solver's
+  scale, a generalised mass of one.
 - **Modal analysis** (`lon`, `--analysis-type modal`, `--modes`, default 10)
   is one `*FREQUENCY` step and no load. Its mass is the materials' density
   alone (a material without one stops it, `E-MAT-003`): IFC cannot say
