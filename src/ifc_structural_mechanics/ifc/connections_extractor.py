@@ -10,7 +10,6 @@ import logging
 from typing import Dict, List, Optional, Union
 
 import ifcopenshell
-import ifcopenshell.util.placement
 import numpy as np
 
 # Updated imports to use existing domain model
@@ -682,18 +681,11 @@ class ConnectionsExtractor:
                     return result
 
         # Method 2: Fallback to ObjectPlacement if TopologyRepresentation not available
-        if (
-            hasattr(ifc_connection, "ObjectPlacement")
-            and ifc_connection.ObjectPlacement
-        ):
-            matrix = ifcopenshell.util.placement.get_local_placement(
-                ifc_connection.ObjectPlacement
-            )
-            coords = [matrix[0][3], matrix[1][3], matrix[2][3]]
-            # Structural connections often have a placement at the origin and
-            # their real position in the topology, so the origin tells nothing
-            if any(c != 0.0 for c in coords):
-                return [c * self.length_scale for c in coords]
+        transformation = get_item_transformation(ifc_connection, self.length_scale)
+        # Structural connections often have a placement at the origin and
+        # their real position in the topology, so the origin tells nothing
+        if transformation is not None and np.any(transformation["location"] != 0.0):
+            return [float(c) for c in transformation["location"]]
 
         raise ModelExtractionError(
             "Its position cannot be found: it has no vertex or edge "

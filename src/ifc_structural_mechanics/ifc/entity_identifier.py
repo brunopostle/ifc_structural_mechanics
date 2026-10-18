@@ -380,12 +380,191 @@ def find_member_endpoints(
     return []
 
 
+def _placement_error(message: str) -> ModelExtractionError:
+    return ModelExtractionError(message, code="E-IFC-003")
+
+
+def _straight_axis(curve):
+    """A point and the direction of a straight grid axis curve, in its grid's axes.
+
+    The direction is the curve's own sense. Grid axes are 2D curves; any third
+    coordinate is ignored.
+    """
+    if curve.is_a("IfcLine"):
+        point = np.array(curve.Pnt.Coordinates[:2], dtype=float)
+        direction = np.array(curve.Dir.Orientation.DirectionRatios[:2], dtype=float)
+    elif curve.is_a("IfcPolyline") or curve.is_a("IfcIndexedPolyCurve"):
+        if curve.is_a("IfcPolyline"):
+            points = [p.Coordinates[:2] for p in curve.Points]
+        else:
+            if curve.Segments and any(
+                segment.is_a("IfcArcIndex") for segment in curve.Segments
+            ):
+                raise _placement_error(
+                    f"Grid axis curve #{curve.id()} has arcs; only straight grid "
+                    "axes are supported."
+                )
+            points = [p[:2] for p in curve.Points.CoordList]
+        points = np.array(points, dtype=float)
+        point = points[0]
+        direction = points[-1] - points[0]
+        length = np.linalg.norm(direction)
+        if length > 0:
+            across = (points - point) @ _left_of(direction / length)
+            if np.max(np.abs(across)) > 1e-6 * length:
+                raise _placement_error(
+                    f"Grid axis curve #{curve.id()} is a polyline that is not "
+                    "straight; only straight grid axes are supported."
+                )
+    elif curve.is_a("IfcTrimmedCurve"):
+        point, direction = _straight_axis(curve.BasisCurve)
+        if not curve.SenseAgreement:
+            direction = -direction
+    elif curve.is_a("IfcOffsetCurve2D"):
+        point, direction = _straight_axis(curve.BasisCurve)
+        point = point + curve.Distance * _left_of(direction)
+    else:
+        raise _placement_error(
+            f"Grid axis curve #{curve.id()} is an {curve.is_a()}; only straight "
+            "grid axes are supported."
+        )
+    length = np.linalg.norm(direction)
+    if not length > 0:
+        raise _placement_error(f"Grid axis curve #{curve.id()} has no direction.")
+    return point, direction / length
+
+
+def _left_of(direction):
+    """The direction turned anticlockwise through 90 degrees, as IFC offsets go."""
+    return np.array([-direction[1], direction[0]])
+
+
+def _grid_of(axis):
+    grids = {
+        grid.id(): grid
+        for attribute in ("PartOfU", "PartOfV", "PartOfW")
+        for grid in (getattr(axis, attribute, None) or ())
+    }
+    if len(grids) != 1:
+        raise _placement_error(
+            f"Grid axis #{axis.id()} {axis.AxisTag or ''} belongs to "
+            f"{len(grids)} grids; it must belong to one."
+        )
+    return next(iter(grids.values()))
+
+
+def _virtual_grid_intersection(intersection):
+    """Where an IfcVirtualGridIntersection is, in the axes of its grid.
+
+    Returns:
+        The grid, the point (x, y, z) and the direction of the first axis
+        there.
+    """
+    axes = list(intersection.IntersectingAxes)
+    grids = [_grid_of(axis) for axis in axes]
+    if grids[0] != grids[1]:
+        raise _placement_error(
+            f"Grid intersection #{intersection.id()} joins axes of two grids."
+        )
+    offsets = list(intersection.OffsetDistances or ())
+    lines = []
+    for n, axis in enumerate(axes):
+        point, direction = _straight_axis(axis.AxisCurve)
+        if axis.SameSense is False:
+            direction = -direction
+        if n < len(offsets):
+            # To the left of the axis as it runs, so SameSense turns it over
+            point = point + offsets[n] * _left_of(direction)
+        lines.append((point, direction))
+    (p1, t1), (p2, t2) = lines
+    determinant = t1[0] * t2[1] - t1[1] * t2[0]
+    if abs(determinant) < 1e-9:
+        raise _placement_error(
+            f"Grid intersection #{intersection.id()}: the axes "
+            f"{axes[0].AxisTag} and {axes[1].AxisTag} are parallel."
+        )
+    gap = p2 - p1
+    along = (gap[0] * t2[1] - gap[1] * t2[0]) / determinant
+    point = p1 + along * t1
+    height = offsets[2] if len(offsets) > 2 else 0.0
+    return grids[0], np.array([point[0], point[1], height]), t1
+
+
+def _grid_placement_matrix(placement):
+    """The matrix of an IfcGridPlacement: a point and a direction on a grid.
+
+    The grid axes lie in the xy plane of the grid's ObjectPlacement, and so
+    do the x and y axes of the placement.
+    """
+    grid, origin, x_axis = _virtual_grid_intersection(placement.PlacementLocation)
+    grid_matrix = _placement_matrix(grid.ObjectPlacement)
+
+    # IFC4.3 adds PlacementRelTo, which is to be the grid's placement
+    relative_to = getattr(placement, "PlacementRelTo", None)
+    if relative_to is not None and not np.allclose(
+        _placement_matrix(relative_to), grid_matrix
+    ):
+        raise _placement_error(
+            f"Grid placement #{placement.id()} is placed relative to something "
+            "other than the placement of its grid."
+        )
+
+    reference = placement.PlacementRefDirection
+    if reference is not None:
+        if reference.is_a("IfcDirection"):
+            # Only x and y count, as the placement lies in the grid's plane
+            x_axis = np.array(reference.DirectionRatios[:2], dtype=float)
+        else:
+            other_grid, other, _ = _virtual_grid_intersection(reference)
+            if other_grid != grid:
+                raise _placement_error(
+                    f"Grid placement #{placement.id()} takes its direction from "
+                    "an intersection on another grid."
+                )
+            x_axis = (other - origin)[:2]
+        length = np.linalg.norm(x_axis)
+        if not length > 1e-12:
+            raise _placement_error(
+                f"Grid placement #{placement.id()} has no direction in the "
+                "plane of its grid."
+            )
+        x_axis = x_axis / length
+
+    local = np.eye(4)
+    local[:3, 0] = [x_axis[0], x_axis[1], 0.0]
+    local[:3, 1] = [-x_axis[1], x_axis[0], 0.0]
+    local[:3, 3] = origin
+    return grid_matrix @ local
+
+
+def _placement_matrix(placement):
+    """The 4x4 matrix of an object placement and everything it is relative to."""
+    import ifcopenshell.util.placement
+
+    if placement is None:
+        return np.eye(4)
+    if placement.is_a("IfcGridPlacement"):
+        return _grid_placement_matrix(placement)
+    if not placement.is_a("IfcLocalPlacement"):
+        raise _placement_error(
+            f"Its placement is an {placement.is_a()}; only IfcLocalPlacement "
+            "and IfcGridPlacement are supported."
+        )
+    parent = _placement_matrix(placement.PlacementRelTo)
+    return parent @ np.array(
+        ifcopenshell.util.placement.get_axis2placement(placement.RelativePlacement),
+        dtype=float,
+    )
+
+
 def get_transformation(placement, length_scale: float = 1.0):
     """
     Get the transformation an IFC placement stands for.
 
     The whole chain of ``PlacementRelTo`` is followed, so the result takes the
-    item's own coordinates to the global ones.
+    item's own coordinates to the global ones. A grid placement is the
+    intersection of two straight grid axes, with their offsets, in the axes
+    of the grid's own placement.
 
     Args:
         placement: The IFC placement object
@@ -398,28 +577,16 @@ def get_transformation(placement, length_scale: float = 1.0):
         Dictionary with location and rotation matrix, or None if identity transform
 
     Raises:
-        ModelExtractionError: If the placement is not an IfcLocalPlacement or
-            cannot be read.
+        ModelExtractionError: If the placement is neither an IfcLocalPlacement
+            nor an IfcGridPlacement on straight axes, or cannot be read.
     """
     if not placement:
         return None
 
     try:
-        if not placement.is_a("IfcLocalPlacement"):
-            raise ModelExtractionError(
-                f"Its placement is an {placement.is_a()}; only "
-                "IfcLocalPlacement is supported.",
-                code="E-IFC-003",
-            )
-
-        import ifcopenshell.util.placement
-
         # Parallel axes divide by zero in there; that is reported below
         with np.errstate(invalid="ignore", divide="ignore"):
-            matrix = np.array(
-                ifcopenshell.util.placement.get_local_placement(placement),
-                dtype=float,
-            )
+            matrix = _placement_matrix(placement)
         if not np.all(np.isfinite(matrix)):
             raise ModelExtractionError(
                 "The axes of its placement cannot be read (Axis and "

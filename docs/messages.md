@@ -16,7 +16,7 @@ A curve member needs an IfcEdge representation and a surface member an IfcFaceSu
 
 ### E-IFC-003: Placement cannot be used
 
-Only IfcLocalPlacement is supported, with axes that are not parallel. Place the item with a local placement.
+IfcLocalPlacement is supported, with axes that are not parallel, and IfcGridPlacement on straight grid axes (lines, straight polylines, their trims and offsets) that are not parallel. Circular grid axes and IfcLinearPlacement are not. Place the item with a local placement.
 
 ### E-IFC-004: Units cannot be worked out
 

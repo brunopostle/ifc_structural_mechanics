@@ -426,8 +426,10 @@ _ERRORS = [
     MessageKind(
         "E-IFC-003",
         "Placement cannot be used",
-        "Only IfcLocalPlacement is supported, with axes that are not parallel. "
-        "Place the item with a local placement.",
+        "IfcLocalPlacement is supported, with axes that are not parallel, and "
+        "IfcGridPlacement on straight grid axes (lines, straight polylines, "
+        "their trims and offsets) that are not parallel. Circular grid axes and "
+        "IfcLinearPlacement are not. Place the item with a local placement.",
     ),
     MessageKind(
         "E-IFC-004",
