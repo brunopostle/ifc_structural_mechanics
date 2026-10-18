@@ -583,7 +583,10 @@ def _validate_model(domain_model, gravity: bool) -> list:
     # Check that loads exist; warn when gravity is the likely missing ingredient
     load_groups = getattr(domain_model, "load_groups", [])
     has_explicit_loads = any(
-        getattr(g, "loads", []) or getattr(g, "includes_self_weight", False) is True
+        getattr(g, "loads", [])
+        or getattr(g, "includes_self_weight", False) is True
+        or isinstance(getattr(g, "support_displacements", None), list)
+        and bool(g.support_displacements)
         for g in load_groups
     )
     if not has_explicit_loads and not gravity:

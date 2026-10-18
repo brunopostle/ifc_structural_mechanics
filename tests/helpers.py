@@ -53,6 +53,7 @@ def plane_model(
     line_loads=None,
     moments=None,
     local_loads=None,
+    support_displacements=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -91,6 +92,9 @@ def plane_model(
         local_loads: ``{name: None or (name, name)}``, the loads that are in
             LOCAL_COORDS: in the axes of their joint (``support_axes``), or
             in those of that member, to which the action is then assigned.
+        support_displacements: ``{name: (dx, dy, dz, rx, ry, rz)}`` in metres
+            and radians, a prescribed displacement of that joint (an
+            ``IfcStructuralLoadSingleDisplacement``) in the load case.
 
     Returns:
         *path*.
@@ -366,6 +370,34 @@ def plane_model(
             None,
             None,
             bar_of[ends],
+            action,
+        )
+        actions.append(action)
+    for name, values in (support_displacements or {}).items():
+        action = create(
+            "IfcStructuralPointAction",
+            guid(),
+            None,
+            f"D{name}",
+            None,
+            None,
+            None,
+            None,
+            create(
+                "IfcStructuralLoadSingleDisplacement",
+                None,
+                *[float(v) for v in values],
+            ),
+            "GLOBAL_COORDS",
+            None,
+        )
+        create(
+            "IfcRelConnectsStructuralActivity",
+            guid(),
+            None,
+            None,
+            None,
+            joints[name],
             action,
         )
         actions.append(action)

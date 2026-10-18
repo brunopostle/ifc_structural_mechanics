@@ -1079,6 +1079,112 @@ def _warn_model(
     record_warning(domain_model, code, message, **kwargs)
 
 
+# A component of a support displacement below this (m or rad) moves nothing
+_NO_DISPLACEMENT = 1e-12
+
+
+def support_displacement_values(
+    domain_model: StructuralModel,
+) -> Dict[Optional[str], Dict[Tuple[str, int], float]]:
+    """The value each support displacement gives the DOFs of its support.
+
+    Returns:
+        ``{group id: {(support set, dof): value}}`` in metres and radians,
+        global DOFs 1 to 6, for every load group with support displacements.
+        ``write_boundary_conditions`` has to have run: the support's set and
+        what it holds are taken from ``domain_model.support_nodes``.
+
+    Raises:
+        AnalysisError: If a displacement moves its support along a direction
+            the support does not hold rigidly as a global DOF: one it leaves
+            free (that would add a restraint), holds by a spring, or holds
+            by equations because it is skew.
+    """
+    supports = getattr(domain_model, "support_nodes", None) or {}
+    values: Dict[Optional[str], Dict[Tuple[str, int], float]] = {}
+    for group in getattr(domain_model, "load_groups", None) or []:
+        for displacement in getattr(group, "support_displacements", None) or ():
+            connection = domain_model.get_connection(displacement.connection_id)
+            record = supports.get(displacement.connection_id)
+            if connection is None or record is None:
+                raise AnalysisError(
+                    f"Support displacement {displacement.id} moves connection "
+                    f"{displacement.connection_id}, which is not a support of "
+                    "the model.",
+                    code="E-LOD-007",
+                    ifc_guids=guids_of(
+                        domain_model, [displacement.id, displacement.connection_id]
+                    ),
+                )
+            vector = np.array(
+                [*displacement.translation, *displacement.rotation], dtype=float
+            )
+            if displacement.coordinate_system == "local":
+                # The support's own axes; a point connection with no system
+                # of its own has the global ones
+                axes = getattr(connection, "local_axes", None)
+                if axes is not None:
+                    axes = np.array(axes, dtype=float)
+                    vector = np.concatenate([axes.T @ vector[:3], axes.T @ vector[3:]])
+            held = set(record["dofs"])
+            for index, value in enumerate(vector):
+                dof = index + 1
+                if abs(value) <= _NO_DISPLACEMENT:
+                    continue
+                if dof not in held:
+                    rows = record["translations" if dof <= 3 else "rotations"]
+                    axis = np.eye(3)[(dof - 1) % 3]
+                    how = (
+                        "holds it along a skew direction, by equations"
+                        if rows and share_in_span(rows, axis) > 1 - 1e-9
+                        else "does not hold it rigidly (it leaves it free or "
+                        "holds it by a spring)"
+                    )
+                    raise AnalysisError(
+                        f"Support displacement {displacement.id} moves support "
+                        f"{displacement.connection_id} by {value:.6g} "
+                        f"{'m' if dof <= 3 else 'rad'} along global DOF {dof}, "
+                        f"and the support {how}. Only a direction a support "
+                        "holds rigidly in global axes can be given a "
+                        "displacement.",
+                        code="E-LOD-007",
+                        ifc_guids=guids_of(
+                            domain_model,
+                            [displacement.id, displacement.connection_id],
+                        ),
+                    )
+                key = (f"BC_{displacement.connection_id}", dof)
+                case = values.setdefault(group.id, {})
+                case[key] = case.get(key, 0.0) + float(value)
+    return values
+
+
+def _write_support_displacements(
+    file: TextIO,
+    values: Dict[Optional[str], Dict[Tuple[str, int], float]],
+    group_ids: Optional[Iterable[str]],
+) -> None:
+    """Give the supports the displacements of a step's load groups.
+
+    A ``*BOUNDARY`` value stays in force in later steps, so every DOF that
+    any group moves is written in every step, with zero where none of this
+    step's groups moves it. ``group_ids`` None means all groups.
+    """
+    every = sorted({key for case in values.values() for key in case})
+    if not every:
+        return
+    step: Dict[Tuple[str, int], float] = {}
+    for group_id, case in values.items():
+        if group_ids is None or group_id in group_ids:
+            for key, value in case.items():
+                step[key] = step.get(key, 0.0) + value
+    file.write("** Support displacements (zero where this step moves none)\n")
+    file.write("*BOUNDARY\n")
+    for set_name, dof in every:
+        file.write(f"{set_name}, {dof}, {dof}, {step.get((set_name, dof), 0.0):.9e}\n")
+    file.write("\n")
+
+
 def _write_load_reset(file: TextIO) -> None:
     """Clear loads carried over from earlier steps.
 
@@ -1522,7 +1628,23 @@ def _write_analysis_steps(
         for record in (getattr(domain_model, "support_nodes", None) or {}).values()
     )
 
+    displacements = support_displacement_values(domain_model)
+
     if analysis_type == "linear_buckling":
+        if displacements:
+            moved = [
+                d.id
+                for g in domain_model.load_groups
+                for d in getattr(g, "support_displacements", ())
+            ]
+            raise AnalysisError(
+                f"The model has {len(moved)} support displacement(s) (the first "
+                f"is {moved[0]}); a buckling analysis takes none: CalculiX "
+                "scales the loads of the buckling step, not what its supports "
+                "are given.",
+                code="E-LOD-007",
+                ifc_guids=guids_of(domain_model, moved),
+            )
         file.write("*STEP\n")
         file.write("*BUCKLE\n")
         file.write("10\n\n")
@@ -1586,6 +1708,8 @@ def _write_analysis_steps(
                     u1_node_masses,
                     has_u1_elements,
                 )
+            _write_support_displacements(file, displacements, [load_case.id])
+            loads_written |= load_case.id in displacements
             if not loads_written:
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
@@ -1608,6 +1732,7 @@ def _write_analysis_steps(
                 u1_node_masses,
                 has_u1_elements,
             )
+            _write_support_displacements(file, displacements, [])
             _write_step_output_requests(
                 file, has_u1_elements=has_u1_elements, has_springs=has_springs
             )
@@ -1636,6 +1761,8 @@ def _write_analysis_steps(
                 u1_node_masses,
                 has_u1_elements,
             )
+        _write_support_displacements(file, displacements, None)
+        loads_written |= bool(displacements)
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")
@@ -2351,7 +2478,7 @@ def _write_validated_loads_within_step(
                 f"Attempted to write {total_loads_attempted} loads but none were successful"
             )
     else:
-        logger.warning("No loads found in domain model")
+        logger.info("No loads to write in this step")
 
     return loads_written
 

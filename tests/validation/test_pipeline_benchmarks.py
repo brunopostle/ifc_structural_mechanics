@@ -5608,3 +5608,191 @@ class TestSlabJoinedToBeamsAlongALine:
         (slab,) = [m for m in data["members"] if m["type"] == "surface"]
         for beam in beams:
             assert beam["tied_to_surface_members"] == [slab["id"]]
+
+
+def _settled_beam(tmp_path, with_other_case: bool = False) -> str:
+    """Two 4 m spans over three pinned supports, the middle one settling.
+
+    Case ``Load`` moves the middle support down by ``SETTLEMENT``. With
+    ``with_other_case``, case ``Other`` has ``POINT_LOAD`` in the middle of
+    the first span and combination ``Both`` is 1.5 ``Load`` + ``Other``.
+    """
+    path = plane_model(
+        str(tmp_path / "settled.ifc"),
+        nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0), "C": (8, 0)},
+        members=[("A", "M"), ("M", "B"), ("B", "C")],
+        supports={"A": PLANE_PIN, "B": PLANE_ROLLER, "C": PLANE_ROLLER},
+        loads={"M": (0.0, -TestSupportDisplacements.POINT_LOAD)},
+        hinged=False,
+        support_displacements={
+            "B": (0.0, 0.0, -TestSupportDisplacements.SETTLEMENT, 0.0, 0.0, 0.0)
+        },
+    )
+    model = ifcopenshell.open(path)
+    (case,) = model.by_type("IfcStructuralLoadCase")
+    (assignment,) = [
+        r for r in model.by_type("IfcRelAssignsToGroup") if r.RelatingGroup == case
+    ]
+    (force,) = [a for a in assignment.RelatedObjects if a.Name == "PM"]
+    assignment.RelatedObjects = [a for a in assignment.RelatedObjects if a != force]
+    if with_other_case:
+        other = model.create_entity(
+            "IfcStructuralLoadCase",
+            ifcopenshell.guid.new(),
+            Name="Other",
+            PredefinedType="LOAD_CASE",
+            ActionType="NOTDEFINED",
+            ActionSource="NOTDEFINED",
+        )
+        model.create_entity(
+            "IfcRelAssignsToGroup",
+            ifcopenshell.guid.new(),
+            RelatedObjects=[force],
+            RelatingGroup=other,
+        )
+        both = model.create_entity(
+            "IfcStructuralLoadGroup",
+            ifcopenshell.guid.new(),
+            Name="Both",
+            PredefinedType="LOAD_COMBINATION",
+            ActionType="NOTDEFINED",
+            ActionSource="NOTDEFINED",
+        )
+        for group, factor in ((case, 1.5), (other, 1.0)):
+            model.create_entity(
+                "IfcRelAssignsToGroupByFactor",
+                ifcopenshell.guid.new(),
+                RelatedObjects=[group],
+                RelatingGroup=both,
+                Factor=factor,
+            )
+    else:
+        model.remove(force)
+    model.write(path)
+    return path
+
+
+class TestSupportDisplacements:
+    """Supports moved by the file (``aiz.58``): settlement and a turned end.
+
+    A prescribed displacement (``IfcStructuralLoadSingleDisplacement``) used
+    to stop the analysis. The beam is the 0.1 m square bar of
+    ``plane_model``, and the closed forms are Timoshenko's: its shear
+    deformation takes 0.05 to 0.3 % off what bending alone gives.
+    """
+
+    SETTLEMENT = 0.01
+    POINT_LOAD = 10000.0
+    SPAN = 4.0
+    EI = PLANE_E * 0.1**4 / 12
+    # Shear stiffness of the square bar, nu = 0.3, and its ratio to bending
+    # over a span
+    KGA = 5 / 6 * PLANE_E / 2.6 * 0.1**2
+    PHI = 12 * EI / (KGA * SPAN**2)
+
+    def _settling_force(self) -> float:
+        """The force that sags a 2 L span by d at midspan: 6 EI d / L^3,
+        less what shear adds to the sag."""
+        return self.SETTLEMENT / (
+            self.SPAN**3 / (6 * self.EI) + self.SPAN / (2 * self.KGA)
+        )
+
+    def test_settled_support_is_pulled_down(self, tmp_path):
+        data = _run(_settled_beam(tmp_path), tmp_path, mesh_size=0.25)
+        force = self._settling_force()
+        for x, share in ((0.0, 0.5), (4.0, -1.0), (8.0, 0.5)):
+            reaction = _support_at(data, (x, 0.0, 0.0))["by_load_case"]["Load"]
+            assert reaction["fz_N"] == pytest.approx(share * force, rel=0.001)
+        assert data["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
+            self.SETTLEMENT, rel=1e-6
+        )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["applied_load_N"] == [0.0, 0.0, 0.0]
+        assert total["imbalance_N"] < 1e-6 * force
+
+    def test_other_cases_do_not_move_it(self, tmp_path):
+        """A ``*BOUNDARY`` value stays in force until it is written again.
+
+        With the point load alone the middle support takes 11 P / 16; the
+        combination is the sum of its cases.
+        """
+        data = _run(_settled_beam(tmp_path, True), tmp_path, mesh_size=0.25)
+        middle = _support_at(data, (4.0, 0.0, 0.0))
+        settled = middle["by_load_case"]["Load"]["fz_N"]
+        loaded = middle["by_load_case"]["Other"]["fz_N"]
+        assert settled == pytest.approx(-self._settling_force(), rel=0.001)
+        assert loaded == pytest.approx(11 * self.POINT_LOAD / 16, rel=0.003)
+        assert middle["by_load_combination"]["Both"]["fz_N"] == pytest.approx(
+            1.5 * settled + loaded, rel=1e-6
+        )
+        moved = middle["prescribed_displacements"]
+        assert moved["by_load_case"] == {
+            "Load": {
+                "translation_m": [0.0, 0.0, -self.SETTLEMENT],
+                "rotation_rad": [0.0, 0.0, 0.0],
+            }
+        }
+        assert moved["by_load_combination"]["Both"]["translation_m"] == (
+            pytest.approx([0.0, 0.0, -1.5 * self.SETTLEMENT])
+        )
+        for x in (0.0, 8.0):
+            assert "prescribed_displacements" not in _support_at(data, (x, 0.0, 0.0))
+
+    def test_turned_end_of_a_fixed_beam(self, tmp_path):
+        """4 EI t / L at the turned end, 2 EI t / L at the other, 6 EI t / L^2
+        of shear, each with Timoshenko's factor."""
+        turn = 0.001
+        path = plane_model(
+            str(tmp_path / "turned.ifc"),
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_FIXED, "B": PLANE_FIXED},
+            loads={},
+            hinged=False,
+            support_displacements={"A": (0.0, 0.0, 0.0, 0.0, turn, 0.0)},
+        )
+        data = _run(path, tmp_path, mesh_size=0.25)
+        diagram = _curve_member_diagram(data)
+        phi = self.PHI
+        near = (4 + phi) / (1 + phi) * self.EI * turn / self.SPAN
+        far = (2 - phi) / (1 + phi) * self.EI * turn / self.SPAN
+        shear = 6 / (1 + phi) * self.EI * turn / self.SPAN**2
+        assert abs(diagram["Mf2_Nm"][0]) == pytest.approx(near, rel=0.001)
+        assert abs(diagram["Mf2_Nm"][-1]) == pytest.approx(far, rel=0.001)
+        assert diagram["Mf2_Nm"][0] * diagram["Mf2_Nm"][-1] < 0
+        assert abs(diagram["Vf2_N"][0]) == pytest.approx(shear, rel=0.001)
+        for x, moment in ((0.0, near), (4.0, far)):
+            support = _support_at(data, (x, 0.0, 0.0))
+            assert support["moments"] in MOMENT_SOURCES
+            reaction = support["by_load_case"]["Load"]
+            assert reaction["my_Nm"] == pytest.approx(moment, rel=0.01)
+            assert abs(reaction["fz_N"]) == pytest.approx(shear, rel=0.01)
+
+    def test_along_a_direction_the_support_leaves_free_is_an_error(self, tmp_path):
+        """Moving a roller along its free direction would add a restraint."""
+        path = plane_model(
+            str(tmp_path / "free.ifc"),
+            nodes={"A": (0, 0), "B": (4, 0)},
+            members=[("A", "B")],
+            supports={"A": PLANE_PIN, "B": PLANE_ROLLER},
+            loads={},
+            hinged=False,
+            support_displacements={"B": (0.01, 0.0, 0.0, 0.0, 0.0, 0.0)},
+        )
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.5
+        )
+        assert result["status"] == "failed"
+        (error,) = result["errors"]
+        assert error["code"] == "E-LOD-007"
+        assert "leaves it free" in error["message"]
+
+    def test_buckling_is_an_error(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=_settled_beam(tmp_path),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=0.5,
+            analysis_type="linear_buckling",
+        )
+        assert result["status"] == "failed"
+        assert result["errors"][0]["code"] == "E-LOD-007"

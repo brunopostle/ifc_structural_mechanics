@@ -331,3 +331,121 @@ class TestLoads:
         )
         with pytest.raises(ModelExtractionError, match="IfcStructuralLoadTemperature"):
             Extractor(model).extract_model()
+
+
+def _support_displacement(model, item, **values):
+    """A point action moving *item*, in beam_01's Dead case."""
+    action = model.create_entity(
+        "IfcStructuralPointAction",
+        ifcopenshell.guid.new(),
+        AppliedLoad=model.create_entity(
+            "IfcStructuralLoadSingleDisplacement", **values
+        ),
+        GlobalOrLocal="GLOBAL_COORDS",
+    )
+    model.create_entity(
+        "IfcRelConnectsStructuralActivity",
+        ifcopenshell.guid.new(),
+        RelatingElement=item,
+        RelatedStructuralActivity=action,
+    )
+    (dead,) = [c for c in model.by_type("IfcStructuralLoadCase") if c.Name == "Dead"]
+    model.create_entity(
+        "IfcRelAssignsToGroup",
+        ifcopenshell.guid.new(),
+        RelatedObjects=[action],
+        RelatingGroup=dead,
+    )
+    return action
+
+
+def _support(model):
+    return [
+        c
+        for c in model.by_type("IfcStructuralPointConnection")
+        if c.AppliedCondition is not None
+    ][0]
+
+
+class TestSupportDisplacements:
+    """A prescribed displacement of a support (``aiz.58``).
+
+    It used to stop the analysis as a load of an unsupported kind.
+    """
+
+    def test_is_read_in_metres_and_radians_beside_the_loads(self):
+        """beam_01 is in millimetres."""
+        model = _open("beam_01")
+        support = _support(model)
+        action = _support_displacement(
+            model, support, DisplacementZ=-10.0, RotationalDisplacementRY=0.002
+        )
+        (dead,) = [
+            g
+            for g in Extractor(model).extract_model().load_groups
+            if g.name == "Dead" and g.is_load_case
+        ]
+        (moved,) = dead.support_displacements
+        assert moved.id == action.GlobalId
+        assert moved.connection_id == support.GlobalId
+        assert moved.translation == pytest.approx([0.0, 0.0, -0.01])
+        assert moved.rotation == pytest.approx([0.0, 0.002, 0.0])
+        assert all(load.id != action.GlobalId for load in dead.loads)
+
+    def test_rotation_follows_the_angle_unit(self):
+        model = _open("beam_01")
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        degree = model.create_entity(
+            "IfcConversionBasedUnit",
+            model.create_entity("IfcDimensionalExponents", 0, 0, 0, 0, 0, 0, 0),
+            "PLANEANGLEUNIT",
+            "degree",
+            model.create_entity(
+                "IfcMeasureWithUnit",
+                model.create_entity("IfcPlaneAngleMeasure", 0.017453293),
+                [u for u in assignment.Units if u.UnitType == "PLANEANGLEUNIT"][0],
+            ),
+        )
+        assignment.Units = [
+            u for u in assignment.Units if u.UnitType != "PLANEANGLEUNIT"
+        ] + [degree]
+        _support_displacement(model, _support(model), RotationalDisplacementRY=1.0)
+        (moved,) = [
+            d
+            for g in Extractor(model).extract_model().load_groups
+            for d in g.support_displacements
+        ]
+        assert moved.rotation == pytest.approx([0.0, 0.017453293, 0.0])
+
+    def test_on_a_member_is_an_error(self):
+        model = _open("beam_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        action = _support_displacement(model, member, DisplacementZ=-10.0)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-007"
+        assert action.GlobalId in error.value.ifc_guids
+        assert "IfcStructuralCurveMember" in str(error.value)
+
+    def test_on_a_connection_that_is_no_support_is_an_error(self):
+        model = _open("beam_01")
+        support = _support(model)
+        support.AppliedCondition = None
+        _support_displacement(model, support, DisplacementZ=-10.0)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-007"
+        assert support.GlobalId in error.value.ifc_guids
+
+    def test_distortion_is_an_error(self):
+        model = _open("beam_01")
+        action = _support_displacement(model, _support(model), DisplacementZ=-10.0)
+        action.AppliedLoad = model.create_entity(
+            "IfcStructuralLoadSingleDisplacementDistortion",
+            DisplacementZ=-10.0,
+            Distortion=0.1,
+        )
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-LOD-001"
+        assert "distortion" in str(error.value)

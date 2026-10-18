@@ -455,6 +455,57 @@ class GravityLoad:
         self.direction = direction or [0.0, 0.0, -1.0]
 
 
+class SupportDisplacement(DomainEntity):
+    """A support moved by a given amount: a settlement, or a support turned.
+
+    IFC gives it as an ``IfcStructuralPointAction`` whose applied load is an
+    ``IfcStructuralLoadSingleDisplacement``, assigned to a point connection
+    that is a support. It is not a force and is not among a group's
+    ``loads``: the writer gives the support's nodes these values in the steps
+    of the load cases it belongs to, and zero in the others.
+
+    It moves the support along what the support holds. A component the file
+    leaves out is zero; one along a direction the support leaves free is
+    nothing to move unless it is not zero, which the writer refuses rather
+    than add a restraint the file does not have.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        connection_id: str,
+        translation: List[float],
+        rotation: List[float],
+        coordinate_system: str = "global",
+    ):
+        """Initialize a SupportDisplacement.
+
+        Args:
+            id: GlobalId of the IFC action.
+            connection_id: Id of the support it moves.
+            translation: x, y and z in metres.
+            rotation: About x, y and z in radians.
+            coordinate_system: "global", or "local" for the axes of the
+                support (its ``local_axes``).
+        """
+        super().__init__(id=id, entity_type="support_displacement")
+        self.connection_id = connection_id
+        self.translation = [float(v) for v in translation]
+        self.rotation = [float(v) for v in rotation]
+        self.coordinate_system = coordinate_system
+        # As for loads: the action of the file this comes from
+        self.action_id: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        """Convert the support displacement to a dictionary representation."""
+        result = super().as_dict()
+        result["connection_id"] = self.connection_id
+        result["translation"] = self.translation
+        result["rotation"] = self.rotation
+        result["coordinate_system"] = self.coordinate_system
+        return result
+
+
 class LoadGroup(DomainEntity):
     """A group of loads that are applied together."""
 
@@ -478,6 +529,8 @@ class LoadGroup(DomainEntity):
         # IfcStructuralLoadCase.SelfWeightCoefficients: the share of the
         # members' weight the case includes along global x, y and z
         self.self_weight_coefficients: Optional[List[float]] = None
+        # Supports the group moves (IfcStructuralLoadSingleDisplacement)
+        self.support_displacements: List[SupportDisplacement] = []
 
     @property
     def includes_self_weight(self) -> bool:
@@ -486,12 +539,20 @@ class LoadGroup(DomainEntity):
 
     @property
     def has_actions(self) -> bool:
-        """Whether the group loads the structure: with loads or self-weight."""
-        return bool(self.loads) or self.includes_self_weight
+        """Whether the group loads the structure: with loads, self-weight or
+        supports it moves."""
+        return (
+            bool(self.loads)
+            or self.includes_self_weight
+            or bool(self.support_displacements)
+        )
 
-    def add_load(self, load: Load) -> None:
-        """Add a load to the group."""
-        if load not in self.loads:
+    def add_load(self, load: Union[Load, SupportDisplacement]) -> None:
+        """Add a load, or a support displacement, to the group."""
+        if isinstance(load, SupportDisplacement):
+            if load not in self.support_displacements:
+                self.support_displacements.append(load)
+        elif load not in self.loads:
             self.loads.append(load)
 
     def remove_load(self, load: Load) -> bool:
@@ -530,6 +591,10 @@ class LoadGroup(DomainEntity):
         if self.description:
             result["description"] = self.description
         result["loads"] = [load.as_dict() for load in self.loads]
+        if self.support_displacements:
+            result["support_displacements"] = [
+                d.as_dict() for d in self.support_displacements
+            ]
 
         return result
 

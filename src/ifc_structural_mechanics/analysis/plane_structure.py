@@ -86,12 +86,25 @@ def plane_normal(
         return None
     flat = [axis for axis in range(3) if extent[axis] <= _FLAT * size]
 
-    # Loads are forces and self-weight is a direction: each kind is judged
-    # against its own largest
+    # Loads are forces, self-weight is a direction and a support displacement
+    # a length: each kind is judged against its own largest
     forces = []
     weights = []
     moments = []
+    shifts = []
+    turns = []
     for group in domain_model.load_groups:
+        for displacement in getattr(group, "support_displacements", None) or ():
+            shift = np.array(displacement.translation, dtype=float)
+            turn = np.array(displacement.rotation, dtype=float)
+            if displacement.coordinate_system == "local":
+                connection = domain_model.get_connection(displacement.connection_id)
+                axes = getattr(connection, "local_axes", None)
+                if axes is not None:
+                    axes = np.array(axes, dtype=float)
+                    shift, turn = axes.T @ shift, axes.T @ turn
+            shifts.append(np.abs(shift))
+            turns.append(np.abs(turn))
         if getattr(group, "includes_self_weight", False):
             weights.append(
                 np.abs(np.array(group.self_weight_coefficients, dtype=float))
@@ -109,7 +122,7 @@ def plane_normal(
     if gravity_direction is not None:
         weights.append(np.abs(np.array(gravity_direction, dtype=float)))
     loaded = []
-    for vectors in (forces, weights):
+    for vectors in (forces, weights, shifts):
         largest = max((float(vector.max()) for vector in vectors), default=0.0)
         loaded += [
             axis
@@ -138,15 +151,17 @@ def plane_normal(
         return None
     if normal in loaded:
         return None
-    # A moment keeps the structure in its plane when it is about the normal
-    largest = max((float(moment.max()) for moment in moments), default=0.0)
-    if any(
-        moment[axis] > _FLAT * largest
-        for moment in moments
-        for axis in range(3)
-        if axis != normal
-    ):
-        return None
+    # A moment, or a support turned, keeps the structure in its plane when
+    # it is about the normal
+    for vectors in (moments, turns):
+        largest = max((float(vector.max()) for vector in vectors), default=0.0)
+        if any(
+            vector[axis] > _FLAT * largest
+            for vector in vectors
+            for axis in range(3)
+            if axis != normal
+        ):
+            return None
 
     for member in members:
         axes = getattr(member, "local_axis", None)

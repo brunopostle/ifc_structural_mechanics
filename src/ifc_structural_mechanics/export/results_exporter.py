@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from ..analysis.boundary_condition_handling import support_displacement_values
 from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from ..analysis.superposition import combine_results
 from ..utils.error_handling import ResultProcessingError
@@ -44,7 +45,7 @@ class ResultsExporter:
         analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
     """
 
-    SCHEMA_VERSION = "1.10"
+    SCHEMA_VERSION = "1.11"
 
     def __init__(
         self,
@@ -252,6 +253,19 @@ class ResultsExporter:
                 data[block].setdefault("by_load_combination", {})[name] = values
 
         for support, combined_support in zip(data["supports"], result["supports"]):
+            moved = support.get("prescribed_displacements")
+            if moved:
+                vector = np.zeros(6)
+                for case, factor in factors.items():
+                    values = moved["by_load_case"].get(case)
+                    if values is not None:
+                        vector += factor * np.array(
+                            values["translation_m"] + values["rotation_rad"]
+                        )
+                if np.any(vector):
+                    moved.setdefault("by_load_combination", {})[name] = (
+                        self._displacement_values(vector)
+                    )
             for key in ("by_load_case", "by_load_case_in_axes"):
                 values = combined_support.get(key, {}).get(name)
                 if values is not None:
@@ -1465,6 +1479,14 @@ class ResultsExporter:
             values["resultant_N"] = float(np.linalg.norm(force))
             by_load_case[step["load_case"]] = values
         entry["by_load_case"] = by_load_case
+        moved = self._prescribed_displacements(connection.id)
+        if moved:
+            entry["prescribed_displacements"] = {
+                "by_load_case": {
+                    case: self._displacement_values(vector)
+                    for case, vector in moved.items()
+                }
+            }
         if held_rotations and entry["forces"] == "solver" and not balanced:
             entry["forces"] = "unreliable"
 
@@ -1480,6 +1502,35 @@ class ResultsExporter:
                 for case, values in by_load_case.items()
             }
         return entry
+
+    def _prescribed_displacements(self, connection_id: str) -> Dict[str, np.ndarray]:
+        """What each load case moves a support by, in global axes.
+
+        Returns ``{load case name: [ux, uy, uz, rx, ry, rz]}`` for the cases
+        that move it; the values are those the solver was given.
+        """
+        if not hasattr(self, "_support_displacements"):
+            names = {g.id: g.name for g in self.model.load_groups}
+            self._support_displacements = {
+                names.get(group_id, group_id): values
+                for group_id, values in support_displacement_values(self.model).items()
+            }
+        moved: Dict[str, np.ndarray] = {}
+        for case, values in self._support_displacements.items():
+            vector = np.zeros(6)
+            for (set_name, dof), value in values.items():
+                if set_name == f"BC_{connection_id}":
+                    vector[dof - 1] += value
+            if np.any(vector):
+                moved[case] = vector
+        return moved
+
+    @staticmethod
+    def _displacement_values(vector: np.ndarray) -> Dict[str, List[float]]:
+        return {
+            "translation_m": [float(v) for v in vector[:3]],
+            "rotation_rad": [float(v) for v in vector[3:]],
+        }
 
     @staticmethod
     def _projection(record: Dict, key: str, first_dof: int) -> np.ndarray:

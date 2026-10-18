@@ -89,7 +89,13 @@ class Extractor:
         """
         unit_scales = {}
 
-        for unit_type in ("LENGTHUNIT", "FORCEUNIT", "PRESSUREUNIT", "MASSUNIT"):
+        for unit_type in (
+            "LENGTHUNIT",
+            "FORCEUNIT",
+            "PRESSUREUNIT",
+            "MASSUNIT",
+            "PLANEANGLEUNIT",
+        ):
             try:
                 scale = ifcopenshell.util.unit.calculate_unit_scale(self.ifc, unit_type)
             except ModelExtractionError:
@@ -289,7 +295,9 @@ class Extractor:
                 model.add_load_group(group)
 
         grouped = {
-            load.action_id or load.id for group in load_groups for load in group.loads
+            load.action_id or load.id
+            for group in load_groups
+            for load in [*group.loads, *group.support_displacements]
         }
         loose = [
             action

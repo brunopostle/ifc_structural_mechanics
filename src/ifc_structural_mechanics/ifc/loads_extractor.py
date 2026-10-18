@@ -22,6 +22,7 @@ from ..domain.load import (
     LoadCombination,
     LoadGroup,
     PointLoad,
+    SupportDisplacement,
 )
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
@@ -89,6 +90,7 @@ class LoadsExtractor:
         self.unit_scales = unit_scales or {}
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
+        self.angle_scale = self.unit_scales.get("PLANEANGLEUNIT", 1.0)
 
         # Cache for already extracted loads to avoid duplications
         self._load_cache = {}
@@ -270,7 +272,10 @@ class LoadsExtractor:
                             ):
                                 # Get all loads from the referenced group
                                 referenced_group = all_groups[obj.GlobalId]
-                                for load in referenced_group.loads:
+                                for load in [
+                                    *referenced_group.loads,
+                                    *referenced_group.support_displacements,
+                                ]:
                                     load_case.add_load(load)
 
         # Return all populated groups
@@ -446,6 +451,8 @@ class LoadsExtractor:
 
         # For structural point actions
         if ifc_load.is_a("IfcStructuralPointAction"):
+            if applied_load.is_a("IfcStructuralLoadSingleDisplacement"):
+                return self._support_displacement(ifc_load, applied_load, load_id)
             if not applied_load.is_a("IfcStructuralLoadSingleForce"):
                 raise ModelExtractionError(
                     f"Its applied load is an {applied_load.is_a()}; on a point "
@@ -600,6 +607,80 @@ class LoadsExtractor:
             "actions are supported.",
             code="E-LOD-001",
         )
+
+    def _support_displacement(
+        self, ifc_load, applied_load, load_id: str
+    ) -> SupportDisplacement:
+        """The support displacement of a point action with a single displacement.
+
+        Raises:
+            ModelExtractionError: If it has a distortion, or is not assigned
+                to a point connection that is a support.
+        """
+        if applied_load.is_a("IfcStructuralLoadSingleDisplacementDistortion"):
+            raise ModelExtractionError(
+                "Its applied load is an "
+                "IfcStructuralLoadSingleDisplacementDistortion; a distortion "
+                "(warping) of the section is not supported.",
+                code="E-LOD-001",
+            )
+        supports = [
+            relation.RelatingElement
+            for relation in getattr(ifc_load, "AssignedToStructuralItem", None) or []
+            if getattr(relation, "RelatingElement", None) is not None
+        ]
+        if len(supports) != 1 or not supports[0].is_a("IfcStructuralPointConnection"):
+            raise ModelExtractionError(
+                "It is a prescribed displacement and is assigned to "
+                + (
+                    "no item"
+                    if not supports
+                    else ", ".join(f"an {item.is_a()}" for item in supports)
+                )
+                + "; it has to be assigned to one point connection, the "
+                "support it moves.",
+                code="E-LOD-007",
+            )
+        support = supports[0]
+        if getattr(support, "AppliedCondition", None) is None:
+            raise ModelExtractionError(
+                f"It is a prescribed displacement of connection "
+                f"{support.GlobalId}, which has no AppliedCondition: it is no "
+                "support and holds nothing to move.",
+                code="E-LOD-007",
+                ifc_guids=[support.GlobalId],
+            )
+        translation = self._in_global_axes(
+            ifc_load,
+            [
+                d * self.length_scale
+                for d in self._components(
+                    applied_load, ("DisplacementX", "DisplacementY", "DisplacementZ")
+                )
+            ],
+        )
+        rotation = self._in_global_axes(
+            ifc_load,
+            [
+                r * self.angle_scale
+                for r in self._components(
+                    applied_load,
+                    (
+                        "RotationalDisplacementRX",
+                        "RotationalDisplacementRY",
+                        "RotationalDisplacementRZ",
+                    ),
+                )
+            ],
+        )
+        displacement = SupportDisplacement(
+            id=load_id,
+            connection_id=support.GlobalId,
+            translation=translation,
+            rotation=rotation,
+            coordinate_system=self._coordinate_system(ifc_load),
+        )
+        return displacement
 
     def _point_load(self, ifc_load, applied_load, load_id: str, position) -> PointLoad:
         """The point load of a single force of an action, at a position in metres.
