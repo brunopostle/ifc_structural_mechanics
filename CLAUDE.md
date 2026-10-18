@@ -800,6 +800,25 @@ its own in `restrained_in_axes`. `TestSkewSupports` has the incline and a clamp 
 skew axis against statics; `TestPlacedModel.test_turned_off_the_global_axes` runs
 `slab_01` and `structure_01` turned 30 degrees about Z against the files as shipped.
 
+**Support displacements** (`aiz.58`): a point action whose applied load is an
+`IfcStructuralLoadSingleDisplacement`, assigned to a point connection with an
+`AppliedCondition`, moves that support (settlement, a support turned). It is a
+`SupportDisplacement` in `LoadGroup.support_displacements`, never among
+`loads`, which everything else reads as forces; rotations follow the file's
+`PLANEANGLEUNIT`. The steps give it as `*BOUNDARY` values on the support's set
+(`_write_support_displacements()`). Measured on 2.21 and 2.23: a value
+written in a step stays in force in the later ones, so every DOF any case
+moves is written in every step, zero where the step moves none; `*BOUNDARY,
+OP=NEW` breaks the model, do not use it. A nonzero rotation on a clamped
+beam node works. Only a direction the support holds rigidly as a global DOF
+can be moved (`support_displacement_values()`): one it leaves free would add
+a restraint, and springs and skew directions (equations) are not done; each
+raises `E-LOD-007`, as do one on a member and one in a buckling analysis.
+Reactions balance each other (`applied_load_N` is zero), and
+`supports[].prescribed_displacements` says what moved. `TestSupportDisplacements`
+has a settled middle support and a turned end of a fixed beam against
+Timoshenko's closed forms (0.1%), a second case, and a combination.
+
 **Member-side releases** (`IfcRelConnectsStructuralMember.AppliedCondition`) are in
 the axes of that relation (`connection.release_axes_by_member`; the member's own axes
 when the relation has no `ConditionCoordinateSystem`). `released_rotation_axes()`

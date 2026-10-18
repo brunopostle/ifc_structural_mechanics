@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.10**.
+calculation report. This page describes schema **1.11**.
 
 `results.json` is written by `ResultsExporter`
 (`src/ifc_structural_mechanics/export/results_exporter.py`) and
@@ -50,12 +50,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.8 | 2026-10-14 | `forces` on `global_reactions` entries (`solver` or `supports`). |
 | 1.9 | 2026-10-18 | Elastic supports (`springs`, `moments: "springs"`) and surface supports (`type: "surface"`). |
 | 1.10 | 2026-10-18 | `run` (how the results were made), `warnings`, `limits`. |
+| 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.10",
+  "schema_version": "1.11",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m"},
   "model": {"id": "...", "name": "..."},
@@ -132,7 +133,12 @@ instance). Absent means unknown; never read it as zero.
                  "resultant_N": 5000.0}
       },
       "axes": {"x": [...], "y": [...], "z": [...]},
-      "by_load_case_in_axes": {"Dead": {"fx_N": ..., ..., "mz_Nm": ...}}
+      "by_load_case_in_axes": {"Dead": {"fx_N": ..., ..., "mz_Nm": ...}},
+      "prescribed_displacements": {
+        "by_load_case": {"Settlement": {"translation_m": [0.0, 0.0, -0.01],
+                                        "rotation_rad": [0.0, 0.0, 0.0]}},
+        "by_load_combination": {...}
+      }
     }
   ],
   "warnings": [
@@ -290,6 +296,13 @@ along a line support (`/m`) and per square metre over a surface support
 (`/m2`, a modulus of subgrade reaction). `restrained` lists only what is
 held rigidly. The springs' part of the reaction is their stiffness times
 their displacement, which is exact; it is in `by_load_case` with the rest.
+
+`prescribed_displacements` (schema 1.11) is present for a support the file
+moves (an `IfcStructuralLoadSingleDisplacement`: a settlement, or a support
+turned): what it is moved by in each load case and combination that moves
+it, in global axes, metres and radians. A load case that only moves
+supports has an `applied_load_N` of zero, and reactions that balance each
+other.
 
 ### Where the moments come from: `moments`
 

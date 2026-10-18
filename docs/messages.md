@@ -264,7 +264,7 @@ The model has no structural connections, so nothing supports it and the analysis
 
 ### E-LOD-001: Load of an unsupported kind
 
-Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations). Temperature loads, prescribed displacements and the varying actions of IFC2X3 are not.
+Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations), and point actions with single displacements on supports. Temperature loads, displacements with a distortion and the varying actions of IFC2X3 are not.
 
 ### E-LOD-002: Load distribution cannot be used
 
@@ -285,6 +285,10 @@ Shells have no rotation about their normal and are not given moments; warping mo
 ### E-LOD-006: Load without a value
 
 The action has no AppliedLoad, or its force cannot be read. Give it one.
+
+### E-LOD-007: Support displacement that cannot be applied
+
+A prescribed displacement (IfcStructuralLoadSingleDisplacement) moves a support along what it holds. It has to be a point action assigned to a point connection with an AppliedCondition, and every component that is not zero has to be along a direction the support holds rigidly in global axes: not one it leaves free, which would add a restraint the file does not have, not a spring, and not a skew direction, which is held by equations. A buckling analysis takes no support displacements. The message says which applies.
 
 ### W-LOD-001: No loads
 
