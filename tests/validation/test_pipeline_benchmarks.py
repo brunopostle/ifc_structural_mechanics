@@ -4785,6 +4785,53 @@ class TestBeamEndingOnTheSpanOfAnother:
             )
 
 
+class TestPlaneFrameJoinedByTheMesh:
+    """A beam framing into the span of two fixed columns, 10 kN on it.
+
+    Columns 4 m high and 4 m apart, the beam between them at 3 m. The file
+    gives the ends of the beam connections of their own, which join nothing
+    else; the mesh joins it to the columns rigidly. The frame stands up out
+    of its plane on its fixed feet, and was once held in it all the same,
+    since the plane check went by the file's connections alone (``aiz.81``).
+    """
+
+    NODES = {
+        "A": (0, 0),
+        "B": (0, 4),
+        "C": (4, 4),
+        "D": (4, 0),
+        "E": (0, 3),
+        "F": (4, 3),
+        "M": (2, 3),
+    }
+
+    def _run(self, tmp_path, columns):
+        return _plane_run(
+            tmp_path,
+            nodes=self.NODES,
+            members=columns + [("E", "M"), ("M", "F")],
+            supports={"A": PLANE_FIXED, "D": PLANE_FIXED},
+            loads={"M": (0.0, -10000.0)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+
+    def test_not_held_in_its_plane(self, tmp_path):
+        (tmp_path / "mesh").mkdir()
+        (tmp_path / "file").mkdir()
+        mesh, warnings = self._run(tmp_path / "mesh", [("A", "B"), ("D", "C")])
+        assert [w for w in warnings if "no connection between them" in w]
+        assert not [w for w in warnings if PLANE_WARNING in w]
+        assert not [w for w in warnings if "free to spin" in w]
+        file, warnings = self._run(
+            tmp_path / "file", [("A", "E"), ("E", "B"), ("D", "F"), ("F", "C")]
+        )
+        assert not [w for w in warnings if PLANE_WARNING in w]
+        assert mesh["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
+            file["global_displacements"]["envelope"]["max_tz_m"], rel=1e-4
+        )
+
+
 class TestBeamContinuousOverASupport:
     """Two 4 m spans over three pinned supports, 10 kN in the middle of each.
 

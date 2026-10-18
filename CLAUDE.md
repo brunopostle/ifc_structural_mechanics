@@ -1065,8 +1065,9 @@ rotational degrees of freedom**. This drives everything about joints:
   programs join members that meet, and the IFC specification, which joins
   members through connection objects alone, says nothing of members that
   only touch. Do not make these joints pins, and do not take them apart
-  under `--strict-connections`. `plane_structure.py` still goes by the
-  file's connections alone (`aiz.81`).
+  under `--strict-connections`. `plane_structure.py` counts them as rigid
+  joints too (`mesh_joints`, `aiz.81`): a plane frame joined that way was
+  once held in its plane when it stood up on its own.
 - **A connection is a support only if it has an `AppliedCondition`**
   (`stiffness_properties` in the domain model). Without one it restrains
   nothing, however many members it joins and whatever its type.

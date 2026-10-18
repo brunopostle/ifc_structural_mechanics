@@ -3710,6 +3710,13 @@ class UnifiedCalculixWriter:
                         pairs.setdefault((a, b), node)
         return pairs
 
+    def _mesh_joints(self) -> List[Tuple[str, str, np.ndarray]]:
+        """``_curve_members_joined_by_the_mesh`` with where each joint is."""
+        return [
+            (a, b, np.array(self.nodes[node], dtype=float))
+            for (a, b), node in self._curve_members_joined_by_the_mesh().items()
+        ]
+
     def _report_joints_made_by_the_mesh(self) -> None:
         """Say where curve members are joined with no connection in the file."""
         pairs = self._curve_members_joined_by_the_mesh()
@@ -3790,7 +3797,9 @@ class UnifiedCalculixWriter:
         if plane is not None:
             from ..analysis.plane_structure import spinning_members
 
-            for conn, member_id in spinning_members(self.domain_model, plane):
+            for conn, member_id in spinning_members(
+                self.domain_model, plane, self._mesh_joints()
+            ):
                 for dof in (4 + i for i in range(3) if i != plane):
                     self._torsion_holds.append((conn, member_id, dof))
             return
@@ -3974,7 +3983,7 @@ class UnifiedCalculixWriter:
         normal = plane_normal(self.domain_model, gravity)
         if normal is None:
             return
-        freedoms = out_of_plane_freedoms(self.domain_model, normal)
+        freedoms = out_of_plane_freedoms(self.domain_model, normal, self._mesh_joints())
         if not freedoms:
             return
         self._plane_normal = normal

@@ -17,12 +17,14 @@ rotations about the two global axes in it. A member is tied to each of its
 joints in that translation, and in each of those rotations it is not released
 in. A support ties its joint to the ground in what it restrains. What is left
 of the movements after the ties is what nothing holds. Members that share a
-point without a connection of the file are not known to be joined here, which
-can only make the count too large; holding a plane structure that did not need
-it changes nothing in its plane.
+mesh node where no connection of the file joins them (a member ending on the
+span of another, two that cross) are joined rigidly there, as the mesh joins
+them; the writer passes those joints in (``mesh_joints``, ``aiz.81``). Left
+out, they made the count too large and a frame joined that way was held in
+its plane when it stood up on its own.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -195,7 +197,9 @@ class _OutOfPlane:
     every joint, the same three about its own position.
     """
 
-    def __init__(self, domain_model: StructuralModel, normal: int):
+    def __init__(
+        self, domain_model: StructuralModel, normal: int, mesh_joints: Sequence = ()
+    ):
         self.normal = normal
         self.in_plane = [axis for axis in range(3) if axis != normal]
         self.members = {member.id: member for member in domain_model.members}
@@ -241,6 +245,19 @@ class _OutOfPlane:
             for k, axis in enumerate(self.in_plane):
                 if share_in_span(turning, np.eye(3)[axis]) > 1.0 - _FLAT:
                     self.rows.append([(joint, self._turn(k))])
+        # A shared node is a rigid joint: no release, and no support of its own
+        for member_a, member_b, point in mesh_joints:
+            if member_a not in self.members or member_b not in self.members:
+                continue
+            point = np.array([float(v) for v in point])
+            joint = self._body(("mesh", member_a, member_b))
+            for member_id in (member_a, member_b):
+                index = self.bodies[("member", member_id)]
+                self.rows.append(
+                    [(index, self._across(point)), (joint, self._across(None))]
+                )
+                for k in range(len(self.in_plane)):
+                    self.rows.append([(index, self._turn(k)), (joint, self._turn(k))])
 
     def _body(self, key) -> int:
         return self.bodies.setdefault(key, len(self.bodies))
@@ -263,11 +280,11 @@ class _OutOfPlane:
 
     def hold_every_node(self) -> None:
         """Add the restraint of every member and joint across the plane."""
-        for (kind, key), index in self.bodies.items():
-            if kind == "joint":
+        for (kind, *key), index in self.bodies.items():
+            if kind != "member":
                 self.rows.append([(index, self._across(None))])
                 continue
-            for point in _member_points(self.members[key]):
+            for point in _member_points(self.members[key[0]]):
                 self.rows.append([(index, self._across(point))])
 
     def twist(self, member_id: str) -> np.ndarray:
@@ -295,8 +312,8 @@ class _OutOfPlane:
                 sign = -1.0 if position else 1.0
                 matrix[i, 3 * index : 3 * index + 3] += sign * values
         used = np.ones(unknowns, dtype=bool)
-        for (kind, _), index in self.bodies.items():
-            if kind == "joint":
+        for (kind, *_), index in self.bodies.items():
+            if kind != "member":
                 columns = slice(3 * index + 1, 3 * index + 3)
                 used[columns] = np.abs(matrix[:, columns]).sum(axis=0) > 0
         basis = np.zeros((unknowns, 0))
@@ -313,21 +330,28 @@ class _OutOfPlane:
         return basis
 
 
-def out_of_plane_freedoms(domain_model: StructuralModel, normal: int) -> int:
+def out_of_plane_freedoms(
+    domain_model: StructuralModel, normal: int, mesh_joints: Sequence = ()
+) -> int:
     """How many ways a plane structure can move out of its plane unstrained.
 
     Args:
         domain_model: A model for which ``plane_normal()`` gave *normal*.
         normal: The global axis across the plane.
+        mesh_joints: ``(member id, member id, point)`` where two members share
+            a mesh node that no connection of the file accounts for: a rigid
+            joint.
 
     Returns:
         The number of independent movements nothing restrains; 0 for a
         structure that stands up on its own.
     """
-    return int(_OutOfPlane(domain_model, normal).free_movements().shape[1])
+    return int(_OutOfPlane(domain_model, normal, mesh_joints).free_movements().shape[1])
 
 
-def spinning_members(domain_model: StructuralModel, normal: int) -> List[Tuple]:
+def spinning_members(
+    domain_model: StructuralModel, normal: int, mesh_joints: Sequence = ()
+) -> List[Tuple]:
     """Where to hold the members that can still spin once every node is held.
 
     Holding every node across the plane leaves a member one movement out of
@@ -335,12 +359,16 @@ def spinning_members(domain_model: StructuralModel, normal: int) -> List[Tuple]:
     run of members joined rigidly end to end. Each such movement is stopped
     by holding one member at one of its connections.
 
+    Members that share a mesh node (``mesh_joints``, as for
+    ``out_of_plane_freedoms()``) are joined rigidly there, but are never held
+    at such a joint: it is no connection.
+
     Returns:
         ``(connection, member id)`` pairs. The connection is one where the
         member is pinned if it has one (nothing but its spin is restrained by
         holding it there), else a support, else any of its connections.
     """
-    system = _OutOfPlane(domain_model, normal)
+    system = _OutOfPlane(domain_model, normal, mesh_joints)
     system.hold_every_node()
     basis = system.free_movements()
     ends_of: dict = {}

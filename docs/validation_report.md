@@ -1188,6 +1188,14 @@ another at right angles), and its 37 "free to spin" members were among them. Its
 solver input is the same to the byte as before; only the warnings changed.
 `building_01` has two such places.
 
+The check for plane structures went by the file's connections alone as well
+(`aiz.81`, `TestPlaneFrameJoinedByTheMesh`): two columns 4 m high on fixed feet, a
+beam framing into their spans at 3 m with connections that join nothing else, 10 kN in
+its middle. The frame stands up out of its plane, but its beam looked loose, so every
+node was held across the plane and a warning said so. It is no longer held, and its
+deflection is 3.4883 mm either way, the same as with the columns split at the beam and
+joined to it in the file: holding a plane structure changes nothing in its plane.
+
 **A beam continuous over a pinned support** (`aiz.78`,
 `TestBeamContinuousOverASupport`). Two 4 m spans, four members, three supports that
 hold no rotation, 10 kN in the middle of each span. A support with a free rotation was

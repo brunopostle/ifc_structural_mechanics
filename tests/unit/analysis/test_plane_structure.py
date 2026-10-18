@@ -253,3 +253,38 @@ class TestSpinningMembers:
         supports = {"A": held, "C": PLANE_ROLLER_2D}
         model = _model(tmp_path, BEAM_NODES, BEAM_MEMBERS, supports, hinged=False)
         assert spinning_members(model, Y) == []
+
+
+def _detach(model, member_index, at):
+    """Take a member out of the connection at a point, as if the file had
+    joined nothing there but the mesh did. Returns the member and the point."""
+    member = model.members[member_index]
+    for connection in model.connections:
+        if member.id in connection.connected_members and all(
+            abs(float(a) - float(b)) < 1e-9 for a, b in zip(connection.position, at)
+        ):
+            connection.connected_members.remove(member.id)
+            return member.id, at
+    raise AssertionError(f"no connection of {member.id} at {at}")
+
+
+class TestJointsMadeByTheMesh:
+    """Members sharing a node with no connection of the file (aiz.81)."""
+
+    def test_portal_joined_by_the_mesh_stands(self, tmp_path):
+        model = _portal(tmp_path, {"A": PLANE_FIXED, "D": PLANE_FIXED})
+        beam, b = _detach(model, 1, (0.0, 0.0, 3.0))
+        _, c = _detach(model, 1, (4.0, 0.0, 3.0))
+        left, right = model.members[0].id, model.members[2].id
+        assert out_of_plane_freedoms(model, Y) == 3
+        joints = [(left, beam, b), (beam, right, c)]
+        assert out_of_plane_freedoms(model, Y, joints) == 0
+
+    def test_straight_run_joined_by_the_mesh_spins_as_one(self, tmp_path):
+        supports = {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}
+        model = _model(tmp_path, BEAM_NODES, BEAM_MEMBERS, supports, hinged=False)
+        second, b = _detach(model, 1, (2.0, 0.0, 0.0))
+        first = model.members[0].id
+        assert len(spinning_members(model, Y)) == 2
+        ((connection, _),) = spinning_members(model, Y, [(first, second, b)])
+        assert connection.stiffness_properties
