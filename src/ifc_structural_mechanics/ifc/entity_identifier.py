@@ -658,158 +658,45 @@ def get_connection_input(
     if not connection.AppliedCondition:
         return None
 
+    # The powers of length in each stiffness: a force over a length at a
+    # point, over a length per length along a curve, per area over a surface
+    # (a modulus of subgrade reaction); a moment per radian at a point, per
+    # length along a curve. Faces have no rotational stiffness.
+    names = {
+        "point": ("TranslationalStiffness{}", "RotationalStiffness{}"),
+        "line": ("TranslationalStiffnessByLength{}", "RotationalStiffnessByLength{}"),
+        "surface": ("TranslationalStiffnessByArea{}", None),
+    }
+    length_powers = {"point": (-1, 1), "line": (-2, 0), "surface": (-3, None)}
+    if geometryType not in names:
+        return None
     try:
-        from ..utils.units import convert_linear_stiffness, convert_rotational_stiffness
-
-        if geometryType == "point":
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessX"):
-                dx = connection.AppliedCondition.TranslationalStiffnessX.wrappedValue
-                dx = _ifc_stiffness_to_float(
-                    dx, convert_linear_stiffness, force_scale, unit_scale
+        condition = connection.AppliedCondition
+        result = {}
+        for kind, (template, power) in enumerate(
+            zip(names[geometryType], length_powers[geometryType])
+        ):
+            for axis in "XYZ":
+                key = ("d" if kind == 0 else "dr") + axis.lower()
+                if template is None:
+                    continue
+                attribute = template.format(axis)
+                if not hasattr(condition, attribute):
+                    result[key] = 0.0
+                    continue
+                value = getattr(condition, attribute)
+                if value is None:
+                    raise ModelExtractionError(
+                        f"Its {condition.is_a()} gives no {attribute}."
+                    )
+                result[key] = _ifc_stiffness_to_float(
+                    getattr(value, "wrappedValue", value),
+                    lambda v, f, u, p=power: v * f * u**p,
+                    force_scale,
+                    unit_scale,
                 )
-            else:
-                dx = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessY"):
-                dy = connection.AppliedCondition.TranslationalStiffnessY.wrappedValue
-                dy = _ifc_stiffness_to_float(
-                    dy, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dy = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessZ"):
-                dz = connection.AppliedCondition.TranslationalStiffnessZ.wrappedValue
-                dz = _ifc_stiffness_to_float(
-                    dz, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dz = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessX"):
-                drx = connection.AppliedCondition.RotationalStiffnessX.wrappedValue
-                drx = _ifc_stiffness_to_float(
-                    drx, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                drx = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessY"):
-                dry = connection.AppliedCondition.RotationalStiffnessY.wrappedValue
-                dry = _ifc_stiffness_to_float(
-                    dry, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                dry = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessZ"):
-                drz = connection.AppliedCondition.RotationalStiffnessZ.wrappedValue
-                drz = _ifc_stiffness_to_float(
-                    drz, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                drz = 0.0
-
-            return {"dx": dx, "dy": dy, "dz": dz, "drx": drx, "dry": dry, "drz": drz}
-
-        if geometryType == "line":
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByLengthX"):
-                dx = (
-                    connection.AppliedCondition.TranslationalStiffnessByLengthX.wrappedValue
-                )
-                dx = _ifc_stiffness_to_float(
-                    dx, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dx = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByLengthY"):
-                dy = (
-                    connection.AppliedCondition.TranslationalStiffnessByLengthY.wrappedValue
-                )
-                dy = _ifc_stiffness_to_float(
-                    dy, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dy = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByLengthZ"):
-                dz = (
-                    connection.AppliedCondition.TranslationalStiffnessByLengthZ.wrappedValue
-                )
-                dz = _ifc_stiffness_to_float(
-                    dz, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dz = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessByLengthX"):
-                drx = (
-                    connection.AppliedCondition.RotationalStiffnessByLengthX.wrappedValue
-                )
-                drx = _ifc_stiffness_to_float(
-                    drx, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                drx = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessByLengthY"):
-                dry = (
-                    connection.AppliedCondition.RotationalStiffnessByLengthY.wrappedValue
-                )
-                dry = _ifc_stiffness_to_float(
-                    dry, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                dry = 0.0
-
-            if hasattr(connection.AppliedCondition, "RotationalStiffnessByLengthZ"):
-                drz = (
-                    connection.AppliedCondition.RotationalStiffnessByLengthZ.wrappedValue
-                )
-                drz = _ifc_stiffness_to_float(
-                    drz, convert_rotational_stiffness, force_scale, unit_scale
-                )
-            else:
-                drz = 0.0
-
-            return {"dx": dx, "dy": dy, "dz": dz, "drx": drx, "dry": dry, "drz": drz}
-
-        if geometryType == "surface":
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByAreaX"):
-                dx = (
-                    connection.AppliedCondition.TranslationalStiffnessByAreaX.wrappedValue
-                )
-                dx = _ifc_stiffness_to_float(
-                    dx, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dx = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByAreaY"):
-                dy = (
-                    connection.AppliedCondition.TranslationalStiffnessByAreaY.wrappedValue
-                )
-                dy = _ifc_stiffness_to_float(
-                    dy, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dy = 0.0
-
-            if hasattr(connection.AppliedCondition, "TranslationalStiffnessByAreaZ"):
-                dz = (
-                    connection.AppliedCondition.TranslationalStiffnessByAreaZ.wrappedValue
-                )
-                dz = _ifc_stiffness_to_float(
-                    dz, convert_linear_stiffness, force_scale, unit_scale
-                )
-            else:
-                dz = 0.0
-            return {"dx": dx, "dy": dy, "dz": dz}
-
+        return result
     except ModelExtractionError:
         raise
     except Exception as e:
         raise ModelExtractionError(f"Error extracting connection input: {e}") from e
-
-    return None

@@ -102,7 +102,9 @@ the ones a user needs to know before trusting a result.
   - a member has no geometry, no material, no profile or (a slab or wall) no
     thickness, or its material has no Young's modulus, or a shear modulus
     (and no Poisson's ratio) that no isotropic material could have;
-  - a connection has no position, or is an `IfcStructuralSurfaceConnection`;
+  - a connection has no position, a surface connection's face has an
+    opening or no plane to give the axes of a condition that differs by
+    direction, or a support condition leaves a stiffness unset;
   - a load has no position or no member, applies a moment to a surface
     member or one that varies along its member, or is of a kind
     other than a point, line or area force (temperature, prescribed

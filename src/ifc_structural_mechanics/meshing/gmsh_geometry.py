@@ -312,6 +312,7 @@ class GmshGeometryConverter:
         self,
         support_point_tags: Optional[List[int]] = None,
         surface_point_tags: Optional[List[int]] = None,
+        surface_piece_tags: Optional[List[Tuple[int, int]]] = None,
     ) -> None:
         """
         Fragment geometry entities to create shared topology.
@@ -332,6 +333,9 @@ class GmshGeometryConverter:
             surface_point_tags: Gmsh point tags where connections land on a
                 surface member. Passed as *tools* to the surface fragment() so
                 the shell mesh has a node at each of them.
+            surface_piece_tags: Surfaces where a surface support covers a
+                surface member (``_surface_support_pieces``), passed as tools
+                so the shell mesh follows its outline.
         """
         self._fragment_map = None
         curve_map = None
@@ -363,8 +367,10 @@ class GmshGeometryConverter:
             except Exception as e:
                 raise MeshingError(f"Curve fragment failed: {e}") from e
 
-        # Fragment surfaces against surfaces (and against connection points)
+        # Fragment surfaces against surfaces (and against connection points
+        # and the parts of them that surface supports cover)
         surface_tools = [(0, pt) for pt in (surface_point_tags or [])]
+        surface_tools += list(surface_piece_tags or [])
         if len(self._all_surface_dim_tags) >= 2 or (
             self._all_surface_dim_tags and surface_tools
         ):
@@ -839,6 +845,69 @@ class GmshGeometryConverter:
             logger.info(f"Seeded {len(seeded)} connection point(s) on surfaces")
         return seeded
 
+    def _surface_support_pieces(
+        self, domain_model: StructuralModel
+    ) -> List[Tuple[int, int]]:
+        """The parts of surface members that surface supports cover.
+
+        A surface support (``connection.face``) may cover a slab in part: a
+        strip footing under a raft. Its outline is intersected with every
+        surface member, and the pieces fragment the members, so the shell
+        mesh has edges along the outline and its elements lie inside the
+        support or outside it, which the spring shares of an elastic one
+        need. The outline is built with points of its own and removed after,
+        so nothing of it is meshed but the pieces.
+
+        Returns:
+            The (2, tag) of each piece, to pass as tools to the surface
+            fragment().
+        """
+        faces = [
+            conn.face
+            for conn in domain_model.connections
+            if getattr(conn, "face", None) is not None
+        ]
+        members = [
+            tag
+            for member in domain_model.members
+            if isinstance(member, SurfaceMember)
+            for tag in self._member_surface_tags.get(member.id, [])
+        ]
+        if not faces or not members:
+            return []
+        pieces: List[Tuple[int, int]] = []
+        for face in faces:
+            try:
+                points = [
+                    gmsh.model.occ.addPoint(*(float(v) for v in corner))
+                    for corner in face
+                ]
+                lines = [
+                    gmsh.model.occ.addLine(points[i], points[(i + 1) % len(points)])
+                    for i in range(len(points))
+                ]
+                outline = gmsh.model.occ.addPlaneSurface(
+                    [gmsh.model.occ.addCurveLoop(lines)]
+                )
+                for tag in members:
+                    common, _ = gmsh.model.occ.intersect(
+                        [(2, outline)],
+                        [(2, tag)],
+                        removeObject=False,
+                        removeTool=False,
+                    )
+                    pieces += [dim_tag for dim_tag in common if dim_tag[0] == 2]
+                gmsh.model.occ.remove([(2, outline)], recursive=True)
+            except MeshingError:
+                raise
+            except Exception as e:
+                raise MeshingError(
+                    f"Could not lay a surface support onto the surface members: {e}"
+                ) from e
+        if pieces:
+            logger.info(f"Surface supports cover {len(pieces)} piece(s) of surfaces")
+        return pieces
+
     def _create_physical_groups(self, domain_model: StructuralModel) -> None:
         """
         Create Gmsh physical groups so mesh elements inherit member ownership.
@@ -996,9 +1065,12 @@ class GmshGeometryConverter:
         crossing_curve_tags, crossing_surface_tags = self._seed_crossings(domain_model)
         support_point_tags += crossing_curve_tags
         surface_point_tags += crossing_surface_tags
+        surface_piece_tags = self._surface_support_pieces(domain_model)
 
         # Phase 2: Fragment for shared topology
-        self._fragment_all_entities(support_point_tags, surface_point_tags)
+        self._fragment_all_entities(
+            support_point_tags, surface_point_tags, surface_piece_tags
+        )
 
         # Phase 3: Single synchronize
         try:

@@ -29,13 +29,19 @@ class TestConnectionsExtractor:
             # Adjust ID generation to match warning logs
             if connection_type == "point":
                 connection.GlobalId = f"po{index+1}"
-                connection.is_a.return_value = "IfcStructuralPointConnection"
+                kind = "IfcStructuralPointConnection"
             elif connection_type == "curve":
                 connection.GlobalId = f"co{index+1}"
-                connection.is_a.return_value = "IfcStructuralCurveConnection"
+                kind = "IfcStructuralCurveConnection"
             else:  # surface
                 connection.GlobalId = f"so{index+1}"
-                connection.is_a.return_value = "IfcStructuralSurfaceConnection"
+                kind = "IfcStructuralSurfaceConnection"
+            # An is_a that says yes to every type makes a point connection a
+            # surface connection too
+            kinds = {kind, "IfcStructuralConnection", "IfcStructuralItem"}
+            connection.is_a = lambda *args, kind=kind, kinds=kinds: (
+                args[0] in kinds if args else kind
+            )
 
             # Create Representation object
             representation = MagicMock()
@@ -118,6 +124,8 @@ class TestConnectionsExtractor:
         # Create connections
         self.point_connections = [create_mock_connection("point", i) for i in range(2)]
         self.curve_connections = [create_mock_connection("curve", i) for i in range(2)]
+        # Not in the file: a surface connection needs a face, which these
+        # mocks do not have
         self.surface_connections = [
             create_mock_connection("surface", i) for i in range(2)
         ]
@@ -150,8 +158,6 @@ class TestConnectionsExtractor:
                 return self.point_connections
             elif entity_type == "IfcStructuralCurveConnection":
                 return self.curve_connections
-            elif entity_type == "IfcStructuralSurfaceConnection":
-                return self.surface_connections
             return []
 
         # Apply the by_type mock
@@ -218,21 +224,27 @@ class TestConnectionsExtractor:
         assert position == [1.0, 2.0, 3.0], f"Unexpected position: {position}"
 
     def test_extract_all_connections(self):
-        """Test extracting all connections."""
-        # Call the method
+        """Test extracting all connections.
+
+        The curve and surface mocks have a vertex for a representation; when
+        every mock's is_a said yes to every type, they were read as point
+        connections. Only the point connections are in this file.
+        """
+        self.mock_ifc.by_type = lambda entity_type: (
+            self.point_connections
+            if entity_type == "IfcStructuralPointConnection"
+            else []
+        )
         connections = self.extractor.extract_all_connections()
 
         # Verify results
-        assert len(connections) == 6
+        assert len(connections) == 2
 
         # Verify connection types
         assert all(isinstance(conn, PointConnection) for conn in connections)
 
         # Verify IDs
-        assert all(
-            conn.id in ["po1", "po2", "co1", "co2", "so1", "so2"]
-            for conn in connections
-        )
+        assert all(conn.id in ["po1", "po2"] for conn in connections)
 
     def test_determine_connection_type(self):
         """What a connection holds does not change what it is.
@@ -332,14 +344,8 @@ class TestConnectionsExtractor:
         with pytest.raises(ModelExtractionError, match="po1.*position"):
             self.extractor._create_domain_connection(broken)
 
-    def test_surface_connection_is_refused(self):
+    def test_surface_connection_without_a_face_is_an_error(self):
         """It used to become a point support, at the origin if need be."""
         surface = self.surface_connections[0]
-        # The fixture's is_a says yes to every type; this one tells the truth
-        surface.is_a = lambda *args: (
-            args[0] == "IfcStructuralSurfaceConnection"
-            if args
-            else "IfcStructuralSurfaceConnection"
-        )
-        with pytest.raises(ModelExtractionError, match="only point and curve"):
+        with pytest.raises(ModelExtractionError, match="so1.*no face"):
             self.extractor._create_domain_connection(surface)

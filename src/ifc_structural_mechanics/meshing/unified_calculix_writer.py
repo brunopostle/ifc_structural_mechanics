@@ -315,6 +315,9 @@ class UnifiedCalculixWriter:
             # Step 2c9: Spread point forces on beam nodes over a rigid section
             self._knot_point_loaded_nodes()
 
+            # Step 2c10: Springs of elastic supports
+            self._build_support_springs()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -907,6 +910,7 @@ class UnifiedCalculixWriter:
             self._write_materials(f)
             self._write_sections(f)
             self._write_rigid_links(f)
+            self._write_support_springs(f)
 
             # Connections (kinematic couplings, MPCs)
             # Pass boundary condition DOFs to avoid conflicts
@@ -920,6 +924,7 @@ class UnifiedCalculixWriter:
                 self.element_sets,
                 self._structure_nodes(),
                 rotation_arms=getattr(self, "_support_arms", None),
+                springs=getattr(self, "_support_springs", None),
             )
             self._record_support_node_elements()
             # What an equation of a skew support already decides is not
@@ -2419,6 +2424,254 @@ class UnifiedCalculixWriter:
             next_elem += 1
         self._helper_nodes = helpers
 
+    def _build_support_springs(self) -> None:
+        """Put a spring on every node of an elastic support.
+
+        Each spring is a ``SPRING1`` on a node of its own, whose first
+        translation an equation makes what the spring resists: the node's
+        translation along the spring for a translational one, and for a
+        rotational one the rotation of a stiff arm fixed to the node (the
+        movement of its tip across it, over its length). CalculiX ignores a
+        ``SPRING1`` on the rotation of a beam or shell node, and a spring on
+        the tip of an arm would hold the node's translation as well
+        (measured). The spring's own node is printed in every step, and its
+        displacement times the stiffness is the reaction: the solver's force
+        at a node is wrong when a tie leans on it, as the line bearings do.
+
+        A node of shells alone has no rotation about their normal. A spring
+        about it would hold nothing and is left out, with a warning; the arm
+        of one about an axis in their plane lies in it too, and its tip is
+        held against turning about the normal relative to the node.
+
+        Stored in ``self._support_springs`` as ``{support id: [spring]}``,
+        each a dict with ``kind`` (translation or rotation), ``node``,
+        ``spring_node``, ``position``, ``direction`` (the direction or the
+        axis, global) and ``stiffness`` (N/m or N*m/rad); a rotational one
+        also has ``across``, the direction its arm's tip moves in, and
+        ``arm_length``.
+
+        Raises:
+            AnalysisError: If a support has no node, its elements do not cover
+                it, or it has a rotational spring that cannot be built: in a
+                model with U1 members, or about an axis neither in the plane
+                of the shells at a node of theirs alone nor across it.
+        """
+        from ..analysis.boundary_condition_handling import (
+            find_connection_support_nodes,
+            spring_node_shares,
+            support_springs,
+        )
+
+        self._support_springs: Dict[str, List[Dict[str, Any]]] = {}
+        self._spring_elements: List[Tuple[int, int, float]] = []
+        self._spring_equations: List[List[Tuple[int, int, float]]] = []
+        elastic = [
+            (conn, *support_springs(conn)) for conn in self.domain_model.connections
+        ]
+        elastic = [item for item in elastic if item[1] or item[2]]
+        if not elastic:
+            return
+        elements_at: Dict[int, List[int]] = {}
+        for elem_id, elem in self.elements.items():
+            for node in elem["nodes"]:
+                elements_at.setdefault(node, []).append(elem_id)
+        links = list(getattr(self, "_rigid_links", []))
+        linked = {
+            n
+            for _, a, b in links + list(getattr(self, "_knot_links", []))
+            for n in (a, b)
+        }
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [e for e, _, _ in links]
+                + [e for e, _, _ in getattr(self, "_knot_links", [])]
+            )
+            + 1
+        )
+        structure = self._structure_nodes()
+        drilling_left_out: List[str] = []
+
+        def new_node(position) -> int:
+            nonlocal next_node
+            node = next_node
+            self.nodes[node] = tuple(float(v) for v in position)
+            helpers.add(node)
+            next_node += 1
+            return node
+
+        for conn, translations, rotations in elastic:
+            if rotations and self._u1_members:
+                raise AnalysisError(
+                    f"Support {conn.id} cannot be applied: it has a rotational "
+                    "spring, which takes a stiff arm, and arms cannot be used "
+                    "in a model with user elements."
+                )
+            nodes = find_connection_support_nodes(conn, structure)
+            if not nodes:
+                raise AnalysisError(
+                    f"Support {conn.id} cannot be applied: the mesh has no node "
+                    "on it. Check that it lies on a member."
+                )
+            shares = spring_node_shares(conn, nodes, self.elements, self.nodes)
+            springs = self._support_springs.setdefault(conn.id, [])
+            for node, share in sorted(shares.items()):
+                if share <= 0.0:
+                    continue
+                here = np.array(self.nodes[node], dtype=float)
+                for direction, stiffness in translations:
+                    spring_node = new_node(here)
+                    self._spring_equations.append(
+                        [(spring_node, 1, 1.0)]
+                        + [
+                            (node, i + 1, -float(direction[i]))
+                            for i in range(3)
+                            if abs(direction[i]) > 1e-12
+                        ]
+                    )
+                    self._spring_elements.append(
+                        (next_elem, spring_node, stiffness * share)
+                    )
+                    next_elem += 1
+                    springs.append(
+                        {
+                            "kind": "translation",
+                            "node": node,
+                            "spring_node": spring_node,
+                            "position": tuple(float(v) for v in here),
+                            "direction": [float(v) for v in direction],
+                            "stiffness": stiffness * share,
+                        }
+                    )
+                for axis, stiffness in rotations:
+                    drilling = (
+                        None
+                        if node in linked
+                        else self._drilling_axis(elements_at.get(node, []))
+                    )
+                    if drilling is not None:
+                        along = abs(float(np.dot(axis, drilling)))
+                        if along > 1.0 - 1e-6:
+                            drilling_left_out.append(str(conn.id))
+                            continue
+                        if along > 1e-6:
+                            raise AnalysisError(
+                                f"Support {conn.id} cannot be applied: it has a "
+                                "rotational spring about an axis that is neither "
+                                "in the plane of the shells at node "
+                                f"{node} nor across it."
+                            )
+                        arm = np.cross(axis, drilling)
+                    else:
+                        arm = np.array(
+                            self._orthogonal_beam_normal(
+                                (0.0, 0.0, 1.0), tuple(float(v) for v in axis)
+                            ),
+                            dtype=float,
+                        )
+                    arm = arm / np.linalg.norm(arm)
+                    tip = new_node(here + self._HINGE_ARM * arm)
+                    links.append((next_elem, node, tip))
+                    linked.update((node, tip))
+                    next_elem += 1
+                    # The tip moves across the arm by the rotation times its
+                    # length
+                    across = np.cross(axis, arm)
+                    spring_node = new_node(here)
+                    self._spring_equations.append(
+                        [(spring_node, 1, 1.0)]
+                        + [
+                            term
+                            for i in range(3)
+                            if abs(across[i]) > 1e-12
+                            for term in (
+                                (tip, i + 1, -float(across[i]) / self._HINGE_ARM),
+                                (node, i + 1, float(across[i]) / self._HINGE_ARM),
+                            )
+                        ]
+                    )
+                    if drilling is not None:
+                        # Turning about the normal swings the tip along this
+                        turn = np.cross(drilling, arm)
+                        pivot = int(np.argmax(np.abs(turn)))
+                        order = [pivot] + [i for i in range(3) if i != pivot]
+                        self._spring_equations.append(
+                            [
+                                (tip, i + 1, float(turn[i]))
+                                for i in order
+                                if abs(turn[i]) > 1e-12
+                            ]
+                            + [
+                                (node, i + 1, -float(turn[i]))
+                                for i in range(3)
+                                if abs(turn[i]) > 1e-12
+                            ]
+                        )
+                    self._spring_elements.append(
+                        (next_elem, spring_node, stiffness * share)
+                    )
+                    next_elem += 1
+                    springs.append(
+                        {
+                            "kind": "rotation",
+                            "node": node,
+                            "spring_node": spring_node,
+                            "position": tuple(float(v) for v in here),
+                            "direction": [float(v) for v in axis],
+                            "stiffness": stiffness * share,
+                            "across": [float(v) for v in across],
+                            "arm_length": self._HINGE_ARM,
+                        }
+                    )
+        self._helper_nodes = helpers
+        if len(links) > len(getattr(self, "_rigid_links", [])):
+            self._rigid_links = links
+        self._member_node_cache = {}
+        if drilling_left_out:
+            names = sorted(set(drilling_left_out))
+            self._warn_user(
+                f"{len(names)} elastic support(s) have a rotational spring about "
+                "the normal of the shells they hold, which have no rotation "
+                "about it: it holds nothing and is left out: "
+                + ", ".join(names[:5])
+                + (", ..." if len(names) > 5 else "")
+            )
+        logger.info(
+            f"Built {len(self._spring_elements)} springs at "
+            f"{len(self._support_springs)} elastic supports"
+        )
+
+    def _write_support_springs(self, file: TextIO) -> None:
+        """Write the springs of elastic supports (``_build_support_springs``).
+
+        Each has an element set and a ``*SPRING`` card of its own, since each
+        node's stiffness is its share of the support's. The spring nodes are
+        held in their other two translations, which nothing else resists,
+        and gathered in ``SPRING_NODES``, which every step prints.
+        """
+        elements = getattr(self, "_spring_elements", [])
+        if not elements:
+            return
+        file.write("** Elastic supports: a spring on a node of its own each\n")
+        for elem_id, node, stiffness in elements:
+            elset = f"SPRING_{elem_id}"
+            file.write(f"*ELEMENT, TYPE=SPRING1, ELSET={elset}\n{elem_id}, {node}\n")
+            file.write(f"*SPRING, ELSET={elset}\n1\n{stiffness:.9e}\n")
+        file.write("** What each spring resists\n")
+        for terms in self._spring_equations:
+            self._write_equation(file, terms)
+        nodes = sorted(node for _, node, _ in elements)
+        file.write("*BOUNDARY\n")
+        for node in nodes:
+            file.write(f"{node}, 2, 3\n")
+        file.write("*NSET, NSET=SPRING_NODES\n")
+        for i in range(0, len(nodes), 8):
+            file.write(", ".join(map(str, nodes[i : i + 8])) + "\n")
+        file.write("\n")
+        self.node_sets["SPRING_NODES"] = nodes
+
     def _drilling_axis(self, element_ids: List[int]) -> Optional[np.ndarray]:
         """The normal of the shells at a node, if it is a node of shells alone.
 
@@ -2845,7 +3098,7 @@ class UnifiedCalculixWriter:
         from ..analysis.boundary_condition_handling import (
             released_rotation_axes,
             share_in_span,
-            support_restraint,
+            support_resistance,
         )
 
         self._torsion_holds: List[Tuple[Any, str, int]] = []
@@ -2901,7 +3154,7 @@ class UnifiedCalculixWriter:
         restrained = set()
         for conn in self.domain_model.connections:
             attached = list(conn.connected_members or [])
-            restraint = support_restraint(conn)
+            restraint = support_resistance(conn)
             for member_id in attached:
                 if member_id not in directions:
                     continue
@@ -2950,7 +3203,7 @@ class UnifiedCalculixWriter:
             supports = []
             for member_id in members:
                 for conn in connections_of[member_id]:
-                    restraint = support_restraint(conn)
+                    restraint = support_resistance(conn)
                     if restraint is None or not (
                         len(restraint[0]) or len(restraint[1])
                     ):
@@ -3479,7 +3732,7 @@ class UnifiedCalculixWriter:
         converge to unrealistically large displacements.
         """
         from ifc_structural_mechanics.analysis.boundary_condition_handling import (
-            support_restraint,
+            support_resistance,
         )
 
         model = self.domain_model
@@ -3489,7 +3742,7 @@ class UnifiedCalculixWriter:
             real = list(conn.connected_members)
             if len(real) >= 2:
                 continue  # member-to-member connection
-            restraint = support_restraint(conn)
+            restraint = support_resistance(conn)
             if restraint is not None and len(restraint[1]):
                 return (
                     []

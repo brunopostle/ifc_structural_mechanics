@@ -578,7 +578,12 @@ here. This section only records the constraints that shape day-to-day work.
   in the file. `building_02` solves, its reactions match the applied loads and its
   deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
   reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
-  Never run it finer than 2 m on the development machine.
+  Never run it finer than 2 m on the development machine. Measured
+  2026-10-17: at 2 m `ccx` alone needs 60 s and 2.08 GB (SPOOLES, the only
+  direct solver of stock builds); `SOLVER=ITERATIVE CHOLESKY` does not
+  converge on expanded shells, and S8R quads instead of S6 save 17% of
+  memory on a plate. A 1 m mesh needs a machine with more memory or a
+  CalculiX built with PaStiX or PARDISO.
 - **Member results are read on the faces of expanded elements.** A member's
   largest displacement in `results.json` includes what its rotation adds at
   the faces: a few percent on a slender member, more on a deep one.
@@ -698,7 +703,9 @@ element within the loaded member's outline, whoever owns it.
 - `IfcBoolean(False)` — free/released (treated as 0.0)
 - Numeric measure — spring stiffness in project units
 
-The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this. After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
+The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this;
+`get_connection_input()` scales a number by the powers of length its kind has
+(N/m and N·m/rad at a point, per metre along an edge, N/m per m² over a face). After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
 
 **The six values are in the connection's own axes, not the global ones.** A point
 connection uses its `ConditionCoordinateSystem`; a curve connection has x along its
@@ -739,6 +746,47 @@ What is skew is written by `write_boundary_conditions()` from `support_equations
   as well; the plane hold skips it for the same reason.
 - No arms in a model with U1 members (no link elements next to U1): a skew rotation
   there stops the analysis with an `AnalysisError`.
+
+**Elastic supports** (`aiz.94`): a stiffness that is neither zero nor rigid is
+a spring (`support_springs()`; it was once taken as free without a word). Measured
+on 2.23, and what the design rests on:
+
+- `SPRING1` on DOF 1-3 of a beam or shell node works; on DOF 4-6 it is accepted
+  and does nothing.
+- A spring at the tip of a stiff arm holds the node's translation as well. So
+  `_build_support_springs()` puts each spring on a node of its own whose first
+  translation an `*EQUATION` makes what it resists: the node's translation along
+  the spring, or for a rotation the arm tip's movement across the arm over its
+  length. The spring node is held in DOF 2-3 (the solver crashes without a word
+  otherwise). Rotational springs on a node of shells alone: the arm lies in their
+  plane and its tip is held against turning about the normal relative to the
+  node; one about the normal holds nothing and is left out with a warning.
+- `RF` is wrong at a node an equation leans on (a line bearing's tie gave
+  -7994 N where the spring took +1006 N), and at a spring node it is the spring's
+  force along global x whatever its direction. So the reaction of a spring is its
+  stiffness times its node's displacement (`SPRING_NODES`, printed every step,
+  `ResultsParser.parse_spring_displacements()`, combined by superposition).
+  `ResultsExporter._elastic_correction()` takes the spring nodes' `RF` and the
+  equations' push on support nodes (`_spring_push_on_node()`) off the solver's
+  total and adds the springs.
+- A line or surface spring is shared out by `spring_node_shares()`: HRZ-lumped
+  (a six-node triangle's corners 3/57, middles 16/57 of its area; a quadratic
+  edge 1/6, 2/3, 1/6), since the shape functions' integrals give a six-node
+  triangle's corners nothing. The elements found must cover the edge or face to
+  1%, else `AnalysisError`.
+
+**Surface supports** (`aiz.96`, `IfcStructuralSurfaceConnection`) keep their
+outline in `connection.face`; their axes are those of the `Position` of the
+face's `IfcPlane` (z across it), and a condition that differs by direction on a
+face with no plane raises. `GmshGeometry._surface_support_pieces()` intersects
+the outline with each surface member and the pieces fragment the members, so
+the mesh follows it. The support holds every node on the face
+(`find_nodes_in_face()`). An `IfcBoundaryFaceCondition` has translations only:
+inside a rigidly held area a slab's normals still turn, against transverse
+shear alone, over about sqrt(D / kappa G t), which at the edge of the area adds
+M l / D of rotation (measured: half of `slab_01` held, the free half 15% over
+q L^4 / 8 D, as that predicts). `TestElasticSupports` and `TestSurfaceSupports`
+check them against closed forms.
 
 `results.json` lists what a support holds along global axes in `restrained` and along
 its own in `restrained_in_axes`. `TestSkewSupports` has the incline and a clamp about a

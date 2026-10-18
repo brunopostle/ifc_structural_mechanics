@@ -151,6 +151,106 @@ class TestConnections:
         assert connection.GlobalId in str(error.value)
         assert "position cannot be found" in str(error.value)
 
+    def test_unset_stiffness_is_an_error(self):
+        """An optional stiffness left out is not taken as free."""
+        model = _open("cantilever_01")
+        condition = model.by_type("IfcStructuralPointConnection")[0].AppliedCondition
+        condition.TranslationalStiffnessZ = None
+        with pytest.raises(ModelExtractionError, match="TranslationalStiffnessZ"):
+            Extractor(model).extract_model()
+
+    def test_stiffness_per_length_and_per_area_follow_the_length_unit(self):
+        """N/m at a point, N/m per metre along an edge, N/m per m² over a face."""
+        from ifc_structural_mechanics.ifc.entity_identifier import (
+            get_connection_input,
+        )
+
+        model = _open("slab_01")
+        connection = model.by_type("IfcStructuralCurveConnection")[0]
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryEdgeCondition",
+            None,
+            model.create_entity("IfcModulusOfLinearSubgradeReactionMeasure", 2.0),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcModulusOfRotationalSubgradeReactionMeasure", 3.0),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcBoolean", False),
+        )
+        # Millimetres and kilonewtons
+        values = get_connection_input(connection, "line", 0.001, 1000.0)
+        assert values["dx"] == pytest.approx(2.0 * 1000.0 / 0.001**2)
+        assert values["dy"] == 1e20
+        assert values["dz"] == 0.0
+        assert values["drx"] == pytest.approx(3.0 * 1000.0)
+
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryFaceCondition",
+            None,
+            model.create_entity("IfcModulusOfSubgradeReactionMeasure", 4.0),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+        )
+        values = get_connection_input(connection, "surface", 0.001, 1000.0)
+        assert values["dx"] == pytest.approx(4.0 * 1000.0 / 0.001**3)
+        assert "drx" not in values
+
+    def test_surface_connection_has_its_face_and_the_axes_of_its_plane(self):
+        model = _open("slab_01")
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        face = slab.Representation.Representations[0].Items[0]
+        face.FaceSurface.Position.RefDirection = model.create_entity(
+            "IfcDirection", (0.0, 1.0, 0.0)
+        )
+        shape = model.create_entity(
+            "IfcProductDefinitionShape",
+            None,
+            None,
+            [
+                model.create_entity(
+                    "IfcTopologyRepresentation",
+                    slab.Representation.Representations[0].ContextOfItems,
+                    "Reference",
+                    "Face",
+                    [face],
+                )
+            ],
+        )
+        condition = model.create_entity(
+            "IfcBoundaryFaceCondition",
+            None,
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcModulusOfSubgradeReactionMeasure", 1.0e7),
+        )
+        surface = model.create_entity(
+            "IfcStructuralSurfaceConnection",
+            "2Xq$8rX9P0Uw2P5bHS7Y0g",
+            slab.OwnerHistory,
+            None,
+            None,
+            None,
+            slab.ObjectPlacement,
+            shape,
+            condition,
+        )
+        group = model.by_type("IfcRelAssignsToGroup")[0]
+        group.RelatedObjects = list(group.RelatedObjects) + [surface]
+        (connection,) = [
+            c
+            for c in Extractor(model).extract_model().connections
+            if c.id == surface.GlobalId
+        ]
+        assert sorted(map(tuple, connection.face)) == sorted(
+            [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 3.0, 0.0), (0.0, 3.0, 0.0)]
+        )
+        assert connection.position == pytest.approx([2.5, 1.5, 0.0])
+        assert connection.local_axes[0] == pytest.approx([0.0, 1.0, 0.0])
+        assert connection.local_axes[2] == pytest.approx([0.0, 0.0, 1.0])
+        stiffness = connection.get_stiffness_properties()
+        assert stiffness["dx"] == 1e20
+        assert stiffness["dz"] == pytest.approx(1.0e7)
+
 
 class TestLoads:
     def test_load_in_no_group_is_reported(self):

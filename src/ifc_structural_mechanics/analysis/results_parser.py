@@ -646,6 +646,59 @@ class ResultsParser:
                     )
         return steps
 
+    def parse_spring_displacements(self, dat_file: str) -> List[Dict]:
+        """Read the displacements of the springs' own nodes, per step.
+
+        Each spring of an elastic support is on a node of its own whose first
+        translation is what the spring resists (see
+        ``UnifiedCalculixWriter._build_support_springs``); the steps print
+        them as ``displacements (vx,vy,vz) for set SPRING_NODES``.
+
+        Returns:
+            One record per step, in step order, with ``load_case`` and
+            ``displacements``, a dict of node number to ``[ux, uy, uz]``.
+            Empty if the file is missing or the model has no springs.
+        """
+        if not os.path.exists(dat_file):
+            return []
+        steps: List[Dict] = []
+        current: Optional[Dict[int, List[float]]] = None
+        names = self.load_case_names or []
+        with open(dat_file, "r") as file:
+            for line in file:
+                text = line.strip()
+                lowered = text.lower()
+                if lowered.startswith("displacements (vx,vy,vz) for set spring_nodes"):
+                    current = {}
+                    index = len(steps)
+                    steps.append(
+                        {
+                            "load_case": (
+                                names[index]
+                                if index < len(names)
+                                else f"step_{index + 1}"
+                            ),
+                            "displacements": current,
+                        }
+                    )
+                    continue
+                if current is None or not text:
+                    continue
+                parts = text.split()
+                try:
+                    node = int(parts[0])
+                    values = [float(value) for value in parts[1:4]]
+                except (ValueError, IndexError):
+                    current = None  # the block has ended
+                    continue
+                if len(values) != 3:
+                    raise ResultProcessingError(
+                        f"Cannot read the spring displacement line {text!r} "
+                        f"in {dat_file}"
+                    )
+                current[node] = values
+        return steps
+
     # The forces of a support node's expanded nodes have to add up to the
     # force printed for the node itself, to this share of the largest force
     # in the step or of the forces added, which are a large couple where the
@@ -1237,6 +1290,7 @@ class ResultsParser:
             "section_forces": [],
             "support_node_forces": [],
             "support_node_moments": [],
+            "spring_node_displacements": [],
         }
 
         try:
@@ -1282,6 +1336,9 @@ class ResultsParser:
                 reactions = self.parse_reactions(dat_file)
                 parsed_results["reaction"].extend(reactions)
                 parsed_results["support_node_forces"] = self.parse_node_forces(dat_file)
+                parsed_results["spring_node_displacements"] = (
+                    self.parse_spring_displacements(dat_file)
+                )
                 if "results" in result_files:
                     parsed_results["support_node_moments"] = (
                         self.parse_support_node_moments(

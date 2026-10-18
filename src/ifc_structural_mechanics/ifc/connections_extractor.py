@@ -162,11 +162,14 @@ class ConnectionsExtractor:
         if not (
             ifc_connection.is_a("IfcStructuralPointConnection")
             or ifc_connection.is_a("IfcStructuralCurveConnection")
+            or ifc_connection.is_a("IfcStructuralSurfaceConnection")
         ):
             raise ModelExtractionError(
-                f"It is an {ifc_connection.is_a()}; only point and curve "
-                "connections are supported."
+                f"It is an {ifc_connection.is_a()}; only point, curve and "
+                "surface connections are supported."
             )
+        if ifc_connection.is_a("IfcStructuralSurfaceConnection"):
+            return self._build_surface_connection(ifc_connection)
 
         # Extract basic connection information
         connection_id = ifc_connection.GlobalId
@@ -246,6 +249,150 @@ class ConnectionsExtractor:
         if not connection.validate():
             raise ModelExtractionError("It does not pass validation.")
         return connection
+
+    def _build_surface_connection(self, ifc_connection) -> StructuralConnection:
+        """Create the domain connection of an ``IfcStructuralSurfaceConnection``.
+
+        Its face is the outline of the area it supports, in metres and global
+        coordinates (``connection.face``); its position is the face's centre.
+        The condition (``IfcBoundaryFaceCondition``) is a stiffness per area
+        along each axis of the face's surface: those of the ``Position`` of
+        its ``IfcPlane``, z across the face.
+
+        Raises:
+            ModelExtractionError: If its face cannot be read, it has no
+                condition, or its condition treats the directions differently
+                and its face has no plane to give them.
+        """
+        representation = get_representation(ifc_connection, "Face")
+        if not representation or not representation.Items:
+            raise ModelExtractionError("It has no face representation.")
+        item = representation.Items[0]
+        if not item.is_a("IfcFace"):
+            raise ModelExtractionError(
+                f"Its face representation is an {item.is_a()}, not a face."
+            )
+        corners = self._face_corners(item)
+        transformation = get_item_transformation(ifc_connection, self.length_scale)
+        face = [[float(v) * self.length_scale for v in corner] for corner in corners]
+        if transformation:
+            face = transform_vectors(face, transformation)
+        face = [[float(v) for v in corner] for corner in face]
+        if len(face) < 3:
+            raise ModelExtractionError("Its face has fewer than three corners.")
+        centre = np.mean(np.array(face, dtype=float), axis=0)
+        normal = np.zeros(3)
+        for i in range(len(face)):
+            normal += np.cross(face[i], face[(i + 1) % len(face)])
+        if np.linalg.norm(normal) < 1e-12:
+            raise ModelExtractionError("Its face has no area.")
+        normal = normal / np.linalg.norm(normal)
+        if max(abs(float(np.dot(np.array(c) - centre, normal))) for c in face) > 1e-3:
+            raise ModelExtractionError("Its face is not plane.")
+
+        if not ifc_connection.AppliedCondition:
+            raise ModelExtractionError(
+                "It has no AppliedCondition, so it supports nothing; a surface "
+                "connection cannot join members."
+            )
+        stiffness = get_connection_input(
+            ifc_connection, "surface", self.length_scale, self.force_scale
+        )
+        connection = create_connection_from_stiffness(
+            ifc_connection.GlobalId,
+            [float(v) for v in centre],
+            stiffness,
+            "rigid",
+            ifc_connection.GlobalId,
+        )
+        connection.face = face
+        connection.local_axes = self._face_axes(item, transformation, stiffness)
+        for member_id in find_connected_elements(ifc_connection):
+            connection.connect_member(member_id)
+        if not connection.validate():
+            raise ModelExtractionError("It does not pass validation.")
+        return connection
+
+    @staticmethod
+    def _face_corners(face) -> List[List[float]]:
+        """The corners of the outer bound of an ``IfcFace``, in the file's units.
+
+        Raises:
+            ModelExtractionError: If a corner has no coordinates, or the bound
+                is neither a list of edges nor a polygon.
+        """
+        bounds = list(face.Bounds or [])
+        outer = [b for b in bounds if b.is_a("IfcFaceOuterBound")] or bounds
+        if not outer:
+            raise ModelExtractionError("Its face has no bound.")
+        if len(bounds) > 1:
+            raise ModelExtractionError(
+                "Its face has an opening (more than one bound), which is not "
+                "supported."
+            )
+        loop = outer[0].Bound
+        if loop.is_a("IfcPolyLoop"):
+            points = [get_coordinate(point) for point in loop.Polygon]
+        elif loop.is_a("IfcEdgeLoop"):
+            points = []
+            for edge in loop.EdgeList:
+                element = edge.EdgeElement if edge.is_a("IfcOrientedEdge") else edge
+                forward = getattr(edge, "Orientation", True)
+                vertex = element.EdgeStart if forward else element.EdgeEnd
+                points.append(get_coordinate(vertex.VertexGeometry))
+        else:
+            raise ModelExtractionError(
+                f"The bound of its face is an {loop.is_a()}, which is not supported."
+            )
+        if any(point is None for point in points):
+            raise ModelExtractionError("A corner of its face has no coordinates.")
+        if not outer[0].Orientation:
+            points = points[::-1]
+        return [list(point) for point in points]
+
+    def _face_axes(
+        self, face, transformation, stiffness
+    ) -> Optional[List[List[float]]]:
+        """The axes a face condition is in: those of its plane's ``Position``.
+
+        None (the global axes) when the face has no plane and the condition
+        treats the three directions alike, where the axes do not matter.
+
+        Raises:
+            ModelExtractionError: If the condition treats the directions
+                differently and the face has no plane to give its axes.
+        """
+        surface = getattr(face, "FaceSurface", None)
+        if surface is None or not surface.is_a("IfcPlane"):
+            values = [(stiffness or {}).get(key, 0.0) for key in ("dx", "dy", "dz")]
+            if max(values) - min(values) > 1e-9 * max(1.0, max(values)):
+                raise ModelExtractionError(
+                    "Its condition differs between directions, and its face has "
+                    "no plane whose axes would give them."
+                )
+            return None
+        position = surface.Position
+        z_axis = np.array(
+            position.Axis.DirectionRatios if position.Axis else (0.0, 0.0, 1.0),
+            dtype=float,
+        )
+        x_axis = np.array(
+            (
+                position.RefDirection.DirectionRatios
+                if position.RefDirection
+                else (1.0, 0.0, 0.0)
+            ),
+            dtype=float,
+        )
+        if not getattr(face, "SameSense", True):
+            z_axis = -z_axis
+        if transformation:
+            rotation = np.array(transformation["rotationMatrix"], dtype=float)
+            z_axis, x_axis = rotation.dot(z_axis), rotation.dot(x_axis)
+        axes = self._orthonormal_axes(x_axis, z_axis)
+        if axes is None:
+            raise ModelExtractionError("The axes of its face's plane are degenerate.")
+        return axes
 
     def _extract_local_axes(
         self, ifc_connection, edge: Optional[List[List[float]]] = None

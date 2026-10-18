@@ -174,7 +174,18 @@ def create_mock_ifc_file():
     mock_connection.GlobalId = "connection1"
     mock_connection.Name = "Test Connection"
     mock_connection.id.return_value = "5"
-    mock_connection.is_a.return_value = "IfcStructuralPointConnection"
+    # Answers is_a truthfully: a bare return_value makes it a surface
+    # connection as well
+    mock_connection.is_a.side_effect = lambda *args: (
+        args[0]
+        in (
+            "IfcStructuralPointConnection",
+            "IfcStructuralConnection",
+            "IfcStructuralItem",
+        )
+        if args
+        else "IfcStructuralPointConnection"
+    )
     mock_connection.ConditionCoordinateSystem = None
     mock_connection.ObjectPlacement = None
 

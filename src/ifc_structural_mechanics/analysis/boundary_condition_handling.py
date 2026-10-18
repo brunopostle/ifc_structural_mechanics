@@ -198,6 +198,10 @@ def support_restraint(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     fixed = _local_fixity(connection)
     if fixed is None:
         return None
+    if getattr(connection, "face", None) is not None:
+        # The rotations of a surface's nodes are held by holding their
+        # translations over its area; a face condition has none of its own
+        fixed = fixed[:3] + [False, False, False]
     axes = _global_rows(getattr(connection, "local_axes", None))
     translations = axes[[i for i in range(3) if fixed[i]]]
     free = axes[[i for i in range(3) if not fixed[3 + i]]]
@@ -209,6 +213,93 @@ def support_restraint(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     if held_by_the_writer:
         rotations = np.vstack([rotations, np.array(held_by_the_writer, dtype=float)])
     return _reduced_rows(translations), _reduced_rows(rotations)
+
+
+def support_springs(
+    connection,
+) -> Tuple[List[Tuple[np.ndarray, float]], List[Tuple[np.ndarray, float]]]:
+    """The elastic part of a support: the directions it holds with a spring.
+
+    A stiffness in the support condition that is neither zero nor rigid
+    (``_RIGID_STIFFNESS_THRESHOLD``) is a spring. It is per point, per length
+    or per area as the connection is: N/m and N*m/rad at a point
+    connection, N/m and N*m/rad per metre along a curve connection, N/m per
+    square metre (a modulus of subgrade reaction) over a surface connection.
+
+    A support holding a single member does not turn it about an axis the
+    member is released in: a spring in series with a hinge holds nothing, as
+    ``support_restraint`` leaves out a rigid rotation there.
+
+    Returns:
+        ``(translations, rotations)``, each a list of ``(unit direction in
+        global coordinates, stiffness)``.
+
+    Raises:
+        AnalysisError: If a stiffness is negative, or a rotational spring
+            lies partly about an axis the member is released in.
+    """
+    translations: List[Tuple[np.ndarray, float]] = []
+    rotations: List[Tuple[np.ndarray, float]] = []
+    has_stiffness = (
+        hasattr(connection, "has_stiffness_properties")
+        and connection.has_stiffness_properties()
+    )
+    if not has_stiffness:
+        return translations, rotations
+    stiff = connection.get_stiffness_properties() or {}
+    axes = _global_rows(getattr(connection, "local_axes", None))
+    members = list(getattr(connection, "connected_members", []))
+    released = (
+        released_rotation_axes(connection, members[0])
+        if len(members) == 1
+        else np.zeros((0, 3))
+    )
+    for index, key in enumerate(_STIFFNESS_KEYS):
+        value = float(stiff.get(key, 0.0) or 0.0)
+        if value < 0.0:
+            raise AnalysisError(
+                f"Support {connection.id} has a negative stiffness {key} = "
+                f"{value}, which cannot be analysed."
+            )
+        if value == 0.0 or value >= _RIGID_STIFFNESS_THRESHOLD:
+            continue
+        direction = axes[index % 3]
+        if index < 3:
+            translations.append((direction, value))
+            continue
+        share = share_in_span(released, direction) if len(released) else 0.0
+        if share > 1.0 - 1e-6:
+            continue
+        if share > 1e-6:
+            raise AnalysisError(
+                f"Support {connection.id} has a rotational spring {key} about "
+                "an axis that is partly one its member is released about, "
+                "which cannot be analysed."
+            )
+        rotations.append((direction, value))
+    return translations, rotations
+
+
+def support_resistance(connection) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """The directions a support resists at all: rigidly or with a spring.
+
+    For the questions of stability (what can still move, what holds a member
+    against spinning), where a spring holds as a rigid restraint does.
+    ``support_restraint`` is what is written as a restraint.
+
+    Returns:
+        As ``support_restraint``, or None for a connection with no support
+        condition.
+    """
+    restraint = support_restraint(connection)
+    translations, rotations = support_springs(connection)
+    if restraint is None and not translations and not rotations:
+        return None
+    held, turned = restraint if restraint is not None else (np.zeros((0, 3)),) * 2
+    return (
+        _reduced_rows(np.vstack([held] + [d for d, _ in translations])),
+        _reduced_rows(np.vstack([turned] + [a for a, _ in rotations])),
+    )
 
 
 def support_is_skew(connection) -> bool:
@@ -371,6 +462,7 @@ def write_boundary_conditions(
     element_sets: Dict[str, List[int]],
     node_coords: Dict[int, Tuple[float, float, float]],
     rotation_arms: Optional[Dict[str, Dict[int, tuple]]] = None,
+    springs: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> set:
     """
     Write the supports of the model to the CalculiX input file.
@@ -394,6 +486,11 @@ def write_boundary_conditions(
         rotation_arms: For each support with skew rotations, the arm at each
             of its nodes, ``{support id: {node: (tip, position, drilling)}}``
             (see ``rotation_arm``; no tip where it needs no arm).
+        springs: The springs of elastic supports, already written, by
+            support (see ``UnifiedCalculixWriter._build_support_springs``).
+            They are recorded with the support for its reactions, and their
+            nodes are support nodes, so a model held by springs alone has
+            supports.
 
     Returns:
         The ``(node, dof)`` pairs the equations make depend on others, which
@@ -417,9 +514,21 @@ def write_boundary_conditions(
         set_name = f"BC_{connection_id}"
 
         restraint = support_restraint(connection)
+        elastic = (springs or {}).get(connection_id) or []
+        if elastic:
+            spring_nodes = [s["spring_node"] for s in elastic]
+            all_bc_nodes.update(spring_nodes)
 
         # A connection that restrains nothing only joins members
         if restraint is None or not (len(restraint[0]) or len(restraint[1])):
+            if elastic:
+                domain_model.support_nodes[connection_id] = {
+                    "nodes": {},
+                    "dofs": [],
+                    "translations": [],
+                    "rotations": [],
+                    "springs": elastic,
+                }
             continue
         dofs_to_fix = get_constrained_dofs(connection)
 
@@ -466,6 +575,8 @@ def write_boundary_conditions(
             "translations": restraint[0].tolist(),
             "rotations": restraint[1].tolist(),
         }
+        if elastic:
+            domain_model.support_nodes[connection_id]["springs"] = elastic
 
         file.write(f"*NSET, NSET={set_name}\n")
         for i in range(0, len(bc_nodes), 8):
@@ -973,6 +1084,7 @@ def _write_load_reset(file: TextIO) -> None:
 def _write_step_output_requests(
     file: TextIO,
     has_u1_elements: bool = False,
+    has_springs: bool = False,
 ) -> None:
     """Write standard output requests for a single analysis step.
 
@@ -985,6 +1097,9 @@ def _write_step_output_requests(
         has_u1_elements: When True, suppress ``*EL FILE S, E`` — U1 Timoshenko
             beam elements do not support stress/strain output and CalculiX will
             segfault if it is requested on them.
+        has_springs: When True, print the displacements of the springs' own
+            nodes (``SPRING_NODES``), from which the reactions of elastic
+            supports are worked out.
     """
     # RF in the result file is the force on every node of the solids that
     # beams and shells are expanded into: a support's moment is in those
@@ -993,6 +1108,9 @@ def _write_step_output_requests(
     # The force on each support node, and their total
     file.write("*NODE PRINT, NSET=ALL_BC_NODES, TOTALS=YES\n")
     file.write("RF\n")
+    if has_springs:
+        file.write("*NODE PRINT, NSET=SPRING_NODES\n")
+        file.write("U\n")
     if not has_u1_elements:
         file.write("*EL FILE\n")
         file.write("S, E\n")
@@ -1371,6 +1489,10 @@ def _write_analysis_steps(
     # U1 (Timoshenko) beam elements don't support *EL FILE S, E stress output.
     # BEAM_B31 present in element_sets (even if empty) signals that U1 elements exist.
     has_u1_elements = "BEAM_B31" in (element_sets or {})
+    has_springs = any(
+        "springs" in record
+        for record in (getattr(domain_model, "support_nodes", None) or {}).values()
+    )
 
     if analysis_type == "linear_buckling":
         file.write("*STEP\n")
@@ -1440,7 +1562,9 @@ def _write_analysis_steps(
                 file.write(
                     f"** WARNING: No loads written for load case {load_case.name}\n\n"
                 )
-            _write_step_output_requests(file, has_u1_elements=has_u1_elements)
+            _write_step_output_requests(
+                file, has_u1_elements=has_u1_elements, has_springs=has_springs
+            )
 
         # Gravity that was asked for is a load case of its own
         if gravity:
@@ -1456,7 +1580,9 @@ def _write_analysis_steps(
                 u1_node_masses,
                 has_u1_elements,
             )
-            _write_step_output_requests(file, has_u1_elements=has_u1_elements)
+            _write_step_output_requests(
+                file, has_u1_elements=has_u1_elements, has_springs=has_springs
+            )
     else:
         # No explicit load cases — single combined step (backward-compatible)
         file.write("*STEP\n")
@@ -1485,7 +1611,9 @@ def _write_analysis_steps(
         if not loads_written:
             file.write("** CRITICAL WARNING: No loads written to analysis step\n")
             file.write("** Analysis will execute but produce no meaningful results\n\n")
-        _write_step_output_requests(file, has_u1_elements=has_u1_elements)
+        _write_step_output_requests(
+            file, has_u1_elements=has_u1_elements, has_springs=has_springs
+        )
 
 
 # Largest distance from a point support to the mesh node that takes it
@@ -1552,15 +1680,60 @@ def find_nodes_on_segment(
     return sorted(int(i) for i in ids[distance <= tolerance])
 
 
+def find_nodes_in_face(
+    face: List[List[float]],
+    node_coords: Dict[int, Tuple[float, float, float]],
+    tolerance: float = 1e-3,
+) -> List[int]:
+    """Return the nodes lying on a plane polygon, its outline included."""
+    if not node_coords:
+        return []
+    corners = np.array(face, dtype=float).reshape(-1, 3)
+    origin = corners.mean(axis=0)
+    normal = np.zeros(3)
+    for i in range(len(corners)):
+        normal += np.cross(corners[i], corners[(i + 1) % len(corners)])
+    normal = normal / np.linalg.norm(normal)
+    u = corners[1] - corners[0]
+    u = u - np.dot(u, normal) * normal
+    u = u / np.linalg.norm(u)
+    v = np.cross(normal, u)
+    ids = np.fromiter(node_coords.keys(), dtype=np.int64, count=len(node_coords))
+    coords = np.array(list(node_coords.values()), dtype=float) - origin
+    near = np.abs(coords @ normal) <= tolerance
+    points = np.stack([coords @ u, coords @ v], axis=1)
+    polygon = np.stack([(corners - origin) @ u, (corners - origin) @ v], axis=1)
+    inside = np.zeros(len(points), dtype=bool)
+    on_outline = np.zeros(len(points), dtype=bool)
+    for i in range(len(polygon)):
+        a, b = polygon[i], polygon[(i + 1) % len(polygon)]
+        # Crossings of a ray along +u
+        straddles = (a[1] > points[:, 1]) != (b[1] > points[:, 1])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            at = a[0] + (points[:, 1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+        inside ^= straddles & (points[:, 0] < at)
+        ab = b - a
+        t = np.clip((points - a) @ ab / float(ab @ ab), 0.0, 1.0)
+        on_outline |= (
+            np.linalg.norm(points - (a + np.outer(t, ab)), axis=1) <= tolerance
+        )
+    return sorted(int(i) for i in ids[near & (inside | on_outline)])
+
+
 def find_connection_support_nodes(
     connection: Any, node_coords: Dict[int, Tuple[float, float, float]]
 ) -> List[int]:
     """Return the mesh nodes a support connection restrains.
 
     A line support (``IfcStructuralCurveConnection``) carries its two end
-    points in ``connection.edge`` and restrains every node along that edge. A
-    point support restrains the node at its position.
+    points in ``connection.edge`` and restrains every node along that edge; a
+    surface support (``IfcStructuralSurfaceConnection``) has its outline in
+    ``connection.face`` and restrains every node on it. A point support
+    restrains the node at its position.
     """
+    face = getattr(connection, "face", None)
+    if face is not None:
+        return find_nodes_in_face(face, node_coords)
     edge = getattr(connection, "edge", None)
     if edge is not None and len(edge) == 2:
         # No node on the edge is no support; its midpoint is not a substitute
@@ -1569,6 +1742,135 @@ def find_connection_support_nodes(
     if position is not None and len(position) == 3:
         return find_support_nodes(position, node_coords, tolerance=SUPPORT_TOLERANCE)
     return []
+
+
+# The share of a uniform spring bed each node of an element takes, lumped by
+# the diagonal of the element's consistent matrix (HRZ). The integrals of
+# the shape functions, which spread a uniform load, give the corners of a
+# six-node triangle nothing, and they would rest on no spring. Line nodes in
+# CalculiX order: end, middle, end.
+_LINE_SHARES = {2: (0.5, 0.5), 3: (1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0)}
+_TRIANGLE_SHARES = {
+    3: (1.0 / 3.0,) * 3,
+    6: (3.0 / 57.0,) * 3 + (16.0 / 57.0,) * 3,
+}
+# The edges of a triangle, as positions in its node list, end to end
+_TRIANGLE_EDGES = {
+    3: ((0, 1), (1, 2), (2, 0)),
+    6: ((0, 3, 1), (1, 4, 2), (2, 5, 0)),
+}
+# How far the length or area the springs of a support cover may be from that
+# of its edge or face
+_SPRING_COVER_TOLERANCE = 0.01
+
+
+def spring_node_shares(
+    connection: Any,
+    nodes: List[int],
+    elements: Dict[int, Dict],
+    node_coords: Dict[int, Tuple[float, float, float]],
+) -> Dict[int, float]:
+    """The length or area of a support each of its nodes stands for.
+
+    A spring condition is per point, per length or per area; what a node's
+    spring gets is that times its share. At a point the share is 1, on one
+    node (that of a curve member where beam and shell nodes meet there, since
+    they are tied). Along an edge it is the length of the elements lying on
+    it, curve members' if there are any, else the edges of shells; over a
+    face it is the area of the shells inside it. Both are lumped as
+    ``_LINE_SHARES`` and ``_TRIANGLE_SHARES`` say.
+
+    Args:
+        connection: The support.
+        nodes: Its nodes (``find_connection_support_nodes``).
+        elements: The mesh elements, ``{id: {"type", "nodes"}}``.
+        node_coords: Node coordinates.
+
+    Returns:
+        ``{node: share}`` in 1, m or m².
+
+    Raises:
+        AnalysisError: If the elements found do not cover the edge or the
+            face: a spring left off part of it is a softer support.
+    """
+    on = set(nodes)
+    face = getattr(connection, "face", None)
+    edge = getattr(connection, "edge", None)
+    shares: Dict[int, float] = {}
+
+    def at(node: int) -> np.ndarray:
+        return np.array(node_coords[node], dtype=float)
+
+    if face is not None:
+        expected = polygon_area(face)
+        covered = 0.0
+        for elem in elements.values():
+            weights = _TRIANGLE_SHARES.get(len(elem["nodes"]))
+            if not str(elem.get("type", "")).startswith("S") or weights is None:
+                continue
+            if not all(n in on for n in elem["nodes"]):
+                continue
+            a, b, c = (at(n) for n in elem["nodes"][:3])
+            area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
+            covered += area
+            for node, weight in zip(elem["nodes"], weights):
+                shares[node] = shares.get(node, 0.0) + weight * area
+        what, unit = "area", "m²"
+    elif edge is not None and len(edge) == 2:
+        expected = float(
+            np.linalg.norm(np.array(edge[1], float) - np.array(edge[0], float))
+        )
+        curves: Dict[frozenset, tuple] = {}
+        shells: Dict[frozenset, tuple] = {}
+        for elem in elements.values():
+            elem_nodes = elem["nodes"]
+            kind = str(elem.get("type", ""))
+            if kind.startswith("S"):
+                pieces = [
+                    tuple(elem_nodes[i] for i in positions)
+                    for positions in _TRIANGLE_EDGES.get(len(elem_nodes), ())
+                ]
+                found = shells
+            else:
+                pieces = [tuple(elem_nodes)]
+                found = curves
+            for piece in pieces:
+                if len(piece) in _LINE_SHARES and all(n in on for n in piece):
+                    # Two shells share an edge that lies inside a surface
+                    found.setdefault(frozenset(piece), piece)
+        covered = 0.0
+        for piece in (curves or shells).values():
+            length = float(np.linalg.norm(at(piece[-1]) - at(piece[0])))
+            covered += length
+            for node, weight in zip(piece, _LINE_SHARES[len(piece)]):
+                shares[node] = shares.get(node, 0.0) + weight * length
+        what, unit = "length", "m"
+    else:
+        curve_nodes = {
+            n
+            for elem in elements.values()
+            if not str(elem.get("type", "")).startswith("S")
+            for n in elem["nodes"]
+        }
+        on_curves = [n for n in sorted(nodes) if n in curve_nodes]
+        return {(on_curves or sorted(nodes))[0]: 1.0} if nodes else {}
+
+    if abs(covered - expected) > _SPRING_COVER_TOLERANCE * expected:
+        raise AnalysisError(
+            f"Support {connection.id} cannot be applied: it is elastic, and "
+            f"the elements on it cover {covered:.4g} {unit} of its {what} of "
+            f"{expected:.4g} {unit}. Check that it lies on its members."
+        )
+    return shares
+
+
+def polygon_area(points) -> float:
+    """The area of a plane polygon given by its corners in 3D."""
+    corners = np.array(points, dtype=float).reshape(-1, 3)
+    total = np.zeros(3)
+    for i in range(len(corners)):
+        total += np.cross(corners[i], corners[(i + 1) % len(corners)])
+    return 0.5 * float(np.linalg.norm(total))
 
 
 def find_closest_node(

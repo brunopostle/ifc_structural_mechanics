@@ -33,7 +33,7 @@ from .boundary_condition_handling import (
     _to_global_axes,
     get_released_rotations,
     share_in_span,
-    support_restraint,
+    support_resistance,
 )
 
 AXIS_NAMES = ("X", "Y", "Z")
@@ -160,7 +160,7 @@ def plane_normal(
         if _FLAT < across_plane < 1.0 - _FLAT:
             return None
     for connection in domain_model.connections:
-        for held in support_restraint(connection) or ():
+        for held in support_resistance(connection) or ():
             if _FLAT < share_in_span(held, np.eye(3)[normal]) < 1.0 - _FLAT:
                 return None
     return normal
@@ -195,7 +195,7 @@ class _OutOfPlane:
                 continue
             point = np.array([float(v) for v in connection.position])
             joint = self._body(("joint", connection.id))
-            restraint = support_restraint(connection)
+            restraint = support_resistance(connection)
             held, turning = restraint if restraint is not None else ((), ())
             fixed = len(held) or len(turning)
             for member_id in attached:

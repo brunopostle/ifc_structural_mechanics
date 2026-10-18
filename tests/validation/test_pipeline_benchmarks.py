@@ -4920,3 +4920,299 @@ class TestSkewSupports:
         envelope = data["global_displacements"]["envelope"]
         assert envelope["max_tz_m"] == pytest.approx((simply + propped) / 2, rel=0.02)
         assert envelope["max_ty_m"] == pytest.approx((simply - propped) / 2, rel=0.05)
+
+
+def _node_condition(model, values):
+    """An IfcBoundaryNodeCondition: True/False for held/free, a number for a spring.
+
+    Numbers are in the file's units: a linear stiffness first three, a
+    rotational one last three.
+    """
+    measures = ["IfcLinearStiffnessMeasure"] * 3 + ["IfcRotationalStiffnessMeasure"] * 3
+    return model.create_entity(
+        "IfcBoundaryNodeCondition",
+        None,
+        *[
+            model.create_entity(
+                "IfcBoolean" if isinstance(value, bool) else measure, value
+            )
+            for value, measure in zip(values, measures)
+        ],
+    )
+
+
+class TestElasticSupports:
+    """Supports with a stiffness that is neither zero nor rigid (aiz.94).
+
+    beam_01 is in millimetres and newtons, so the springs are given in N/mm
+    and N*mm/rad, which checks their units too.
+    """
+
+    B = TestFixedFixedBeamPointLoad
+    MESH = 0.25
+
+    def _beam(self, tmp_path, start, end) -> str:
+        model = _beam_01()
+        supports = sorted(
+            model.by_type("IfcStructuralPointConnection"), key=lambda c: c.id()
+        )
+        for support, values in zip(supports, (start, end)):
+            support.AppliedCondition = _node_condition(model, values)
+        path = str(tmp_path / "elastic.ifc")
+        model.write(path)
+        return path
+
+    def test_spring_under_a_beam_end(self, tmp_path):
+        """A pin and a vertical spring: the spring takes P / 2 and settles P / 2k."""
+        stiffness = 1.0e6  # N/m
+        end = (False, True, stiffness / 1000.0, False, False, False)
+        data = _run(self._beam(tmp_path, PIN, end), tmp_path, self.MESH)
+        load = self.B.LOAD
+        assert _max_vertical_deflection(data) == pytest.approx(
+            load / 2 / stiffness, rel=1e-3
+        )
+        sprung = [s for s in data["supports"] if s.get("springs")]
+        assert len(sprung) == 1
+        (spring,) = sprung[0]["springs"]
+        assert spring["stiffness"] == pytest.approx(stiffness)
+        assert spring["unit"] == "N/m"
+        assert sprung[0]["restrained"] == ["ty"]
+        for support in data["supports"]:
+            assert support["by_load_case"]["Dead"]["fz_N"] == pytest.approx(
+                load / 2, rel=1e-6
+            )
+        total = data["global_reactions"]["by_load_case"]["Dead"]
+        assert total["imbalance_N"] < 1e-6 * load
+
+    def test_rotational_spring_at_a_beam_end(self, tmp_path):
+        """A partly fixed end: M = theta0 / (L / 3EI + 1 / k).
+
+        theta0 = P L^2 / 16 EI is the end rotation of the simply supported
+        beam under the point load. CalculiX ignores a spring on the rotation
+        of a beam node; the spring acts through an arm.
+        """
+        stiffness = 2.0e7  # N*m/rad
+        start = (True, True, True, True, stiffness * 1000.0, True)
+        data = _run(
+            self._beam(tmp_path, start, (False, True, True, False, False, False)),
+            tmp_path,
+            self.MESH,
+        )
+        b = self.B
+        bending = b.E * b.INERTIA
+        theta0 = b.LOAD * b.LENGTH**2 / (16 * bending)
+        moment = theta0 / (b.LENGTH / (3 * bending) + 1 / stiffness)
+        held = _support_at(data, (0.0, 0.0, 0.0))
+        values = held["by_load_case"]["Dead"]
+        assert abs(values["my_Nm"]) == pytest.approx(moment, rel=0.01)
+        assert values["fz_N"] == pytest.approx(
+            b.LOAD / 2 + abs(values["my_Nm"]) / b.LENGTH, rel=1e-3
+        )
+        # The solver's forces are kept, and agree with the member's own end
+        assert held["forces"] == "solver"
+        assert held["moments"] == "solver"
+        diagram = _curve_member_diagram(data)
+        assert abs(diagram["Mf1_Nm"][0]) == pytest.approx(
+            abs(values["my_Nm"]), rel=1e-3
+        )
+        total = data["global_reactions"]["by_load_case"]["Dead"]
+        assert total["imbalance_N"] < 1e-6 * b.LOAD
+        assert total["moment_imbalance_Nm"] < 1e-5 * b.LOAD * b.LENGTH
+
+
+SLAB_E, SLAB_T, SLAB_L, SLAB_W = 2.1e8, 0.2, 5.0, 3.0
+SLAB_Q = 5000.0  # N/m²
+
+
+def _slab_on(tmp_path, condition, corners=None, edges=None) -> str:
+    """slab_01 under a uniform load, held by a surface connection or its edges.
+
+    The line connections of the file hold nothing unless ``edges`` (the
+    condition both get) is given. ``condition``, when given, is that of a
+    surface connection over ``corners`` (the whole slab when left out), as
+    (x, y, z): True/False for held/free, a number for a modulus of subgrade
+    reaction in N/m³.
+    """
+    model = ifcopenshell.open(SLAB)
+    slab = model.by_type("IfcStructuralSurfaceMember")[0]
+    for relation in model.by_type("IfcRelConnectsStructuralMember"):
+        relation.AppliedCondition = None
+    for connection in model.by_type("IfcStructuralCurveConnection"):
+        connection.AppliedCondition = edges(model) if edges else None
+    if condition is not None:
+        face = slab.Representation.Representations[0].Items[0]
+        if corners is not None:
+            loop = model.create_entity(
+                "IfcPolyLoop",
+                [model.create_entity("IfcCartesianPoint", c) for c in corners],
+            )
+            face = model.create_entity(
+                "IfcFaceSurface",
+                [model.create_entity("IfcFaceOuterBound", loop, True)],
+                face.FaceSurface,
+                True,
+            )
+        context = slab.Representation.Representations[0].ContextOfItems
+        shape = model.create_entity(
+            "IfcProductDefinitionShape",
+            None,
+            None,
+            [
+                model.create_entity(
+                    "IfcTopologyRepresentation", context, "Reference", "Face", [face]
+                )
+            ],
+        )
+        applied = model.create_entity(
+            "IfcBoundaryFaceCondition",
+            "ground",
+            *[
+                model.create_entity(
+                    (
+                        "IfcBoolean"
+                        if isinstance(value, bool)
+                        else "IfcModulusOfSubgradeReactionMeasure"
+                    ),
+                    value,
+                )
+                for value in condition
+            ],
+        )
+        connection = model.create_entity(
+            "IfcStructuralSurfaceConnection",
+            ifcopenshell.guid.new(),
+            slab.OwnerHistory,
+            "ground",
+            None,
+            None,
+            slab.ObjectPlacement,
+            shape,
+            applied,
+        )
+        model.create_entity(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            slab.OwnerHistory,
+            None,
+            None,
+            slab,
+            connection,
+        )
+        group = model.by_type("IfcRelAssignsToGroup")[0]
+        group.RelatedObjects = list(group.RelatedObjects) + [connection]
+    _add_area_load(model, slab, (0.0, 0.0, -SLAB_Q))
+    path = str(tmp_path / "slab_supports.ifc")
+    model.write(path)
+    return path
+
+
+class TestSurfaceSupports:
+    """IfcStructuralSurfaceConnection: a slab held over an area (aiz.96)."""
+
+    def test_slab_on_elastic_ground(self, tmp_path):
+        """Held in plan and on a modulus k vertically: it settles q / k."""
+        modulus = 1.0e7
+        data = _run(_slab_on(tmp_path, (True, True, modulus)), tmp_path, mesh_size=0.5)
+        (support,) = data["supports"]
+        assert support["type"] == "surface"
+        assert support["restrained"] == ["tx", "ty"]
+        (spring,) = support["springs"]
+        assert spring["unit"] == "N/m/m2"
+        assert support["position_m"] == pytest.approx([2.5, 1.5, 0.0])
+        load = SLAB_Q * SLAB_L * SLAB_W
+        assert support["by_load_case"]["Imposed"]["fz_N"] == pytest.approx(
+            load, rel=1e-6
+        )
+        # The springs are lumped as the elements' stiffness is, the load as
+        # its work is, so the settlement is not quite even
+        assert _max_vertical_deflection(data) == pytest.approx(
+            SLAB_Q / modulus, rel=0.02
+        )
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["imbalance_N"] < 1e-6 * load
+
+    def test_slab_held_on_half_its_area(self, tmp_path):
+        """The mesh follows the outline; the free half is a cantilever.
+
+        Its tip deflects more than q L^4 / 8 D: a face condition holds the
+        translations of the slab's middle surface only, and inside the held
+        half its normals turn against transverse shear alone, over a length
+        sqrt(D / kappa G t), which adds M l / D at the root.
+        """
+        half = ((0.0, 0.0, 0.0), (2.5, 0.0, 0.0), (2.5, 3.0, 0.0), (0.0, 3.0, 0.0))
+        data = _run(_slab_on(tmp_path, (True, True, True), corners=half), tmp_path, 0.4)
+        (support,) = data["supports"]
+        assert support["restrained"] == ["tx", "ty", "tz"]
+        values = support["by_load_case"]["Imposed"]
+        load = SLAB_Q * SLAB_L * SLAB_W
+        assert values["fz_N"] == pytest.approx(load, rel=1e-6)
+        # The load acts at the middle of the slab, 1.25 m from the support's
+        assert abs(values["my_Nm"]) == pytest.approx(load * 1.25, rel=1e-6)
+
+        nu = 0.2
+        stiffness = SLAB_E * SLAB_T**3 / (12 * (1 - nu**2))
+        length = SLAB_L / 2
+        shear = 5.0 / 6.0 * SLAB_E / (2 * (1 + nu)) * SLAB_T
+        root = SLAB_Q * length**2 / 2 * math.sqrt(stiffness / shear) / stiffness
+        expected = SLAB_Q * length**4 / (8 * stiffness) + root * length
+        assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.03)
+
+    def test_condition_differing_by_direction_needs_a_plane(self, tmp_path):
+        model = ifcopenshell.open(_slab_on(tmp_path, (True, True, 1.0e7)))
+        (connection,) = model.by_type("IfcStructuralSurfaceConnection")
+        face = connection.Representation.Representations[0].Items[0]
+        connection.Representation.Representations[0].Items = [
+            model.create_entity("IfcFace", face.Bounds)
+        ]
+        path = str(tmp_path / "no_plane.ifc")
+        model.write(path)
+        with pytest.raises(ModelExtractionError, match="no plane"):
+            analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"))
+
+    def test_slab_edges_on_springs(self, tmp_path):
+        """Both edges on vertical and rotational springs per metre.
+
+        The slab spans 5 m between them as a strip: settlement q L / 2 k_z,
+        and end moments theta0 / (L / 2 D + 1 / k_r) per metre, with
+        theta0 = q L^3 / 24 D. Its sides are free, so D is that of a strip
+        free to curl, E t^3 / 12. The edge nodes belong to shells alone,
+        which have no rotation about their normal: the arm of the rotational
+        spring is held against it.
+        """
+        linear, rotational = 1.0e6, 2.0e5
+
+        def edges(model):
+            return model.create_entity(
+                "IfcBoundaryEdgeCondition",
+                None,
+                model.create_entity("IfcBoolean", True),
+                model.create_entity("IfcBoolean", True),
+                model.create_entity(
+                    "IfcModulusOfLinearSubgradeReactionMeasure", linear
+                ),
+                model.create_entity(
+                    "IfcModulusOfRotationalSubgradeReactionMeasure", rotational
+                ),
+                model.create_entity("IfcBoolean", False),
+                model.create_entity("IfcBoolean", False),
+            )
+
+        data = _run(_slab_on(tmp_path, None, edges=edges), tmp_path, 0.25)
+        stiffness = SLAB_E * SLAB_T**3 / 12
+        theta0 = SLAB_Q * SLAB_L**3 / (24 * stiffness)
+        moment = theta0 / (SLAB_L / (2 * stiffness) + 1 / rotational)
+        assert len(data["supports"]) == 2
+        for support in data["supports"]:
+            assert support["type"] == "line"
+            assert support["moments"] == "springs"
+            assert {s["unit"] for s in support["springs"]} == {
+                "N/m/m",
+                "N*m/rad/m",
+            }
+            values = support["by_load_case"]["Imposed"]
+            assert values["fz_N"] == pytest.approx(
+                SLAB_Q * SLAB_L * SLAB_W / 2, rel=1e-4
+            )
+            assert abs(values["my_Nm"]) == pytest.approx(moment * SLAB_W, rel=0.01)
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["imbalance_N"] < 1e-6 * SLAB_Q * SLAB_L * SLAB_W

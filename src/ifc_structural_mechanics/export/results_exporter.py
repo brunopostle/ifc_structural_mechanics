@@ -59,12 +59,15 @@ Schema (summary level)
     {
       "ifc_guid": "...",
       "id": "...",
-      "type": "point" | "line",
+      "type": "point" | "line" | "surface",
       "position_m": [0.0, 0.0, 0.0],
       "restrained": ["tx", "ty", "tz", "ry"],
+      "springs": [{"kind": "translation" | "rotation",
+                   "direction": [0.0, 0.0, 1.0], "stiffness": 1.0e7,
+                   "unit": "N/m/m2"}],
       "forces": "solver" | "member_end_forces" | "unreliable",
       "moments": "solver" | "member_end_forces" | "none_restrained"
-                 | "not_computed",
+                 | "springs" | "not_computed",
       "by_load_case": {
         "Dead": {"fx_N": 0.0, "fy_N": 0.0, "fz_N": 5000.0,
                  "mx_Nm": 0.0, "my_Nm": -1.0e4, "mz_Nm": 0.0,
@@ -148,13 +151,26 @@ lists the global directions the support holds (t for translation, r for
 rotation). A skew support holds directions that are not global ones, which
 are not in that list: ``restrained_in_axes`` (schema 1.3) has what it holds
 along its own ``axes``. The forces are the solver's, summed over the
-support's nodes. For a line support ``position_m`` is the middle of its edge.
+support's nodes. For a line support ``position_m`` is the middle of its edge,
+for a surface support (schema 1.9) the mean of the corners of its face.
+
+``springs`` (schema 1.9) is present for an elastic support: one that holds a
+direction with a stiffness that is neither zero nor rigid. Each spring is a
+translation along ``direction`` or a rotation about it, in global axes, with
+its ``stiffness`` as the file gives it: ``unit`` is N/m or N*m/rad, per metre
+along a line support (``/m``) and per square metre over a surface support
+(``/m2``, a modulus of subgrade reaction). ``restrained`` lists only what is
+held rigidly. The springs' part of the reaction is their stiffness times
+their displacement, which is exact; it is in ``by_load_case`` with the rest.
 
 The solver gives a beam or shell node no moment, so the moments come from
 elsewhere, and ``moments`` says where:
 
 - ``none_restrained``: the support holds no rotation; the moments are those
   of its nodal forces about ``position_m`` (zero for a point support).
+- ``springs`` (schema 1.9): the support holds no rotation rigidly and has a
+  rotational spring; the moments are those of the springs and of its nodal
+  forces about ``position_m``.
 - ``solver`` (schema 1.6): the support holds a rotation. The solver expands
   beams and shells into solids and gives the force on each of their nodes;
   the moments are those of the forces on the nodes the support's own were
@@ -282,7 +298,7 @@ class ResultsExporter:
         analysis_type: ``"linear_static"`` or ``"linear_buckling"``.
     """
 
-    SCHEMA_VERSION = "1.8"
+    SCHEMA_VERSION = "1.9"
 
     def __init__(
         self,
@@ -1527,24 +1543,50 @@ class ResultsExporter:
         not balance: see ``_supports``.
         """
         edge = getattr(connection, "edge", None)
-        if edge is not None and len(edge) == 2:
+        face = getattr(connection, "face", None)
+        if face is not None:
+            kind = "surface"
+            position = np.mean(np.array(face, dtype=float), axis=0)
+        elif edge is not None and len(edge) == 2:
             kind = "line"
             position = (np.array(edge[0], float) + np.array(edge[1], float)) / 2.0
         else:
             kind = "point"
             position = np.array(connection.position, dtype=float)
-        # What the support holds, as projections onto those directions
-        hold = self._projection(record, "translations", 1)
-        turn = self._projection(record, "rotations", 4)
-        held_rotations = bool(turn.any())
+        springs = record.get("springs") or []
+        # What the support holds rigidly, as projections onto those
+        # directions, and what it resists at all, springs included
+        rigid = self._projection(record, "translations", 1)
+        turn_rigid = self._projection(record, "rotations", 4)
+        hold, turn = rigid, turn_rigid
+        if springs:
+            hold = self._projection(
+                {
+                    "translations": [r for r in rigid if r.any()]
+                    + [s["direction"] for s in springs if s["kind"] == "translation"]
+                },
+                "translations",
+                1,
+            )
+            turn = self._projection(
+                {
+                    "rotations": [r for r in turn_rigid if r.any()]
+                    + [s["direction"] for s in springs if s["kind"] == "rotation"]
+                },
+                "rotations",
+                4,
+            )
+        held_rotations = bool(turn_rigid.any())
 
         entry: Dict[str, Any] = {
             "ifc_guid": getattr(connection, "ifc_guid", None),
             "id": connection.id,
             "type": kind,
             "position_m": [float(v) for v in position],
-            "restrained": self._held_names(hold, turn, np.eye(3)),
+            "restrained": self._held_names(rigid, turn_rigid, np.eye(3)),
         }
+        if springs:
+            entry["springs"] = self._spring_conditions(connection, kind)
         entry["forces"] = "solver"
         ends = self._member_ends_at(connection, position) if held_rotations else {}
         balanced = all(self._reactions_balance(index) for index in range(len(steps)))
@@ -1570,8 +1612,22 @@ class ResultsExporter:
                 # node; the reaction is that less the load applied there
                 nodal = np.array(step["forces"].get(node, (0.0, 0.0, 0.0)))
                 nodal = nodal - np.array(applied.get(node, (0.0, 0.0, 0.0)))
+                for spring in springs:
+                    if spring["node"] == node:
+                        # The solver's force at a node a spring holds has the
+                        # spring's push on it, which is taken from its
+                        # displacement instead
+                        nodal = nodal - self._spring_push_on_node(
+                            spring, step["load_case"]
+                        )
                 force += nodal
                 moment += np.cross(np.array(xyz) - position, nodal)
+            for spring in springs:
+                pushed_by, turned_by = self._spring_reaction(spring, step["load_case"])
+                force += pushed_by
+                moment += turned_by + np.cross(
+                    np.array(spring["position"], dtype=float) - position, pushed_by
+                )
             nodal_moment: Optional[np.ndarray] = moment
             if held_rotations:
                 # A node that takes a moment has it in the forces on the
@@ -1609,7 +1665,9 @@ class ResultsExporter:
                 mistaken = True
 
         from_solver = not mistaken and all(m is not None for _, m in solved)
-        if not held_rotations:
+        if not held_rotations and turn.any():
+            entry["moments"] = "springs"
+        elif not held_rotations:
             entry["moments"] = "none_restrained"
         elif from_solver:
             entry["moments"] = "solver"
@@ -1659,7 +1717,7 @@ class ResultsExporter:
             entry["axes"] = {
                 name: [float(v) for v in row] for name, row in zip("xyz", rotation)
             }
-            entry["restrained_in_axes"] = self._held_names(hold, turn, rotation)
+            entry["restrained_in_axes"] = self._held_names(rigid, turn_rigid, rotation)
             entry["by_load_case_in_axes"] = {
                 case: self._in_axes(values, rotation)
                 for case, values in by_load_case.items()
@@ -1684,6 +1742,102 @@ class ResultsExporter:
         _, singular, vh = np.linalg.svd(rows, full_matrices=False)
         basis = vh[singular > 1e-9]
         return basis.T @ basis
+
+    def _spring_reaction(
+        self, spring: Dict[str, Any], case: str
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """The force and the moment one spring of a support exerts.
+
+        Its node's first translation is what it resists (see
+        ``UnifiedCalculixWriter._build_support_springs``): a translation
+        along ``direction``, or a rotation about it.
+
+        Returns:
+            The force, at the spring's ``position``, and the moment.
+
+        Raises:
+            ResultProcessingError: If the solver printed no displacement for
+                the spring's node in this load case.
+        """
+        moved = None
+        for step in self.parsed_results.get("spring_node_displacements") or []:
+            if step["load_case"] == case:
+                moved = step["displacements"].get(spring["spring_node"])
+                break
+        if moved is None:
+            raise ResultProcessingError(
+                f"The solver printed no displacement for the spring node "
+                f"{spring['spring_node']} of an elastic support in load case "
+                f"{case}, so its reaction is not known."
+            )
+        value = -float(spring["stiffness"]) * float(moved[0])
+        direction = np.array(spring["direction"], dtype=float)
+        if spring["kind"] == "rotation":
+            return np.zeros(3), value * direction
+        return value * direction, np.zeros(3)
+
+    def _elastic_correction(self, step_index: int) -> np.ndarray:
+        """What the springs add to the solver's total reaction in one step.
+
+        The solver's total is of the forces at ``ALL_BC_NODES``, which has
+        the springs' own nodes, where it prints each spring's force along
+        the first global axis. Those are taken off and the springs' forces
+        added from their displacements, and at a node a spring holds that
+        is also held rigidly, what the spring's equation pushes it with
+        (``_spring_push_on_node``) is taken off the solver's force there.
+        """
+        total = np.zeros(3)
+        recorded = getattr(self.model, "support_nodes", None) or {}
+        steps = self.parsed_results.get("support_node_forces") or []
+        if not isinstance(recorded, dict) or step_index >= len(steps):
+            return total
+        step = steps[step_index]
+        for record in recorded.values():
+            for spring in record.get("springs") or []:
+                total += self._spring_reaction(spring, step["load_case"])[0]
+                # The solver prints the spring's own force at its node, along
+                # the node's first axis, whatever the spring's direction
+                total -= np.array(
+                    step["forces"].get(spring["spring_node"], (0.0, 0.0, 0.0))
+                )
+                if spring["node"] in record["nodes"]:
+                    total -= self._spring_push_on_node(spring, step["load_case"])
+        return total
+
+    def _spring_push_on_node(self, spring: Dict[str, Any], case: str) -> np.ndarray:
+        """The force the equation of a spring puts on the node it holds.
+
+        That of a translational spring is the spring's force. A rotational
+        one acts through an arm, and the equation pushes the node across the
+        arm and the tip back, a couple; the node's share is the moment over
+        the arm's length.
+        """
+        force, moment = self._spring_reaction(spring, case)
+        if spring["kind"] != "rotation":
+            return force
+        across = np.array(spring["across"], dtype=float)
+        size = float(np.dot(moment, np.array(spring["direction"], dtype=float)))
+        return -size / float(spring["arm_length"]) * across
+
+    def _spring_conditions(self, connection, kind: str) -> List[Dict[str, Any]]:
+        """The springs of a support as its condition gives them, in global axes."""
+        from ..analysis.boundary_condition_handling import support_springs
+
+        per = {"point": "", "line": "/m", "surface": "/m2"}[kind]
+        translations, rotations = support_springs(connection)
+        return [
+            {
+                "kind": name,
+                "direction": [float(v) for v in direction],
+                "stiffness": float(stiffness),
+                "unit": unit + per,
+            }
+            for name, unit, found in (
+                ("translation", "N/m", translations),
+                ("rotation", "N*m/rad", rotations),
+            )
+            for direction, stiffness in found
+        ]
 
     @staticmethod
     def _held_names(hold: np.ndarray, turn: np.ndarray, axes: np.ndarray) -> List[str]:
@@ -1723,8 +1877,9 @@ class ResultsExporter:
             return True
         applied = self._loads_on_support_nodes(step_index).values()
         load = loads[step_index]
+        elastic = self._elastic_correction(step_index)
         reaction = [
-            value - sum(node_load[axis] for node_load in applied)
+            value - sum(node_load[axis] for node_load in applied) + elastic[axis]
             for axis, value in enumerate(totals[step_index].get_forces())
         ]
         imbalance = math.sqrt(sum((r + a) ** 2 for r, a in zip(reaction, load)))
@@ -1901,8 +2056,9 @@ class ResultsExporter:
             # restrained direction is missing from it, and has to be taken
             # off to get the reaction (see ``_StepLoadRecorder``)
             applied = self._loads_on_support_nodes(index).values()
+            elastic = self._elastic_correction(index)
             forces = [
-                value - sum(load[axis] for load in applied)
+                value - sum(load[axis] for load in applied) + float(elastic[axis])
                 for axis, value in enumerate(totals[index].get_forces())
             ]
             # Where the solver's total does not balance the loads and the

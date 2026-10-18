@@ -1303,7 +1303,11 @@ to a node of shells alone swings freely about their normal.
   between a beam and a slab is analysed as a hinge line.
 - **Per-member stress in `results.json`**: attributed to the right member, but no value
   is compared with a reference.
-- **Unsupported input**: surface connections, moments applied to surface members or
+- **Elastic and surface supports**: Tier 2 checks a spring under a beam end, a
+  rotational spring at a beam end, a slab on elastic ground, a slab held on half its
+  area and slab edges on vertical and rotational springs, against closed forms. Not
+  covered: a surface support under a wall or a sloping slab.
+- **Unsupported input**: moments applied to surface members or
   varying along a member, and load kinds other than forces and moments stop the
   analysis with an error naming the entity. So do the varying actions of IFC2X3 and
   curve actions of type `EQUIDISTANT` or `USERDEFINED`.

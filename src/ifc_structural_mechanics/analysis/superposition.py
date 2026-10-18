@@ -71,6 +71,7 @@ def combine_results(
         "reaction": [],
         "support_node_forces": [],
         "support_node_moments": [],
+        "spring_node_displacements": [],
     }
 
     totals = [
@@ -110,6 +111,25 @@ def combine_results(
             {
                 "load_case": name,
                 "forces": {n: [float(v) for v in f] for n, f in forces.items()},
+            }
+        ]
+
+    springs = parsed_results.get("spring_node_displacements") or []
+    spring_step_of = {step["load_case"]: index for index, step in enumerate(springs)}
+    if springs:
+        moved: Dict[int, np.ndarray] = {}
+        for case, factor in factors.items():
+            if case not in spring_step_of:
+                raise ResultProcessingError(
+                    f"Load combination {name}: load case {case} has no "
+                    "displacements of the springs of elastic supports."
+                )
+            for node, values in springs[spring_step_of[case]]["displacements"].items():
+                moved[node] = moved.get(node, 0.0) + factor * np.array(values)
+        combined["spring_node_displacements"] = [
+            {
+                "load_case": name,
+                "displacements": {n: [float(v) for v in u] for n, u in moved.items()},
             }
         ]
 

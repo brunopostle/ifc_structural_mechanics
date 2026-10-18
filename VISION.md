@@ -141,12 +141,12 @@ What holds it back:
   a reference. `building_02` now gives plausible deflections and correct
   reactions, but it has no reference and is too large to refine on a small
   machine.
-- **Releases.** Skew supports are not modelled, and end releases on open
-  sections are full pins.
+- **Releases.** End releases on members with user elements (open sections,
+  opt-in) are full pins.
 - **Input the tool cannot handle.** It now stops, naming the entity, rather
-  than substitute a default; what it does not support at all (applied
-  moments, surface supports, loads that vary along a
-  member) is listed in the README.
+  than substitute a default; what it does not support at all (temperature
+  loads, prescribed displacements, grid placements) is listed
+  in the README.
 - **Validation coverage.** Pinned supports, open sections, area loads and a
   torsion frame now have benchmarks; a multi-storey frame does not.
 
