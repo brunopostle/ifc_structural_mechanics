@@ -1030,14 +1030,24 @@ rotational degrees of freedom**. This drives everything about joints:
   release. Members in line turn together and hold nothing for each other:
   they are one run, held once (`aiz.72`), at a support at an end of the run
   if it has one, else at a joint inside it (measured to 0.1%: only the
-  torsion of members in line is restrained there). Along a global axis the
-  hold is a `*BOUNDARY` on that rotation, outside the support's set. Along
-  any other (a rafter, a brace) the support is given the rotation to hold
-  (`connection.torsion_hold_axes`, `aiz.74`): `support_restraint()` returns
-  it with what the file says, so the arm, the equations and the reactions
-  are those of a skew support, and `_build_support_arms()` runs after this
-  step for that reason. Only reported: runs with no support of their own,
-  and skew ones on line supports or in a model with U1 members.
+  torsion of members in line is restrained there). The support is given
+  the rotation to hold (`connection.torsion_hold_axes`, `aiz.74`):
+  `support_restraint()` returns it with what the file says, so it is
+  written in the support's set, its moment is in the reactions, and along
+  a skew axis (a rafter, a brace) the arm and equations are those of a
+  skew support; `_build_support_arms()` runs after this step for that
+  reason. Only on a line support along a global axis is it a `*BOUNDARY`
+  at one node (`_torsion_holds`). Only reported: runs with no support of
+  their own, and skew ones on line supports or in a model with U1 members.
+  **A member across holds a run only if it cannot swing with it**
+  (`aiz.79`, `analysis/spinning.py`): `free_runs()` counts what is free
+  with every member and joint a rigid body, rigidly joined ones merged,
+  and holds each run whose turning is still free (a beam on two balls with
+  an arm hanging from one end; a mechanism under load, once 7480 km of
+  deflection). It can only add holds, and it takes a member the mesh ties
+  to a surface (`_curve_members_on_surfaces()`) or one joined to a member
+  it does not count as held, so it misses mechanisms through slabs rather
+  than invent ones there.
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve members only, in a plane parallel to

@@ -14,7 +14,7 @@ responsible for writing elements to CalculiX input files.
 import logging
 import math
 import os
-from typing import Any, Dict, Iterable, List, Optional, TextIO, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, TextIO, Tuple
 
 import meshio
 import numpy as np
@@ -3717,6 +3717,35 @@ class UnifiedCalculixWriter:
                         pairs.setdefault((a, b), node)
         return pairs
 
+    def _curve_members_on_surfaces(self) -> Set[str]:
+        """Curve members the mesh ties to a surface member.
+
+        By a node they share (a line joint merged into the slab) or a line
+        bearing at one of their nodes (``_build_line_bearings``: a beam lying
+        in a slab, a column meeting one). Connections of the file between a
+        curve and a surface member are not looked for here.
+        """
+        shell_nodes = {
+            node
+            for element in self.elements.values()
+            if element.get("type") in SHELL_ELEMENT_TYPES
+            for node in element["nodes"]
+        }
+        tied = shell_nodes | {node for node, _ in getattr(self, "_line_bearings", [])}
+        found = set()
+        for member in self.domain_model.members:
+            if not isinstance(member, CurveMember):
+                continue
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            if any(
+                node in tied
+                for element in self.element_sets.get(member_set, [])
+                if element in self.elements
+                for node in self.elements[element]["nodes"]
+            ):
+                found.add(member.id)
+        return found
+
     def _mesh_joints(self) -> List[Tuple[str, str, np.ndarray]]:
         """``_curve_members_joined_by_the_mesh`` with where each joint is."""
         return [
@@ -3889,17 +3918,18 @@ class UnifiedCalculixWriter:
             else:
                 restrained.update((a, b))
 
-        runs: Dict[str, List[str]] = {}
+        grouped: Dict[str, List[str]] = {}
         for member_id in directions:
             if connections_of[member_id]:
-                runs.setdefault(run(member_id), []).append(member_id)
+                grouped.setdefault(run(member_id), []).append(member_id)
+        runs = list(grouped.values())
 
-        held, loose = [], []
-        for members in runs.values():
-            if restrained.intersection(members):
-                continue
-            # A support that holds nothing but members of the run, an end of
-            # the run before a joint inside it
+        def supports_of(members: List[str]) -> list:
+            """Where a run can be held: ``(members there, support, member)``.
+
+            A support that holds nothing but members of the run, an end of
+            the run before a joint inside it.
+            """
             supports = []
             for member_id in members:
                 for conn in connections_of[member_id]:
@@ -3920,17 +3950,53 @@ class UnifiedCalculixWriter:
                     for found in supports
                     if getattr(found[1], "edge", None) is None and not self._u1_members
                 ]
+            return supports
+
+        held: List[str] = []
+        loose: List[str] = []
+        held_runs: List[int] = []
+
+        def hold(index: int) -> None:
+            members = runs[index]
+            supports = supports_of(members)
             if not supports:
                 loose.extend(members)
-                continue
+                return
             _, conn, member_id = min(supports, key=lambda found: found[0])
-            if aligned:
+            axis = np.abs(directions[members[0]])
+            aligned = [i for i in range(3) if axis[i] > 1.0 - 1e-6]
+            if aligned and getattr(conn, "edge", None) is not None:
+                # At one node of the line, not every node along it
                 self._torsion_holds.append((conn, member_id, 4 + aligned[0]))
             else:
                 conn.torsion_hold_axes.append(
                     [float(v) for v in directions[members[0]]]
                 )
             held.extend(members)
+            held_runs.append(index)
+
+        for index, members in enumerate(runs):
+            if not restrained.intersection(members):
+                hold(index)
+
+        # A member across may give way itself: count what is still free with
+        # every member and joint a rigid body (aiz.79)
+        from ..analysis.spinning import free_runs
+
+        checked = [i for i, members in enumerate(runs) if restrained & set(members)]
+        if checked:
+            free = free_runs(
+                self.domain_model,
+                directions,
+                runs,
+                held=held_runs,
+                grounded=self._curve_members_on_surfaces(),
+                mesh_joints=self._mesh_joints(),
+                preferred={i for i in checked if supports_of(runs[i])},
+            )
+            for index in free:
+                if index in checked:
+                    hold(index)
 
         if held:
             self._warn_user(

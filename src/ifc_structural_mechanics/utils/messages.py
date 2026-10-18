@@ -234,10 +234,15 @@ _KINDS = [
         "W-SUP-001",
         "Members held against spinning about their own axis",
         "Nothing restrains these members' rotation about their own axis: "
-        "ball supports at both ends of a beam are the usual cause. Each, or "
-        "the straight run of members it is part of, is held in torsion at one "
-        "of its supports so that the results are defined. Nothing else "
-        "changes. Restrain that rotation at a support to be explicit.",
+        "ball supports at both ends of a beam are the usual cause, and so is "
+        "a member across that has no support of its own and would swing "
+        "with them. Each, or the straight run of members it is part of, is "
+        "held in torsion at one of its supports so that the results are "
+        "defined; that support is reported as holding the rotation. Where "
+        "nothing loads the movement the hold carries nothing; where a load "
+        "does (on the member that would swing) the support's moment is the "
+        "torsion it carries, which the model as given cannot resist. Restrain "
+        "that rotation at a support to be explicit.",
     ),
     MessageKind(
         "W-SUP-002",

@@ -65,10 +65,24 @@ def _messages(writer):
     return [w["message"] for w in getattr(writer.domain_model, "analysis_warnings", [])]
 
 
+def _holds(writer):
+    """``(support, axis)`` for each run held in torsion, in either way."""
+    holds = [
+        (conn.id, tuple(round(v, 6) for v in axis))
+        for conn in writer.domain_model.connections
+        for axis in conn.torsion_hold_axes
+    ]
+    holds += [
+        (conn.id, tuple(float(i == dof - 4) for i in range(3)))
+        for conn, _, dof in writer._torsion_holds
+    ]
+    return holds
+
+
 def test_beam_on_two_ball_supports_is_held_at_the_first():
     writer = _writer(BALL, BALL)
 
-    assert writer._torsion_hold_dofs() == [(1, 4)]
+    assert _holds(writer) == [("left", (1.0, 0.0, 0.0))]
     assert len(_messages(writer)) == 1
     assert "1 member(s) are free to spin about their own axis" in _messages(writer)[0]
     assert "beam" in _messages(writer)[0]
@@ -92,28 +106,46 @@ def test_rotation_held_about_another_axis_does_not_count():
     """drz held on a beam along X is bending, not torsion."""
     writer = _writer((1, 1, 1, 0, 0, 1), BALL)
 
-    assert writer._torsion_hold_dofs() == [(1, 4)]
+    assert _holds(writer) == [("left", (1.0, 0.0, 0.0))]
 
 
 def test_axis_of_the_member_decides_which_rotation():
     writer = _writer(BALL, BALL, end_point=(0.0, 0.0, 3.0))
 
-    assert writer._torsion_hold_dofs() == [(1, 6)]
+    assert _holds(writer) == [("left", (0.0, 0.0, 1.0))]
 
 
-def test_member_joined_to_another_is_taken_as_held():
-    """The joint passes torsion on to the column, which has its own support."""
+def test_member_joined_to_one_that_swings_with_it_is_held():
+    """The column hangs from the beam's end and turns with it (aiz.79)."""
     writer = _writer(BALL, BALL, second_member=True)
 
-    assert writer._torsion_hold_dofs() == []
+    assert _holds(writer) == [("left", (1.0, 0.0, 0.0))]
+    assert "beam" in _messages(writer)[0]
 
 
-def _run_of_members(points, supports, released=None, branch=None):
+def test_member_tied_to_a_surface_is_taken_as_held():
+    """What a shell does is not counted; the column ending on one holds (aiz.79).
+
+    Its end shares a node with a triangle of a slab, which stops the swing.
+    """
+    writer = _writer(BALL, BALL, second_member=True)
+    writer.nodes.update({4: (5.0, 0.0, -3.0), 5: (4.0, 1.0, -3.0)})
+    writer.elements[3] = {"type": "S3", "nodes": [3, 4, 5]}
+    writer.domain_model.analysis_warnings = []
+    writer._hold_spinning_members()
+
+    assert writer._curve_members_on_surfaces() == {"column"}
+    assert _holds(writer) == []
+    assert _messages(writer) == []
+
+
+def _run_of_members(points, supports, released=None, branch=None, foot=None):
     """Members joined end to end at *points*, with ``{index: flags}`` supports.
 
     Args:
         released: ``{(point index, member id): [dofs]}``, member-side releases.
         branch: The far end of one more member starting at the last point.
+        foot: The flags of a support at the far end of the branch.
     """
     model = StructuralModel(id="model")
     nodes = {i + 1: tuple(point) for i, point in enumerate(points)}
@@ -136,6 +168,8 @@ def _run_of_members(points, supports, released=None, branch=None):
         joints[a - 1].connect_member(member_id)
         if b <= len(points):
             joints[b - 1].connect_member(member_id)
+    if foot is not None:
+        model.connections.append(_support("foot", branch, foot, "branch"))
     for (index, member_id), dofs in (released or {}).items():
         joints[index].released_dofs_by_member = {member_id: dofs}
 
@@ -160,7 +194,7 @@ def test_two_members_in_line_do_not_hold_each_other():
     """They turn together: once each counted as held by the other."""
     writer = _run_of_members(LINE, {0: BALL, 2: BALL})
 
-    assert writer._torsion_hold_dofs() == [(1, 4)]
+    assert _holds(writer) == [("joint0", (1.0, 0.0, 0.0))]
     (message,) = _messages(writer)
     assert "2 member(s) are free to spin about their own axis" in message
     assert "m0, m1" in message
@@ -171,7 +205,7 @@ def test_run_is_held_once_wherever_its_supports_are():
     points = [(0.0, 0.0, 0.0)] + [(x, 0.0, 0.0) for x in (1.0, 3.0, 5.0, 6.0)]
     writer = _run_of_members(points, {1: BALL, 3: BALL})
 
-    assert writer._torsion_hold_dofs() == [(2, 4)]
+    assert _holds(writer) == [("joint1", (1.0, 0.0, 0.0))]
     assert "4 member(s)" in _messages(writer)[0]
 
 
@@ -187,7 +221,7 @@ def test_torsional_release_ends_a_run():
     """Held on one side of the release, the other side still spins."""
     writer = _run_of_members(LINE, {0: PIN, 2: BALL}, released={(1, "m1"): [4]})
 
-    assert writer._torsion_hold_dofs() == [(3, 4)]
+    assert _holds(writer) == [("joint2", (1.0, 0.0, 0.0))]
     assert "1 member(s)" in _messages(writer)[0]
     assert "m1" in _messages(writer)[0]
 
@@ -199,11 +233,36 @@ def test_bending_release_between_them_leaves_the_run_whole():
 
 
 def test_member_across_the_run_holds_all_of_it():
-    """Turning the run would bend the member that leaves it."""
-    writer = _run_of_members(LINE, {0: BALL, 2: BALL}, branch=(4.0, 0.0, -3.0))
+    """Turning the run would bend the member that leaves it, which stands."""
+    writer = _run_of_members(
+        LINE, {0: BALL, 2: BALL}, branch=(4.0, 0.0, -3.0), foot=BALL
+    )
 
     assert writer._torsion_hold_dofs() == []
     assert _messages(writer) == []
+
+
+def test_member_across_that_swings_with_the_run_holds_nothing():
+    """Nothing stops the branch, so the run turns and takes it along (aiz.79).
+
+    Held at the end of the run where nothing else is joined, which stops the
+    branch as well.
+    """
+    writer = _run_of_members(LINE, {0: BALL, 2: BALL}, branch=(4.0, 0.0, -3.0))
+
+    assert _holds(writer) == [("joint0", (1.0, 0.0, 0.0))]
+    (message,) = _messages(writer)
+    assert "2 member(s) are free to spin about their own axis" in message
+    assert "m0, m1" in message
+
+
+def test_member_across_held_by_a_support_that_only_slides_holds_nothing():
+    """A foot free along Y lets the branch swing about the run's axis."""
+    writer = _run_of_members(
+        LINE, {0: BALL, 2: BALL}, branch=(4.0, 0.0, -3.0), foot=(1, 0, 1, 0, 0, 0)
+    )
+
+    assert _holds(writer) == [("joint0", (1.0, 0.0, 0.0))]
 
 
 def _held_axes(writer):
@@ -288,9 +347,9 @@ def test_hold_is_written_as_a_boundary_condition(tmp_path):
     writer._write_calculix_input_file(str(path))
     text = path.read_text()
 
-    assert "** Members held against spinning about their own axis" in text
-    block = text.split("** Members held against spinning about their own axis")[1]
-    assert block.splitlines()[1:3] == ["*BOUNDARY", "1, 4, 4"]
+    # With the support, so that what it carries is in the reactions
+    assert "** Members held against spinning about their own axis" not in text
+    assert "BC_left, 1, 4\n" in text
     assert io.StringIO(text).readline().startswith("**")
 
 

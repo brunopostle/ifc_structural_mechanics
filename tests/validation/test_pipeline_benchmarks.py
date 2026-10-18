@@ -4711,6 +4711,64 @@ class TestInclinedBeamFreeToSpin:
             assert reaction["fz_N"] == pytest.approx(self.DOWN / 2, rel=0.01)
 
 
+class TestBeamTurningWithAnArmAcross:
+    """A 4 m beam along X on ball supports, a 3 m arm out along Y from its end.
+
+    1 kN down at the tip of the arm. The arm joins the beam rigidly and
+    across it, so the beam once counted as held in torsion by it; but the arm
+    has no support and swings with the beam about the line of the two balls,
+    a mechanism (``aiz.79``): it came out with 7480 km of deflection and
+    reactions of 148 and 493 N. Held at the far support, the beam carries
+    3 m x 1 kN of torsion to it: the tip drops by the twist of the beam times
+    3 m, and the arm's own bending and shear as a cantilever.
+    """
+
+    LOAD, BEAM, ARM, SIDE = 1000.0, 4.0, 3.0, 0.1
+
+    def test_held_and_carried_in_torsion(self, tmp_path):
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0, 0), "B": (self.BEAM, 0, 0), "D": (self.BEAM, 3, 0)},
+            members=[("A", "B"), ("B", "D")],
+            supports={"A": PLANE_PIN, "B": PLANE_PIN},
+            loads={"D": (0.0, -self.LOAD)},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        (warning,) = [w for w in warnings if "free to spin" in w]
+        assert "1 member(s) are free to spin about their own axis" in warning
+        assert "held in torsion at one of its supports" in warning
+
+        torque = self.LOAD * self.ARM
+        far = _support_at(data, (0.0, 0.0, 0.0))
+        # The hold is the support's, so its moment is in the reactions
+        assert far["restrained"] == ["tx", "ty", "tz", "rx"]
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert total["imbalance_N"] < 1e-6 * self.LOAD
+        assert total["moment_imbalance_Nm"] < 1e-6 * torque
+        assert abs(far["by_load_case"]["Load"]["mx_Nm"]) == pytest.approx(
+            torque, rel=1e-3
+        )
+        assert abs(far["by_load_case"]["Load"]["fz_N"]) < 1e-3 * self.LOAD
+        near = _support_at(data, (self.BEAM, 0.0, 0.0))["by_load_case"]["Load"]
+        assert near["fz_N"] == pytest.approx(self.LOAD, rel=1e-4)
+        torsions = sorted(
+            m["envelope"]["section_forces"]["max_T_Nm"] for m in data["members"]
+        )
+        assert torsions[0] < 1.0
+        assert torsions[1] == pytest.approx(torque, rel=FORCE_TOLERANCE)
+
+        shear_modulus = PLANE_E / 2.6
+        torsion_constant = 0.1406 * self.SIDE**4
+        twist = torque * self.BEAM / (shear_modulus * torsion_constant)
+        bending = self.LOAD * self.ARM**3 / (3 * PLANE_E * self.SIDE**4 / 12)
+        shear = self.LOAD * self.ARM / (shear_modulus * self.SIDE**2 * 5 / 6)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(
+            twist * self.ARM + bending + shear, rel=0.01
+        )
+
+
 class TestBeamEndingOnTheSpanOfAnother:
     """A 3 m beam between the middles of two fixed 4 m girders, 10 kN on it.
 

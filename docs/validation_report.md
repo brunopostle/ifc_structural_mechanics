@@ -1034,6 +1034,29 @@ The reactions add up to the loads to six figures, with 5030 and 4970 N of the 10
 the two supports. Passes on CalculiX 2.21 as well: no rotation is restrained by
 `*BOUNDARY`.
 
+**A member across that swings with the run** (`aiz.79`,
+`TestBeamTurningWithAnArmAcross`). A 4 m beam along X on supports that hold
+translations only, and a 3 m arm out along Y from one end, rigidly joined, with
+1 kN down at its tip. The beam counted as held in torsion by the arm, since it
+joins it across; but the arm has no support and swings with the beam about the line
+of the two supports. A mechanism under load, and it was solved with only a
+plausibility warning. A count of what is left free with every member and joint a
+rigid body (`analysis/spinning.py`) now finds it, and the far support is given the
+rotation to hold. The beam then carries the arm's moment in torsion, and the support
+reports it:
+
+| Quantity | By hand | Before | Now |
+|---|---|---|---|
+| Deflection at the tip | 36.85 mm | 7480 km | 36.80 mm |
+| Torsion of the beam | 3000 N·m | 5 N·m | 2999.98 N·m |
+| Vertical reactions | 0 and 1000 N | 29 and 295 N | 0.0 and 1000.0 N |
+| Moment at the far support | 3000 N·m | | 3000.0 N·m |
+
+By hand: the twist of the beam times 3 m, with the torsion constant 0.1406 a^4 of a
+square, and the arm's bending and shear as a cantilever. A member tied to a surface,
+which the count does not model, is taken as held, so the count can miss a mechanism
+through a slab but never invents one.
+
 **A load on part of a member, and one that varies along it** (`aiz.58`,
 `TestPortalAgainstTheResultsInItsFile`, `TestLoadThatVariesAlongABeam`). An
 `IfcStructuralCurveAction` gives its load as values with their locations along the
