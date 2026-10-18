@@ -26,6 +26,27 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(autouse=True)
+def results_match_their_schema(monkeypatch):
+    """Validate every results.json a test writes against the JSON Schema.
+
+    The schema is part of the contract with other tools, so a key added to
+    the results without it fails here.
+    """
+    from ifc_structural_mechanics.export import results_exporter
+    from tests.helpers import check_results_schema
+
+    write = results_exporter.ResultsExporter.write
+
+    def checked(data, output_path):
+        check_results_schema(data)
+        write(data, output_path)
+
+    monkeypatch.setattr(
+        results_exporter.ResultsExporter, "write", staticmethod(checked)
+    )
+
+
 BUILDING_02_IFC = (
     Path(__file__).parent.parent
     / "examples"
@@ -56,6 +77,15 @@ def building_02_run(tmp_path_factory):
         output_dir=output_dir,
         mesh_size=2.0,
     )
+    # Session fixtures run before the function fixture that checks every
+    # results.json, so this one is checked here
+    results_path = Path(output_dir) / "results.json"
+    if results_path.exists():
+        import json
+
+        from tests.helpers import check_results_schema
+
+        check_results_schema(json.loads(results_path.read_text()))
     return result, output_dir
 
 

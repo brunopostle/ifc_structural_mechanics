@@ -32,6 +32,26 @@ def temp_file(suffix="", prefix="tmp", content=None):
     return path
 
 
+def check_results_schema(data):
+    """Raise if a results dict does not match the JSON Schema of results.json."""
+    import jsonschema
+
+    from ifc_structural_mechanics.export import results_schema
+
+    validator = jsonschema.Draft202012Validator(
+        results_schema(), format_checker=jsonschema.FormatChecker()
+    )
+    errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
+    if errors:
+        raise AssertionError(
+            "results.json does not match its schema:\n"
+            + "\n".join(
+                f"  {'/'.join(map(str, error.path)) or '(top)'}: {error.message}"
+                for error in errors[:10]
+            )
+        )
+
+
 def _ifcopenshell():
     import ifcopenshell
     import ifcopenshell.guid

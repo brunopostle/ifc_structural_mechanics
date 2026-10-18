@@ -19,6 +19,26 @@ ifc-analysis analyze examples/analysis-models/ifcFiles/beam_01.ifc \
 cp /tmp/beam_01/results.json docs/examples/beam_01_results.json
 ```
 
+## JSON Schema
+
+The same, for a program to check a file against, is a JSON Schema
+(draft 2020-12) in the package:
+`src/ifc_structural_mechanics/export/results_schema.json`, which
+`ifc_structural_mechanics.export.results_schema()` returns as a dict.
+
+```python
+import json, jsonschema
+from ifc_structural_mechanics.export import results_schema
+
+jsonschema.validate(json.load(open("results.json")), results_schema())
+```
+
+It describes exactly the version of the library it comes with, and a key it
+does not know is an error: check a file with the schema of its own
+`schema_version`. Every `results.json` the test suite writes is validated
+against it, so it cannot fall behind what is written. The prose here says
+what the values mean, which the schema does not.
+
 ## Versions
 
 `schema_version` is `"<major>.<minor>"`, compared as two numbers (1.10 comes
@@ -161,8 +181,8 @@ says otherwise (`_in_axes`, the section force diagrams).
 
 - `created`: when the file was written, UTC, ISO 8601.
 - `library`: this library's name and version.
-- `solver`: CalculiX and its version as it printed it, or `null` if it did
-  not. Version 2.21 and earlier get some reactions wrong (see `forces`).
+- `solver`: CalculiX and its version as it printed it; the version is
+  `null` if it did not print one. Version 2.21 and earlier get some reactions wrong (see `forces`).
 - `input_file`: the name of the IFC file analysed and the SHA-256 of its
   bytes. A viewer can compare it with the file it has open to know whether
   the results are stale.

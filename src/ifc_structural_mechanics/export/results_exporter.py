@@ -5,9 +5,12 @@ registered) and the ``parsed_results`` dict returned by ``ResultsParser``, and
 writes a ``results.json`` file keyed to IFC GlobalIds.
 
 The schema, what each value means and its changelog are in
-``docs/results_schema.md``. Bump ``ResultsExporter.SCHEMA_VERSION`` and add a
-line to the changelog there whenever what is written changes. ``run`` and
-``warnings`` are added by ``api.structural_analysis.analyze_ifc()``.
+``docs/results_schema.md``, and as a JSON Schema in ``results_schema.json``
+beside this module (``results_schema()``). Bump
+``ResultsExporter.SCHEMA_VERSION`` and add a line to the changelog there
+whenever what is written changes, and change the JSON Schema with it: every
+file the tests write is validated against it. ``run`` and ``warnings`` are
+added by ``api.structural_analysis.analyze_ifc()``.
 """
 
 import json
@@ -24,6 +27,19 @@ from ..analysis.superposition import combine_results
 from ..utils.error_handling import ResultProcessingError
 
 logger = logging.getLogger(__name__)
+
+
+def results_schema() -> Dict[str, Any]:
+    """The JSON Schema (draft 2020-12) of the ``results.json`` this version writes.
+
+    It describes exactly ``ResultsExporter.SCHEMA_VERSION``: a key it does
+    not know is an error, so validate a file with the schema of its own
+    ``schema_version``. A reader of 1.x ignores keys it does not know.
+    """
+    from importlib.resources import files
+
+    text = files(__package__).joinpath("results_schema.json").read_text("utf-8")
+    return json.loads(text)
 
 
 class ResultsExporter:

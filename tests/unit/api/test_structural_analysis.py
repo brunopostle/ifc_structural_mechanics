@@ -33,7 +33,13 @@ def no_run_record():
     the record of the run, which hashes the file, is left out."""
     with patch(
         "ifc_structural_mechanics.api.structural_analysis._run_record",
-        return_value={},
+        return_value={
+            "created": "2026-10-18T00:00:00+00:00",
+            "library": {"name": "ifc_structural_mechanics", "version": "0"},
+            "solver": {"name": "CalculiX", "version": None},
+            "input_file": {"name": "model.ifc", "sha256": "0" * 64},
+            "settings": {},
+        },
     ):
         yield
 

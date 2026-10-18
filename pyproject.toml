@@ -42,6 +42,7 @@ dev = [
     "flake8>=4.0.0",
     "ruff==0.16.4",
     "mypy>=0.9.0",
+    "jsonschema>=4.18.0",
 ]
 viz = [
     "pyvista>=0.38.0",
@@ -50,6 +51,9 @@ viz = [
 [project.urls]
 "Homepage" = "https://github.com/brunopostle/ifc_structural_mechanics"
 "Bug Tracker" = "https://github.com/brunopostle/ifc_structural_mechanics/issues"
+
+[tool.setuptools.package-data]
+"ifc_structural_mechanics.export" = ["results_schema.json"]
 
 [tool.black]
 line-length = 88

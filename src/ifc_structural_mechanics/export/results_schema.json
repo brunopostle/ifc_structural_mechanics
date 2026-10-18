@@ -1,0 +1,480 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.12",
+  "title": "results.json",
+  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.12: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "units",
+    "model",
+    "analysis_type",
+    "limits",
+    "load_cases",
+    "members",
+    "global_displacements",
+    "global_reactions",
+    "supports"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.12"},
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["length", "force", "moment", "stress", "displacement", "frequency", "mass"],
+      "properties": {
+        "length": {"const": "m"},
+        "force": {"const": "N"},
+        "moment": {"const": "N*m"},
+        "stress": {"const": "Pa"},
+        "displacement": {"const": "m"},
+        "frequency": {"const": "Hz"},
+        "mass": {"const": "kg"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"}
+      }
+    },
+    "run": {"$ref": "#/$defs/run"},
+    "analysis_type": {"$ref": "#/$defs/analysis_type"},
+    "limits": {
+      "description": "The limit of each envelope key a member's status is checked against; empty when none was given.",
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    },
+    "load_cases": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "load_combinations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/load_combination"}
+    },
+    "members": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/member"}
+    },
+    "global_displacements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "envelope": {"$ref": "#/$defs/displacement_summary"},
+        "by_load_case": {"$ref": "#/$defs/displacement_summaries"},
+        "by_load_combination": {"$ref": "#/$defs/displacement_summaries"}
+      }
+    },
+    "global_reactions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "by_load_case": {"$ref": "#/$defs/total_reactions"},
+        "by_load_combination": {"$ref": "#/$defs/total_reactions"},
+        "total": {"$ref": "#/$defs/total_reaction"}
+      }
+    },
+    "supports": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/support"}
+    },
+    "buckling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_load_case", "modes"],
+      "properties": {
+        "reference_load_case": {"type": "string"},
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "factor"],
+            "properties": {
+              "mode": {"type": "integer", "minimum": 1},
+              "factor": {"type": "number"}
+            }
+          }
+        }
+      }
+    },
+    "modal": {"$ref": "#/$defs/modal"},
+    "warnings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/warning"}
+    }
+  },
+  "$defs": {
+    "analysis_type": {"enum": ["linear_static", "linear_buckling", "modal"]},
+    "vector": {
+      "type": "array",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "numbers": {
+      "type": "array",
+      "items": {"type": "number"}
+    },
+    "run": {
+      "description": "How the results were made (schema 1.10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created", "library", "solver", "input_file", "settings"],
+      "properties": {
+        "created": {"type": "string", "format": "date-time"},
+        "library": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": "string"}
+          }
+        },
+        "solver": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": ["string", "null"]}
+          }
+        },
+        "input_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "sha256"],
+          "properties": {
+            "name": {"type": "string"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "analysis_type": {"$ref": "#/$defs/analysis_type"},
+            "mesh_size_m": {"type": ["number", "null"]},
+            "element_order": {"enum": [1, 2]},
+            "strict_connections": {"type": "boolean"},
+            "open_sections": {"enum": ["equivalent", "user_element"]},
+            "gravity": {"type": "boolean"},
+            "num_modes": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "load_combination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "ifc_guid", "factors"],
+      "properties": {
+        "name": {"type": "string"},
+        "ifc_guid": {"type": "string"},
+        "factors": {
+          "type": "object",
+          "additionalProperties": {"type": "number"}
+        },
+        "cases_without_loads": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "section_forces": {
+      "description": "Largest magnitudes over a curve member, and the largest tension and compression.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_N_N": {"type": "number"},
+        "max_T_Nm": {"type": "number"},
+        "max_Mf1_Nm": {"type": "number"},
+        "max_Mf2_Nm": {"type": "number"},
+        "max_Vf1_N": {"type": "number"},
+        "max_Vf2_N": {"type": "number"},
+        "max_tension_N": {"type": "number"},
+        "max_compression_N": {"type": "number"}
+      }
+    },
+    "member_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_displacement_m": {"type": "number"},
+        "max_relative_displacement_m": {"type": "number"},
+        "max_von_mises_Pa": {"type": "number"},
+        "max_normal_stress_Pa": {"type": "number"},
+        "utilisation_ratio": {"type": "number"},
+        "section_forces": {"$ref": "#/$defs/section_forces"}
+      }
+    },
+    "member_results": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/member_result"}
+    },
+    "diagram": {
+      "description": "Signed section forces along a curve member: parallel lists, a distance listed twice being a jump.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["distance_m", "N_N", "Vf1_N", "Vf2_N", "T_Nm", "Mf1_Nm", "Mf2_Nm"],
+      "properties": {
+        "distance_m": {"$ref": "#/$defs/numbers"},
+        "N_N": {"$ref": "#/$defs/numbers"},
+        "Vf1_N": {"$ref": "#/$defs/numbers"},
+        "Vf2_N": {"$ref": "#/$defs/numbers"},
+        "T_Nm": {"$ref": "#/$defs/numbers"},
+        "Mf1_Nm": {"$ref": "#/$defs/numbers"},
+        "Mf2_Nm": {"$ref": "#/$defs/numbers"}
+      }
+    },
+    "diagrams": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/diagram"}
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ifc_guid", "id", "type", "status"],
+      "properties": {
+        "ifc_guid": {"type": ["string", "null"], "description": "Its GlobalId; null only for an entity built without one, never from an IFC file."},
+        "id": {"type": "string"},
+        "type": {"enum": ["curve", "surface"]},
+        "status": {"enum": ["ok", "warning", "fail"]},
+        "section_model": {"const": "equivalent_rectangle"},
+        "tied_to_surface_members": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "envelope": {"$ref": "#/$defs/member_result"},
+        "combination_envelope": {"$ref": "#/$defs/member_result"},
+        "by_load_case": {"$ref": "#/$defs/member_results"},
+        "by_load_combination": {"$ref": "#/$defs/member_results"},
+        "section_axes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "1", "2"],
+          "properties": {
+            "x": {"$ref": "#/$defs/vector"},
+            "1": {"$ref": "#/$defs/vector"},
+            "2": {"$ref": "#/$defs/vector"}
+          }
+        },
+        "section_force_diagrams": {"$ref": "#/$defs/diagrams"},
+        "section_force_diagrams_by_combination": {"$ref": "#/$defs/diagrams"}
+      }
+    },
+    "displacement_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_displacement_m": {"type": "number"},
+        "max_tx_m": {"type": "number"},
+        "max_ty_m": {"type": "number"},
+        "max_tz_m": {"type": "number"}
+      }
+    },
+    "displacement_summaries": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/displacement_summary"}
+    },
+    "total_reaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fx_N", "fy_N", "fz_N", "resultant_N"],
+      "properties": {
+        "forces": {"enum": ["solver", "supports"]},
+        "fx_N": {"type": "number"},
+        "fy_N": {"type": "number"},
+        "fz_N": {"type": "number"},
+        "mx_Nm": {"type": "number"},
+        "my_Nm": {"type": "number"},
+        "mz_Nm": {"type": "number"},
+        "resultant_N": {"type": "number"},
+        "applied_load_N": {"$ref": "#/$defs/vector"},
+        "imbalance_N": {"type": "number"},
+        "applied_moment_Nm": {"$ref": "#/$defs/vector"},
+        "moment_imbalance_Nm": {"type": "number"}
+      }
+    },
+    "total_reactions": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/total_reaction"}
+    },
+    "reaction": {
+      "description": "What a support exerts on the structure at its position; moments absent where they cannot be had.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fx_N", "fy_N", "fz_N"],
+      "properties": {
+        "fx_N": {"type": "number"},
+        "fy_N": {"type": "number"},
+        "fz_N": {"type": "number"},
+        "mx_Nm": {"type": "number"},
+        "my_Nm": {"type": "number"},
+        "mz_Nm": {"type": "number"},
+        "resultant_N": {"type": "number"}
+      }
+    },
+    "reactions": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/reaction"}
+    },
+    "directions": {
+      "type": "array",
+      "items": {"enum": ["tx", "ty", "tz", "rx", "ry", "rz"]}
+    },
+    "prescribed_displacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translation_m", "rotation_rad"],
+      "properties": {
+        "translation_m": {"$ref": "#/$defs/vector"},
+        "rotation_rad": {"$ref": "#/$defs/vector"}
+      }
+    },
+    "prescribed_displacements": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/prescribed_displacement"}
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ifc_guid", "id", "type", "position_m", "restrained", "forces", "moments", "by_load_case"],
+      "properties": {
+        "ifc_guid": {"type": ["string", "null"], "description": "Its GlobalId; null only for an entity built without one, never from an IFC file."},
+        "id": {"type": "string"},
+        "type": {"enum": ["point", "line", "surface"]},
+        "position_m": {"$ref": "#/$defs/vector"},
+        "restrained": {"$ref": "#/$defs/directions"},
+        "springs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "direction", "stiffness", "unit"],
+            "properties": {
+              "kind": {"enum": ["translation", "rotation"]},
+              "direction": {"$ref": "#/$defs/vector"},
+              "stiffness": {"type": "number"},
+              "unit": {"enum": ["N/m", "N/m/m", "N/m/m2", "N*m/rad", "N*m/rad/m", "N*m/rad/m2"]}
+            }
+          }
+        },
+        "forces": {"enum": ["solver", "member_end_forces", "unreliable"]},
+        "moments": {"enum": ["solver", "member_end_forces", "none_restrained", "springs", "not_computed"]},
+        "by_load_case": {"$ref": "#/$defs/reactions"},
+        "by_load_combination": {"$ref": "#/$defs/reactions"},
+        "axes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "z"],
+          "properties": {
+            "x": {"$ref": "#/$defs/vector"},
+            "y": {"$ref": "#/$defs/vector"},
+            "z": {"$ref": "#/$defs/vector"}
+          }
+        },
+        "restrained_in_axes": {"$ref": "#/$defs/directions"},
+        "by_load_case_in_axes": {"$ref": "#/$defs/reactions"},
+        "by_load_combination_in_axes": {"$ref": "#/$defs/reactions"},
+        "prescribed_displacements": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "by_load_case": {"$ref": "#/$defs/prescribed_displacements"},
+            "by_load_combination": {"$ref": "#/$defs/prescribed_displacements"}
+          }
+        }
+      }
+    },
+    "translations_and_rotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z", "rx", "ry", "rz"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "z": {"type": "number"},
+        "rx": {"type": "number"},
+        "ry": {"type": "number"},
+        "rz": {"type": "number"}
+      }
+    },
+    "translations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "z": {"type": "number"}
+      }
+    },
+    "rotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rx", "ry", "rz"],
+      "properties": {
+        "rx": {"type": "number"},
+        "ry": {"type": "number"},
+        "rz": {"type": "number"}
+      }
+    },
+    "modal": {
+      "description": "Natural frequencies, participation factors and effective masses (schema 1.12).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mass_source", "modes"],
+      "properties": {
+        "mass_source": {"const": "materials"},
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "frequency_Hz", "period_s", "angular_frequency_rad_s", "eigenvalue", "mechanism"],
+            "properties": {
+              "mode": {"type": "integer", "minimum": 1},
+              "frequency_Hz": {"type": "number"},
+              "period_s": {"type": ["number", "null"]},
+              "angular_frequency_rad_s": {"type": "number"},
+              "eigenvalue": {"type": "number"},
+              "mechanism": {"type": "boolean"},
+              "participation_factors": {"$ref": "#/$defs/translations_and_rotations"},
+              "effective_mass_kg": {"$ref": "#/$defs/translations"},
+              "effective_mass_moment_kgm2": {"$ref": "#/$defs/rotations"}
+            }
+          }
+        },
+        "total_effective_mass_kg": {"$ref": "#/$defs/translations"},
+        "total_effective_mass_moment_kgm2": {"$ref": "#/$defs/rotations"},
+        "mass_fraction": {"$ref": "#/$defs/translations_and_rotations"}
+      }
+    },
+    "warning": {
+      "description": "An approximation the analysis made, or a result it doubts; codes are explained in docs/messages.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "title", "message", "severity", "ifc_guids"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^W-[A-Z]{3}-[0-9]{3}$"},
+        "title": {"type": "string"},
+        "message": {"type": "string"},
+        "severity": {"const": "warning"},
+        "entity_type": {"type": ["string", "null"]},
+        "ccx_id": {"type": ["integer", "string", "null"]},
+        "domain_id": {"type": ["string", "null"]},
+        "ifc_guids": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}
