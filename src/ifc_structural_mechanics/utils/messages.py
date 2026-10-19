@@ -249,7 +249,8 @@ _KINDS = [
         "Plane structure held in its plane",
         "Every member and load lies in one plane and nothing holds the "
         "structure there, so it is analysed as a plane frame: every node is "
-        "held across the plane. Forces and displacements in the plane are "
+        "held across the plane (by an equation where the plane is parallel "
+        "to no two global axes). Forces and displacements in the plane are "
         "not affected. Add supports across the plane to analyse it in three "
         "dimensions.",
     ),

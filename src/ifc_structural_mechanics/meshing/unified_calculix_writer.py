@@ -1019,12 +1019,24 @@ class UnifiedCalculixWriter:
                 for node, dof in plane_holds:
                     f.write(f"{node}, {dof}, {dof}\n")
                 f.write("\n")
+            plane_equations = getattr(self, "_plane_equations", [])
+            if plane_equations:
+                f.write("** Plane structure held across its plane\n")
+                for terms in plane_equations:
+                    self._write_equation(f, terms)
+                f.write("\n")
             holds = self._torsion_hold_dofs()
             if holds:
                 f.write("** Members held against spinning about their own axis\n")
                 f.write("*BOUNDARY\n")
                 for node, dof in holds:
                     f.write(f"{node}, {dof}, {dof}\n")
+                f.write("\n")
+            spin_arms = getattr(self, "_spin_arm_equations", [])
+            if spin_arms:
+                f.write("** Members held against spinning, by arms across the plane\n")
+                for terms in spin_arms:
+                    self._write_equation(f, terms)
                 f.write("\n")
 
             temperatures = self._temperature_fields()
@@ -2189,8 +2201,12 @@ class UnifiedCalculixWriter:
             find_connection_support_nodes,
             get_constrained_dofs,
             support_equations,
+            support_restraint,
         )
 
+        # What each support node is held in, for a plane hold across a
+        # skew plane
+        held: Dict[int, List[np.ndarray]] = {}
         for conn in self.domain_model.connections:
             # Find nodes at this connection's position
             if hasattr(conn, "position") and conn.position:
@@ -2198,8 +2214,11 @@ class UnifiedCalculixWriter:
                     conn, node_coords, member_nodes
                 )
                 dofs = get_constrained_dofs(conn)
+                restraint = support_restraint(conn)
 
                 for node in bc_nodes:
+                    if restraint is not None and len(restraint[0]):
+                        held.setdefault(node, []).append(restraint[0])
                     for dof in dofs:
                         bc_node_dofs.add((node, dof))
                     # A skew direction is an equation, and its first term
@@ -2216,6 +2235,7 @@ class UnifiedCalculixWriter:
 
         bc_node_dofs.update(self._torsion_hold_dofs())
         bc_node_dofs.update(self._plane_hold_dofs())
+        self._plane_equations = self._plane_hold_equations(bc_node_dofs, held)
 
         logger.info(f"Collected {len(bc_node_dofs)} boundary condition DOFs")
         if logger.isEnabledFor(logging.DEBUG):
@@ -3832,6 +3852,7 @@ class UnifiedCalculixWriter:
         )
 
         self._torsion_holds: List[Tuple[Any, str, int]] = []
+        self._spin_arm_equations: List[List[Tuple[int, int, float]]] = []
         for conn in self.domain_model.connections:
             conn.torsion_hold_axes = []
         # In a plane structure held in its plane, a member's rotations about
@@ -3842,12 +3863,16 @@ class UnifiedCalculixWriter:
         # 3 %: CalculiX's restraint of a beam node's rotation is approximate.)
         plane = getattr(self, "_plane_normal", None)
         if plane is not None:
-            from ..analysis.plane_structure import spinning_members
+            from ..analysis.plane_structure import global_axis, spinning_members
 
+            axis = global_axis(plane)
             for conn, member_id in spinning_members(
                 self.domain_model, plane, self._mesh_joints()
             ):
-                for dof in (4 + i for i in range(3) if i != plane):
+                if axis is None:
+                    self._build_spin_arms(conn, member_id, plane)
+                    continue
+                for dof in (4 + i for i in range(3) if i != axis):
                     self._torsion_holds.append((conn, member_id, dof))
             return
 
@@ -4029,6 +4054,52 @@ class UnifiedCalculixWriter:
                 ifc_guids=self._ifc_guids(loose),
             )
 
+    def _build_spin_arms(self, conn, member_id: str, normal: np.ndarray) -> None:
+        """Hold a member's rotations about the axes of a skew plane at a joint.
+
+        What ``*BOUNDARY`` on two rotations does in a plane parallel to two
+        global axes: a stiff arm across the plane on each of the member's
+        nodes there, its tip tied to the node in both directions of the
+        plane. The tip of an arm along the normal moves by ``rotation x
+        normal``, so that stops the rotations about the axes in the plane and
+        leaves the one about the normal, the structure's own, free.
+
+        Stored in ``self._spin_arm_equations``, written with the members
+        held against spinning.
+        """
+        from ..analysis.boundary_condition_handling import _reduce, _terms
+        from ..analysis.plane_structure import in_plane_axes
+
+        links = list(getattr(self, "_rigid_links", []))
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [elem_id for elem_id, _, _ in links]
+            )
+            + 1
+        )
+        rows, pivots = _reduce(in_plane_axes(normal))
+        for _, node in self._find_connection_nodes_at_location(conn, [member_id]):
+            tip = tuple(
+                float(v)
+                for v in np.array(self.nodes[node], dtype=float)
+                + self._HINGE_ARM * np.array(normal, dtype=float)
+            )
+            self.nodes[next_node] = tip
+            helpers.add(next_node)
+            links.append((next_elem, node, next_node))
+            for row, pivot in zip(rows, pivots):
+                self._spin_arm_equations.append(
+                    _terms(next_node, row, pivot) + _terms(node, -row, pivot)
+                )
+            next_node += 1
+            next_elem += 1
+        self._rigid_links = links
+        self._helper_nodes = helpers
+        self._member_node_cache = {}
+
     def _hold_plane_structure(self) -> None:
         """Hold a plane truss or frame that nothing keeps in its plane.
 
@@ -4050,11 +4121,13 @@ class UnifiedCalculixWriter:
         """
         from ..analysis.plane_structure import (
             AXIS_NAMES,
+            describe_plane,
+            global_axis,
             out_of_plane_freedoms,
             plane_normal,
         )
 
-        self._plane_normal: Optional[int] = None
+        self._plane_normal: Optional[np.ndarray] = None
         if self.analysis_config.get_analysis_type() != "linear_static":
             return
         if self._u1_members:
@@ -4071,29 +4144,95 @@ class UnifiedCalculixWriter:
         if not freedoms:
             return
         self._plane_normal = normal
-        in_plane = [AXIS_NAMES[axis] for axis in range(3) if axis != normal]
+        axis = global_axis(normal)
+        held = f"along {AXIS_NAMES[axis]}" if axis is not None else "across the plane"
         self._warn_user(
             "W-SUP-002",
             f"The model is a plane structure: every member lies in a plane "
-            f"parallel to global {in_plane[0]} and {in_plane[1]} and every load "
-            f"acts in it. Nothing holds it there ({freedoms} movement(s) out "
-            "of the plane are unrestrained), so it is analysed as a plane "
-            f"frame: every node is held along {AXIS_NAMES[normal]}, and "
-            "members free to spin about their own axis are held against it. "
-            "Forces and displacements in the plane are not affected.",
+            f"{describe_plane(normal)} and every load acts in it. Nothing "
+            f"holds it there ({freedoms} movement(s) out of the plane are "
+            "unrestrained), so it is analysed as a plane frame: every node is "
+            f"held {held}, and members free to spin about their own axis are "
+            "held against it. Forces and displacements in the plane are not "
+            "affected.",
         )
 
     def _plane_hold_dofs(self) -> List[Tuple[int, int]]:
-        """The ``(node, dof)`` restraints decided by ``_hold_plane_structure``."""
+        """The ``(node, dof)`` restraints decided by ``_hold_plane_structure``,
+        in a plane parallel to two global axes (``_plane_hold_equations`` in
+        any other)."""
+        from ..analysis.plane_structure import global_axis
+
         normal = getattr(self, "_plane_normal", None)
-        if normal is None:
+        if normal is None or global_axis(normal) is None:
             return []
+        return [(node, global_axis(normal) + 1) for node in self._plane_held_nodes()]
+
+    def _plane_held_nodes(self) -> List[int]:
+        """The nodes of the elements and links, which a plane hold holds."""
         nodes: set = set()
         for element in self.elements.values():
             nodes.update(element["nodes"])
         for _, node_a, node_b in getattr(self, "_rigid_links", []):
             nodes.update((node_a, node_b))
-        return [(node, normal + 1) for node in sorted(nodes)]
+        return sorted(nodes)
+
+    def _plane_hold_equations(
+        self, bc_node_dofs: set, held: Dict[int, List[np.ndarray]]
+    ) -> List[List[Tuple[int, int, float]]]:
+        """The equations that hold every node across a skew plane.
+
+        Each node's translation along the normal is zero: an equation between
+        its three translations, with the one the normal has most of
+        dependent, unless a restraint or another support's equation has it
+        already. What a support restrains is put in (it is zero, or the
+        dependent term of the support's equation is replaced by the others),
+        so that no equation depends on another's dependent term, and a node
+        whose support holds it across the plane already is left out. Arm and
+        hinge tips are left out too: their own arms carry them with the
+        nodes they are fixed to.
+
+        Args:
+            bc_node_dofs: The ``(node, dof)`` pairs restrained or dependent
+                so far; the dependent term of each equation is added.
+            held: The translations each support node is held in, as the
+                reduced rows of ``support_restraint``, from every support at
+                the node.
+        """
+        from ..analysis.boundary_condition_handling import _reduce, share_in_span
+        from ..analysis.plane_structure import global_axis
+
+        normal = getattr(self, "_plane_normal", None)
+        if normal is None or global_axis(normal) is not None:
+            return []
+        normal = np.array(normal, dtype=float)
+        helpers = getattr(self, "_helper_nodes", set())
+        equations = []
+        for node in self._plane_held_nodes():
+            if node in helpers:
+                continue
+            row = normal.copy()
+            rows = held.get(node, [])
+            if rows:
+                stacked = np.vstack(rows)
+                if share_in_span(stacked, normal) > 1.0 - 1e-9:
+                    continue
+                for support_row, pivot in zip(*_reduce(stacked)):
+                    row = row - row[pivot] * support_row
+            row[np.abs(row) < 1e-12] = 0.0
+            free = [
+                i
+                for i in range(3)
+                if row[i] != 0.0 and (node, i + 1) not in bc_node_dofs
+            ]
+            if not free:
+                continue
+            pivot = max(free, key=lambda i: abs(row[i]))
+            order = [pivot] + [i for i in range(3) if i != pivot and row[i] != 0.0]
+            terms = [(node, i + 1, float(row[i] / row[pivot])) for i in order]
+            equations.append(terms)
+            bc_node_dofs.add((node, pivot + 1))
+        return equations
 
     def _torsion_hold_dofs(self) -> List[Tuple[int, int]]:
         """The ``(node, dof)`` restraints decided by ``_hold_spinning_members``."""

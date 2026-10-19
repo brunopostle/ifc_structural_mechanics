@@ -4660,6 +4660,221 @@ class TestPlaneFrame:
                 ), key
 
 
+class TestSkewPlaneStructure:
+    """The truss and the portal above turned 30 degrees about Z (94g.9).
+
+    Their plane is then parallel to no two global axes, and they were left
+    unheld: a mechanism. Every node is now held across the plane by an
+    equation, and a member that can spin by an arm across it. The answer is
+    that of the structure in the X-Z plane, turned.
+    """
+
+    TURN = 30.0
+
+    def _turned(self, horizontal):
+        angle = math.radians(self.TURN)
+        return horizontal * math.cos(angle), horizontal * math.sin(angle)
+
+    def test_truss(self, tmp_path):
+        truss = TestPlaneTruss()
+        (tmp_path / "flat").mkdir()
+        flat, _ = truss._truss(
+            tmp_path / "flat", {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}
+        )
+        data, warnings = truss._truss(
+            tmp_path, {"A": PLANE_PIN_2D, "C": PLANE_ROLLER_2D}, turn=self.TURN
+        )
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "the normal is (-0.5, 0.866, 0)" in warning
+        assert "12 movement(s) out of the plane are unrestrained" in warning
+        assert "every node is held across the plane" in warning
+        forces = _axial_forces(data, str(tmp_path / "plane.ifc"))
+        for name, expected in truss._expected_forces().items():
+            assert forces[name] == pytest.approx(expected, rel=1e-3), name
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tz_m"] == pytest.approx(
+            truss._expected_deflection(), rel=0.01
+        )
+        # Its own movement in the plane, turned: nothing leaves it
+        before = flat["global_displacements"]["envelope"]
+        along_x, along_y = self._turned(before["max_tx_m"])
+        assert envelope["max_tx_m"] == pytest.approx(along_x, rel=1e-3)
+        assert envelope["max_ty_m"] == pytest.approx(along_y, rel=1e-3)
+        assert envelope["max_tz_m"] == pytest.approx(before["max_tz_m"], rel=1e-3)
+        for support in data["supports"]:
+            assert support["by_load_case"]["Load"]["fz_N"] == pytest.approx(
+                TRUSS_LOAD / 2, rel=1e-6
+            )
+
+    def test_portal_with_fixed_feet(self, tmp_path):
+        """Its feet hold rotation about the normal: a skew support each."""
+        portal = TestPlaneFrame()
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes=portal.NODES,
+            members=portal.MEMBERS,
+            supports={"A": PLANE_FIXED_2D, "D": PLANE_FIXED_2D},
+            loads={"B": (portal.LOAD, 0.0)},
+            hinged=False,
+            mesh_size=0.25,
+            turn=self.TURN,
+        )
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "3 movement(s)" in warning
+        k = (1 / portal.WIDTH) / (1 / portal.HEIGHT)
+        half = portal.LOAD * portal.HEIGHT / 2
+        foot = half * (3 * k + 1) / (6 * k + 1)
+        corner = half * 3 * k / (6 * k + 1)
+        moments = portal._moments(data, tmp_path)
+        assert abs(moments["AB"][0]) == pytest.approx(foot, rel=FORCE_TOLERANCE)
+        assert abs(moments["AB"][-1]) == pytest.approx(corner, rel=FORCE_TOLERANCE)
+        assert abs(moments["CD"][-1]) == pytest.approx(foot, rel=FORCE_TOLERANCE)
+        for member in data["members"]:
+            # No bending out of the plane
+            assert member["envelope"]["section_forces"]["max_Mf1_Nm"] < 1e-4 * foot
+        sway = (
+            portal.LOAD
+            * portal.HEIGHT**3
+            / (12 * portal._stiffness())
+            * (3 * k + 2)
+            / (6 * k + 1)
+        )
+        along_x, along_y = self._turned(sway)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tx_m"] == pytest.approx(along_x, rel=DEFLECTION_TOLERANCE)
+        assert envelope["max_ty_m"] == pytest.approx(along_y, rel=DEFLECTION_TOLERANCE)
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        assert math.hypot(total["fx_N"], total["fy_N"]) == pytest.approx(
+            portal.LOAD, rel=1e-5
+        )
+
+
+def _shear_wall(tmp_path, turn: float) -> str:
+    """slab_01 stood up as a wall 5 m high and 3 m wide, pushed sideways.
+
+    Its edge at x = 0 is the foot, held in every translation along it and
+    free to turn about it; the other edge is free. A uniform push of
+    ``SHEAR_WALL_PUSH`` along the slab's y, in its plane, is horizontal.
+    The placement of every item turns the wall about Z by ``turn`` degrees
+    from the global X-Z plane.
+    """
+    model = ifcopenshell.open(SLAB)
+    for relation in model.by_type("IfcRelConnectsStructuralMember"):
+        relation.AppliedCondition = None
+    foot, top = sorted(
+        model.by_type("IfcStructuralCurveConnection"), key=lambda c: c.id()
+    )
+    foot.AppliedCondition = _edge_condition(
+        model, (True, True, True, False, False, False)
+    )
+    for relation in list(model.get_inverse(top)):
+        if relation.is_a("IfcRelConnectsStructuralMember"):
+            model.remove(relation)
+        elif relation.is_a("IfcRelAssignsToGroup"):
+            relation.RelatedObjects = [o for o in relation.RelatedObjects if o != top]
+    model.remove(top)
+    for action in list(model.by_type("IfcStructuralAction")):
+        for relation in model.get_inverse(action):
+            if relation.is_a("IfcRelConnectsStructuralActivity"):
+                model.remove(relation)
+        model.remove(action)
+    wall = model.by_type("IfcStructuralSurfaceMember")[0]
+    _add_area_load(model, wall, (0.0, SHEAR_WALL_PUSH, 0.0))
+    angle = math.radians(turn)
+    placement = model.create_entity(
+        "IfcLocalPlacement",
+        RelativePlacement=model.create_entity(
+            "IfcAxis2Placement3D",
+            Location=model.create_entity("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+            Axis=model.create_entity(
+                "IfcDirection", (-math.sin(angle), math.cos(angle), 0.0)
+            ),
+            RefDirection=model.create_entity("IfcDirection", (0.0, 0.0, 1.0)),
+        ),
+    )
+    for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
+        for entity in model.by_type(kind):
+            entity.ObjectPlacement = placement
+    path = str(tmp_path / "wall.ifc")
+    model.write(path)
+    return path
+
+
+SHEAR_WALL_PUSH = 1000.0  # N/m2
+
+
+class TestShearWall:
+    """A wall in its own plane on a line support at its foot (94g.9).
+
+    Held along its foot in translation only, it can fall over about it, and
+    surface members were never taken for a plane structure: it was a
+    mechanism. Held across its plane, it is a deep cantilever: Timoshenko's,
+    w H^4 / 8 EI + w H^2 / 2 (5/6) G A with w = q b, to a few percent (its
+    foot is held across the whole width, which no beam is), and the moment
+    at its foot is w H^2 / 2 by statics.
+    """
+
+    HEIGHT, WIDTH, THICKNESS, E, NU = 5.0, 3.0, 0.2, 2.1e8, 0.2
+
+    def _run(self, tmp_path, turn):
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=_shear_wall(tmp_path, turn),
+            output_dir=output_dir,
+            mesh_size=0.25,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            return json.load(fh), [w["message"] for w in result["warnings"]]
+
+    def _push(self):
+        return SHEAR_WALL_PUSH * self.WIDTH
+
+    def test_cantilever_by_hand(self, tmp_path):
+        data, warnings = self._run(tmp_path, 0.0)
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "parallel to global X and Z" in warning
+        assert "1 movement(s)" in warning
+        w = self._push()
+        inertia = self.THICKNESS * self.WIDTH**3 / 12
+        shear = self.E / (2 * (1 + self.NU)) * 5 / 6 * self.THICKNESS * self.WIDTH
+        expected = w * self.HEIGHT**4 / (
+            8 * self.E * inertia
+        ) + w * self.HEIGHT**2 / (2 * shear)
+        envelope = data["global_displacements"]["envelope"]
+        assert envelope["max_tx_m"] == pytest.approx(expected, rel=0.03)
+        # Across it only the faces move, as the wall thins and thickens
+        assert envelope.get("max_ty_m", 0.0) < 0.01 * envelope["max_tx_m"]
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["fx_N"] == pytest.approx(-w * self.HEIGHT, rel=1e-5)
+        assert abs(total["my_Nm"]) == pytest.approx(w * self.HEIGHT**2 / 2, rel=1e-5)
+
+    def test_turned_off_the_global_axes(self, tmp_path):
+        (tmp_path / "flat").mkdir()
+        (tmp_path / "turned").mkdir()
+        flat, _ = self._run(tmp_path / "flat", 0.0)
+        turned, warnings = self._run(tmp_path / "turned", 30.0)
+        (warning,) = [w for w in warnings if PLANE_WARNING in w]
+        assert "every node is held across the plane" in warning
+        before = flat["global_displacements"]["envelope"]
+        after = turned["global_displacements"]["envelope"]
+        angle = math.radians(30.0)
+        # The mesh of a surface is not the same after the move
+        assert after["max_displacement_m"] == pytest.approx(
+            before["max_displacement_m"], rel=1e-3
+        )
+        assert after["max_tx_m"] == pytest.approx(
+            before["max_tx_m"] * math.cos(angle), rel=1e-3
+        )
+        assert after["max_ty_m"] == pytest.approx(
+            before["max_tx_m"] * math.sin(angle), rel=1e-3
+        )
+        total = turned["global_reactions"]["by_load_case"]["Imposed"]
+        assert math.hypot(total["fx_N"], total["fy_N"]) == pytest.approx(
+            self._push() * self.HEIGHT, rel=1e-5
+        )
+
+
 class TestPointLoadAtAFreeEnd:
     """A 3 m column, 0.1 m square, 10 kN down on its top (aiz.76).
 

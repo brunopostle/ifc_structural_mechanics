@@ -1,5 +1,6 @@
 """Helpers shared by tests that build a domain model by hand."""
 
+import math
 import os
 import tempfile
 
@@ -91,6 +92,7 @@ def plane_model(
     expansion=None,
     depth=None,
     cases=None,
+    turn=0.0,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -144,6 +146,9 @@ def plane_model(
             actions named ``P<joint>``, ``Q<joint><joint>``,
             ``D<joint>`` or ``T<joint><joint>`` that it holds; the
             ``Load`` case holds them all unless they are listed here.
+        turn: An angle in degrees about global Z by which the placement of
+            every item turns the whole structure, its supports' axes and
+            its loads with it: a plane off the global axes.
 
     Returns:
         *path*.
@@ -160,6 +165,18 @@ def plane_model(
         create("IfcDirection", (1.0, 0.0, 0.0)),
     )
     placement = create("IfcLocalPlacement", None, axes)
+    if turn:
+        angle = math.radians(turn)
+        placement = create(
+            "IfcLocalPlacement",
+            None,
+            create(
+                "IfcAxis2Placement3D",
+                create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+                up,
+                create("IfcDirection", (math.cos(angle), math.sin(angle), 0.0)),
+            ),
+        )
     units = create(
         "IfcUnitAssignment", [create("IfcSIUnit", None, "LENGTHUNIT", None, "METRE")]
     )
@@ -408,7 +425,7 @@ def plane_model(
             f"Q{ends[0]}{ends[1]}",
             None,
             None,
-            None,
+            placement if turn else None,
             None,
             (
                 create(

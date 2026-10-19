@@ -242,7 +242,7 @@ Nothing restrains these members' rotation about their own axis: ball supports at
 
 ### W-SUP-002: Plane structure held in its plane
 
-Every member and load lies in one plane and nothing holds the structure there, so it is analysed as a plane frame: every node is held across the plane. Forces and displacements in the plane are not affected. Add supports across the plane to analyse it in three dimensions.
+Every member and load lies in one plane and nothing holds the structure there, so it is analysed as a plane frame: every node is held across the plane (by an equation where the plane is parallel to no two global axes). Forces and displacements in the plane are not affected. Add supports across the plane to analyse it in three dimensions.
 
 ### W-SUP-003: Possible mechanism
 

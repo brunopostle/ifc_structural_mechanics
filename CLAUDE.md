@@ -1074,15 +1074,25 @@ rotational degrees of freedom**. This drives everything about joints:
   than invent ones there.
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
-  `plane_normal()` recognises one (curve members only, in a plane parallel to
-  two global axes, loads, the self-weight of load cases and gravity in it,
-  section axes in and across it; a
-  straight run takes the plane of its loads) and `out_of_plane_freedoms()`
-  counts what nothing restrains, with members and joints as rigid bodies tied
-  by the file's connections and supports. If any, every node gets the
-  translation across the plane restrained (a `*BOUNDARY` of its own, not in
-  `ALL_BC_NODES`, so not in the reactions), `spinning_members()` says where
-  to hold what can still spin, and one warning reports it. Linear static
+  `plane_normal()` recognises one (curve and surface members in one plane
+  of any direction, loads, the self-weight of load cases and gravity in it,
+  section axes and supports in and across it; a straight run takes the
+  plane of its loads) and returns its unit normal, exactly a global axis
+  when it is one (`global_axis()`). `out_of_plane_freedoms()` counts what
+  nothing restrains, with members and joints as rigid bodies tied by the
+  file's connections and supports (a surface member in translation only,
+  which can only overcount). If any, every node gets the translation
+  across the plane restrained (a `*BOUNDARY` of its own, not in
+  `ALL_BC_NODES`, so not in the reactions; in a skew plane an `*EQUATION`
+  per node, `_plane_hold_equations()`, with what its support holds put in
+  and arm and hinge tips left out), `spinning_members()` says where to hold
+  what can still spin (in a skew plane with a stiff arm along the normal,
+  `_build_spin_arms()`), and one warning reports it (`94g.9`).
+  **An `*EQUATION` on a shell node ties the mean of its top and bottom
+  layers only** (`gen3dmpc.f`; a `*BOUNDARY` holds the middle layer as
+  well): measured, a wall pushed in its plane on a skew line support is 3%
+  more flexible than on the same support written as `*BOUNDARY`. That is
+  the skew support's equation, not the plane hold's. Linear static
   only: buckling out of the plane must stay possible. A plane model that
   stands up (`beam_01`, `portal_01`) is untouched. **Never restrain a
   rotation at a node inside a member in bending**: CalculiX's rotational
