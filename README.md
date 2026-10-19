@@ -314,12 +314,14 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--output DIR` | Output directory for analysis results (required) | — |
-| `--analysis-type TYPE` | `linear_static` or `linear_buckling` | `linear_static` |
+| `--analysis-type TYPE` | `linear_static`, `linear_buckling` or `modal` | `linear_static` |
+| `--modes N` | How many modes a modal analysis finds, lowest frequency first | `10` |
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
 | `--gravity` | Add self-weight as a load case of its own, `Gravity`. For files with no load case: a load case that includes self-weight in the file has it without this | off |
 | `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |
 | `--open-sections [equivalent\|user-element]` | How sections other than solid rectangles are analysed: as a rectangle of the same stiffness, or with CalculiX U1 elements (only for models made of nothing else) | `equivalent` |
+| `--timeout SECONDS` | CalculiX solver timeout (0 = no limit) | `600` |
 | `--verbose` | Enable verbose logging | off |
 | `--json-output` | Print the outcome (status, warnings, errors, output files) as one JSON document on standard output | off |
 | `--map-entities/--no-map-entities` | Map errors back to IFC entities | on |
