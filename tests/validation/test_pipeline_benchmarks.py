@@ -5612,6 +5612,64 @@ class TestSkewSupports:
                 weight * math.sin(angle) / 2, rel=1e-3
             )
 
+    def test_tilted_slab_pushed_in_its_plane(self, tmp_path):
+        """slab_01 between two pinned edges, 10 kPa in its plane along them.
+
+        Tilted 30 degrees about X, the hold along each edge is an equation
+        on nodes of shells alone, which holds the mean of the top and bottom
+        of the expanded section and not its middle unless the node is a knot
+        (``aiz.103``). It was 3 % more flexible than the level slab at this
+        mesh, and more on a finer one.
+        """
+        import ifcopenshell
+
+        angle = math.radians(30.0)
+        found = {}
+        for label, turn in (("level", 0.0), ("tilted", angle)):
+            model = ifcopenshell.open(SLAB)
+            for rel in model.by_type("IfcRelConnectsStructuralMember"):
+                rel.AppliedCondition = None
+            for edge in model.by_type("IfcStructuralCurveConnection"):
+                edge.AppliedCondition = _edge_condition(
+                    model, (True, True, True, False, False, False)
+                )
+            slab = model.by_type("IfcStructuralSurfaceMember")[0]
+            for action in list(model.by_type("IfcStructuralAction")):
+                for rel in model.get_inverse(action):
+                    if rel.is_a("IfcRelConnectsStructuralActivity"):
+                        model.remove(rel)
+                model.remove(action)
+            _add_area_load(model, slab, (0.0, 1.0e4, 0.0))
+            placement = model.create_entity(
+                "IfcLocalPlacement",
+                RelativePlacement=model.create_entity(
+                    "IfcAxis2Placement3D",
+                    Location=model.create_entity("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+                    Axis=model.create_entity(
+                        "IfcDirection", (0.0, -math.sin(turn), math.cos(turn))
+                    ),
+                    RefDirection=model.create_entity("IfcDirection", (1.0, 0.0, 0.0)),
+                ),
+            )
+            for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
+                for entity in model.by_type(kind):
+                    entity.ObjectPlacement = placement
+            path = str(tmp_path / f"{label}.ifc")
+            model.write(path)
+            found[label] = _run(path, tmp_path / label, mesh_size=0.25)
+
+        level, tilted = found["level"], found["tilted"]
+        before = level["global_displacements"]["envelope"]["max_displacement_m"]
+        after = tilted["global_displacements"]["envelope"]["max_displacement_m"]
+        assert after == pytest.approx(before, rel=1e-4)
+        case = level["load_cases"][0]
+        push = level["global_reactions"]["by_load_case"][case]["fy_N"]
+        total = tilted["global_reactions"]["by_load_case"][case]
+        assert math.hypot(total["fy_N"], total["fz_N"]) == pytest.approx(
+            abs(push), rel=1e-6
+        )
+        assert total["imbalance_N"] < 1e-6 * abs(push)
+
 
 def _node_condition(model, values):
     """An IfcBoundaryNodeCondition: True/False for held/free, a number for a spring.

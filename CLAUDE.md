@@ -813,6 +813,18 @@ What is skew is written by `write_boundary_conditions()` from `support_equations
 - The first term of every such equation is in `_collect_boundary_condition_dofs()`
   with the restrained DOFs, so no joint equation makes it depend on something else
   as well; the plane hold skips it for the same reason.
+- **An `*EQUATION` on a node of shells alone holds the mean of the top and
+  bottom of its expanded section, not the middle** (`aiz.103`; `gen3dmpc.f`
+  has the line for the middle commented out, `gen3dboun.f` holds both for a
+  `*BOUNDARY`). `slab_01` pushed in its plane between pinned edges, the hold
+  along them an equation, was 1.9, 3.0 and 4.8% too flexible at a 0.5, 0.25
+  and 0.125 m mesh. `_knot_shell_support_nodes()` hangs a knot link on every
+  such node of a skew support's equations: tilted 30 degrees the slab is
+  then the level one to 2e-5 at all three, and in bending knots there change
+  nothing to six figures. Not on the nodes of spring equations: knots at
+  every node of a slab on surface springs broke its equilibrium (78.0 kN of
+  springs for 75 kN of load, measured), and the springs' own tests are right
+  without them.
 - No arms in a model with U1 members (no link elements next to U1): a skew rotation
   there stops the analysis with an `AnalysisError`.
 
@@ -1088,11 +1100,9 @@ rotational degrees of freedom**. This drives everything about joints:
   and arm and hinge tips left out), `spinning_members()` says where to hold
   what can still spin (in a skew plane with a stiff arm along the normal,
   `_build_spin_arms()`), and one warning reports it (`94g.9`).
-  **An `*EQUATION` on a shell node ties the mean of its top and bottom
-  layers only** (`gen3dmpc.f`; a `*BOUNDARY` holds the middle layer as
-  well): measured, a wall pushed in its plane on a skew line support is 3%
-  more flexible than on the same support written as `*BOUNDARY`. That is
-  the skew support's equation, not the plane hold's. Linear static
+  An `*EQUATION` on a shell node ties the mean of its top and bottom
+  layers only (see Skew supports); the plane hold's is across the shell,
+  where that does not matter. Linear static
   only: buckling out of the plane must stay possible. A plane model that
   stands up (`beam_01`, `portal_01`) is untouched. **Never restrain a
   rotation at a node inside a member in bending**: CalculiX's rotational

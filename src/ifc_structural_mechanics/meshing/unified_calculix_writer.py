@@ -324,6 +324,10 @@ class UnifiedCalculixWriter:
             # Step 2c10: Springs of elastic supports
             self._build_support_springs()
 
+            # Step 2c11: Hold the whole thickness of shells where an equation
+            # supports them
+            self._knot_shell_support_nodes()
+
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
 
@@ -2265,7 +2269,11 @@ class UnifiedCalculixWriter:
             if node in self.nodes
         }
         connectivity = [(e, elem["nodes"]) for e, elem in self.elements.items()]
-        connectivity += [(e, [a, b]) for e, a, b in getattr(self, "_rigid_links", [])]
+        connectivity += [
+            (e, [a, b])
+            for e, a, b in list(getattr(self, "_rigid_links", []))
+            + list(getattr(self, "_knot_links", []))
+        ]
         for elem_id, elem_nodes in connectivity:
             for node in elem_nodes:
                 if node in recorded:
@@ -2934,6 +2942,105 @@ class UnifiedCalculixWriter:
             next_node += 1
             next_elem += 1
         self._helper_nodes = helpers
+
+    def _knot_shell_support_nodes(self) -> None:
+        """Make a knot of every node of shells a support equation acts on.
+
+        CalculiX expands a shell node into three through the thickness. A
+        ``*BOUNDARY`` holds the mean of the outer two and the middle one
+        (``gen3dboun.f``), an equation the mean of the outer two only
+        (``gen3dmpc.f``, where the line for the middle one is commented
+        out), so a skew support leaves the middle of the section free to
+        slide. ``slab_01`` pushed in its plane between two
+        edges, their hold along the edge written as an equation, came out
+        1.9, 3.0 and 4.8 % more flexible than with ``*BOUNDARY`` at a 0.5,
+        0.25 and 0.125 m mesh (``aiz.103``); the edge nodes' middles moved
+        0.09 to 0.2 mm where they are held. At a knot the section is rigid
+        and the equation holds all of it: the same slab is then within
+        0.06 % of the ``*BOUNDARY`` one at all three, which a knot changes
+        by as much, and in bending the knots change nothing to six figures.
+
+        A short link hung on the node makes it a knot, as for point loads
+        (``_knot_point_loaded_nodes``). Nodes on a beam, a link or an arm
+        are knots already. Nothing in a model with U1 members, where link
+        elements cannot be used on stock CalculiX.
+
+        The equations of springs are left as they are: with a knot at every
+        node of a slab on surface springs the springs carried 78.0 kN of a
+        75 kN load (measured), and without them they agree with closed forms.
+        """
+        from ..analysis.boundary_condition_handling import (
+            find_connection_support_nodes,
+            support_equations,
+        )
+
+        if self._u1_members:
+            return
+        if not hasattr(self, "_knot_links"):
+            self._knot_links = []
+        arms = getattr(self, "_support_arms", {})
+        structure = self._structure_nodes()
+        member_nodes = self._support_member_nodes()
+        on_equations: set = set()
+        for conn in self.domain_model.connections:
+            if not conn.has_stiffness_properties():
+                continue
+            for node in find_connection_support_nodes(conn, structure, member_nodes):
+                tip, _, drilling = arms.get(conn.id, {}).get(node, (None, None, None))
+                for terms in support_equations(conn, node, tip, drilling):
+                    if len(terms) > 1:
+                        on_equations.update(n for n, _, _ in terms)
+        if not on_equations:
+            return
+
+        elements_at: Dict[int, List[int]] = {}
+        for elem_id, elem in self.elements.items():
+            for node in elem["nodes"]:
+                elements_at.setdefault(node, []).append(elem_id)
+        linked = {
+            n
+            for _, a, b in list(getattr(self, "_rigid_links", [])) + self._knot_links
+            for n in (a, b)
+        }
+        helpers = set(getattr(self, "_helper_nodes", set()))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [e for e, _, _ in getattr(self, "_rigid_links", [])]
+                + [e for e, _, _ in self._knot_links]
+                + [e for e, _, _ in getattr(self, "_spring_elements", [])]
+            )
+            + 1
+        )
+        knotted = 0
+        for node in sorted(on_equations):
+            elems = elements_at.get(node, [])
+            if (
+                node in linked
+                or not elems
+                or any(
+                    self.elements[e]["type"] not in SHELL_ELEMENT_TYPES for e in elems
+                )
+            ):
+                continue
+            corners = [
+                np.array(self.nodes[n], dtype=float)
+                for n in self.elements[elems[0]]["nodes"][:3]
+            ]
+            normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+            normal = normal / np.linalg.norm(normal)
+            self.nodes[next_node] = tuple(
+                float(v) for v in np.array(self.nodes[node]) + self._KNOT_LINK * normal
+            )
+            helpers.add(next_node)
+            self._knot_links.append((next_elem, node, next_node))
+            next_node += 1
+            next_elem += 1
+            knotted += 1
+        self._helper_nodes = helpers
+        if knotted:
+            logger.info(f"Made knots of {knotted} shell nodes on support equations")
 
     def _build_support_springs(self) -> None:
         """Put a spring on every node of an elastic support.
