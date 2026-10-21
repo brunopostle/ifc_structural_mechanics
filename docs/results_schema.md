@@ -6,6 +6,17 @@ members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
 calculation report. This page describes schema **1.13**.
 
+It is read together with the IFC file it was made from, which
+`run.input_file` names and pins with its SHA-256: check that before going
+by its GlobalIds. What the file itself says plainly (names, descriptions,
+representations, profile names, classifications, property sets) is left to
+it. What the analysis decided or worked out from it is here, in SI units and
+global axes, because a reader of the IFC would have to do it all again to
+have it and might not come to the same answer: positions after placements
+and units (`position_m`), section axes, what a support holds, the
+approximations made. A report or a viewer takes labels and drawings from the
+IFC and every number from here.
+
 `results.json` is written by `ResultsExporter`
 (`src/ifc_structural_mechanics/export/results_exporter.py`) and
 `analyze_ifc()`, which adds `run` and `warnings`. An example, `beam_01.ifc`
