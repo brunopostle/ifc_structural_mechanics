@@ -805,7 +805,7 @@ beam lying inside another once had its loads left out with a warning.
 
 The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this;
 `get_connection_input()` scales a number by the unit the file declares for its kind, else by the powers of length it has
-(N/m and N·m/rad at a point, per metre along an edge, N/m per m² over a face). After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
+(N/m and N·m/rad at a point, per metre along an edge, N/m per m² over a face). A condition of another kind than its connection (a node condition on a line support) raises `E-SUP-007`; it once held nothing. IFC2X3 names translations `LinearStiffness*` and has numbers only, -1 for rigid, a convention IFC4 forbids (`aiz.105`); no IFC2X3 model gets that far yet, since its members stop extraction first (`E-SEC-001`, `E-MAT-002`: no `IfcMaterialProfileSet`, no `HasProperties`). After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
 
 **The six values are in the connection's own axes, not the global ones.** A point
 connection uses its `ConditionCoordinateSystem`; a curve connection has x along its
