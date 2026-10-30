@@ -355,7 +355,7 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
 
             # Add entity reference if available and mapping is enabled
             if map_entities and warning.get("domain_id"):
-                entity_type = warning.get("entity_type", "entity")
+                entity_type = warning.get("entity_type") or "entity"
                 domain_id = warning.get("domain_id")
                 click.echo(f"     Reference: {entity_type} {domain_id}")
 
@@ -368,7 +368,7 @@ def _display_result(result: dict, map_entities: bool = True) -> None:
 
             # Add entity reference if available and mapping is enabled
             if map_entities and error.get("domain_id"):
-                entity_type = error.get("entity_type", "entity")
+                entity_type = error.get("entity_type") or "entity"
                 domain_id = error.get("domain_id")
                 click.echo(f"     Reference: {entity_type} {domain_id}")
 
@@ -443,7 +443,7 @@ def _handle_error(error_type: str, error: Exception, json_output: bool = False) 
 
                 # Add entity reference if available
                 if detail.get("domain_id"):
-                    entity_type = detail.get("entity_type", "entity")
+                    entity_type = detail.get("entity_type") or "entity"
                     domain_id = detail.get("domain_id")
                     click.echo(f"     Reference: {entity_type} {domain_id}")
 

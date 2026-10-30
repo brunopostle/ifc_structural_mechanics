@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 # We'll use run_analyze from original commands.py to maintain compatibility
 # Update these imports to match your enhanced implementation
-from ifc_structural_mechanics.cli.commands import cli, run_analyze
+from ifc_structural_mechanics.cli.commands import _display_result, cli, run_analyze
 from ifc_structural_mechanics.utils.error_handling import (
     AnalysisError,
     MeshingError,
@@ -222,6 +222,18 @@ class TestEnhancedCLICommands:
         ):
             exit_code = run_analyze(ifc_file=temp_ifc_file, output_dir=temp_output_dir)
             assert exit_code == 0  # Success with warnings is still success
+
+    def test_warning_of_no_entity_type_names_none(self, capsys):
+        """A warning has its keys whether it knows them or not."""
+        _display_result(
+            {
+                "status": "success",
+                "warnings": [
+                    {"message": "m", "entity_type": None, "domain_id": "beam_7"}
+                ],
+            }
+        )
+        assert "Reference: entity beam_7" in capsys.readouterr().out
 
     def test_analyze_with_errors(
         self, mock_analyze_ifc, temp_ifc_file, temp_output_dir
