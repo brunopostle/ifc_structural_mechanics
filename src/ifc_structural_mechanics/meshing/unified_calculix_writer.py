@@ -1347,7 +1347,10 @@ class UnifiedCalculixWriter:
                 continue
             member_set = f"MEMBER_{self._get_short_id(member.id)}"
             own = [e for e in sets.get(member_set, []) if e in self.elements]
-            outline_area = self._polygon_area(outline)
+            holes = [np.array(hole, dtype=float) for hole in member.holes]
+            outline_area = self._polygon_area(outline) - sum(
+                self._polygon_area(hole) for hole in holes
+            )
             meshed_area = sum(
                 self._polygon_area(
                     np.array([self.nodes[n] for n in self.elements[e]["nodes"][:3]])
@@ -1369,6 +1372,7 @@ class UnifiedCalculixWriter:
                 elem_id
                 for elem_id, centroid in shells
                 if self._point_in_outline(centroid, outline)
+                and not any(self._point_in_outline(centroid, hole) for hole in holes)
             ]
             if inside:
                 sets[member_set] = inside

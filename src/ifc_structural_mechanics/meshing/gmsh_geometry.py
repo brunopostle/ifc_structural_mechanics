@@ -245,42 +245,16 @@ class GmshGeometryConverter:
         Returns:
             (surface_tag, point_tags)  -- surface_tag may be None on failure
         """
-        surface_points = self._convert_surface(member.geometry)
+        point_tags: List[int] = []
+        curve_loop_tags = [
+            self._create_surface_loop(member, corners, point_tags)
+            for corners in [member.geometry, *member.holes]
+        ]
 
-        point_tags = []
-        for point in surface_points:
-            try:
-                pt = self._get_or_create_point(point[0], point[1], point[2], dim=2)
-                point_tags.append(pt)
-            except MeshingError:
-                raise
-            except Exception as e:
-                raise MeshingError(
-                    f"Error adding Gmsh point for member {member.id}: {e}",
-                    code="E-MSH-001",
-                ) from e
-
-        # Create lines forming a closed loop
-        line_tags = []
-        for i in range(len(point_tags)):
-            try:
-                line_tag = gmsh.model.occ.addLine(
-                    point_tags[i], point_tags[(i + 1) % len(point_tags)]
-                )
-                line_tags.append(line_tag)
-            except MeshingError:
-                raise
-            except Exception as e:
-                raise MeshingError(
-                    f"Error adding Gmsh line for member {member.id}: {e}",
-                    code="E-MSH-001",
-                ) from e
-
-        # Create curve loop and surface
+        # Create the surface, its outline first and then its holes
         surface_tag = None
         try:
-            curve_loop_tag = gmsh.model.occ.addCurveLoop(line_tags)
-            surface_tag = gmsh.model.occ.addPlaneSurface([curve_loop_tag])
+            surface_tag = gmsh.model.occ.addPlaneSurface(curve_loop_tags)
         except MeshingError:
             raise
         except Exception as e:
@@ -312,6 +286,56 @@ class GmshGeometryConverter:
             f"{len(point_tags)} points"
         )
         return surface_tag, point_tags
+
+    def _create_surface_loop(
+        self, member: SurfaceMember, corners: Any, point_tags: List[int]
+    ) -> int:
+        """Create a closed loop through the corners of an outline or a hole.
+
+        Args:
+            member: The surface member, for messages.
+            corners: The corners of the loop.
+            point_tags: The tags of its points are added to this list.
+
+        Returns:
+            The tag of the curve loop.
+        """
+        tags = []
+        for point in self._convert_surface(corners):
+            try:
+                tags.append(
+                    self._get_or_create_point(point[0], point[1], point[2], dim=2)
+                )
+            except MeshingError:
+                raise
+            except Exception as e:
+                raise MeshingError(
+                    f"Error adding Gmsh point for member {member.id}: {e}",
+                    code="E-MSH-001",
+                ) from e
+        point_tags.extend(tags)
+
+        line_tags = []
+        for i in range(len(tags)):
+            try:
+                line_tags.append(
+                    gmsh.model.occ.addLine(tags[i], tags[(i + 1) % len(tags)])
+                )
+            except MeshingError:
+                raise
+            except Exception as e:
+                raise MeshingError(
+                    f"Error adding Gmsh line for member {member.id}: {e}",
+                    code="E-MSH-001",
+                ) from e
+        try:
+            return gmsh.model.occ.addCurveLoop(line_tags)
+        except MeshingError:
+            raise
+        except Exception as e:
+            raise MeshingError(
+                f"Error creating surface for member {member.id}: {e}", code="E-MSH-001"
+            ) from e
 
     # ------------------------------------------------------------------
     # Fragment and remap
@@ -661,6 +685,34 @@ class GmshGeometryConverter:
                     return [self._get_or_create_point(*position, dim=1)]
         return []
 
+    @classmethod
+    def _point_on_surface(
+        cls,
+        point: np.ndarray,
+        polygon: np.ndarray,
+        holes: List[np.ndarray],
+        tol: float = 1e-4,
+    ) -> bool:
+        """Whether *point* is on a face: in its outline, not inside a hole.
+
+        The edge of a hole is part of the face.
+        """
+        if not cls._point_in_planar_polygon(point, polygon, tol):
+            return False
+        for hole in holes:
+            if not cls._point_in_planar_polygon(point, hole, tol):
+                continue
+            on_edge = False
+            for a, b in zip(hole, np.roll(hole, -1, axis=0)):
+                along = b - a
+                t = float(
+                    np.clip(np.dot(point - a, along) / np.dot(along, along), 0, 1)
+                )
+                on_edge = on_edge or np.linalg.norm(a + t * along - point) <= tol
+            if not on_edge:
+                return False
+        return True
+
     @staticmethod
     def _point_in_planar_polygon(
         point: np.ndarray, polygon: np.ndarray, tol: float = 1e-4
@@ -743,7 +795,13 @@ class GmshGeometryConverter:
             if length < 1e-12:
                 continue
             surfaces.append(
-                (polygon, normal / length, polygon.min(axis=0), polygon.max(axis=0))
+                (
+                    polygon,
+                    normal / length,
+                    polygon.min(axis=0),
+                    polygon.max(axis=0),
+                    [np.array(hole, dtype=float) for hole in member.holes],
+                )
             )
         if not surfaces:
             return [], []
@@ -764,7 +822,7 @@ class GmshGeometryConverter:
                 except (TypeError, ValueError):
                     continue
                 low, high = np.minimum(a, b) - tol, np.maximum(a, b) + tol
-                for polygon, normal, s_low, s_high in surfaces:
+                for polygon, normal, s_low, s_high, holes in surfaces:
                     if (high < s_low).any() or (low > s_high).any():
                         continue
                     along = float(np.dot(b - a, normal))
@@ -775,7 +833,7 @@ class GmshGeometryConverter:
                     if t < -reach or t > 1.0 + reach:
                         continue
                     point = a + min(max(t, 0.0), 1.0) * (b - a)
-                    if not self._point_in_planar_polygon(point, polygon):
+                    if not self._point_on_surface(point, polygon, holes):
                         continue
                     key = self._coord_key(point[0], point[1], point[2])
                     if key not in self._surface_point_registry:
@@ -826,7 +884,8 @@ class GmshGeometryConverter:
             except (TypeError, ValueError, KeyError, NotImplementedError):
                 continue
             if polygon.ndim == 2 and polygon.shape[1] == 3 and len(polygon) >= 3:
-                polygons.append((member.id, polygon))
+                holes = [np.array(hole, dtype=float) for hole in member.holes]
+                polygons.append((member.id, polygon, holes))
         if not polygons:
             return []
 
@@ -847,9 +906,9 @@ class GmshGeometryConverter:
                 continue
             if self._coord_key(pos[0], pos[1], pos[2]) in self._surface_point_registry:
                 continue  # already a corner of some surface
-            for member_id, polygon in polygons:
-                if member_id in surface_ids and self._point_in_planar_polygon(
-                    pos, polygon
+            for member_id, polygon, holes in polygons:
+                if member_id in surface_ids and self._point_on_surface(
+                    pos, polygon, holes
                 ):
                     seeded.append(
                         self._get_or_create_point(pos[0], pos[1], pos[2], dim=2)

@@ -157,6 +157,60 @@ def is_structural_connection(entity: Optional[ifcopenshell.entity_instance]) -> 
         ) from e
 
 
+def face_loops(face, unit_scale: float = 1.0) -> tuple:
+    """The corners of the outer bound of an ``IfcFace`` and of its other bounds.
+
+    Args:
+        face: The IfcFace.
+        unit_scale: Scale factor to convert to SI units.
+
+    Returns:
+        (outline, holes): a list of corners and a list of lists of them, each
+        in the sense of its bound.
+
+    Raises:
+        ValueError: If the face has no bound, no one bound is its outer one, a
+            corner has no coordinates, or a bound is neither a list of edges
+            nor a polygon. The caller raises its own stage's error with this
+            message.
+    """
+    bounds = list(face.Bounds or [])
+    if not bounds:
+        raise ValueError("Its face has no bound.")
+    outer = [bound for bound in bounds if bound.is_a("IfcFaceOuterBound")]
+    if len(bounds) == 1:
+        outer = bounds
+    if len(outer) != 1:
+        raise ValueError(
+            f"Its face has {len(bounds)} bounds and {len(outer)} marked as the "
+            "outer one (IfcFaceOuterBound), so its outline cannot be told from "
+            "its openings."
+        )
+
+    def corners(bound) -> list:
+        loop = bound.Bound
+        if loop.is_a("IfcEdgeLoop"):
+            points = []
+            for edge in loop.EdgeList:
+                element = edge.EdgeElement if edge.is_a("IfcOrientedEdge") else edge
+                forward = getattr(edge, "Orientation", True)
+                vertex = element.EdgeStart if forward else element.EdgeEnd
+                points.append(get_coordinate(vertex.VertexGeometry, unit_scale))
+        elif loop.is_a("IfcPolyLoop"):
+            points = [get_coordinate(point, unit_scale) for point in loop.Polygon]
+        else:
+            raise ValueError(
+                f"The bound of its face is an {loop.is_a()}, which is not supported."
+            )
+        if any(point is None for point in points):
+            raise ValueError("A corner of its face has no coordinates.")
+        if not bound.Orientation:
+            points = points[::-1]
+        return [list(point) for point in points]
+
+    return corners(outer[0]), [corners(b) for b in bounds if b is not outer[0]]
+
+
 def get_coordinate(point, unit_scale: float = 1.0):
     """
     Extract coordinates from an IfcCartesianPoint with robust validation.

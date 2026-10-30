@@ -679,3 +679,136 @@ class TestTemperatureLoads:
             Extractor(model).extract_model()
         assert error.value.code == "E-LOD-008"
         assert "LINEAR" in str(error.value)
+
+
+def _bound(model, corners, outer=False):
+    """A bound through the corners: oriented edges, as the example models have."""
+    create = model.create_entity
+    vertices = [
+        create("IfcVertexPoint", create("IfcCartesianPoint", tuple(c))) for c in corners
+    ]
+    edges = [
+        create(
+            "IfcOrientedEdge",
+            EdgeElement=create(
+                "IfcEdgeCurve",
+                vertices[i],
+                vertices[(i + 1) % len(vertices)],
+                create(
+                    "IfcLine",
+                    create("IfcCartesianPoint", tuple(corners[i])),
+                    create(
+                        "IfcVector",
+                        create("IfcDirection", (1.0, 0.0, 0.0)),
+                        1.0,
+                    ),
+                ),
+                True,
+            ),
+            Orientation=True,
+        )
+        for i in range(len(vertices))
+    ]
+    kind = "IfcFaceOuterBound" if outer else "IfcFaceBound"
+    return create(kind, create("IfcEdgeLoop", edges), True)
+
+
+HOLE = ((2.0, 1.0, 0.0), (3.0, 1.0, 0.0), (3.0, 2.0, 0.0), (2.0, 2.0, 0.0))
+
+
+class TestFaceBounds:
+    """slab_01 is 5 by 3 at z = 0, and its one bound is a plain IfcFaceBound."""
+
+    def _slab(self, *holes, mark_outer=True):
+        model = _open("slab_01")
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        face = slab.Representation.Representations[0].Items[0]
+        outer = face.Bounds[0]
+        if mark_outer:
+            outer = model.create_entity(
+                "IfcFaceOuterBound", outer.Bound, outer.Orientation
+            )
+        face.Bounds = [outer] + [_bound(model, hole) for hole in holes]
+        return model, face
+
+    def _member(self, model):
+        return next(
+            m
+            for m in Extractor(model).extract_model().members
+            if m.__class__.__name__ == "SurfaceMember"
+        )
+
+    def test_an_opening_is_read_as_a_hole(self):
+        model, _ = self._slab(HOLE)
+        member = self._member(model)
+        assert len(member.geometry) == 4
+        assert member.holes == [[list(corner) for corner in HOLE]]
+
+    def test_the_outer_bound_is_the_outline_wherever_it_is_listed(self):
+        """Bounds[0] was once taken: the member became the hole."""
+        model, face = self._slab(HOLE)
+        face.Bounds = list(face.Bounds)[::-1]
+        member = self._member(model)
+        assert max(corner[0] for corner in member.geometry) == pytest.approx(5.0)
+        assert len(member.holes) == 1
+
+    def test_a_face_with_no_outer_bound_is_an_error(self):
+        model, _ = self._slab(HOLE, mark_outer=False)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert "E-IFC-002" in str(error.value)
+        assert "outer" in str(error.value)
+
+    def test_a_reversed_edge_gives_its_far_end(self):
+        """The start of each edge element was once read, whatever its sense."""
+        model, face = self._slab(mark_outer=False)
+        before = self._member(model).geometry
+        for edge in face.Bounds[0].Bound.EdgeList:
+            element = edge.EdgeElement
+            element.EdgeStart, element.EdgeEnd = element.EdgeEnd, element.EdgeStart
+            edge.Orientation = False
+        assert self._member(model).geometry == before
+
+    @pytest.mark.parametrize(
+        "corners, reason",
+        [
+            (((6.0, 1.0, 0.0), (7.0, 1.0, 0.0), (7.0, 2.0, 0.0)), "outside"),
+            (((4.0, 1.0, 0.0), (6.0, 1.0, 0.0), (6.0, 2.0, 0.0)), "crosses"),
+            (((0.0, 1.0, 0.0), (1.0, 1.0, 0.0), (1.0, 2.0, 0.0)), "touches"),
+            (((1.0, 1.0, 0.5), (2.0, 1.0, 0.5), (2.0, 2.0, 0.5)), "plane"),
+        ],
+    )
+    def test_an_opening_not_clear_inside_the_face_is_an_error(self, corners, reason):
+        model, _ = self._slab(corners)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert "E-IFC-002" in str(error.value)
+        assert reason in str(error.value)
+
+    def test_openings_that_overlap_are_an_error(self):
+        other = ((2.5, 1.5, 0.0), (3.5, 1.5, 0.0), (3.5, 2.5, 0.0), (2.5, 2.5, 0.0))
+        model, _ = self._slab(HOLE, other)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert "another opening" in str(error.value)
+
+    def test_an_opening_inside_another_is_an_error(self):
+        other = ((2.2, 1.2, 0.0), (2.8, 1.2, 0.0), (2.8, 1.8, 0.0))
+        model, _ = self._slab(HOLE, other)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert "inside another opening" in str(error.value)
+
+    def test_an_opening_moves_with_the_placement(self):
+        model, _ = self._slab(HOLE)
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        slab.ObjectPlacement = model.create_entity(
+            "IfcLocalPlacement",
+            None,
+            model.create_entity(
+                "IfcAxis2Placement3D",
+                model.create_entity("IfcCartesianPoint", (10.0, 0.0, 0.0)),
+            ),
+        )
+        member = self._member(model)
+        assert member.holes[0][0] == pytest.approx([12.0, 1.0, 0.0])

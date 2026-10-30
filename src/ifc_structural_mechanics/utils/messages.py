@@ -475,8 +475,10 @@ _ERRORS = [
         "E-IFC-002",
         "Member geometry cannot be read",
         "A curve member needs an IfcEdge representation and a surface member an "
-        "IfcFaceSurface or IfcFace, with vertices that have coordinates. The "
-        "message names the member and what is missing.",
+        "IfcFaceSurface or IfcFace, with vertices that have coordinates, and "
+        "one outer bound (IfcFaceOuterBound) if it has more than one. Other "
+        "bounds are openings: they must lie clear inside the outline and of "
+        "each other. The message names the member and what is missing.",
     ),
     MessageKind(
         "E-IFC-003",

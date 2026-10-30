@@ -7333,3 +7333,181 @@ class TestModalAnalysis:
         )
         assert result["status"] == "failed"
         assert [e["code"] for e in result["errors"]] == ["E-SEC-006"]
+
+
+def _slab_01_face(model, corners, outer=True):
+    """A bound of an IFC face through the corners, as a polygon."""
+    loop = model.create_entity(
+        "IfcPolyLoop", [model.create_entity("IfcCartesianPoint", c) for c in corners]
+    )
+    kind = "IfcFaceOuterBound" if outer else "IfcFaceBound"
+    return model.create_entity(kind, loop, True)
+
+
+def _slab_01_piece(model, slab, corners, holes=()):
+    """A surface member like slab_01's, with a face of its own."""
+    context = slab.Representation.Representations[0].ContextOfItems
+    surface = slab.Representation.Representations[0].Items[0].FaceSurface
+    bounds = [_slab_01_face(model, corners)]
+    bounds += [_slab_01_face(model, hole, outer=False) for hole in holes]
+    face = model.create_entity("IfcFaceSurface", bounds, surface, True)
+    shape = model.create_entity(
+        "IfcProductDefinitionShape",
+        None,
+        None,
+        [
+            model.create_entity(
+                "IfcTopologyRepresentation", context, "Reference", "Face", [face]
+            )
+        ],
+    )
+    piece = model.create_entity(
+        "IfcStructuralSurfaceMember",
+        ifcopenshell.guid.new(),
+        slab.OwnerHistory,
+        "piece",
+        None,
+        None,
+        slab.ObjectPlacement,
+        shape,
+        slab.PredefinedType,
+        slab.Thickness,
+    )
+    for association in slab.HasAssociations:
+        association.RelatedObjects = list(association.RelatedObjects) + [piece]
+    group = model.by_type("IfcRelAssignsToGroup")[0]
+    group.RelatedObjects = list(group.RelatedObjects) + [piece]
+    return piece
+
+
+class TestSlabWithAnOpening:
+    """slab_01, 5 by 3 and clamped at both ends, with a 1 m square hole (2uq)."""
+
+    LOOP = ((2.0, 1.0, 0.0), (3.0, 1.0, 0.0), (3.0, 2.0, 0.0), (2.0, 2.0, 0.0))
+    AREA = SLAB_L * SLAB_W - 1.0
+
+    def _holed(self, model):
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        face = slab.Representation.Representations[0].Items[0]
+        face.Bounds = [
+            model.create_entity(
+                "IfcFaceOuterBound", face.Bounds[0].Bound, face.Bounds[0].Orientation
+            ),
+            _slab_01_face(model, self.LOOP, outer=False),
+        ]
+        return slab
+
+    def _write(self, model, tmp_path, name) -> str:
+        path = str(tmp_path / f"{name}.ifc")
+        model.write(path)
+        return path
+
+    def test_loads_leave_the_opening_out(self, tmp_path):
+        model = ifcopenshell.open(SLAB)
+        _add_area_load(model, self._holed(model), (0.0, 0.0, -SLAB_Q))
+        data = _run(self._write(model, tmp_path, "holed"), tmp_path, mesh_size=0.5)
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["fz_N"] == pytest.approx(SLAB_Q * self.AREA, rel=1e-6)
+
+    def test_weight_leaves_the_opening_out(self, tmp_path):
+        """Against the same slab with no hole: it weighs less by the hole."""
+        solid = _run(SLAB, tmp_path / "solid", mesh_size=0.5, gravity=True)
+        model = ifcopenshell.open(SLAB)
+        self._holed(model)
+        holed = _run(
+            self._write(model, tmp_path, "holed"), tmp_path, mesh_size=0.5, gravity=True
+        )
+        weights = [
+            run["global_reactions"]["by_load_case"]["Gravity"]["fz_N"]
+            for run in (solid, holed)
+        ]
+        assert weights[1] / weights[0] == pytest.approx(self.AREA / 15.0, rel=1e-6)
+
+    def test_load_on_a_slab_overlapped_keeps_off_what_fills_the_opening(self, tmp_path):
+        """Elements found by outline must not include those in the hole.
+
+        A landing lying on the slab takes elements from it, so its load goes
+        by outline; a panel fills the hole, and is inside the outline.
+        """
+        model = ifcopenshell.open(SLAB)
+        slab = self._holed(model)
+        landing = ((0.5, 0.5, 0.0), (1.5, 0.5, 0.0), (1.5, 1.5, 0.0), (0.5, 1.5, 0.0))
+        _slab_01_piece(model, slab, landing)
+        _slab_01_piece(model, slab, self.LOOP)
+        analysis_order = model.by_type("IfcRelAssignsToGroup")[0]
+        analysis_order.RelatedObjects = list(analysis_order.RelatedObjects)[::-1]
+        _add_area_load(model, slab, (0.0, 0.0, -SLAB_Q))
+        data = _run(self._write(model, tmp_path, "filled"), tmp_path, mesh_size=0.5)
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["fz_N"] == pytest.approx(SLAB_Q * self.AREA, rel=1e-6)
+
+    def test_bends_as_the_slab_drawn_in_four_pieces_round_it(self, tmp_path):
+        """Nothing closed-form for a plate with a hole, but this is the same plate."""
+        model = ifcopenshell.open(SLAB)
+        _add_area_load(model, self._holed(model), (0.0, 0.0, -SLAB_Q))
+        holed = _run(self._write(model, tmp_path, "holed"), tmp_path, mesh_size=0.25)
+
+        model = ifcopenshell.open(SLAB)
+        slab = model.by_type("IfcStructuralSurfaceMember")[0]
+        face = slab.Representation.Representations[0].Items[0]
+        face.Bounds = [
+            _slab_01_face(
+                model,
+                ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 3.0, 0.0), (0.0, 3.0, 0.0)),
+            )
+        ]
+        right = _slab_01_piece(
+            model,
+            slab,
+            ((3.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 3.0, 0.0), (3.0, 3.0, 0.0)),
+        )
+        lower = _slab_01_piece(
+            model,
+            slab,
+            ((2.0, 0.0, 0.0), (3.0, 0.0, 0.0), (3.0, 1.0, 0.0), (2.0, 1.0, 0.0)),
+        )
+        upper = _slab_01_piece(
+            model,
+            slab,
+            ((2.0, 2.0, 0.0), (3.0, 2.0, 0.0), (3.0, 3.0, 0.0), (2.0, 3.0, 0.0)),
+        )
+        for relation in model.by_type("IfcRelConnectsStructuralMember"):
+            edge = relation.RelatedStructuralConnection.Representation
+            start = edge.Representations[0].Items[0].EdgeStart.VertexGeometry
+            if start.Coordinates[0] > 2.5:
+                relation.RelatingStructuralMember = right
+        _add_area_load(model, slab, (0.0, 0.0, -SLAB_Q))
+        for piece in (right, lower, upper):
+            action = model.by_type("IfcStructuralPlanarAction")[0]
+            model.create_entity(
+                "IfcRelConnectsStructuralActivity",
+                ifcopenshell.guid.new(),
+                slab.OwnerHistory,
+                None,
+                None,
+                piece,
+                model.create_entity(
+                    "IfcStructuralPlanarAction",
+                    GlobalId=ifcopenshell.guid.new(),
+                    OwnerHistory=slab.OwnerHistory,
+                    ObjectPlacement=slab.ObjectPlacement,
+                    AppliedLoad=action.AppliedLoad,
+                    GlobalOrLocal="GLOBAL_COORDS",
+                    ProjectedOrTrue="TRUE_LENGTH",
+                    PredefinedType="CONST",
+                ),
+            )
+            group = model.by_type("IfcRelAssignsToGroup")
+            case = next(
+                g for g in group if g.RelatingGroup.is_a("IfcStructuralLoadCase")
+            )
+            case.RelatedObjects = list(case.RelatedObjects) + [
+                model.by_type("IfcStructuralPlanarAction")[-1]
+            ]
+        pieces = _run(self._write(model, tmp_path, "pieces"), tmp_path / "p", 0.25)
+
+        assert _max_vertical_deflection(holed) == pytest.approx(
+            _max_vertical_deflection(pieces), rel=1e-3
+        )
+        total = pieces["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["fz_N"] == pytest.approx(SLAB_Q * self.AREA, rel=1e-6)

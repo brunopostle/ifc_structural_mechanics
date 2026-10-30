@@ -770,6 +770,15 @@ ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true. A
 channel is `IfcUShapeProfileDef`. A profile with no handler raises
 `ModelExtractionError`; never fall back to a default section.
 
+**A surface member's openings are the other bounds of its face** (`2uq`,
+`SurfaceMember.holes`, `entity_identifier.face_loops()`). Only `Bounds[0]` was once
+read, so an opening was solid, and the hole's outline became the member if it came
+first. They are meshed as holes, so weight and area loads leave them out of
+themselves, and `_point_on_surface()` keeps a column passing through one from being
+pinned to the slab. One that is not clear inside the outline and the others raises
+`E-IFC-002` (`_check_holes()`); a surface connection's face with one raises
+`E-SUP-004`. No example model has one.
+
 **Area loads follow the member's outline.** Where one surface member lies
 inside another (a landing on a floor slab), fragmenting gives each element to
 one of them. `_load_element_sets()` applies an area load to every shell

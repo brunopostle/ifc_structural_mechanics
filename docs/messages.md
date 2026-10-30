@@ -12,7 +12,7 @@ The file has no IfcStructuralCurveMember or IfcStructuralSurfaceMember. The anal
 
 ### E-IFC-002: Member geometry cannot be read
 
-A curve member needs an IfcEdge representation and a surface member an IfcFaceSurface or IfcFace, with vertices that have coordinates. The message names the member and what is missing.
+A curve member needs an IfcEdge representation and a surface member an IfcFaceSurface or IfcFace, with vertices that have coordinates, and one outer bound (IfcFaceOuterBound) if it has more than one. Other bounds are openings: they must lie clear inside the outline and of each other. The message names the member and what is missing.
 
 ### E-IFC-003: Placement cannot be used
 

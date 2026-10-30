@@ -281,6 +281,8 @@ class SurfaceMember(StructuralMember):
         # Local z in global axes, the normal of the face's plane, where the
         # file gives one
         self.normal: Optional[List[float]] = None
+        # The outlines of its openings, each a list of corners like geometry
+        self.holes: List[List[List[float]]] = []
 
         # Initialize parent with common properties
         super().__init__(id, "surface", geometry, material, allow_none_props, ifc_guid)
@@ -328,4 +330,5 @@ class SurfaceMember(StructuralMember):
         """
         result = super().as_dict()
         result["thickness"] = self.thickness
+        result["holes"] = self.holes
         return result

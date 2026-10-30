@@ -23,6 +23,7 @@ from .entity_identifier import (
 )
 from .entity_identifier import (
     analyze_connection_type,
+    face_loops,
     find_connected_elements,
     get_coordinate,
     get_item_transformation,
@@ -336,37 +337,16 @@ class ConnectionsExtractor:
             ModelExtractionError: If a corner has no coordinates, or the bound
                 is neither a list of edges nor a polygon.
         """
-        bounds = list(face.Bounds or [])
-        outer = [b for b in bounds if b.is_a("IfcFaceOuterBound")] or bounds
-        if not outer:
-            raise ModelExtractionError("Its face has no bound.", code="E-SUP-004")
-        if len(bounds) > 1:
+        try:
+            points, holes = face_loops(face)
+        except ValueError as error:
+            raise ModelExtractionError(str(error), code="E-SUP-004") from error
+        if holes:
             raise ModelExtractionError(
                 "Its face has an opening (more than one bound), which is not "
                 "supported.",
                 code="E-SUP-004",
             )
-        loop = outer[0].Bound
-        if loop.is_a("IfcPolyLoop"):
-            points = [get_coordinate(point) for point in loop.Polygon]
-        elif loop.is_a("IfcEdgeLoop"):
-            points = []
-            for edge in loop.EdgeList:
-                element = edge.EdgeElement if edge.is_a("IfcOrientedEdge") else edge
-                forward = getattr(edge, "Orientation", True)
-                vertex = element.EdgeStart if forward else element.EdgeEnd
-                points.append(get_coordinate(vertex.VertexGeometry))
-        else:
-            raise ModelExtractionError(
-                f"The bound of its face is an {loop.is_a()}, which is not supported.",
-                code="E-SUP-004",
-            )
-        if any(point is None for point in points):
-            raise ModelExtractionError(
-                "A corner of its face has no coordinates.", code="E-SUP-004"
-            )
-        if not outer[0].Orientation:
-            points = points[::-1]
         return [list(point) for point in points]
 
     def _face_axes(

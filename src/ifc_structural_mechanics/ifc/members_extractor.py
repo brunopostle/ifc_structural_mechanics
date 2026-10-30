@@ -15,6 +15,7 @@ import numpy as np
 from ..domain.property import Material, Section, Thickness
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
+    face_loops,
     get_1D_orientation,
     get_coordinate,
     get_item_transformation,
@@ -293,9 +294,12 @@ class MembersExtractor:
                 "The outline of its face cannot be read.", code="E-IFC-002"
             )
 
+        _, holes = self._face_loops(representation.Items[0], self.length_scale)
         transformation = get_item_transformation(entity, self.length_scale)
         if transformation:
             geometry = transform_vectors(geometry, transformation)
+            holes = [transform_vectors(hole, transformation) for hole in holes]
+        self._check_holes(geometry, holes)
 
         thickness_value = convert_length(
             getattr(entity, "Thickness", None) or 0.0, self.length_scale
@@ -315,7 +319,104 @@ class MembersExtractor:
             ifc_guid=entity.GlobalId,
         )
         member.normal = self._surface_normal(representation, transformation)
+        member.holes = [[[float(v) for v in corner] for corner in h] for h in holes]
         return member
+
+    @staticmethod
+    def _face_loops(face, unit_scale: float) -> tuple:
+        """``face_loops()``, its failures as this stage's error."""
+        try:
+            return face_loops(face, unit_scale)
+        except ValueError as error:
+            raise ModelExtractionError(str(error), code="E-IFC-002") from error
+
+    @staticmethod
+    def _check_holes(geometry: Any, holes: List[Any]) -> None:
+        """Refuse holes that do not lie clear inside a face, and apart.
+
+        Gmsh would mesh some of them into something else without a word.
+
+        Raises:
+            ModelExtractionError: If a hole has fewer than three corners, is
+                out of the face's plane, or touches or leaves the outline or
+                another hole.
+        """
+        if not holes:
+            return
+
+        def refuse(reason: str) -> None:
+            raise ModelExtractionError(
+                f"An opening of its face {reason}", code="E-IFC-002"
+            )
+
+        outline = np.array(geometry, dtype=float)
+        normal = np.zeros(3)
+        for i in range(len(outline)):
+            normal += np.cross(outline[i], outline[(i + 1) % len(outline)])
+        length = float(np.linalg.norm(normal))
+        if length < 1e-12:
+            raise ModelExtractionError("Its face has no area.", code="E-IFC-002")
+        normal /= length
+        keep = [i for i in range(3) if i != int(np.argmax(np.abs(normal)))]
+
+        loops = [outline[:, keep]]
+        for hole in holes:
+            corners = np.array(hole, dtype=float)
+            if len(corners) < 3:
+                refuse("has fewer than three corners.")
+            if np.abs((corners - outline[0]) @ normal).max() > 1e-3:
+                refuse("is not in the plane of the face.")
+            loops.append(corners[:, keep])
+
+        def inside(point: np.ndarray, loop: np.ndarray) -> bool:
+            result = False
+            for (x0, y0), (x1, y1) in zip(loop, np.roll(loop, -1, axis=0)):
+                if (y0 > point[1]) != (y1 > point[1]) and point[0] < x0 + (
+                    point[1] - y0
+                ) * (x1 - x0) / (y1 - y0):
+                    result = not result
+            return result
+
+        def off_segment(point: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+            t = float(np.clip((point - a) @ (b - a) / ((b - a) @ (b - a)), 0.0, 1.0))
+            return float(np.linalg.norm(a + t * (b - a) - point))
+
+        def segments_meet(p0, p1, q0, q1) -> bool:
+            def side(a, b, c):
+                return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+            if (side(p0, p1, q0) > 0) != (side(p0, p1, q1) > 0) and (
+                side(q0, q1, p0) > 0
+            ) != (side(q0, q1, p1) > 0):
+                return True
+            return (
+                min(
+                    off_segment(q0, p0, p1),
+                    off_segment(q1, p0, p1),
+                    off_segment(p0, q0, q1),
+                    off_segment(p1, q0, q1),
+                )
+                < 1e-6
+            )
+
+        def edges(loop: np.ndarray):
+            return list(zip(loop, np.roll(loop, -1, axis=0)))
+
+        for index, hole in enumerate(loops[1:], start=1):
+            if not inside(hole[0], loops[0]):
+                refuse("lies outside its outline.")
+            for other_index, other in enumerate(loops[:index]):
+                if any(
+                    segments_meet(p0, p1, q0, q1)
+                    for p0, p1 in edges(hole)
+                    for q0, q1 in edges(other)
+                ):
+                    refuse(
+                        "touches or crosses "
+                        + ("its outline." if other_index == 0 else "another opening.")
+                    )
+                if other_index and (inside(hole[0], other) or inside(other[0], hole)):
+                    refuse("lies inside another opening.")
 
     @staticmethod
     def _surface_normal(representation, transformation) -> Optional[List[float]]:
@@ -375,16 +476,8 @@ class MembersExtractor:
             return ends
 
         if item.is_a("IfcFaceSurface") and item.Bounds:
-            edges = getattr(item.Bounds[0].Bound, "EdgeList", None) or []
-            corners = [
-                get_coordinate(edge.EdgeElement.EdgeStart.VertexGeometry, unit_scale)
-                for edge in edges
-            ]
-            if any(corner is None for corner in corners):
-                raise ModelExtractionError(
-                    "A corner of its face has no coordinates.", code="E-IFC-002"
-                )
-            return corners or None
+            outline, _ = self._face_loops(item, unit_scale)
+            return outline or None
 
         return None
 
