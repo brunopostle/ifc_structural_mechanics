@@ -24,7 +24,6 @@ from ..ifc.entity_identifier import (
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
 from ..utils.units import (
-    convert_area,
     convert_density,
     convert_length,
     convert_moment_of_inertia,
@@ -81,6 +80,7 @@ class MembersExtractor:
         # Store unit scales
         self.unit_scales = unit_scales or {}
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
+        self.area_scale = self.unit_scales.get("AREAUNIT", self.length_scale**2)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
@@ -732,9 +732,7 @@ class MembersExtractor:
             else:
                 # Convert provided properties to SI units
                 if "crossSectionArea" in mechProps:
-                    mechProps["crossSectionArea"] = convert_area(
-                        mechProps["crossSectionArea"], self.length_scale
-                    )
+                    mechProps["crossSectionArea"] *= self.area_scale
                 if "momentOfInertiaY" in mechProps:
                     mechProps["momentOfInertiaY"] = convert_moment_of_inertia(
                         mechProps["momentOfInertiaY"], self.length_scale

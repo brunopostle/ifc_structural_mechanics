@@ -96,8 +96,17 @@ class Extractor:
             "MASSUNIT",
             "PLANEANGLEUNIT",
             "THERMODYNAMICTEMPERATUREUNIT",
+            "AREAUNIT",
         ):
             try:
+                # An area has a unit of its own: Bonsai's default project has
+                # lengths in millimetres and areas in square metres. A file
+                # that declares none has no scale here, see MembersExtractor.
+                if (
+                    unit_type == "AREAUNIT"
+                    and not ifcopenshell.util.unit.get_project_unit(self.ifc, unit_type)
+                ):
+                    continue
                 scale = ifcopenshell.util.unit.calculate_unit_scale(self.ifc, unit_type)
             except ModelExtractionError:
                 raise

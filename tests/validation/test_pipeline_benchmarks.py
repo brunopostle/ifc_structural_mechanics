@@ -47,6 +47,7 @@ from ifc_structural_mechanics.converters.section_profiles import (  # noqa: E402
     rectangle_shear_moduli,
 )
 from ifc_structural_mechanics.domain.property import Section  # noqa: E402
+from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
 )
@@ -2707,6 +2708,55 @@ def _portal_reactions_in_the_file() -> dict:
             result.ForceZ * POUND_FORCE,
         )
     return reactions
+
+
+class TestAreaInAUnitOfItsOwn:
+    """A profile's ``CrossSectionArea`` is in the file's AREAUNIT (``94g.22``).
+
+    Bonsai's default project has lengths in millimetres and areas in square
+    metres. The area was scaled by the length unit squared: a HEB 160 came out
+    with 5.4e-9 m2, a 231 m deep equivalent rectangle, and 1.14 m of displacement
+    on its faces under a load that bends it 13.6 mm. portal_01 is the one example
+    with a mechanical profile pset; here it gives its area in square metres.
+    """
+
+    SHIPPED = os.path.join(IFC_DIR, "portal_01.ifc")
+
+    def _in_square_metres(self, tmp_path) -> str:
+        model = ifcopenshell.open(self.SHIPPED)
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        assignment.Units = [
+            unit
+            for unit in assignment.Units
+            if getattr(unit, "UnitType", None) != "AREAUNIT"
+        ] + [model.create_entity("IfcSIUnit", UnitType="AREAUNIT", Name="SQUARE_METRE")]
+        for pset in model.by_type("IfcProfileProperties"):
+            for prop in pset.Properties:
+                if prop.Name == "CrossSectionArea":
+                    prop.NominalValue.wrappedValue *= INCH**2
+        path = str(tmp_path / "square_metres.ifc")
+        model.write(path)
+        return path
+
+    def test_same_section(self, tmp_path):
+        shipped = Extractor(self.SHIPPED).extract_model().members[0].section
+        restated = (
+            Extractor(self._in_square_metres(tmp_path))
+            .extract_model()
+            .members[0]
+            .section
+        )
+        assert restated.area == pytest.approx(8.84 * INCH**2, rel=1e-9)
+        assert restated.area == pytest.approx(shipped.area, rel=1e-3)
+
+    def test_same_results(self, tmp_path):
+        """On the faces too, where a section of the wrong depth shows."""
+        shipped = _run(self.SHIPPED, tmp_path / "shipped", 0.5)
+        restated = _run(self._in_square_metres(tmp_path), tmp_path / "restated", 0.5)
+        for ours, theirs in zip(restated["members"], shipped["members"]):
+            assert ours["envelope"]["max_displacement_m"] == pytest.approx(
+                theirs["envelope"]["max_displacement_m"], rel=1e-3
+            )
 
 
 class TestPortalAgainstTheResultsInItsFile:
