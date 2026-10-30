@@ -324,6 +324,14 @@ unassigned density is in kg/m³, the spec's "usually", and one that cannot be st
 analysis (`E-MAT-005`); an unassigned inertia is in m⁴. Pset_ProfileMechanical of an I
 profile is used where it agrees with the dimensions to a factor of 1.5, else the
 dimensions are, with `W-SEC-005` (`94g.24`): Bonsai can write m⁴ under a declared mm⁴.
+The other derived units are read as declared too (`94g.25`, `Extractor._get_unit_scales()`):
+line and planar forces, torques, moments per length, moduli, thermal expansion and the
+five stiffnesses (`portal_01` has lbf·in per degree). Undeclared, each is made of the
+length, force, pressure and temperature units, a rotational stiffness per radian;
+Bonsai's templates declare none of them. A property's own
+`IfcPropertySingleValue.Unit` goes before the project's (`_own_scale()`), so a test that
+restates a value of `beam_01` or `building_01`, whose materials give units, has to set
+it too. Poisson's ratio from E and G is worked out in SI, as they may differ.
 
 **Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
 representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the
@@ -796,7 +804,7 @@ beam lying inside another once had its loads left out with a warning.
 - Numeric measure — spring stiffness in project units
 
 The helper `_ifc_stiffness_to_float()` in `entity_identifier.py` handles this;
-`get_connection_input()` scales a number by the powers of length its kind has
+`get_connection_input()` scales a number by the unit the file declares for its kind, else by the powers of length it has
 (N/m and N·m/rad at a point, per metre along an edge, N/m per m² over a face). After extraction, `get_constrained_dofs(connection)` in `boundary_condition_handling.py` translates per-DOF stiffness values to the list of CalculiX DOF numbers to fix (threshold 1e12). This correctly handles pinned supports (`T,T,T,F,F,F` → DOF 1-3) and fully fixed supports (`T,T,T,T,T,T` → DOF 1-6).
 
 **The six values are in the connection's own axes, not the global ones.** A point
