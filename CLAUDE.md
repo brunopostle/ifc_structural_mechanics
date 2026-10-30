@@ -259,7 +259,7 @@ Command-line interface:
   - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its three load cases and 17 load combinations, and 2.3 GB of memory). Skip with `-m "not slow"`.
+- **Slow tests**: A failing one fails CI. End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its three load cases and 17 load combinations, and 2.3 GB of memory). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -464,7 +464,9 @@ here. This section only records the constraints that shape day-to-day work.
   they still do not balance are the others `"unreliable"` and the total the
   solver's (`94g.7`). Measured on 2.21: `portal_01`'s own total is 11%
   short and the supports' is off by 5 in 100 000; `structure_01`'s wall
-  foot was unreliable and is not. **A point force on a support node is not
+  foot was unreliable and is not. `building_02`'s own total is 4% over, 26
+  of its 51 supports are replaced, each within 4e-5 of what 2.23 gives (the
+  other 25 are identical), and the total balances to 2e-5 (`1y6`). **A point force on a support node is not
   in the member's end**: `support_node_loads` has it a second time (values
   10 to 12, from the `** Point loads` line the load writer puts before
   them) and `_support_entry()` takes it off the member end's force before
