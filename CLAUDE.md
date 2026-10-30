@@ -1056,7 +1056,9 @@ rotational degrees of freedom**. This drives everything about joints:
   meshes the line into the slab and the beam with the same nodes along it
   (`_seed_line_joints()`, `_conform_line_joints()`: the beam is split at the
   line's ends and at the image of every point on either, and each pair of
-  pieces is transfinite with one count). Rigid (neither member released
+  pieces is transfinite with one count; the pieces are found after
+  `fragment()` by distance, since it moves vertices it merges, across the
+  rounding of `_coord_key()` too, `9ot`). Rigid (neither member released
   about the line): the nodes are merged, or joined by a rigid link where the
   beam is eccentric (a downstand beam; `IfcRelConnectsWithEccentricity` is
   taken from the geometry, as at points), in `_merge_rigid_connection_nodes()`.

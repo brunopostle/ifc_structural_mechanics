@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # Coordinate rounding precision for the shared point registry.
 # 6 decimal places gives ~micron tolerance for meter-scale models.
 COORD_PRECISION = 6
+# Points this close are one: rounding to COORD_PRECISION moves one by up to 9e-7,
+# and fragment() moves a vertex it merges.
+SAME_POINT_TOLERANCE = 5e-6
 
 
 class GmshGeometryConverter:
@@ -985,9 +988,10 @@ class GmshGeometryConverter:
             along /= length
             beam_start, beam_end = start - offset, end - offset
 
-            # Every point on the line or on the beam along it, as a distance
-            # along the line
-            stations = {0.0, length}
+            # Every point on the line or on the beam along it, by its distance
+            # along the line. Each keeps its own coordinates: one rebuilt from a
+            # rounded distance lands beside the point it came from.
+            stations = {0.0: start, length: end}
             for registry, shift in (
                 (self._curve_point_registry, offset),
                 (self._surface_point_registry, np.zeros(3)),
@@ -998,10 +1002,9 @@ class GmshGeometryConverter:
                     if 1e-6 < s < length - 1e-6 and self._point_on_segment(
                         point, start, end
                     ):
-                        stations.add(round(s, COORD_PRECISION))
-            stations = sorted(stations)
+                        stations.setdefault(round(s, COORD_PRECISION), point)
 
-            points = [start + s * along for s in stations]
+            points = [stations[s] for s in sorted(stations)]
             surface_points = [
                 self._get_or_create_point(*point, dim=2) for point in points
             ]
@@ -1045,25 +1048,34 @@ class GmshGeometryConverter:
         pieces = getattr(self, "_line_joint_pieces", [])
         if not pieces:
             return
-        by_ends: Dict[frozenset, List[int]] = {}
+        tags, firsts, seconds = [], [], []
         for _, tag in gmsh.model.getEntities(1):
             ends = gmsh.model.getBoundary([(1, tag)], oriented=False)
-            keys = frozenset(
-                self._coord_key(*gmsh.model.getValue(0, abs(point), []))
-                for _, point in ends
-            )
-            by_ends.setdefault(keys, []).append(tag)
+            if len(ends) == 2:
+                tags.append(tag)
+                first, second = (
+                    gmsh.model.getValue(0, abs(point), []) for _, point in ends
+                )
+                firsts.append(first)
+                seconds.append(second)
+        firsts = np.array(firsts).reshape(-1, 3)
+        seconds = np.array(seconds).reshape(-1, 3)
+
+        def curves_between(a: np.ndarray, b: np.ndarray) -> List[int]:
+            """The curves from a to b, by distance: fragment() moves vertices."""
+            at_a = np.linalg.norm(firsts - a, axis=1) < SAME_POINT_TOLERANCE
+            at_b = np.linalg.norm(seconds - b, axis=1) < SAME_POINT_TOLERANCE
+            b_first = np.linalg.norm(firsts - b, axis=1) < SAME_POINT_TOLERANCE
+            a_second = np.linalg.norm(seconds - a, axis=1) < SAME_POINT_TOLERANCE
+            return [
+                tags[i] for i in np.flatnonzero((at_a & at_b) | (b_first & a_second))
+            ]
+
         for beam_id, offset, segments, size in pieces:
             beam_tags = set(self._member_curve_tags.get(beam_id, []))
             for a, b in segments:
                 count = max(1, int(np.ceil(float(np.linalg.norm(b - a)) / size - 1e-9)))
-                in_slab = [
-                    tag
-                    for tag in by_ends.get(
-                        frozenset((self._coord_key(*a), self._coord_key(*b))), []
-                    )
-                    if tag not in beam_tags
-                ]
+                in_slab = [tag for tag in curves_between(a, b) if tag not in beam_tags]
                 if not in_slab:
                     raise MeshingError(
                         f"The line from {a.tolist()} to {b.tolist()}, which joins "
@@ -1073,15 +1085,7 @@ class GmshGeometryConverter:
                     )
                 on_beam = [
                     tag
-                    for tag in by_ends.get(
-                        frozenset(
-                            (
-                                self._coord_key(*(a - offset)),
-                                self._coord_key(*(b - offset)),
-                            )
-                        ),
-                        [],
-                    )
+                    for tag in curves_between(a - offset, b - offset)
                     if tag in beam_tags
                 ]
                 for tag in in_slab + on_beam:
