@@ -12,6 +12,7 @@ import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
 from ifc_structural_mechanics.domain.structural_member import CurveMember, SurfaceMember
+from ifc_structural_mechanics.ifc.extractor import Extractor
 from ifc_structural_mechanics.ifc.members_extractor import MembersExtractor
 
 
@@ -79,7 +80,7 @@ class TestMemberExtraction:
                 print(f"  - {entity_type}: Error: {e}")
 
         # Create the extractor with the IFC file
-        extractor = MembersExtractor(ifc_file)
+        extractor = MembersExtractor(ifc_file, Extractor(ifc_file).unit_scales)
 
         # Extract all members
         members = extractor.extract_all_members()
@@ -182,7 +183,7 @@ class TestMemberExtraction:
             )
 
         # Create the extractor with the IFC file
-        extractor = MembersExtractor(ifc_file)
+        extractor = MembersExtractor(ifc_file, Extractor(ifc_file).unit_scales)
 
         # Extract curve members
         curve_members = extractor.extract_curve_members()

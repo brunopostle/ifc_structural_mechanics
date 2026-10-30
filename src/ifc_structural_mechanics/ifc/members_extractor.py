@@ -24,12 +24,15 @@ from ..ifc.entity_identifier import (
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
 from ..utils.units import (
-    convert_density,
     convert_length,
     convert_moment_of_inertia,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# What a density given with no unit can be, in kg/m3
+MIN_DENSITY, MAX_DENSITY = 1.0, 1.0e6
 
 
 class MembersExtractor:
@@ -82,7 +85,7 @@ class MembersExtractor:
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.area_scale = self.unit_scales.get("AREAUNIT", self.length_scale**2)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
-        self.mass_scale = self.unit_scales.get("MASSUNIT", 1.0)
+        self.density_scale = self.unit_scales.get("MASSDENSITYUNIT")
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
         # Kelvin per unit of the file: a difference of temperature
         self.temperature_scale = self.unit_scales.get(
@@ -544,7 +547,7 @@ class MembersExtractor:
         # that is wrong under gravity and harmless otherwise
         density = None
         if density_raw is not None:
-            density = convert_density(density_raw, self.length_scale, self.mass_scale)
+            density = self._density_in_si(density_raw, name)
         else:
             self._warn_once(
                 "W-MAT-001",
@@ -624,6 +627,34 @@ class MembersExtractor:
                 else None
             ),
         )
+
+    def _density_in_si(self, value: float, material_name: str) -> float:
+        """
+        A material's mass density in kg/m3.
+
+        IFC does not say what a density is in when the project assigns no
+        MASSDENSITYUNIT, only that it is usually kg/m3, which is what Bonsai's
+        projects in millimetres have. A value that cannot be that is in another
+        unit, and reading it so would make a member weigh nothing or a billion
+        times too much.
+
+        Args:
+            value: The density as the file gives it
+            material_name: Name of the material, for the error
+
+        Returns:
+            The density in kg/m3
+        """
+        if self.density_scale is not None:
+            return value * self.density_scale
+        if value != 0 and not MIN_DENSITY <= value <= MAX_DENSITY:
+            raise ModelExtractionError(
+                f"Its material '{material_name}' has a mass density of {value} "
+                "and the file assigns no MASSDENSITYUNIT, so it would be "
+                f"{value} kg/m3, which no material is. Assign the unit it is in.",
+                code="E-MAT-005",
+            )
+        return value
 
     def _create_section(self, profile):
         """

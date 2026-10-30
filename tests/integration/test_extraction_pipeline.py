@@ -318,6 +318,7 @@ def create_mock_ifc_file():
 class TestExtractionPipeline:
     """Tests for the complete extraction pipeline."""
 
+    @patch("ifcopenshell.util.unit.get_project_unit", new=lambda file, unit_type: None)
     @patch("ifcopenshell.util.unit.calculate_unit_scale")
     def test_extract_model_from_mock(self, mock_calculate_unit_scale):
         """Test extracting a complete model from a mock IFC file."""

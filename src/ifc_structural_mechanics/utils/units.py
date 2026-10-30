@@ -8,6 +8,8 @@ IFC project units and SI units throughout the library.
 import logging
 from typing import List, Optional, Union
 
+import ifcopenshell.util.unit
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,3 +90,37 @@ def convert_density(
     """
     mass_factor = mass_scale if mass_scale is not None else 1.0
     return value * (mass_factor / (unit_scale**3))
+
+
+def unit_to_si(unit) -> float:
+    """
+    Scale factor from an IFC unit to SI, with mass in kilograms.
+
+    Works through the entities of the unit, so that a gram-based unit is scaled
+    to kilograms wherever it appears (IfcOpenShell's scales are to grams, which
+    makes a pound 453.6) and a derived unit is scaled in any IfcOpenShell.
+
+    Args:
+        unit: An IfcSIUnit, IfcConversionBasedUnit or IfcDerivedUnit
+
+    Returns:
+        What to multiply a value in this unit by to have it in SI
+    """
+    if unit.is_a("IfcDerivedUnit"):
+        scale = 1.0
+        for element in unit.Elements:
+            scale *= unit_to_si(element.Unit) ** element.Exponent
+        return scale
+    if unit.is_a("IfcConversionBasedUnit"):
+        factor = unit.ConversionFactor
+        return float(factor.ValueComponent.wrappedValue) * unit_to_si(
+            factor.UnitComponent
+        )
+    scale = (
+        ifcopenshell.util.unit.get_prefix_multiplier(unit.Prefix)
+        if unit.Prefix
+        else 1.0
+    )
+    if unit.Name == "GRAM":
+        return scale * 0.001
+    return scale ** {"SQUARE_METRE": 2, "CUBIC_METRE": 3}.get(unit.Name, 1)

@@ -77,6 +77,69 @@ class TestMembers:
         (message,) = [w["message"] for w in extracted.analysis_warnings]
         assert "no mass density" in message and "weightless" in message
 
+    @staticmethod
+    def _density(model):
+        return Extractor(model).extract_model().members[0].material.density
+
+    @staticmethod
+    def _give_density(model, value):
+        for pset in model.by_type("IfcMaterialProperties"):
+            for prop in pset.Properties:
+                if prop.Name == "MassDensity":
+                    prop.NominalValue.wrappedValue = value
+
+    @staticmethod
+    def _without_density_unit(model):
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        assignment.Units = [
+            unit
+            for unit in assignment.Units
+            if getattr(unit, "UnitType", None) != "MASSDENSITYUNIT"
+        ]
+
+    def test_density_with_its_unit(self):
+        """Tonnes per cubic millimetre, the gram-based unit scaled to kilograms."""
+        assert self._density(_open("beam_01")) == pytest.approx(2500.0)
+
+    def test_density_in_pounds_per_cubic_inch(self):
+        """0.284 lb/in3 is steel. A pound was once taken for 453.6 kg."""
+        assert self._density(_open("portal_01")) == pytest.approx(7861, rel=1e-3)
+
+    def test_density_with_no_unit_in_a_millimetre_file_is_in_kg_per_m3(self):
+        """As in Bonsai's projects. It was once 7.85e12 kg/m3 (94g.23)."""
+        model = _open("beam_01")
+        self._without_density_unit(model)
+        self._give_density(model, 7850.0)
+        assert self._density(model) == pytest.approx(7850.0)
+
+    def test_declared_density_unit_need_not_be_of_the_length_unit(self):
+        model = _open("beam_01")
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        (unit,) = [
+            u
+            for u in assignment.Units
+            if getattr(u, "UnitType", None) == "MASSDENSITYUNIT"
+        ]
+        metre = model.create_entity("IfcSIUnit", UnitType="LENGTHUNIT", Name="METRE")
+        kilogram = model.create_entity(
+            "IfcSIUnit", UnitType="MASSUNIT", Prefix="KILO", Name="GRAM"
+        )
+        unit.Elements = [
+            model.create_entity("IfcDerivedUnitElement", kilogram, 1),
+            model.create_entity("IfcDerivedUnitElement", metre, -3),
+        ]
+        self._give_density(model, 7850.0)
+        assert self._density(model) == pytest.approx(7850.0)
+
+    @pytest.mark.parametrize("value", [2.5e-9, 7.85e9])
+    def test_density_with_no_unit_that_cannot_be_kg_per_m3_is_an_error(self, value):
+        model = _open("beam_01")
+        self._without_density_unit(model)
+        self._give_density(model, value)
+        with pytest.raises(ModelExtractionError, match="MASSDENSITYUNIT") as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-MAT-005"
+
     def test_material_without_poisson_ratio_gets_a_warning(self):
         model = _open("cantilever_01")
         for pset in model.by_type("IfcMaterialProperties"):

@@ -2759,6 +2759,33 @@ class TestAreaInAUnitOfItsOwn:
             )
 
 
+class TestDensityWithNoUnit:
+    """A density with no MASSDENSITYUNIT is in kg/m3, as in Bonsai (``94g.23``).
+
+    In a file in millimetres it was once divided by the length unit cubed, and
+    a member came out a billion times too heavy.
+    """
+
+    def test_weighs_the_same(self, tmp_path):
+        model = ifcopenshell.open(BEAM)
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        assignment.Units = [
+            unit
+            for unit in assignment.Units
+            if getattr(unit, "UnitType", None) != "MASSDENSITYUNIT"
+        ]
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name == "MassDensity":
+                prop.NominalValue.wrappedValue = 2500.0
+        path = str(tmp_path / "no_density_unit.ifc")
+        model.write(path)
+        restated = _run(path, tmp_path / "restated", 0.5)
+        shipped = _run(BEAM, tmp_path / "shipped", 0.5)
+        for name, ours in restated["global_reactions"]["by_load_case"].items():
+            theirs = shipped["global_reactions"]["by_load_case"][name]
+            assert ours["fz_N"] == pytest.approx(theirs["fz_N"], rel=1e-6)
+
+
 class TestPortalAgainstTheResultsInItsFile:
     """portal_01: 100 lbf/in on the right half of the beam of a W10X30 portal.
 

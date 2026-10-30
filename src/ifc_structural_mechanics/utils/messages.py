@@ -523,6 +523,14 @@ _ERRORS = [
     ),
     # Sections
     MessageKind(
+        "E-MAT-005",
+        "A density that cannot be in kg/m3",
+        "The file assigns no MASSDENSITYUNIT, so a density is read as kg/m3, "
+        "and this one is below 1 or above 1 000 000. It is in some other unit, "
+        "probably tonnes per cubic millimetre or per cubic metre. Add the unit "
+        "to the project's IfcUnitAssignment.",
+    ),
+    MessageKind(
         "E-SEC-001",
         "Curve member without a profile",
         "A curve member needs an IfcMaterialProfileSet (usually through an "

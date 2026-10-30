@@ -56,6 +56,10 @@ A load case includes self-weight, --gravity was given, or the analysis is modal,
 
 The material has a shear modulus and no Poisson's ratio, and the two moduli give a ratio no isotropic material has (or the shear modulus is not positive). Check the constants.
 
+### E-MAT-005: A density that cannot be in kg/m3
+
+The file assigns no MASSDENSITYUNIT, so a density is read as kg/m3, and this one is below 1 or above 1 000 000. It is in some other unit, probably tonnes per cubic millimetre or per cubic metre. Add the unit to the project's IfcUnitAssignment.
+
 ### W-MAT-001: Material without a mass density
 
 The material has no Pset_MaterialCommon.MassDensity, so its members weigh nothing. That is only right if no load case includes self-weight; when one does, or --gravity is given, the analysis stops instead. Give the material its density.

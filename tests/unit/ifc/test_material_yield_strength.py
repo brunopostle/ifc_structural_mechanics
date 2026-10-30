@@ -42,7 +42,8 @@ def _material(properties):
 def _extract(material):
     extractor = MagicMock(spec=MembersExtractor)
     extractor.length_scale = 0.001
-    extractor.mass_scale = 1000.0
+    extractor.density_scale = 1.0e12  # and in tonnes per cubic millimetre
+    extractor._density_in_si = lambda value, name: value * extractor.density_scale
     extractor.pressure_scale = 1.0e6  # the file is in MPa
     return MembersExtractor._create_material(extractor, material)
 

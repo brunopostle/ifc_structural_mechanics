@@ -17,6 +17,7 @@ import ifcopenshell.util.unit
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
+from ..utils.units import unit_to_si
 from .connections_extractor import ConnectionsExtractor
 from .entity_identifier import (
     is_structural_connection,
@@ -136,6 +137,20 @@ class Extractor:
                         f"{unit_scales['MASSUNIT']}"
                     )
                     break
+
+        # Derived units as the file declares them, which need not be made of its
+        # length and mass units. MembersExtractor says what none declared means.
+        for unit_type in ("MASSDENSITYUNIT",):
+            try:
+                unit = ifcopenshell.util.unit.get_project_unit(self.ifc, unit_type)
+                if unit:
+                    unit_scales[unit_type] = unit_to_si(unit)
+            except Exception as error:
+                raise ModelExtractionError(
+                    f"The {unit_type} of the IFC file cannot be worked out, so "
+                    f"its values cannot be converted: {error}",
+                    code="E-IFC-004",
+                ) from error
 
         # Warn when the model is not in SI base units so engineers know
         # their values will be scaled. Most structural tools use metres, but
