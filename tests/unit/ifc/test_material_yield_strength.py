@@ -1,7 +1,5 @@
 """The yield stress of a steel is read from the IFC material, in project units."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
 ifcopenshell = pytest.importorskip("ifcopenshell")
@@ -40,12 +38,15 @@ def _material(properties):
 
 
 def _extract(material):
-    extractor = MagicMock(spec=MembersExtractor)
-    extractor.length_scale = 0.001
-    extractor.density_scale = 1.0e12  # and in tonnes per cubic millimetre
-    extractor._density_in_si = lambda value, name: value * extractor.density_scale
-    extractor.pressure_scale = 1.0e6  # the file is in MPa
-    return MembersExtractor._create_material(extractor, material)
+    extractor = MembersExtractor(
+        material.file,
+        {
+            "LENGTHUNIT": 0.001,
+            "MASSDENSITYUNIT": 1.0e12,  # tonnes per cubic millimetre
+            "PRESSUREUNIT": 1.0e6,  # the file is in MPa
+        },
+    )
+    return extractor._create_material(material)
 
 
 MECHANICAL = {

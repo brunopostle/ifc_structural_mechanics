@@ -87,6 +87,7 @@ class TestMembers:
             for prop in pset.Properties:
                 if prop.Name == "MassDensity":
                     prop.NominalValue.wrappedValue = value
+                    prop.Unit = None
 
     @staticmethod
     def _without_density_unit(model):
@@ -631,6 +632,15 @@ class TestTemperatureLoads:
             for u in assignment.Units
             if getattr(u, "UnitType", None) != "THERMODYNAMICTEMPERATUREUNIT"
         ] + [fahrenheit]
+        # The file gives its coefficients per kelvin, and that unit goes first
+        assignment.Units = [
+            u
+            for u in assignment.Units
+            if getattr(u, "UnitType", None) != "THERMALEXPANSIONCOEFFICIENTUNIT"
+        ]
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name == "ThermalExpansionCoefficient":
+                prop.Unit = None
         member = model.by_type("IfcStructuralCurveMember")[0]
         _temperature(model, member, DeltaTConstant=9.0)
         extracted = Extractor(model).extract_model()

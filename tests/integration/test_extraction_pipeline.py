@@ -120,16 +120,19 @@ def create_mock_ifc_file():
     mock_material_property.Name = "YoungModulus"
     mock_material_property.NominalValue = Mock()
     mock_material_property.NominalValue.wrappedValue = 210e9
+    mock_material_property.Unit = None
 
     mock_density_property = Mock()
     mock_density_property.Name = "MassDensity"
     mock_density_property.NominalValue = Mock()
     mock_density_property.NominalValue.wrappedValue = 7850.0
+    mock_density_property.Unit = None
 
     mock_poisson_property = Mock()
     mock_poisson_property.Name = "PoissonRatio"
     mock_poisson_property.NominalValue = Mock()
     mock_poisson_property.NominalValue.wrappedValue = 0.3
+    mock_poisson_property.Unit = None
 
     mock_pset = Mock()
     mock_pset.Name = "Pset_MaterialMechanical"

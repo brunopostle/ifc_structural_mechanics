@@ -2763,6 +2763,7 @@ class TestDensityWithNoUnit:
         for prop in model.by_type("IfcPropertySingleValue"):
             if prop.Name == "MassDensity":
                 prop.NominalValue.wrappedValue = 2500.0
+                prop.Unit = None
         path = str(tmp_path / "no_density_unit.ifc")
         model.write(path)
         restated = _run(path, tmp_path / "restated", 0.5)
@@ -2770,6 +2771,89 @@ class TestDensityWithNoUnit:
         for name, ours in restated["global_reactions"]["by_load_case"].items():
             theirs = shipped["global_reactions"]["by_load_case"][name]
             assert ours["fz_N"] == pytest.approx(theirs["fz_N"], rel=1e-6)
+
+
+class TestDeclaredUnits:
+    """Loads and moduli restated in other units give the same results (``94g.25``).
+
+    A derived unit need not be made of the file's length and force units.
+    ``portal_01`` is in pounds and inches: here its line load is in kN/m and
+    its moduli in GPa, whichever way they are declared.
+    """
+
+    @staticmethod
+    def _restated(tmp_path, own_units: bool) -> str:
+        model = ifcopenshell.open(os.path.join(IFC_DIR, "portal_01.ifc"))
+        kilonewton = model.create_entity(
+            "IfcSIUnit", UnitType="FORCEUNIT", Prefix="KILO", Name="NEWTON"
+        )
+        metre = model.create_entity("IfcSIUnit", UnitType="LENGTHUNIT", Name="METRE")
+
+        def derived(unit_type, *elements):
+            return model.create_entity(
+                "IfcDerivedUnit",
+                Elements=[
+                    model.create_entity(
+                        "IfcDerivedUnitElement", Unit=unit, Exponent=exponent
+                    )
+                    for unit, exponent in elements
+                ],
+                UnitType=unit_type,
+            )
+
+        gigapascal = model.create_entity(
+            "IfcSIUnit", UnitType="PRESSUREUNIT", Prefix="GIGA", Name="PASCAL"
+        )
+        declared = [
+            derived("LINEARFORCEUNIT", (kilonewton, 1), (metre, -1)),
+            derived("MODULUSOFELASTICITYUNIT", (gigapascal, 1)),
+            derived("SHEARMODULUSUNIT", (gigapascal, 1)),
+        ]
+        moduli = {prop.UnitType: prop for prop in declared[1:]}
+        (assignment,) = model.by_type("IfcUnitAssignment")
+        replaced = {"LINEARFORCEUNIT"}
+        if not own_units:
+            replaced |= set(moduli)
+        assignment.Units = [
+            unit
+            for unit in assignment.Units
+            if getattr(unit, "UnitType", None) not in replaced
+        ] + [unit for unit in declared if unit.UnitType in replaced]
+
+        lbf_per_inch = 4.44822162 / 0.0254
+        for load in model.by_type("IfcStructuralLoadLinearForce"):
+            load.LinearForceZ = load.LinearForceZ * lbf_per_inch / 1000.0
+        psi_in_gpa = 6894.7572932 / 1e9
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name in ("YoungModulus", "ShearModulus"):
+                prop.NominalValue.wrappedValue *= psi_in_gpa
+                if own_units:
+                    prop.Unit = moduli[
+                        (
+                            "MODULUSOFELASTICITYUNIT"
+                            if prop.Name == "YoungModulus"
+                            else "SHEARMODULUSUNIT"
+                        )
+                    ]
+        path = str(tmp_path / f"restated_{own_units}.ifc")
+        model.write(path)
+        return path
+
+    @pytest.mark.parametrize("own_units", [False, True], ids=["project", "property"])
+    def test_same_results(self, tmp_path, own_units):
+        restated = _run(self._restated(tmp_path, own_units), tmp_path / "restated", 0.5)
+        shipped = _run(
+            os.path.join(IFC_DIR, "portal_01.ifc"), tmp_path / "shipped", 0.5
+        )
+        for name, ours in restated["global_reactions"]["by_load_case"].items():
+            theirs = shipped["global_reactions"]["by_load_case"][name]
+            assert theirs["fz_N"] > 0
+            assert ours["fz_N"] == pytest.approx(theirs["fz_N"], rel=1e-5)
+        assert restated["global_displacements"]["envelope"][
+            "max_displacement_m"
+        ] == pytest.approx(
+            shipped["global_displacements"]["envelope"]["max_displacement_m"], rel=1e-5
+        )
 
 
 class TestPortalAgainstTheResultsInItsFile:

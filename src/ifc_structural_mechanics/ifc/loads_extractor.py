@@ -92,6 +92,19 @@ class LoadsExtractor:
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.angle_scale = self.unit_scales.get("PLANEANGLEUNIT", 1.0)
+        # As the file declares them, else made of its force and length units
+        self.linear_force_scale = self.unit_scales.get(
+            "LINEARFORCEUNIT", self.force_scale / self.length_scale
+        )
+        self.planar_force_scale = self.unit_scales.get(
+            "PLANARFORCEUNIT", self.force_scale / self.length_scale**2
+        )
+        self.torque_scale = self.unit_scales.get(
+            "TORQUEUNIT", self.force_scale * self.length_scale
+        )
+        self.linear_moment_scale = self.unit_scales.get(
+            "LINEARMOMENTUNIT", self.force_scale
+        )
         # Kelvin per unit of the file: a difference of temperature
         self.temperature_scale = self.unit_scales.get(
             "THERMODYNAMICTEMPERATUREUNIT", 1.0
@@ -482,8 +495,7 @@ class LoadsExtractor:
                     ifc_load, applied_load, load_id, start_pos, axis, length
                 )
 
-            # Force per length: scale = force_scale / length_scale
-            scale = self.force_scale / self.length_scale
+            scale = self.linear_force_scale
             samples = [
                 (
                     location * self.length_scale,
@@ -538,11 +550,10 @@ class LoadsExtractor:
                     applied_load, self._LINEAR_MOMENTS, "that varies along its member"
                 )
             else:
-                # Moment per length: a force times a length, per length
                 moment = self._in_global_axes(
                     ifc_load,
                     [
-                        m * self.force_scale
+                        m * self.linear_moment_scale
                         for m in self._components(applied_load, self._LINEAR_MOMENTS)
                     ],
                 )
@@ -572,9 +583,7 @@ class LoadsExtractor:
                 force_z = getattr(applied_load, "PlanarForceZ", 0.0) or 0.0
                 force_vector = [force_x, force_y, force_z]
 
-                # Planar force is force/area: scale = force_scale / length_scale^2
-                area_scale = self.force_scale / (self.length_scale**2)
-                force_vector = [f * area_scale for f in force_vector]
+                force_vector = [f * self.planar_force_scale for f in force_vector]
             else:
                 raise ModelExtractionError(
                     f"Its applied load is an {applied_load.is_a()}; on a planar "
@@ -784,11 +793,10 @@ class LoadsExtractor:
                 for f in self._components(applied_load, ("ForceX", "ForceY", "ForceZ"))
             ],
         )
-        # A moment is a force times a length
         moment = self._in_global_axes(
             ifc_load,
             [
-                m * self.force_scale * self.length_scale
+                m * self.torque_scale
                 for m in self._components(
                     applied_load, ("MomentX", "MomentY", "MomentZ")
                 )

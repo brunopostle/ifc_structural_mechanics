@@ -26,6 +26,7 @@ from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
 from ..utils.units import (
     convert_length,
+    unit_to_si,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,9 +93,17 @@ class MembersExtractor:
         self.density_scale = self.unit_scales.get("MASSDENSITYUNIT")
         self.inertia_scale = self.unit_scales.get("MOMENTOFINERTIAUNIT", 1.0)
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
-        # Kelvin per unit of the file: a difference of temperature
-        self.temperature_scale = self.unit_scales.get(
-            "THERMODYNAMICTEMPERATUREUNIT", 1.0
+        self.modulus_scale = self.unit_scales.get(
+            "MODULUSOFELASTICITYUNIT", self.pressure_scale
+        )
+        self.shear_modulus_scale = self.unit_scales.get(
+            "SHEARMODULUSUNIT", self.pressure_scale
+        )
+        # Per unit of the file's temperature, a difference of temperature:
+        # strain is alpha times that
+        self.expansion_scale = self.unit_scales.get(
+            "THERMALEXPANSIONCOEFFICIENTUNIT",
+            1.0 / self.unit_scales.get("THERMODYNAMICTEMPERATUREUNIT", 1.0),
         )
 
         # What the analysis will not do exactly as the file says; the
@@ -572,6 +581,9 @@ class MembersExtractor:
 
         mechProps = {}
         commonProps = {}
+        # The scale of a property that gives a unit of its own, which goes
+        # before the one the project assigns
+        own_scales = {}
 
         # First pass: standard pset names (preferred)
         for pset in psets:
@@ -582,6 +594,7 @@ class MembersExtractor:
                 for prop in pset.Properties:
                     propName = prop.Name[0].lower() + prop.Name[1:]
                     value = prop.NominalValue.wrappedValue
+                    self._note_own_unit(own_scales, propName, prop)
                     if pset.Name == "Pset_MaterialMechanical":
                         mechProps[propName] = value
                     else:
@@ -616,21 +629,27 @@ class MembersExtractor:
                         "youngmodulus" in lower_name or "elasticmodulus" in lower_name
                     ) and elastic_modulus_raw is None:
                         elastic_modulus_raw = value
+                        self._note_own_unit(own_scales, "youngModulus", prop)
                     elif (
                         "massdensity" in lower_name or lower_name == "density"
                     ) and density_raw is None:
                         density_raw = value
+                        self._note_own_unit(own_scales, "massDensity", prop)
                     elif (
                         "poissonratio" in lower_name or "poisson" in lower_name
                     ) and poisson_ratio is None:
                         poisson_ratio = value
                     elif "shearmodulus" in lower_name and shear_modulus_raw is None:
                         shear_modulus_raw = value
+                        self._note_own_unit(own_scales, "shearModulus", prop)
                     elif (
                         "thermalexpansioncoefficient" in lower_name
                         and expansion_raw is None
                     ):
                         expansion_raw = value
+                        self._note_own_unit(
+                            own_scales, "thermalExpansionCoefficient", prop
+                        )
 
         name = getattr(material, "Name", None) or "unnamed"
         if elastic_modulus_raw is None:
@@ -639,13 +658,17 @@ class MembersExtractor:
                 "(Pset_MaterialMechanical.YoungModulus).",
                 code="E-MAT-002",
             )
-        elastic_modulus = elastic_modulus_raw * self.pressure_scale
+        elastic_modulus = elastic_modulus_raw * own_scales.get(
+            "youngModulus", self.modulus_scale
+        )
 
         # Without a density the member weighs nothing, and the user is told:
         # that is wrong under gravity and harmless otherwise
         density = None
         if density_raw is not None:
-            density = self._density_in_si(density_raw, name)
+            density = self._density_in_si(
+                density_raw, name, own_scales.get("massDensity")
+            )
         else:
             self._warn_once(
                 "W-MAT-001",
@@ -655,30 +678,35 @@ class MembersExtractor:
             )
         # An isotropic material has G = E / 2(1 + nu): a shear modulus given
         # in place of Poisson's ratio is the same information
-        if poisson_ratio is None and shear_modulus_raw is not None:
-            if not shear_modulus_raw > 0:
+        shear_modulus = None
+        if shear_modulus_raw is not None:
+            shear_modulus = shear_modulus_raw * own_scales.get(
+                "shearModulus", self.shear_modulus_scale
+            )
+        if poisson_ratio is None and shear_modulus is not None:
+            if not shear_modulus > 0:
                 raise ModelExtractionError(
                     f"Its material '{name}' has a shear modulus of "
-                    f"{shear_modulus_raw} and no Poisson's ratio.",
+                    f"{shear_modulus:.6g} Pa and no Poisson's ratio.",
                     code="E-MAT-004",
                 )
-            poisson_ratio = elastic_modulus_raw / (2.0 * shear_modulus_raw) - 1.0
+            poisson_ratio = elastic_modulus / (2.0 * shear_modulus) - 1.0
             if not -1.0 < poisson_ratio < 0.5:
                 raise ModelExtractionError(
                     f"Its material '{name}' has no Poisson's ratio, and its "
-                    f"Young's modulus {elastic_modulus_raw} and shear modulus "
-                    f"{shear_modulus_raw} give {poisson_ratio:.4g}, which no "
+                    f"Young's modulus {elastic_modulus:.6g} Pa and shear modulus "
+                    f"{shear_modulus:.6g} Pa give {poisson_ratio:.4g}, which no "
                     "isotropic material has.",
                     code="E-MAT-004",
                 )
-        elif poisson_ratio is not None and shear_modulus_raw is not None:
-            implied = elastic_modulus_raw / (2.0 * (1.0 + poisson_ratio))
-            if abs(implied - shear_modulus_raw) > 0.01 * abs(implied):
+        elif poisson_ratio is not None and shear_modulus is not None:
+            implied = elastic_modulus / (2.0 * (1.0 + poisson_ratio))
+            if abs(implied - shear_modulus) > 0.01 * abs(implied):
                 self._warn_once(
                     "W-MAT-003",
                     f"Material '{name}' has a shear modulus of "
-                    f"{shear_modulus_raw}, where its Young's modulus and "
-                    f"Poisson's ratio {poisson_ratio} give {implied:.6g}; the "
+                    f"{shear_modulus:.6g} Pa, where its Young's modulus and "
+                    f"Poisson's ratio {poisson_ratio} give {implied:.6g} Pa; the "
                     "material is analysed as isotropic with the Poisson's ratio.",
                 )
         if poisson_ratio is None:
@@ -703,7 +731,7 @@ class MembersExtractor:
                 except (AttributeError, TypeError, ValueError):
                     continue
                 if value > 0:
-                    yield_strength = value * self.pressure_scale
+                    yield_strength = value * self._own_scale(prop, self.pressure_scale)
 
         # Create material with extracted properties or defaults, converted to SI units
         return Material(
@@ -717,14 +745,26 @@ class MembersExtractor:
             elastic_modulus=elastic_modulus,
             poisson_ratio=poisson_ratio,
             yield_strength=yield_strength,
-            # Per unit of the file's temperature: strain is alpha times a
-            # difference of temperature
             thermal_expansion_coefficient=(
-                float(expansion_raw) / self.temperature_scale
+                float(expansion_raw)
+                * own_scales.get("thermalExpansionCoefficient", self.expansion_scale)
                 if expansion_raw is not None
                 else None
             ),
         )
+
+    @staticmethod
+    def _own_scale(prop, project_scale: float) -> float:
+        """The scale of a property: of its own unit if it gives one."""
+        unit = getattr(prop, "Unit", None)
+        return unit_to_si(unit) if unit else project_scale
+
+    @staticmethod
+    def _note_own_unit(own_scales: dict, key: str, prop) -> None:
+        """Remember the scale of a property's own unit, if it gives one."""
+        unit = getattr(prop, "Unit", None)
+        if unit:
+            own_scales[key] = unit_to_si(unit)
 
     def _take_mechanical_properties(self, section: Section, profile) -> None:
         """
@@ -743,7 +783,7 @@ class MembersExtractor:
         for pset in getattr(profile, "HasProperties", None) or []:
             if pset.Name == "Pset_ProfileMechanical":
                 for prop in pset.Properties:
-                    stated[prop.Name] = prop.NominalValue.wrappedValue
+                    stated[prop.Name] = prop
 
         for name, attribute, scale in (
             ("CrossSectionArea", "area", self.area_scale),
@@ -753,7 +793,8 @@ class MembersExtractor:
         ):
             if name not in stated:
                 continue
-            value = stated[name] * scale
+            prop = stated[name]
+            value = prop.NominalValue.wrappedValue * self._own_scale(prop, scale)
             from_dimensions = getattr(section, attribute)
             if 1 / PSET_AGREEMENT <= value / from_dimensions <= PSET_AGREEMENT:
                 setattr(section, attribute, value)
@@ -780,7 +821,9 @@ class MembersExtractor:
                 )
             )
 
-    def _density_in_si(self, value: float, material_name: str) -> float:
+    def _density_in_si(
+        self, value: float, material_name: str, own_scale: Optional[float] = None
+    ) -> float:
         """
         A material's mass density in kg/m3.
 
@@ -793,10 +836,13 @@ class MembersExtractor:
         Args:
             value: The density as the file gives it
             material_name: Name of the material, for the error
+            own_scale: The scale of a unit the property gives itself
 
         Returns:
             The density in kg/m3
         """
+        if own_scale is not None:
+            return value * own_scale
         if self.density_scale is not None:
             return value * self.density_scale
         if value != 0 and not MIN_DENSITY <= value <= MAX_DENSITY:

@@ -6,7 +6,7 @@ structural analysis-related IFC entities.
 """
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import ifcopenshell
 import numpy as np
@@ -902,7 +902,11 @@ def _ifc_stiffness_to_float(
 
 
 def get_connection_input(
-    connection, geometryType, unit_scale: float = 1.0, force_scale: float = 1.0
+    connection,
+    geometryType,
+    unit_scale: float = 1.0,
+    force_scale: float = 1.0,
+    unit_scales: Optional[Dict[str, float]] = None,
 ):
     """
     Extract connection input properties.
@@ -912,6 +916,8 @@ def get_connection_input(
         geometryType: Type of geometry ("point", "line", "surface")
         unit_scale: Scale factor to convert length to SI units
         force_scale: Scale factor to convert force to SI units
+        unit_scales: The scales of the units the file declares; a stiffness
+            whose unit it does not declare is made of length and force
 
     Returns:
         Dictionary of connection properties with values in SI units, or None
@@ -929,14 +935,23 @@ def get_connection_input(
         "surface": ("TranslationalStiffnessByArea{}", None),
     }
     length_powers = {"point": (-1, 1), "line": (-2, 0), "surface": (-3, None)}
+    units = {
+        "point": ("LINEARSTIFFNESSUNIT", "ROTATIONALSTIFFNESSUNIT"),
+        "line": (
+            "MODULUSOFLINEARSUBGRADEREACTIONUNIT",
+            "MODULUSOFROTATIONALSUBGRADEREACTIONUNIT",
+        ),
+        "surface": ("MODULUSOFSUBGRADEREACTIONUNIT", None),
+    }
     if geometryType not in names:
         return None
     try:
         condition = connection.AppliedCondition
         result = {}
-        for kind, (template, power) in enumerate(
-            zip(names[geometryType], length_powers[geometryType])
+        for kind, (template, power, unit) in enumerate(
+            zip(names[geometryType], length_powers[geometryType], units[geometryType])
         ):
+            declared = (unit_scales or {}).get(unit)
             for axis in "XYZ":
                 key = ("d" if kind == 0 else "dr") + axis.lower()
                 if template is None:
@@ -953,7 +968,9 @@ def get_connection_input(
                     )
                 result[key] = _ifc_stiffness_to_float(
                     getattr(value, "wrappedValue", value),
-                    lambda v, f, u, p=power: v * f * u**p,
+                    lambda v, f, u, p=power, d=declared: (
+                        v * d if d is not None else v * f * u**p
+                    ),
                     force_scale,
                     unit_scale,
                 )

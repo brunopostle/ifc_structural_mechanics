@@ -190,6 +190,7 @@ class ConnectionsExtractor:
             self._determine_geometry_type(ifc_connection),
             self.length_scale,
             self.force_scale,
+            self.unit_scales,
         )
 
         # CREATE CONNECTION WITHOUT VALIDATION
@@ -312,7 +313,11 @@ class ConnectionsExtractor:
                 code="E-SUP-004",
             )
         stiffness = get_connection_input(
-            ifc_connection, "surface", self.length_scale, self.force_scale
+            ifc_connection,
+            "surface",
+            self.length_scale,
+            self.force_scale,
+            self.unit_scales,
         )
         connection = create_connection_from_stiffness(
             ifc_connection.GlobalId,
