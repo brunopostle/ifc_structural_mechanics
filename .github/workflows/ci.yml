@@ -63,7 +63,6 @@ jobs:
 
       - name: Run slow tests
         run: pytest -m slow -v
-        continue-on-error: true
 
       # The pictures need PyVista and a display: Xvfb gives one. Without
       # them the tests that render skip, so check that none did here
@@ -133,4 +132,3 @@ jobs:
 
       - name: Run slow tests
         run: pytest -m slow -v
-        continue-on-error: true

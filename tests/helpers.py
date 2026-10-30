@@ -1,7 +1,9 @@
 """Helpers shared by tests that build a domain model by hand."""
 
+import functools
 import math
 import os
+import subprocess
 import tempfile
 
 from ifc_structural_mechanics.domain.structural_connection import RigidConnection
@@ -553,3 +555,50 @@ def plane_model(
     analysis.LoadedBy = loaded_by
     model.write(path)
     return path
+
+
+_CLAMPED_REACTION_INPUT = """*NODE
+1,0,0,0
+2,0,0,1
+3,0,0,2
+*ELEMENT, TYPE=B32R, ELSET=B
+1,1,2,3
+*NSET,NSET=S
+1
+*MATERIAL,NAME=M
+*ELASTIC
+2e11,0.3
+*BEAM SECTION,ELSET=B,MATERIAL=M,SECTION=RECT
+0.2,0.1
+1,0,0
+*BOUNDARY
+1,1,6
+*STEP
+*STATIC
+*CLOAD
+3,1,100.
+3,3,-1000.
+*NODE PRINT,NSET=S,TOTALS=ONLY
+RF
+*END STEP
+"""
+
+
+@functools.lru_cache(maxsize=None)
+def solver_reports_clamped_reactions() -> bool:
+    """Whether the installed CalculiX gets the reaction at a clamped end right.
+
+    2.21 does not (1077 N for this 1000 N pull on a clamped bar that is also
+    bent); 2.23 does. Tests of the solver's own reactions at such supports
+    cannot pass on 2.21, and ``TestSolverReactionsAreChecked`` covers what
+    the results say then.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        with open(os.path.join(folder, "clamped.inp"), "w") as fh:
+            fh.write(_CLAMPED_REACTION_INPUT)
+        subprocess.run(
+            ["ccx", "-i", "clamped"], cwd=folder, capture_output=True, check=False
+        )
+        with open(os.path.join(folder, "clamped.dat")) as fh:
+            lines = [line.split() for line in fh if line.strip()]
+    return abs(float(lines[-1][2]) - 1000.0) < 1.0

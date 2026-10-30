@@ -25,13 +25,10 @@ Reference values use Timoshenko beam theory (bending plus shear deflection):
   (``_timoshenko_cantilever_frequencies``); rods in tension and torsion
 """
 
-import functools
 import json
 import math
 import os
 import shutil
-import subprocess
-import tempfile
 
 import numpy as np
 import pytest
@@ -71,6 +68,7 @@ from tests.helpers import (  # noqa: E402
     PLANE_ROLLER,
     PLANE_ROLLER_2D,
     plane_model,
+    solver_reports_clamped_reactions,
 )
 
 G_ACCEL = 9.81
@@ -2328,55 +2326,8 @@ class TestTorsion:
         )
 
 
-_CLAMPED_REACTION_INPUT = """*NODE
-1,0,0,0
-2,0,0,1
-3,0,0,2
-*ELEMENT, TYPE=B32R, ELSET=B
-1,1,2,3
-*NSET,NSET=S
-1
-*MATERIAL,NAME=M
-*ELASTIC
-2e11,0.3
-*BEAM SECTION,ELSET=B,MATERIAL=M,SECTION=RECT
-0.2,0.1
-1,0,0
-*BOUNDARY
-1,1,6
-*STEP
-*STATIC
-*CLOAD
-3,1,100.
-3,3,-1000.
-*NODE PRINT,NSET=S,TOTALS=ONLY
-RF
-*END STEP
-"""
-
-
-@functools.lru_cache(maxsize=None)
-def _solver_reports_clamped_reactions() -> bool:
-    """Whether the installed CalculiX gets the reaction at a clamped end right.
-
-    2.21 does not (1077 N for this 1000 N pull on a clamped bar that is also
-    bent); 2.23 does. Tests of the solver's own reactions at such supports
-    cannot pass on 2.21, and ``TestSolverReactionsAreChecked`` covers what
-    the results say then.
-    """
-    with tempfile.TemporaryDirectory() as folder:
-        with open(os.path.join(folder, "clamped.inp"), "w") as fh:
-            fh.write(_CLAMPED_REACTION_INPUT)
-        subprocess.run(
-            ["ccx", "-i", "clamped"], cwd=folder, capture_output=True, check=False
-        )
-        with open(os.path.join(folder, "clamped.dat")) as fh:
-            lines = [line.split() for line in fh if line.strip()]
-    return abs(float(lines[-1][2]) - 1000.0) < 1.0
-
-
 def _needs_solver_reactions() -> None:
-    if not _solver_reports_clamped_reactions():
+    if not solver_reports_clamped_reactions():
         pytest.skip(
             "this CalculiX misreports reactions at supports that hold a rotation"
         )
@@ -2412,7 +2363,7 @@ class TestSupportReactions:
         weight = CANT_RHO * G_ACCEL * 0.2 * 0.4 * CANT_L
         assert support["type"] == "point"
         assert support["restrained"] == ["tx", "ty", "tz", "rx", "ry", "rz"]
-        exact = _solver_reports_clamped_reactions()
+        exact = solver_reports_clamped_reactions()
         assert support["moments"] == ("solver" if exact else "member_end_forces")
         reaction = support["by_load_case"]["Gravity"]
         assert reaction["fz_N"] == pytest.approx(weight, rel=FORCE_TOLERANCE)
@@ -2602,7 +2553,7 @@ class TestSupportReactions:
         assert reaction["my_Nm"] == pytest.approx(-4000.0, rel=1e-3)
         total = data["global_reactions"]["total"]
         assert total["imbalance_N"] < 1e-3 * 1700.0
-        if _solver_reports_clamped_reactions():
+        if solver_reports_clamped_reactions():
             assert support["forces"] == "solver"
             assert not [w for w in warnings if "solver reported" in w]
 
@@ -3162,7 +3113,7 @@ class TestAppliedMoments:
         model.setdefault("loads", {})
         data, warnings = _plane_run(tmp_path, hinged=False, mesh_size=0.25, **model)
         assert not [w for w in warnings if w.startswith("CalculiX")]
-        if _solver_reports_clamped_reactions():
+        if solver_reports_clamped_reactions():
             assert not [w for w in warnings if "solver reported" in w]
         forces = [m["envelope"]["section_forces"] for m in data["members"]]
         return data, forces
@@ -3375,7 +3326,7 @@ class TestSolverReactionsAreChecked:
         (total,) = data["global_reactions"]["by_load_case"].values()
         sources = {support["forces"] for support in data["supports"]}
         warned = [w for w in result["warnings"] if "solver reported" in w["message"]]
-        if _solver_reports_clamped_reactions():
+        if solver_reports_clamped_reactions():
             assert sources == {"solver"}
             assert total["imbalance_N"] < 1e-6 * total["resultant_N"]
             assert not warned
@@ -3407,7 +3358,7 @@ class TestSolverReactionsAreChecked:
             abs(v) for v in total["applied_moment_Nm"]
         )
         sources = sorted(s["forces"] for s in data["supports"])
-        if _solver_reports_clamped_reactions():
+        if solver_reports_clamped_reactions():
             assert sources == ["solver"] * 3
             assert total["forces"] == "solver"
         else:

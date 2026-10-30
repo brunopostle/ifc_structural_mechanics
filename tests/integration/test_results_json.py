@@ -19,6 +19,7 @@ import pytest
 
 from ifc_structural_mechanics import __version__
 from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
+from tests.helpers import solver_reports_clamped_reactions
 
 logger = logging.getLogger(__name__)
 
@@ -398,12 +399,20 @@ class TestBuilding02ResultsJson:
             + 1.6 * cases["Live"]["fz_N"],
             rel=1e-9,
         )
-        assert combined["imbalance_N"] < 1e-6 * combined["fz_N"]
+        # The solver's total balances to six figures. CalculiX 2.21 has 26 of
+        # the 51 supports wrong and its total 4% out: the total is then that
+        # of the supports, 26 of them from their member ends (2e-5, measured)
+        if solver_reports_clamped_reactions():
+            source, limit = "solver", 1e-6
+        else:
+            source, limit = "supports", 1e-4
+        assert combined["forces"] == source
+        assert combined["imbalance_N"] < limit * combined["fz_N"]
         # 51 supports: their moments about the origin balance the loads' too
         for values in list(cases.values()) + [combined]:
             turning = max(abs(v) for v in values["applied_moment_Nm"])
             assert turning > values["fz_N"]
-            assert values["moment_imbalance_Nm"] < 1e-6 * turning
+            assert values["moment_imbalance_Nm"] < limit * turning
         largest = max(
             values["max_displacement_m"]
             for values in data["global_displacements"]["by_load_combination"].values()
