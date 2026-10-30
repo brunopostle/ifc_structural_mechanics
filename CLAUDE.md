@@ -313,6 +313,18 @@ IFC entities commonly encountered:
 
 Use `entity_identifier.py` functions to classify IFC entities rather than direct `is_a()` checks.
 
+**Units are not all made of the length unit** (`94g.22`, `94g.23`). Bonsai's default
+project has lengths in mm, areas in m², and no density unit; the example models'
+units are all made of their length unit, so none of them shows a mix.
+`CrossSectionArea` is in `AREAUNIT`, a density and an inertia in `MASSDENSITYUNIT` and
+`MOMENTOFINERTIAUNIT` (`utils/units.unit_to_si()` works through the unit's entities:
+IfcOpenShell's scales are to grams, which makes a pound 453.6). IFC does not say what
+an unassigned unit means. An unassigned area is in the length unit squared; an
+unassigned density is in kg/m³, the spec's "usually", and one that cannot be stops the
+analysis (`E-MAT-005`); an unassigned inertia is in m⁴. Pset_ProfileMechanical of an I
+profile is used where it agrees with the dimensions to a factor of 1.5, else the
+dimensions are, with `W-SEC-005` (`94g.24`): Bonsai can write m⁴ under a declared mm⁴.
+
 **Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
 representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the
 forces of a load in `GLOBAL_COORDS`. `get_item_transformation(item, length_scale)`
