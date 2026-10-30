@@ -137,6 +137,15 @@ _KINDS = [
     ),
     # Meshing
     MessageKind(
+        "W-SEC-005",
+        "A profile's stated property far from its dimensions",
+        "A value of Pset_ProfileMechanical differs by more than half from what "
+        "the profile's dimensions give, so it is in another unit than the file "
+        "declares or about another axis. The dimensions are used, without the "
+        "fillets of a rolled section: a few percent too flexible. Correct the "
+        "value or the project's unit.",
+    ),
+    MessageKind(
         "W-MSH-001",
         "Members overlap",
         "Two members occupy the same place (a short beam inside a longer one, "

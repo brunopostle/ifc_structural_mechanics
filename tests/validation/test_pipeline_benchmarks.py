@@ -2759,6 +2759,41 @@ class TestAreaInAUnitOfItsOwn:
             )
 
 
+class TestStatedProfileValues:
+    """What Pset_ProfileMechanical states reaches the solver (``94g.24``).
+
+    The inertias were read and dropped, the area kept: a HEB 160 was analysed
+    with 2.414e-5 m4 for the 2.494e-5 of its tables.
+    """
+
+    def test_cantilever_bends_with_the_stated_section(self, tmp_path):
+        area, strong = 1.1 * I_AREA, 1.2 * I_STRONG
+        path = _cantilever_variant(tmp_path, i_profile=True)
+        model = ifcopenshell.open(path)
+        (profile,) = model.by_type("IfcIShapeProfileDef")
+        model.create_entity(
+            "IfcProfileProperties",
+            Name="Pset_ProfileMechanical",
+            Properties=[
+                model.create_entity(
+                    "IfcPropertySingleValue",
+                    Name=name,
+                    NominalValue=model.create_entity(measure, value),
+                )
+                for name, measure, value in (
+                    ("CrossSectionArea", "IfcAreaMeasure", area),
+                    ("MomentOfInertiaY", "IfcMomentOfInertiaMeasure", strong),
+                )
+            ],
+            ProfileDefinition=profile,
+        )
+        model.write(path)
+        data = _run(path, tmp_path, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            _cantilever_self_weight(area, strong, I_H * I_TW), rel=DEFLECTION_TOLERANCE
+        )
+
+
 class TestDensityWithNoUnit:
     """A density with no MASSDENSITYUNIT is in kg/m3, as in Bonsai (``94g.23``).
 

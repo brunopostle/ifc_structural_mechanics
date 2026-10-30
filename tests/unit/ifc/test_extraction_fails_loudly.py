@@ -140,6 +140,35 @@ class TestMembers:
             Extractor(model).extract_model()
         assert error.value.code == "E-MAT-005"
 
+    @staticmethod
+    def _section(model):
+        return Extractor(model).extract_model().members[0].section
+
+    def test_profile_values_are_those_stated(self):
+        """portal_01 in inches: a W10X30's table values, not its plain rectangles."""
+        section = self._section(_open("portal_01"))
+        inch = 0.0254
+        assert section.area == pytest.approx(8.84 * inch**2, rel=1e-3)
+        assert section.moment_of_inertia_y == pytest.approx(170 * inch**4, rel=1e-3)
+        assert section.moment_of_inertia_z == pytest.approx(16.7 * inch**4, rel=1e-3)
+        assert section.torsional_constant == pytest.approx(0.622 * inch**4, rel=1e-3)
+
+    def test_profile_value_far_from_the_dimensions_gives_way_to_them(self):
+        """A value in m4 in a file that declares inches, as Bonsai can write."""
+        model = _open("portal_01")
+        expected = self._section(_open("portal_01")).area
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name == "MomentOfInertiaY":
+                prop.NominalValue.wrappedValue = 7.076e-5
+        extracted = Extractor(model).extract_model()
+        section = extracted.members[0].section
+        width, height, web, flange = (5.81, 10.5, 0.3, 0.51)
+        plain = (width * height**3 - (width - web) * (height - 2 * flange) ** 3) / 12
+        assert section.moment_of_inertia_y == pytest.approx(plain * 0.0254**4)
+        assert section.area == pytest.approx(expected)
+        (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-SEC-005"]
+        assert "MomentOfInertiaY of 'W10X30'" in found["message"]
+
     def test_material_without_poisson_ratio_gets_a_warning(self):
         model = _open("cantilever_01")
         for pset in model.by_type("IfcMaterialProperties"):

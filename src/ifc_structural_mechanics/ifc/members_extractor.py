@@ -25,7 +25,6 @@ from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
 from ..utils.units import (
     convert_length,
-    convert_moment_of_inertia,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 # What a density given with no unit can be, in kg/m3
 MIN_DENSITY, MAX_DENSITY = 1.0, 1.0e6
+
+# How far a profile's stated value may be from its dimensions'. The fillets of
+# a rolled section add a few percent to its inertia and a fifth to its torsion.
+PSET_AGREEMENT = 1.5
 
 
 class MembersExtractor:
@@ -86,6 +89,7 @@ class MembersExtractor:
         self.area_scale = self.unit_scales.get("AREAUNIT", self.length_scale**2)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.density_scale = self.unit_scales.get("MASSDENSITYUNIT")
+        self.inertia_scale = self.unit_scales.get("MOMENTOFINERTIAUNIT", 1.0)
         self.pressure_scale = self.unit_scales.get("PRESSUREUNIT", 1.0)
         # Kelvin per unit of the file: a difference of temperature
         self.temperature_scale = self.unit_scales.get(
@@ -96,6 +100,7 @@ class MembersExtractor:
         # Extractor passes these on to the results
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict[str, Any]] = []
+        self._disagreeing_psets: List[str] = []
 
     def extract_all_members(self) -> List[StructuralMember]:
         """
@@ -628,6 +633,60 @@ class MembersExtractor:
             ),
         )
 
+    def _take_mechanical_properties(self, section: Section, profile) -> None:
+        """
+        Give a section the values its profile's Pset_ProfileMechanical states.
+
+        They include the fillets of a rolled section, which the dimensions do
+        not. A value far from what the dimensions give is in another unit than
+        the file declares or about another axis, so the dimensions stand and
+        the user is told.
+
+        Args:
+            section: The section, with the properties of its dimensions
+            profile: The IFC profile
+        """
+        stated = {}
+        for pset in getattr(profile, "HasProperties", None) or []:
+            if pset.Name == "Pset_ProfileMechanical":
+                for prop in pset.Properties:
+                    stated[prop.Name] = prop.NominalValue.wrappedValue
+
+        for name, attribute, scale in (
+            ("CrossSectionArea", "area", self.area_scale),
+            ("MomentOfInertiaY", "moment_of_inertia_y", self.inertia_scale),
+            ("MomentOfInertiaZ", "moment_of_inertia_z", self.inertia_scale),
+            ("TorsionalConstantX", "torsional_constant", self.inertia_scale),
+        ):
+            if name not in stated:
+                continue
+            value = stated[name] * scale
+            from_dimensions = getattr(section, attribute)
+            if 1 / PSET_AGREEMENT <= value / from_dimensions <= PSET_AGREEMENT:
+                setattr(section, attribute, value)
+            else:
+                disagreement = (
+                    f"{name} of '{section.name}' is {value:.4g} in SI units, "
+                    f"where its dimensions give {from_dimensions:.4g}"
+                )
+                if disagreement not in self._disagreeing_psets:
+                    self._disagreeing_psets.append(disagreement)
+
+        if self._disagreeing_psets:
+            self.warnings = [
+                found for found in self.warnings if found["code"] != "W-SEC-005"
+            ]
+            self.warnings.append(
+                warning(
+                    "W-SEC-005",
+                    f"{len(self._disagreeing_psets)} value(s) of "
+                    "Pset_ProfileMechanical are far from what the profile's "
+                    "dimensions give, and the dimensions are used instead: "
+                    + "; ".join(self._disagreeing_psets[:3])
+                    + ". Check the file's units.",
+                )
+            )
+
     def _density_in_si(self, value: float, material_name: str) -> float:
         """
         A material's mass density in kg/m3.
@@ -710,104 +769,24 @@ class MembersExtractor:
 
         # Handle I-shape profile (symmetric)
         elif profile.is_a("IfcIShapeProfileDef"):
-            # Extract mechanical properties
-            psets = []
-            mechProps = {}
-
-            if hasattr(profile, "HasProperties"):
-                psets = profile.HasProperties
-
-                for pset in psets:
-                    if pset.Name == "Pset_ProfileMechanical":
-                        for prop in pset.Properties:
-                            propName = prop.Name[0].lower() + prop.Name[1:]
-                            mechProps[propName] = prop.NominalValue.wrappedValue
-
-            # If no mechanical properties, calculate them
-            if not mechProps:
-                # Convert dimensions to SI units first
-                flange_thickness = convert_length(
-                    profile.FlangeThickness, self.length_scale
-                )
-                web_thickness = convert_length(profile.WebThickness, self.length_scale)
-                height = convert_length(profile.OverallDepth, self.length_scale)
-                width = convert_length(profile.OverallWidth, self.length_scale)
-
-                # Calculate area (already in SI units)
-                flange_area = width * flange_thickness * 2
-                web_area = web_thickness * (height - 2 * flange_thickness)
-                area = flange_area + web_area
-
-                # Calculate moments of inertia (already in SI units since dimensions are converted)
-                Iy = (width * height**3) / 12 - (width - web_thickness) * (
-                    (height - 2 * flange_thickness) ** 3
-                ) / 12
-                Iz = (2 * flange_thickness) * (width**3) / 12 + (
-                    height - 2 * flange_thickness
-                ) * (web_thickness**3) / 12
-                Jx = (
-                    1
-                    / 3
-                    * (
-                        (height - flange_thickness) * (web_thickness**3)
-                        + 2 * width * (flange_thickness**3)
-                    )
-                )
-
-                mechProps = {
-                    "crossSectionArea": area,
-                    "momentOfInertiaY": Iy,
-                    "momentOfInertiaZ": Iz,
-                    "torsionalConstantX": Jx,
-                }
-            else:
-                # Convert provided properties to SI units
-                if "crossSectionArea" in mechProps:
-                    mechProps["crossSectionArea"] *= self.area_scale
-                if "momentOfInertiaY" in mechProps:
-                    mechProps["momentOfInertiaY"] = convert_moment_of_inertia(
-                        mechProps["momentOfInertiaY"], self.length_scale
-                    )
-                if "momentOfInertiaZ" in mechProps:
-                    mechProps["momentOfInertiaZ"] = convert_moment_of_inertia(
-                        mechProps["momentOfInertiaZ"], self.length_scale
-                    )
-                if "torsionalConstantX" in mechProps:
-                    mechProps["torsionalConstantX"] = convert_moment_of_inertia(
-                        mechProps["torsionalConstantX"], self.length_scale
-                    )
-
-            # Convert dimensions to SI units
             width = convert_length(profile.OverallWidth, self.length_scale)
             height = convert_length(profile.OverallDepth, self.length_scale)
             web_thickness = convert_length(profile.WebThickness, self.length_scale)
             flange_thickness = convert_length(
                 profile.FlangeThickness, self.length_scale
             )
+            fillet_radius = convert_length(
+                getattr(profile, "FilletRadius", None) or 0.0, self.length_scale
+            )
 
-            # FIXED: Safely handle FilletRadius that might be None
-            fillet_radius_value = 0.0  # Default value
-            if hasattr(profile, "FilletRadius"):
-                raw_fillet_radius = profile.FilletRadius
-                if raw_fillet_radius is not None:
-                    fillet_radius_value = raw_fillet_radius
-
-            fillet_radius = convert_length(fillet_radius_value, self.length_scale)
-
-            # Create section
-            return Section(
-                id=(
-                    profile.id()
-                    if hasattr(profile, "id") and callable(profile.id)
-                    else str(uuid.uuid4())
-                ),
-                name=(
-                    profile.ProfileName
-                    if hasattr(profile, "ProfileName")
-                    else "I-Section"
-                ),
+            section = Section(
+                id=profile_id(),
+                name=getattr(profile, "ProfileName", None) or "I-Section",
                 section_type="i",
-                area=mechProps.get("crossSectionArea", 0.0),
+                area=(
+                    2 * width * flange_thickness
+                    + web_thickness * (height - 2 * flange_thickness)
+                ),
                 dimensions={
                     "width": width,
                     "height": height,
@@ -816,6 +795,8 @@ class MembersExtractor:
                     "fillet_radius": fillet_radius,
                 },
             )
+            self._take_mechanical_properties(section, profile)
+            return section
 
         # Handle asymmetric I-shape (averaged flanges → stored as "i")
         elif profile.is_a("IfcAsymmetricIShapeProfileDef"):

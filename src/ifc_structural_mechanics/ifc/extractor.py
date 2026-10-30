@@ -140,7 +140,7 @@ class Extractor:
 
         # Derived units as the file declares them, which need not be made of its
         # length and mass units. MembersExtractor says what none declared means.
-        for unit_type in ("MASSDENSITYUNIT",):
+        for unit_type in ("MASSDENSITYUNIT", "MOMENTOFINERTIAUNIT"):
             try:
                 unit = ifcopenshell.util.unit.get_project_unit(self.ifc, unit_type)
                 if unit:

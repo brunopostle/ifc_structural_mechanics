@@ -114,6 +114,10 @@ The members have no usable Axis (IFC2X3 has none; an axis along the member says 
 
 Something of the member's section could not be represented exactly; the message says what.
 
+### W-SEC-005: A profile's stated property far from its dimensions
+
+A value of Pset_ProfileMechanical differs by more than half from what the profile's dimensions give, so it is in another unit than the file declares or about another axis. The dimensions are used, without the fillets of a rolled section: a few percent too flexible. Correct the value or the project's unit.
+
 ## Meshing
 
 ### E-MSH-001: Gmsh failed
