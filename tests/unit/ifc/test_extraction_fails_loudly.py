@@ -11,6 +11,9 @@ import pytest
 
 ifcopenshell = pytest.importorskip("ifcopenshell")
 
+from ifc_structural_mechanics.ifc.entity_identifier import (  # noqa: E402
+    get_connection_input,
+)
 from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
@@ -256,10 +259,6 @@ class TestConnections:
 
     def test_stiffness_per_length_and_per_area_follow_the_length_unit(self):
         """N/m at a point, N/m per metre along an edge, N/m per m² over a face."""
-        from ifc_structural_mechanics.ifc.entity_identifier import (
-            get_connection_input,
-        )
-
         model = _open("slab_01")
         connection = model.by_type("IfcStructuralCurveConnection")[0]
         connection.AppliedCondition = model.create_entity(
@@ -345,6 +344,120 @@ class TestConnections:
         stiffness = connection.get_stiffness_properties()
         assert stiffness["dx"] == 1e20
         assert stiffness["dz"] == pytest.approx(1.0e7)
+
+    def test_condition_for_another_kind_of_connection_is_an_error(self):
+        """A point condition on a line support once held nothing, without a word."""
+        model = _open("slab_01")
+        for connection in model.by_type("IfcStructuralCurveConnection"):
+            connection.AppliedCondition = model.create_entity(
+                "IfcBoundaryNodeCondition",
+                None,
+                *[model.create_entity("IfcBoolean", True)] * 6,
+            )
+        with pytest.raises(ModelExtractionError, match="ByLengthX") as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-SUP-007"
+
+
+class TestIfc2x3Conditions:
+    """IFC2X3 calls translations Linear, and has numbers only, with -1 for rigid."""
+
+    @staticmethod
+    def _input(ifc_class, connection_class, geometry_type, *values, schema="IFC2X3"):
+        """What a connection of a real file of that schema gives for six values."""
+        model = ifcopenshell.file(schema=schema)
+        _FILES.append(model)
+        connection = model.create_entity(connection_class, "0" * 22)
+        connection.AppliedCondition = model.create_entity(ifc_class, None, *values)
+        # Millimetres and kilonewtons
+        return get_connection_input(connection, geometry_type, 0.001, 1000.0)
+
+    def test_point(self):
+        values = self._input(
+            "IfcBoundaryNodeCondition",
+            "IfcStructuralPointConnection",
+            "point",
+            -1.0,
+            0.0,
+            2.0,
+            -1.0,
+            0.0,
+            3.0,
+        )
+        assert values == pytest.approx(
+            {
+                "dx": 1e20,
+                "dy": 0.0,
+                "dz": 2.0 * 1000.0 / 0.001,
+                "drx": 1e20,
+                "dry": 0.0,
+                "drz": 3.0 * 1000.0 * 0.001,
+            }
+        )
+
+    def test_line(self):
+        values = self._input(
+            "IfcBoundaryEdgeCondition",
+            "IfcStructuralCurveConnection",
+            "line",
+            -1.0,
+            0.0,
+            2.0,
+            -1.0,
+            0.0,
+            3.0,
+        )
+        assert values == pytest.approx(
+            {
+                "dx": 1e20,
+                "dy": 0.0,
+                "dz": 2.0 * 1000.0 / 0.001**2,
+                "drx": 1e20,
+                "dry": 0.0,
+                "drz": 3.0 * 1000.0,
+            }
+        )
+
+    def test_surface(self):
+        values = self._input(
+            "IfcBoundaryFaceCondition",
+            "IfcStructuralSurfaceConnection",
+            "surface",
+            -1.0,
+            0.0,
+            2.0,
+        )
+        assert values == pytest.approx(
+            {"dx": 1e20, "dy": 0.0, "dz": 2.0 * 1000.0 / 0.001**3}
+        )
+
+    def test_unset_is_an_error(self):
+        with pytest.raises(ModelExtractionError, match="LinearStiffnessZ"):
+            self._input(
+                "IfcBoundaryNodeCondition",
+                "IfcStructuralPointConnection",
+                "point",
+                -1.0,
+                -1.0,
+                None,
+                -1.0,
+                -1.0,
+                -1.0,
+            )
+
+    def test_in_ifc4_a_stiffness_of_minus_one_is_one(self):
+        """The specification forbids the convention there: negative values are real."""
+        model = ifcopenshell.file(schema="IFC4")
+        _FILES.append(model)
+        measure = model.create_entity("IfcLinearStiffnessMeasure", -1.0)
+        rigid = model.create_entity("IfcBoolean", True)
+        connection = model.create_entity("IfcStructuralPointConnection", "0" * 22)
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryNodeCondition", None, measure, rigid, rigid, rigid, rigid, rigid
+        )
+        values = get_connection_input(connection, "point", 1.0, 1.0)
+        assert values["dx"] == -1.0
+        assert values["dy"] == 1e20
 
 
 class TestLoads:

@@ -947,6 +947,9 @@ def get_connection_input(
         return None
     try:
         condition = connection.AppliedCondition
+        # IFC2X3 calls translations "Linear", has numbers only and -1 for rigid;
+        # IFC4 forbids that -1, where a negative stiffness is a real one
+        ifc2x3 = condition.file.schema == "IFC2X3"
         result = {}
         for kind, (template, power, unit) in enumerate(
             zip(names[geometryType], length_powers[geometryType], units[geometryType])
@@ -957,17 +960,23 @@ def get_connection_input(
                 if template is None:
                     continue
                 attribute = template.format(axis)
+                if ifc2x3:
+                    attribute = attribute.replace("Translational", "Linear")
                 if not hasattr(condition, attribute):
-                    result[key] = 0.0
-                    continue
+                    raise ModelExtractionError(
+                        f"Its {condition.is_a()} has no {attribute}, so it is not "
+                        f"a condition for a {geometryType} connection.",
+                        code="E-SUP-007",
+                    )
                 value = getattr(condition, attribute)
                 if value is None:
                     raise ModelExtractionError(
                         f"Its {condition.is_a()} gives no {attribute}.",
                         code="E-SUP-007",
                     )
+                value = getattr(value, "wrappedValue", value)
                 result[key] = _ifc_stiffness_to_float(
-                    getattr(value, "wrappedValue", value),
+                    True if ifc2x3 and value == -1 else value,
                     lambda v, f, u, p=power, d=declared: (
                         v * d if d is not None else v * f * u**p
                     ),
