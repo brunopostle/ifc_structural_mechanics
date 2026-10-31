@@ -6486,6 +6486,326 @@ class TestSlabJoinedToBeamsAlongALine:
             assert beam["tied_to_surface_members"] == [slab["id"]]
 
 
+def _two_slabs_in_line(tmp_path, hinged: bool) -> str:
+    """Two 2 m by 1 m slabs meeting along x = 2, under a load along that line.
+
+    The first is clamped along x = 0, the second held across its plane along
+    x = 4. They are joined along x = 2, the second released about it if
+    ``hinged``, and the second carries the load, so that the joint is sheared.
+    """
+    model = ifcopenshell.file(schema="IFC4")
+    create = model.create_entity
+    guid = ifcopenshell.guid.new
+    up = create("IfcDirection", (0.0, 0.0, 1.0))
+    axes = create(
+        "IfcAxis2Placement3D",
+        create("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+        up,
+        create("IfcDirection", (1.0, 0.0, 0.0)),
+    )
+    placement = create("IfcLocalPlacement", None, axes)
+    context = create(
+        "IfcGeometricRepresentationContext", None, "Model", 3, 1e-5, axes, None
+    )
+    project = create(
+        "IfcProject",
+        guid(),
+        None,
+        "Benchmark",
+        None,
+        None,
+        None,
+        None,
+        [context],
+        create(
+            "IfcUnitAssignment",
+            [create("IfcSIUnit", None, "LENGTHUNIT", None, "METRE")],
+        ),
+    )
+    analysis = create(
+        "IfcStructuralAnalysisModel",
+        guid(),
+        None,
+        "Two slabs",
+        None,
+        None,
+        "NOTDEFINED",
+        axes,
+        None,
+        None,
+        placement,
+    )
+    create("IfcRelDeclares", guid(), None, None, None, project, [analysis])
+    material = create("IfcMaterial", "Concrete", None, None)
+    create(
+        "IfcMaterialProperties",
+        "Pset_MaterialMechanical",
+        None,
+        [
+            create(
+                "IfcPropertySingleValue",
+                "YoungModulus",
+                None,
+                create("IfcModulusOfElasticityMeasure", 3.0e10),
+                None,
+            ),
+            create(
+                "IfcPropertySingleValue",
+                "PoissonRatio",
+                None,
+                create("IfcPositiveRatioMeasure", 0.2),
+                None,
+            ),
+        ],
+        material,
+    )
+
+    def vertex(x, y):
+        return create(
+            "IfcVertexPoint", create("IfcCartesianPoint", (float(x), float(y), 0.0))
+        )
+
+    def shape(kind, item):
+        return create(
+            "IfcProductDefinitionShape",
+            None,
+            None,
+            [create("IfcTopologyRepresentation", context, "Reference", kind, [item])],
+        )
+
+    def slab(start, end):
+        corners = [vertex(start, 0), vertex(end, 0), vertex(end, 1), vertex(start, 1)]
+        loop = create(
+            "IfcEdgeLoop",
+            [
+                create(
+                    "IfcOrientedEdge",
+                    None,
+                    None,
+                    create("IfcEdge", corners[i], corners[(i + 1) % 4]),
+                    True,
+                )
+                for i in range(4)
+            ],
+        )
+        face = create(
+            "IfcFaceSurface",
+            [create("IfcFaceOuterBound", loop, True)],
+            create("IfcPlane", axes),
+            True,
+        )
+        member = create(
+            "IfcStructuralSurfaceMember",
+            guid(),
+            None,
+            "Slab",
+            None,
+            None,
+            placement,
+            shape("Face", face),
+            "SHELL",
+            0.2,
+        )
+        create("IfcRelAssociatesMaterial", guid(), None, None, None, [member], material)
+        return member
+
+    def condition(*flags):
+        return create(
+            "IfcBoundaryEdgeCondition",
+            None,
+            *[create("IfcBoolean", flag) for flag in flags],
+        )
+
+    def line(x, applied):
+        return create(
+            "IfcStructuralCurveConnection",
+            guid(),
+            None,
+            "Line",
+            None,
+            None,
+            placement,
+            shape("Edge", create("IfcEdge", vertex(x, 0), vertex(x, 1))),
+            applied,
+            up,
+        )
+
+    def join(member, connection, applied=None, system=None):
+        create(
+            "IfcRelConnectsStructuralMember",
+            guid(),
+            None,
+            None,
+            None,
+            member,
+            connection,
+            applied,
+            None,
+            None,
+            system,
+        )
+
+    first, second = slab(0, 2), slab(2, 4)
+    clamp = line(0, condition(*[True] * 6))
+    held = line(4, condition(False, False, True, False, False, False))
+    joint = line(2, None)
+    join(first, clamp)
+    join(second, held)
+    join(first, joint)
+    if hinged:
+        join(second, joint, condition(True, True, True, True, False, True), axes)
+    else:
+        join(second, joint)
+    create(
+        "IfcRelAssignsToGroup",
+        guid(),
+        None,
+        None,
+        None,
+        [first, second, clamp, held, joint],
+        None,
+        analysis,
+    )
+    _add_area_load(model, second, (0.0, 1.0e4, 0.0))
+    path = str(tmp_path / f"two_slabs_{hinged}.ifc")
+    model.write(path)
+    return path
+
+
+def _slab_pushed_on_its_edges(tmp_path, modulus=None) -> str:
+    """slab_01 pushed along its edges, which hold it rigidly or with ``modulus``."""
+
+    def edges(model):
+        held = model.create_entity("IfcBoolean", True)
+        free = model.create_entity("IfcBoolean", False)
+        along = (
+            model.create_entity("IfcModulusOfLinearSubgradeReactionMeasure", modulus)
+            if modulus
+            else held
+        )
+        return model.create_entity(
+            "IfcBoundaryEdgeCondition", None, held, along, held, free, free, free
+        )
+
+    model = ifcopenshell.open(_slab_on(tmp_path, None, edges=edges))
+    for load in model.by_type("IfcStructuralLoadPlanarForce"):
+        load.PlanarForceX, load.PlanarForceY, load.PlanarForceZ = 0.0, 1.0e4, 0.0
+    path = str(tmp_path / f"pushed_{modulus}.ifc")
+    model.write(path)
+    return path
+
+
+def _slab_sheared_between_beams(tmp_path, released=False, connected=True) -> str:
+    """``_slab_between_beams`` pushed along the beams, with or without its lines."""
+    model = ifcopenshell.open(_slab_between_beams(tmp_path, released=released))
+    for load in model.by_type("IfcStructuralLoadPlanarForce"):
+        load.PlanarForceX, load.PlanarForceY, load.PlanarForceZ = 1.0e4, 0.0, 0.0
+    if not connected:
+        for line in model.by_type("IfcStructuralCurveConnection"):
+            for relation in model.get_inverse(line):
+                if relation.is_a("IfcRelConnectsStructuralMember"):
+                    model.remove(relation)
+                else:
+                    relation.RelatedObjects = [
+                        o for o in relation.RelatedObjects if o != line
+                    ]
+            model.remove(line)
+    path = str(tmp_path / f"sheared_{released}_{connected}.ifc")
+    model.write(path)
+    return path
+
+
+class TestEquationsOnShellsInTheirPlane:
+    """An equation on a shell node holds the mean of its top and bottom (aiz.104).
+
+    The middle of the section is free to slide unless the node is a knot, and
+    the more so the finer the mesh, so each case is run at two sizes against
+    the same structure joined by shared nodes or held by a ``*BOUNDARY``.
+    Without knots they were 4 to 19% too flexible.
+    """
+
+    MESHES = (0.25, 0.125)
+
+    def _run_at(self, path, tmp_path, mesh, name) -> dict:
+        directory = tmp_path / name
+        directory.mkdir()
+        return _run(path, directory, mesh_size=mesh)
+
+    @pytest.mark.parametrize("mesh", MESHES)
+    def test_hinge_between_slabs_sheared_along_it(self, tmp_path, mesh):
+        """A hinge about the line takes the shear along it as a shared node does."""
+        joined, hinged = (
+            self._run_at(_two_slabs_in_line(tmp_path, h), tmp_path, mesh, str(h))
+            for h in (False, True)
+        )
+        assert hinged["global_displacements"]["envelope"]["max_ty_m"] == pytest.approx(
+            joined["global_displacements"]["envelope"]["max_ty_m"], rel=1e-3
+        )
+        total = hinged["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["imbalance_N"] < 1e-5 * 2.0e4
+        assert total["moment_imbalance_Nm"] < 1e-5 * 2.0e4 * 4.0
+
+    @pytest.mark.parametrize("mesh", (0.5, 0.25))
+    def test_line_springs_in_the_plane(self, tmp_path, mesh):
+        """Stiff springs are the rigid edge, and the spring's own q L / 2 k W."""
+        modulus = 1.0e11
+        rigid, sprung = (
+            self._run_at(_slab_pushed_on_its_edges(tmp_path, m), tmp_path, mesh, str(m))
+            for m in (None, modulus)
+        )
+        load = 1.0e4 * SLAB_L * SLAB_W
+        own = load / 2 / (modulus * SLAB_W)
+        assert sprung["global_displacements"]["envelope"][
+            "max_ty_m"
+        ] - own == pytest.approx(
+            rigid["global_displacements"]["envelope"]["max_ty_m"], rel=2e-3
+        )
+        total = sprung["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["imbalance_N"] < 1e-5 * load
+
+    @pytest.mark.parametrize("mesh", MESHES)
+    @pytest.mark.parametrize(
+        "kind", ("released", "bearing"), ids=("released_line", "bearing_only")
+    )
+    def test_slab_sheared_between_beams(self, tmp_path, mesh, kind):
+        """A slab tied to its beams shears as one sharing their nodes."""
+        joined = self._run_at(
+            _slab_sheared_between_beams(tmp_path), tmp_path, mesh, "joined"
+        )
+        tied = self._run_at(
+            _slab_sheared_between_beams(
+                tmp_path, released=kind == "released", connected=kind != "bearing"
+            ),
+            tmp_path,
+            mesh,
+            kind,
+        )
+        assert tied["global_displacements"]["envelope"]["max_tx_m"] == pytest.approx(
+            joined["global_displacements"]["envelope"]["max_tx_m"], rel=1e-3
+        )
+
+    @pytest.mark.parametrize(
+        "force", ((0.0, 0.0, -SLAB_Q), (SLAB_Q, 0.0, 0.0)), ids=("across", "in_plane")
+    )
+    def test_slab_on_surface_springs_in_every_direction(self, tmp_path, force):
+        """Knots at all its nodes, each free to turn about the normal, once broke
+        its equilibrium: the springs carried 78 kN of a 75 kN load. It settles
+        q / k whichever way it is pushed."""
+        modulus = 1.0e7
+        model = ifcopenshell.open(_slab_on(tmp_path, (modulus, modulus, modulus)))
+        for load in model.by_type("IfcStructuralLoadPlanarForce"):
+            load.PlanarForceX, load.PlanarForceY, load.PlanarForceZ = force
+        path = str(tmp_path / "on_springs.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, mesh_size=0.5)
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        load = SLAB_Q * SLAB_L * SLAB_W
+        assert total["imbalance_N"] < 1e-5 * load
+        assert data["global_displacements"]["envelope"]["max_displacement_m"] == (
+            pytest.approx(SLAB_Q / modulus, rel=0.02)
+        )
+
+
 def _settled_beam(tmp_path, with_other_case: bool = False) -> str:
     """Two 4 m spans over three pinned supports, the middle one settling.
 

@@ -325,8 +325,8 @@ class UnifiedCalculixWriter:
             self._build_support_springs()
 
             # Step 2c11: Hold the whole thickness of shells where an equation
-            # supports them
-            self._knot_shell_support_nodes()
+            # acts on them
+            self._knot_shell_nodes_on_equations()
 
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
@@ -995,6 +995,7 @@ class UnifiedCalculixWriter:
             self._write_sections(f)
             self._write_rigid_links(f)
             self._write_support_springs(f)
+            self._write_knot_drilling(f)
 
             # Connections (kinematic couplings, MPCs)
             # Pass boundary condition DOFs to avoid conflicts
@@ -2843,6 +2844,9 @@ class UnifiedCalculixWriter:
     # A knot link carries nothing; it is short and thin so that its
     # expanded nodes stay next to the node it is hung on.
     _KNOT_LINK = 0.01
+    # The cosine above which CalculiX gives shells at a node one normal
+    # (``gen3dnor.f``, about half a degree)
+    _SHELL_SAME_NORMAL = 0.999962
 
     def _knot_point_loaded_nodes(self) -> None:
         """Make a knot of every beam node a point force is applied to.
@@ -2947,37 +2951,51 @@ class UnifiedCalculixWriter:
             next_elem += 1
         self._helper_nodes = helpers
 
-    def _knot_shell_support_nodes(self) -> None:
-        """Make a knot of every node of shells a support equation acts on.
+    def _knot_shell_nodes_on_equations(self) -> None:
+        """Make a knot of every node of shells an equation acts on in their plane.
 
         CalculiX expands a shell node into three through the thickness. A
         ``*BOUNDARY`` holds the mean of the outer two and the middle one
         (``gen3dboun.f``), an equation the mean of the outer two only
         (``gen3dmpc.f``, where the line for the middle one is commented
-        out), so a skew support leaves the middle of the section free to
-        slide. ``slab_01`` pushed in its plane between two
-        edges, their hold along the edge written as an equation, came out
-        1.9, 3.0 and 4.8 % more flexible than with ``*BOUNDARY`` at a 0.5,
-        0.25 and 0.125 m mesh (``aiz.103``); the edge nodes' middles moved
-        0.09 to 0.2 mm where they are held. At a knot the section is rigid
-        and the equation holds all of it: the same slab is then within
-        0.06 % of the ``*BOUNDARY`` one at all three, which a knot changes
-        by as much, and in bending the knots change nothing to six figures.
+        out), so the middle of the section is free to slide. ``slab_01``
+        pushed in its plane between two edges, their hold along the edge
+        written as an equation, came out 1.9, 3.0 and 4.8 % more flexible than
+        with ``*BOUNDARY`` at a 0.5, 0.25 and 0.125 m mesh (``aiz.103``). Sheared
+        in their plane at 0.25, 0.125 and 0.0625 m, a hinge between two slabs was
+        4.4, 7.8 and 8.9 % too flexible and a slab tied or hinged to beams along
+        its edges 9, 15 and 19 %; line springs in its plane, at 0.5, 0.25 and
+        0.125 m, 3.6, 6.4 and 9.1 % (``aiz.104``). At a knot the section is rigid
+        and the equation holds all of it: each is then within 1e-3 of its
+        reference at every mesh.
 
         A short link hung on the node makes it a knot, as for point loads
         (``_knot_point_loaded_nodes``). Nodes on a beam, a link or an arm
         are knots already. Nothing in a model with U1 members, where link
         elements cannot be used on stock CalculiX.
 
-        The equations of springs are left as they are: with a knot at every
-        node of a slab on surface springs the springs carried 78.0 kN of a
-        75 kN load (measured), and without them they agree with closed forms.
+        **The link lies in the shells' plane and its tip is tied against
+        turning about their normal** (``_knot_drilling``). The points of a
+        section are in line along the normal, so nothing else stops a knot
+        turning about it: the solver's value for that rotation is noise, and
+        it broke equilibrium once the knot turned about anything else (the
+        hinge above had reactions of 17 kN at an imbalance of 20 kN of a 20
+        kN load at 0.0625 m, with the links along the normal). The tie touches
+        the section at no point, so it holds nothing of the structure. Only
+        where the shells lie in one plane: where a wall meets a slab the
+        section's points are not in line, the knot needs no tie, and a tie holds
+        the structure against the ground (``building_01``'s moments were out by
+        5e-4 of the total, its forces balancing).
+
+        A spring across the shells acts on the mean of the top and bottom
+        where it matters, so it does not make a knot of its node.
         """
         from ..analysis.boundary_condition_handling import (
             find_connection_support_nodes,
             support_equations,
         )
 
+        self._knot_drilling: List[List[Tuple[int, int, float]]] = []
         if self._u1_members:
             return
         if not hasattr(self, "_knot_links"):
@@ -2994,13 +3012,43 @@ class UnifiedCalculixWriter:
                 for terms in support_equations(conn, node, tip, drilling):
                     if len(terms) > 1:
                         on_equations.update(n for n, _, _ in terms)
-        if not on_equations:
-            return
+        for pair in getattr(self, "_edge_hinge_pairs", []):
+            on_equations.update(pair)
+        for node, terms in getattr(self, "_line_bearings", []):
+            on_equations.add(node)
+            on_equations.update(n for n, weight in terms if abs(weight) > 1e-9)
 
         elements_at: Dict[int, List[int]] = {}
         for elem_id, elem in self.elements.items():
             for node in elem["nodes"]:
                 elements_at.setdefault(node, []).append(elem_id)
+
+        def shell_axes(elements: List[int]) -> Tuple[np.ndarray, np.ndarray]:
+            """The normal of the first element, and a direction in its plane."""
+            corners = [
+                np.array(self.nodes[n], dtype=float)
+                for n in self.elements[elements[0]]["nodes"][:3]
+            ]
+            along = corners[1] - corners[0]
+            normal = np.cross(along, corners[2] - corners[0])
+            return normal / np.linalg.norm(normal), along / np.linalg.norm(along)
+
+        for springs in getattr(self, "_support_springs", {}).values():
+            for spring in springs:
+                elems = elements_at.get(spring["node"], [])
+                if (
+                    spring["kind"] == "translation"
+                    and elems
+                    and all(
+                        self.elements[e]["type"] in SHELL_ELEMENT_TYPES for e in elems
+                    )
+                    and abs(float(np.dot(shell_axes(elems)[0], spring["direction"])))
+                    < 1.0 - 1e-6
+                ):
+                    on_equations.add(spring["node"])
+        if not on_equations:
+            return
+
         linked = {
             n
             for _, a, b in list(getattr(self, "_rigid_links", [])) + self._knot_links
@@ -3028,23 +3076,40 @@ class UnifiedCalculixWriter:
                 )
             ):
                 continue
-            corners = [
-                np.array(self.nodes[n], dtype=float)
-                for n in self.elements[elems[0]]["nodes"][:3]
-            ]
-            normal = np.cross(corners[1] - corners[0], corners[2] - corners[0])
-            normal = normal / np.linalg.norm(normal)
+            normal, along = shell_axes(elems)
             self.nodes[next_node] = tuple(
-                float(v) for v in np.array(self.nodes[node]) + self._KNOT_LINK * normal
+                float(v) for v in np.array(self.nodes[node]) + self._KNOT_LINK * along
             )
             helpers.add(next_node)
             self._knot_links.append((next_elem, node, next_node))
+            if all(
+                abs(float(np.dot(normal, shell_axes([e])[0]))) > self._SHELL_SAME_NORMAL
+                for e in elems
+            ):
+                across = np.cross(normal, along)
+                terms = [
+                    i for i in np.argsort(-np.abs(across)) if abs(across[i]) > 1e-12
+                ]
+                self._knot_drilling.append(
+                    [(next_node, int(i) + 1, float(across[i])) for i in terms]
+                    + [(node, int(i) + 1, -float(across[i])) for i in terms]
+                )
             next_node += 1
             next_elem += 1
             knotted += 1
         self._helper_nodes = helpers
         if knotted:
-            logger.info(f"Made knots of {knotted} shell nodes on support equations")
+            logger.info(f"Made knots of {knotted} shell nodes on equations")
+
+    def _write_knot_drilling(self, file: TextIO) -> None:
+        """Tie the links of shell knots against turning about the shells' normal."""
+        ties = getattr(self, "_knot_drilling", [])
+        if not ties:
+            return
+        file.write("** Knots of shell nodes held against turning about the normal\n")
+        for terms in ties:
+            self._write_equation(file, terms)
+        file.write("**\n")
 
     def _build_support_springs(self) -> None:
         """Put a spring on every node of an elastic support.
@@ -4371,10 +4436,10 @@ class UnifiedCalculixWriter:
         self-weight and belong to no member.
         """
         links = [
-            (elem_id, a, b, self._RIGID_LINK_SIDE)
+            (elem_id, a, b, self._RIGID_LINK_SIDE, "RIGID_LINK")
             for elem_id, a, b in getattr(self, "_rigid_links", [])
         ] + [
-            (elem_id, a, b, self._KNOT_LINK)
+            (elem_id, a, b, self._KNOT_LINK, "KNOT_LINK")
             for elem_id, a, b in getattr(self, "_knot_links", [])
         ]
         if not links:
@@ -4384,10 +4449,10 @@ class UnifiedCalculixWriter:
         # every step with self-weight, that the material has no density
         file.write("*MATERIAL, NAME=MAT_RIGID_LINK\n*DENSITY\n0.\n*ELASTIC\n")
         file.write(f"{self._RIGID_LINK_MODULUS:.6e}, 0.3\n\n")
-        for elem_id, node_a, node_b, side in links:
+        for elem_id, node_a, node_b, side, name in links:
             axis = np.array(self.nodes[node_b]) - np.array(self.nodes[node_a])
             normal = self._orthogonal_beam_normal((0.0, 0.0, 1.0), tuple(axis))
-            elset = f"RIGID_LINK_{elem_id}"
+            elset = f"{name}_{elem_id}"
             file.write(f"*ELEMENT, TYPE=B31, ELSET={elset}\n")
             file.write(f"{elem_id}, {node_a}, {node_b}\n")
             file.write(
