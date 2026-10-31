@@ -389,18 +389,18 @@ The repository includes example IFC structural models (as a git submodule in `ex
 
 | Model | Description | `--gravity` | Max displacement | Vertical reaction | Reference | Status |
 |-------|-------------|-------------|------------------|-------------------|-----------|--------|
-| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan and its own weight | No | 0.41 mm (0.43 mm at a 0.05 m mesh) | 28.8 kN | 0.43 mm by hand | Verified |
+| `beam_01` | 4 m beam fixed at both ends, 20 kN at midspan and its own weight | No | 0.43 mm at any mesh | 28.8 kN | 0.43 mm by hand | Verified |
 | `cantilever_01` | 3 m cantilever, 0.2 × 0.4 m section, self-weight | **Yes** | 0.28 mm | 18.4 N | 0.277 mm Code_Aster, 0.281 mm by hand | Verified |
-| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.429 mm (0.433 mm at 0.5 m) | 660 N | 0.427 mm Code_Aster | Verified, within 2% |
+| `structure_01` | Slab hinged on a wall, two columns, self-weight | **Yes** | 0.428 mm (0.433 mm at 0.5 m) | 660 N | 0.427 mm Code_Aster | Verified, within 2% |
 | `slab_01` | Slab clamped along two edges, self-weight | **Yes** | 0.173 mm (0.181 mm at 0.5 m) | 230 N | 0.181 mm by hand | Verified; the Code_Aster file is for other supports |
-| `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.372 mm (0.373 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2% |
-| `portal_01` | Portal frame of I-sections, load on half of its beam | No | 2.15 mm (2.17 mm at 0.25 m) | 42.7 kN | Reactions stored in the file: vertical to 0.02%, thrust 1.9% lower (shear area) | Verified against a plane frame with the same shear area, within 1.5% |
-| `building_02` | Multi-storey building, three load cases and 17 combinations | No | 16.8 mm (Dead, its self-weight), 25.7 mm (Live), 15.3 mm (Extra_dead), 54.4 mm (1.4D+1.6L) at a 2 m mesh | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
-| `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.70 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.79, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
+| `grid_of_beams` | Secondary beams hinged onto two main beams, self-weight | **Yes** | 0.375 mm (0.375 mm at 0.5 m) | 273 N | 0.396 mm Code_Aster, 0.367 mm without its spurious arm weight | Verified, within 2.3% |
+| `portal_01` | Portal frame of I-sections, load on half of its beam | No | 2.19 mm (2.19 mm at 0.25 m) | 42.7 kN | Reactions stored in the file: vertical to 0.02%, thrust 1.9% lower (shear area) | Verified against a plane frame with the same shear area, within 1.5% |
+| `building_02` | Multi-storey building, three load cases and 17 combinations | No | 16.8 mm (Dead, its self-weight), 26.0 mm (Live), 15.3 mm (Extra_dead), 54.9 mm (1.4D+1.6L) at a 2 m mesh | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | applied loads by hand | Runs; loads and reactions verified, deflections plausible but unchecked |
+| `building_01` | Small building with I-section beams and masonry walls, three load cases | No | 6.78 mm (Dead, its self-weight), 0.29 mm (Live), 0.10 mm (floor finishing); 7.99, 0.34 and 0.11 mm at 0.5 m | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | applied loads by hand | Runs; loads and reactions verified, deflections not |
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,
-measured on 2026-10-11 (`beam_01` and the two buildings on 2026-10-12). The Code_Aster references are the IfcOpenShell IFC2CA
+measured on 2026-10-31. The Code_Aster references are the IfcOpenShell IFC2CA
 results shipped in `examples/analysis-models/models/`. Reactions equal the
 applied loads to six figures at any mesh size; `results.json` gives both, and
 the reaction at each support (see below).
