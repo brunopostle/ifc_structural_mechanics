@@ -259,7 +259,7 @@ Command-line interface:
   - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: A failing one fails CI. End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 6 minutes in total with its three load cases and 17 load combinations, and 2.3 GB of memory). Skip with `-m "not slow"`.
+- **Slow tests**: A failing one fails CI. End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 15 minutes in total with its three load cases and 17 load combinations, and 3.1 GB of memory). Skip with `-m "not slow"`.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -608,7 +608,10 @@ here. This section only records the constraints that shape day-to-day work.
   in the file. `building_02` solves, its reactions match the applied loads and its
   deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
   reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
-  Never run it finer than 2 m on the development machine. Measured
+  Never run it finer than 2 m on the development machine. The knots of `aiz.104`
+  took a whole run at 2 m from 13 min and 2.34 GB to 15 min and 3.10 GB, and moved its
+  largest displacements by 0.34% and its supports by 0.35% at most; the figures for
+  `ccx` that follow are from before them. Measured
   2026-10-17: at 2 m `ccx` alone needs 60 s and 2.08 GB (SPOOLES, the only
   direct solver of stock builds); `SOLVER=ITERATIVE CHOLESKY` does not
   converge on expanded shells, and S8R quads instead of S6 save 17% of
@@ -849,13 +852,30 @@ What is skew is written by `write_boundary_conditions()` from `support_equations
   has the line for the middle commented out, `gen3dboun.f` holds both for a
   `*BOUNDARY`). `slab_01` pushed in its plane between pinned edges, the hold
   along them an equation, was 1.9, 3.0 and 4.8% too flexible at a 0.5, 0.25
-  and 0.125 m mesh. `_knot_shell_support_nodes()` hangs a knot link on every
-  such node of a skew support's equations: tilted 30 degrees the slab is
-  then the level one to 2e-5 at all three, and in bending knots there change
-  nothing to six figures. Not on the nodes of spring equations: knots at
-  every node of a slab on surface springs broke its equilibrium (78.0 kN of
-  springs for 75 kN of load, measured), and the springs' own tests are right
-  without them.
+  and 0.125 m mesh. It grows with refinement, and did so wherever an equation
+  acts in the shells' plane (`aiz.104`): sheared along it, a hinge between two
+  slabs was 4.4, 7.8 and 8.9% too flexible at 0.25, 0.125 and 0.0625 m, a slab
+  tied or hinged to beams along its edges 9, 15 and 19%; line springs in its
+  plane, at 0.5, 0.25 and 0.125 m, 3.6, 6.4 and 9.1%.
+  `_knot_shell_nodes_on_equations()` hangs a knot link on every such node of
+  skew support equations, edge hinges, line bearings and translational springs
+  not along the normal: each is then within 1e-3 of its reference at every mesh
+  (`TestEquationsOnShellsInTheirPlane`), and in bending the knots change nothing
+  to six figures. A spring along the normal gets none: the mean is what matters
+  across the shell.
+- **A knot on a node of shells in one plane has no stiffness against turning
+  about their normal**, as all its section's points are in line along it. The
+  solver's value for that rotation is noise, and it breaks equilibrium once the
+  knot turns about anything else: with the link along the normal the hinge above
+  was out of balance by 20 kN of its 20 kN load at 0.0625 m, and a slab on surface
+  springs carried 78.0 kN of 75 kN. So the link lies in the plane and its tip is tied
+  against turning about the normal (`_knot_drilling`), which leaves imbalances
+  under 1 N and touches no point of the section. That tie is held against the
+  ground, so it is only for shells with one normal (`_SHELL_SAME_NORMAL`, the
+  cosine in `gen3dnor.f`): where a wall meets a slab the points are not in line,
+  the knot needs no tie, and one is a real moment on the structure. `building_01`
+  has 135 such nodes of its 250 knots, and its moments were out by 104 455 N·m (5e-4)
+  with its forces balancing. Check `moment_imbalance_Nm` as well as `imbalance_N`.
 - No arms in a model with U1 members (no link elements next to U1): a skew rotation
   there stops the analysis with an `AnalysisError`.
 
@@ -1015,7 +1035,8 @@ rotational degrees of freedom**. This drives everything about joints:
   1.2% more than Timoshenko's beam at 0.25 m and 3.1% at 0.05 m. A short
   thin link at right angles, its tip free, makes the node a knot: the column
   is right to 0.03% and the I section to 3e-6 at any mesh. The knot links
-  are in `_knot_links`, not `_rigid_links`.
+  are in `_knot_links`, not `_rigid_links`, and their element sets are named
+  `KNOT_LINK_<id>`.
 - **Beams have no Poisson's ratio** (`aiz.91`, `_BEAM_POISSON`): their
   materials (`MAT_RT_`, `MAT_EQ_`) are written with nu = 0, their shear
   moduli as before. Beam theory has no use for it, and in an expanded beam
@@ -1049,14 +1070,15 @@ rotational degrees of freedom**. This drives everything about joints:
   after `fragment()`, which is a rigid joint. A surface member released about
   that edge gets copies of the edge nodes (`_release_hinged_edges()`), tied to
   the originals in DOF 1-3 (`_write_edge_hinges()`); a row of ball joints along
-  a line is a hinge about it.
+  a line is a hinge about it. Both nodes of each pair are knots (see Skew supports).
 - **A curve member lying in a surface member bears on it along its length**,
   connected in the IFC or not (`_build_line_bearings()`). Example models
   connect a slab at its corners only; without this the edge beams carry
   nothing and the slab spans corner to corner (`building_02` gave 462 mm).
   Each beam node the shell mesh does not share is tied in DOF 1-3 to the
   triangle it falls in, with that element's shape functions. It is a hinge
-  line, and one warning reports how many members were tied. Not tied: nodes
+  line, and one warning reports how many members were tied. The shell nodes of
+  a tie are knots, the beam's already (see Skew supports). Not tied: nodes
   on a rigid link, nodes in any earlier equation, and ties that would lean
   on a restrained shell node (CalculiX reports that force at the tied node,
   so it goes missing from the reactions). A member needs two nodes in the
