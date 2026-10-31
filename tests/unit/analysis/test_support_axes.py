@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from ifc_structural_mechanics.analysis.boundary_condition_handling import (
+    _add_nodes_tied_to_supports,
     get_constrained_dofs,
     get_released_rotations,
     released_rotation_axes,
@@ -240,3 +241,50 @@ class TestMemberSideReleaseAtASupport:
         support = _support((FIXED,) * 6, members=("m1", "m2"))
         support.released_dofs_by_member = {"m1": [4, 5, 6]}
         assert get_constrained_dofs(support) == [1, 2, 3, 4, 5, 6]
+
+
+class TestNodesTiedToSupports:
+    """`uda`: the force of a member tied to a support node is read at its own node."""
+
+    COORDS = {n: (float(n), 0.0, 0.0) for n in range(1, 8)}
+
+    @staticmethod
+    def _record(*nodes):
+        return {"nodes": {n: (float(n), 0.0, 0.0) for n in nodes}}
+
+    def test_a_tied_node_joins_the_support(self):
+        supports = {"a": self._record(1)}
+
+        added = _add_nodes_tied_to_supports(supports, [(2, 1)], self.COORDS)
+
+        assert added == {2}
+        assert supports["a"]["nodes"][2] == (2.0, 0.0, 0.0)
+
+    def test_ties_are_followed_through_other_nodes(self):
+        """A copy of a copy, where a member is hinged along two edges."""
+        supports = {"a": self._record(1)}
+
+        added = _add_nodes_tied_to_supports(supports, [(3, 2), (2, 1)], self.COORDS)
+
+        assert added == {2, 3}
+
+    def test_a_node_stays_with_the_support_that_holds_it(self):
+        supports = {"a": self._record(1), "b": self._record(2)}
+
+        added = _add_nodes_tied_to_supports(supports, [(2, 1)], self.COORDS)
+
+        assert added == set()
+        assert set(supports["a"]["nodes"]) == {1}
+
+    def test_a_node_goes_to_one_support(self):
+        supports = {"a": self._record(1), "b": self._record(2)}
+
+        _add_nodes_tied_to_supports(supports, [(3, 1), (3, 2)], self.COORDS)
+
+        assert (3 in supports["a"]["nodes"]) != (3 in supports["b"]["nodes"])
+
+    def test_ties_away_from_supports_add_nothing(self):
+        supports = {"a": self._record(1)}
+
+        assert _add_nodes_tied_to_supports(supports, [(2, 3)], self.COORDS) == set()
+        assert set(supports["a"]["nodes"]) == {1}

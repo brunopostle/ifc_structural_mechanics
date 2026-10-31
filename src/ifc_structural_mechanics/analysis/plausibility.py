@@ -8,6 +8,7 @@ far above what a working structure does.
 """
 
 import math
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..utils.messages import guids_of, warning
@@ -58,23 +59,39 @@ def _length(value: float) -> str:
     return f"{value * 1000.0:.3g} mm"
 
 
+def _has_the_rotation_fault(solver_version: Optional[str]) -> bool:
+    """Whether a version of CalculiX can misreport reactions at clamped ends.
+
+    2.21 does and 2.23 does not. A version that cannot be read may.
+    """
+    numbers = re.match(r"(\d+)\.(\d+)", solver_version or "")
+    return not numbers or (int(numbers[1]), int(numbers[2])) < (2, 23)
+
+
 def balance_warnings(
-    results: Dict[str, Any], user_elements: bool = False
+    results: Dict[str, Any],
+    user_elements: bool = False,
+    solver_version: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Return one warning if the solver's reactions are not to be trusted.
+    """Return one warning if the reactions are not to be trusted.
 
     Statics requires the reactions to balance the loads, so a difference
-    means the solver reported them wrongly (the displacements need not be
-    wrong). CalculiX 2.21 and earlier do this at a support that holds a
-    rotation. Measured: the same input gives the same displacements in 2.21
-    and 2.23, and reactions that are right only in 2.23. The errors of two
-    supports can cancel, so the exporter also checks each such support
-    against the ends of its members and marks the ones it had to replace.
+    means something is wrong. There is one known cause that leaves the
+    displacements right: CalculiX 2.21 and earlier misreport the force at a
+    support that holds a rotation. Measured: the same input gives the same
+    displacements in 2.21 and 2.23, and reactions that are right only in 2.23.
+    The errors of two supports can cancel, so the exporter also checks each
+    such support against the ends of its members and marks the ones it had to
+    replace. The warning names that cause only where the check found such a
+    support on a version that has the fault, and otherwise says there is no
+    explanation (``uda``: it once blamed 2.21 while running on 2.23, for
+    forces that had gone missing through a hinge's equations).
 
     Args:
         results: The dict written to ``results.json``.
         user_elements: The model has U1 elements, whose reactions are worked
             out from their stiffness and not taken from the solver.
+        solver_version: The version of CalculiX that ran, if known.
 
     Returns:
         A list with one warning, or an empty list.
@@ -97,7 +114,14 @@ def balance_warnings(
     unreliable = sum(1 for s in supports if s.get("forces") == "unreliable")
     if not unbalanced and not replaced and not unreliable:
         return []
-    message = "The reactions the solver reported are wrong."
+    explained = user_elements or (
+        (replaced or unreliable) and _has_the_rotation_fault(solver_version)
+    )
+    message = (
+        "The reactions the solver reported are wrong."
+        if explained
+        else "The reactions are not to be trusted."
+    )
     if unbalanced:
         listed = ", ".join(
             f"{case} (off by {imbalance:.4g} N of {size:.4g} N)"
@@ -129,12 +153,19 @@ def balance_warnings(
             "the U1 stiffness of CalculiX 2.23, because the solver's are "
             "wrong; this version of CalculiX may have a different U1 element."
         )
-    else:
+    elif explained:
         message += (
             " CalculiX 2.21 and earlier misreport the force at a support that "
             "holds a rotation; 2.23 does not."
         )
-    message += " Displacements and member forces are not affected."
+    if explained:
+        message += " Displacements and member forces are not affected."
+    else:
+        message += (
+            " No known fault of the solver explains this, so the displacements "
+            "and member forces may be wrong as well. Please report it with the "
+            "input file."
+        )
     concerned = [
         s["ifc_guid"]
         for s in supports
@@ -168,7 +199,7 @@ def _mechanism_mode_warnings(results: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def plausibility_warnings(
-    results: Dict[str, Any], domain_model
+    results: Dict[str, Any], domain_model, solver_version: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Return a warning for each load case whose results are not believable.
 
@@ -185,6 +216,7 @@ def plausibility_warnings(
     Args:
         results: The dict written to ``results.json``.
         domain_model: The analysed ``StructuralModel``, for member geometry.
+        solver_version: The version of CalculiX that ran, if known.
 
     Returns:
         Warning dicts in the form used by ``result["warnings"]``.
@@ -200,7 +232,7 @@ def plausibility_warnings(
     model_size = _extent(everything)
 
     warnings: List[Dict[str, Any]] = balance_warnings(
-        results, _has_user_elements(domain_model)
+        results, _has_user_elements(domain_model), solver_version
     )
     warnings.extend(_mechanism_mode_warnings(results))
     members = results.get("members", [])

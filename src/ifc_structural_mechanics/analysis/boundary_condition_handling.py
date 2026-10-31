@@ -467,6 +467,7 @@ def write_boundary_conditions(
     rotation_arms: Optional[Dict[str, Dict[int, tuple]]] = None,
     springs: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     member_nodes: Optional[Dict[str, Collection[int]]] = None,
+    translation_ties: Iterable[Tuple[int, int]] = (),
 ) -> set:
     """
     Write the supports of the model to the CalculiX input file.
@@ -497,6 +498,8 @@ def write_boundary_conditions(
             supports.
         member_nodes: The nodes of the members each support holds, by
             support (see ``find_connection_support_nodes``).
+        translation_ties: Pairs of nodes at one point that equations tie
+            together in translation (see ``_add_nodes_tied_to_supports``).
 
     Returns:
         The ``(node, dof)`` pairs the equations make depend on others, which
@@ -622,6 +625,12 @@ def write_boundary_conditions(
             ifc_guids=guids_of(domain_model, unattached),
         )
 
+    all_bc_nodes.update(
+        _add_nodes_tied_to_supports(
+            domain_model.support_nodes, translation_ties, node_coords
+        )
+    )
+
     if not all_bc_nodes:
         raise AnalysisError(
             "The model has no supports: no connection has an AppliedCondition "
@@ -637,6 +646,49 @@ def write_boundary_conditions(
     file.write("\n")
     node_sets["ALL_BC_NODES"] = bc_nodes_list
     return dependent
+
+
+def _add_nodes_tied_to_supports(
+    supports: Dict[str, Dict[str, Any]],
+    ties: Iterable[Tuple[int, int]],
+    node_coords: Dict[int, Tuple[float, float, float]],
+) -> set:
+    """Count nodes tied to a support node as nodes of that support.
+
+    The solver's force at a node is what the elements there put on it: an
+    equation's share is not in it. What a member gives a node tied to a support
+    node arrives at the support all the same, and goes missing from the
+    reactions unless that node is printed too (``uda``: the foot of a wall
+    hinged to a floor, at a corner where another wall's support holds the
+    floor, took 15.7 of 539 kN). Like the tips of arms, these nodes are in the
+    support's record and ``ALL_BC_NODES`` and not in ``BC_<id>``: the equation
+    is what holds them.
+
+    Args:
+        supports: ``domain_model.support_nodes``, added to here.
+        ties: Pairs of nodes tied together in translation.
+        node_coords: The positions of the nodes.
+
+    Returns:
+        The nodes added.
+    """
+    tied_to: Dict[int, set] = {}
+    for a, b in ties:
+        tied_to.setdefault(a, set()).add(b)
+        tied_to.setdefault(b, set()).add(a)
+    seen = {node for record in supports.values() for node in record["nodes"]}
+    added: set = set()
+    for record in supports.values():
+        waiting = [node for node in record["nodes"] if node in tied_to]
+        while waiting:
+            for node in tied_to[waiting.pop()]:
+                if node in seen or node not in node_coords:
+                    continue
+                seen.add(node)
+                added.add(node)
+                record["nodes"][int(node)] = tuple(float(c) for c in node_coords[node])
+                waiting.append(node)
+    return added
 
 
 # Standard gravity, m/s². IFC gives self-weight as a share of the members'

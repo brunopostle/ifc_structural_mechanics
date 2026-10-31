@@ -726,6 +726,55 @@ class TestSolverThatMisreportsReactions:
 
         assert "nothing to take them from" in warning["message"]
 
+    def test_a_version_without_the_fault_is_not_blamed(self):
+        """`uda`: it once named 2.21 while running on 2.23."""
+        exporter = self._column(1076.6, 1076.6)
+        results = {
+            "global_reactions": exporter._global_reactions(),
+            "supports": exporter._supports(),
+        }
+
+        (warning,) = balance_warnings(results, solver_version="2.23")
+
+        message = warning["message"]
+        assert "2.21" not in message
+        assert "Displacements and member forces are not affected" not in message
+        assert "No known fault of the solver explains this" in message
+
+    def test_the_fault_is_named_for_a_version_that_has_it(self):
+        exporter = self._column(1076.6, 1076.6)
+        results = {
+            "global_reactions": exporter._global_reactions(),
+            "supports": exporter._supports(),
+        }
+
+        (warning,) = balance_warnings(results, solver_version="2.21")
+
+        assert "CalculiX 2.21 and earlier" in warning["message"]
+        assert "are not affected" in warning["message"]
+
+    def test_no_such_support_is_no_explanation(self):
+        """Forces short with no support replaced: nothing has been checked."""
+        results = {
+            "global_reactions": {
+                "by_load_case": {
+                    "Dead": {
+                        "applied_load_N": [0.0, 0.0, -1000.0],
+                        "resultant_N": 970.0,
+                        "imbalance_N": 30.0,
+                    }
+                }
+            },
+            "supports": [{"forces": "solver"}],
+        }
+
+        (warning,) = balance_warnings(results, solver_version="2.21")
+
+        message = warning["message"]
+        assert "Dead (off by 30 N of 1000 N)" in message
+        assert "2.21" not in message
+        assert "may be wrong as well" in message
+
     def test_no_warning_when_everything_agrees(self):
         exporter = self._column(1000.0, 1000.0)
         results = {

@@ -415,6 +415,18 @@ here. This section only records the constraints that shape day-to-day work.
   `ResultsExporter` takes it off. Reactions then equal the applied loads to
   six figures at any mesh size; `global_reactions` carries `applied_load_N`
   and `imbalance_N`.
+- **The solver's force at a node is what the elements there put on it; an
+  equation's share is not in it** (`uda`). So a member tied to a support node
+  gives its force at its own node, and a support that does not hold that member
+  never saw it: a wall hinged to two floors, whose foot ends at corners other
+  walls' supports hold, was 15.7 of 539 kN short (and the horizontal reactions
+  not zero), 2.8 kN of it sideways, with every displacement right. Every
+  translation tie between nodes at one point is noted
+  (`_translation_ties`), and `_add_nodes_tied_to_supports()` counts the nodes
+  tied to a support node as that support's: in `ALL_BC_NODES` and its record
+  and not in `BC_<id>`, as arm tips are. Nothing about the solve changes. A
+  node a support holds itself stays that support's. Measured: the imbalance goes
+  from 3% to 3e-8 at any mesh, on 2.21 and 2.23.
 - **The moments in `global_reactions` are added up from `supports`**
   (`94g.10`): each support's moments and its force at its position, about
   the origin of the global axes. The solver has no total moment, and the

@@ -41,7 +41,12 @@ def no_run_record():
             "settings": {},
         },
     ):
-        yield
+        # The runner is a mock here, and what it printed is no string
+        with patch(
+            "ifc_structural_mechanics.api.structural_analysis._solver_version",
+            return_value=None,
+        ):
+            yield
 
 
 # Mock the domain model for tests

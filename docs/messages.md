@@ -416,7 +416,7 @@ The modal analysis ran and CalculiX reported no frequency. Its output in the out
 
 ### W-RES-001: Reactions corrected
 
-CalculiX 2.21 and earlier misreport the force at a support that holds a rotation. Such supports have their forces taken from the ends of their members (good to about 1 %), and the message says which totals still do not balance the loads. Displacements and member forces are not affected. CalculiX 2.23 does not need this.
+The reactions do not balance the loads, or some had to be replaced. CalculiX 2.21 and earlier misreport the force at a support that holds a rotation. Such supports have their forces taken from the ends of their members (good to about 1 %), and the message says which totals still do not balance the loads. Displacements and member forces are not affected then, and CalculiX 2.23 does not need this. Where that does not explain it (no such support, or CalculiX 2.23 or later) the message says so: the cause is not known, the other results may be wrong too, and it should be reported with the input file.
 
 ### W-RES-002: Results left out
 

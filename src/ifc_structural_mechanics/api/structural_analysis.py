@@ -299,7 +299,13 @@ def analyze_ifc(
                     node_coordinates=results_parser.node_coordinates,
                 )
                 exported = exporter.build()
-                result["warnings"].extend(plausibility_warnings(exported, domain_model))
+                result["warnings"].extend(
+                    plausibility_warnings(
+                        exported,
+                        domain_model,
+                        _solver_version(calculix_runner.solver_output),
+                    )
+                )
                 exported = _with_run_record(
                     exported,
                     run=_run_record(
@@ -650,6 +656,12 @@ def _loads_are_not_mass(domain_model, gravity: bool) -> List[Dict[str, Any]]:
     ]
 
 
+def _solver_version(solver_output: str) -> Optional[str]:
+    """The version of CalculiX named in what it printed, if it did."""
+    found = re.search(r"CalculiX Version (\d[^,\s]*)", solver_output)
+    return found.group(1) if found else None
+
+
 def _run_record(ifc_path: str, solver_output: str, **settings) -> Dict[str, Any]:
     """How the results were made, for the ``run`` of ``results.json``.
 
@@ -662,11 +674,10 @@ def _run_record(ifc_path: str, solver_output: str, **settings) -> Dict[str, Any]
     with open(ifc_path, "rb") as fh:
         for block in iter(lambda: fh.read(1 << 20), b""):
             sha256.update(block)
-    found = re.search(r"CalculiX Version (\d[^,\s]*)", solver_output)
     return {
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "library": {"name": "ifc_structural_mechanics", "version": __version__},
-        "solver": {"name": "CalculiX", "version": found.group(1) if found else None},
+        "solver": {"name": "CalculiX", "version": _solver_version(solver_output)},
         "input_file": {
             "name": os.path.basename(ifc_path),
             "sha256": sha256.hexdigest(),

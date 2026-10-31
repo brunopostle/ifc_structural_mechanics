@@ -125,6 +125,7 @@ class UnifiedCalculixWriter:
         # (U1 elements don't support *DLOAD; facial-load processing crashes).
         self._u1_element_sets: set = set()
         self._equation_nodes: set = set()
+        self._translation_ties: List[Tuple[int, int]] = []
         # Mass of the U1 elements lumped at their nodes (node_id -> kg)
         self._u1_node_masses: Dict[int, float] = {}
 
@@ -1011,6 +1012,7 @@ class UnifiedCalculixWriter:
                 rotation_arms=getattr(self, "_support_arms", None),
                 springs=getattr(self, "_support_springs", None),
                 member_nodes=self._support_member_nodes(),
+                translation_ties=self._translation_ties,
             )
             self._record_support_node_elements()
             # What an equation of a skew support already decides is not
@@ -2579,6 +2581,7 @@ class UnifiedCalculixWriter:
                 file.write(f"{copy},{dof},1.0,{original},{dof},-1.0\n")
                 constrained_node_dofs.add((copy, dof))
                 self._note_equation_nodes((copy, original))
+                self._note_translation_tie(copy, original)
         file.write("**\n")
 
     # Length of the stiff arms that carry a partial end release.
@@ -3850,6 +3853,17 @@ class UnifiedCalculixWriter:
         """Remember the nodes of an equation just written (see line bearings)."""
         self._equation_nodes.update(nodes)
 
+    def _note_translation_tie(self, node: int, other: int) -> None:
+        """Remember that an equation ties two nodes at one point together.
+
+        Those ties are what ``write_boundary_conditions`` follows to find the
+        nodes whose force arrives at a support. Tips of arms are not at the
+        point they serve, and the arm's elements carry their force.
+        """
+        helpers = getattr(self, "_helper_nodes", set())
+        if node not in helpers and other not in helpers:
+            self._translation_ties.append((node, other))
+
     def _write_line_bearings(
         self, file: TextIO, constrained_node_dofs: set, bc_node_dofs: set
     ) -> None:
@@ -4480,6 +4494,7 @@ class UnifiedCalculixWriter:
             bc_node_dofs: Set of (node_id, dof) tuples that have boundary conditions
         """
         self._equation_nodes: set = set()
+        self._translation_ties: List[Tuple[int, int]] = []
         if not self.domain_model.connections:
             logger.debug("No connections to write")
             self._write_line_bearings(file, set(bc_node_dofs), bc_node_dofs)
@@ -4648,6 +4663,8 @@ class UnifiedCalculixWriter:
                 self._write_equation(file, terms)
                 constrained_node_dofs.add((node, dof))
                 self._note_equation_nodes(n for n, _, _ in terms)
+                if len(terms) == 2 and terms[0][1] == terms[1][1] and dof <= 3:
+                    self._note_translation_tie(node, terms[1][0])
         connection_pairs = [
             (m, n)
             for m, n in self._find_connection_nodes_at_location(
@@ -4675,6 +4692,7 @@ class UnifiedCalculixWriter:
             file.write(f"{node},{dof},1.0,{ref},{dof},-1.0\n")
             constrained_node_dofs.add((node, dof))
             self._note_equation_nodes((node, ref))
+            self._note_translation_tie(node, ref)
             equations_written += 1
 
         # Translations (DOF 1-3): couple all nodes to ref_node, except a node

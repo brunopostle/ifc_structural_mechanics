@@ -7866,3 +7866,133 @@ class TestSlabWithAnOpening:
         )
         total = pieces["global_reactions"]["by_load_case"]["Imposed"]
         assert total["fz_N"] == pytest.approx(SLAB_Q * self.AREA, rel=1e-6)
+
+
+class TestNodesTiedToSupports:
+    """A node tied to a support node takes its force to that support (`uda`).
+
+    The solver's force at a node is what the elements there put on it, not what
+    an equation does, so the force of a member tied to a support node has to be
+    read at its own node.
+    """
+
+    HINGED_WALL = os.path.join("tests", "test_data", "hinged_wall_without_footing.ifc")
+
+    @staticmethod
+    def _assert_balanced(data, rel=1e-6):
+        for total in data["global_reactions"]["by_load_case"].values():
+            load = np.linalg.norm(total["applied_load_N"])
+            assert total["forces"] == "solver"
+            assert total["imbalance_N"] < rel * load
+            assert total["moment_imbalance_Nm"] < rel * np.linalg.norm(
+                total["applied_moment_Nm"]
+            )
+            assert abs(total["fx_N"]) < rel * load
+            assert abs(total["fy_N"]) < rel * load
+
+    @pytest.mark.parametrize("mesh, order", [(0.5, 2), (0.25, 2), (0.5, 1)], ids=str)
+    def test_wall_hinged_along_an_edge_with_no_support(self, tmp_path, mesh, order):
+        """Its foot ends at corners that other walls' supports hold.
+
+        One wall of a room with a porch, hinged to a floor on each side where
+        nothing holds it, was 15.7 of 539 kN short at a 0.5 m mesh.
+        """
+        data = _run(self.HINGED_WALL, tmp_path, mesh, element_order=order)
+
+        self._assert_balanced(data)
+        assert not [w for w in data["warnings"] if w["code"] == "W-RES-001"]
+
+    def test_beam_released_at_a_joint_another_beam_is_held_at(self, tmp_path):
+        """A ball joint leaning on a node that a support of the other beam holds."""
+        path = _balcony_frame(
+            tmp_path, "IfcRectangleProfileDef", {"XDim": 0.1, "YDim": 0.2}
+        )
+        model = ifcopenshell.open(path)
+        create = model.create_entity
+        main, arm = model.by_type("IfcStructuralCurveMember")
+        # Pinned, so that 2.21 has nothing to misreport (`94g.7`)
+        root = next(
+            c
+            for c in model.by_type("IfcStructuralPointConnection")
+            if c.AppliedCondition
+        )
+        root.AppliedCondition = _node_condition(
+            model, [True, True, True, False, False, False]
+        )
+        joint = next(
+            c
+            for c in model.by_type("IfcStructuralPointConnection")
+            if not c.AppliedCondition
+        )
+        placement = joint.ObjectPlacement
+        context = joint.Representation.Representations[0].ContextOfItems
+
+        def shape(point):
+            vertex = create(
+                "IfcVertexPoint", create("IfcCartesianPoint", [float(c) for c in point])
+            )
+            topology = create(
+                "IfcTopologyRepresentation", context, "Reference", "Vertex", [vertex]
+            )
+            return create("IfcProductDefinitionShape", None, None, [topology])
+
+        def support(point, member):
+            connection = create(
+                "IfcStructuralPointConnection",
+                ifcopenshell.guid.new(),
+                None,
+                "Support",
+                None,
+                None,
+                placement,
+                shape(point),
+                _node_condition(model, [True, True, True, False, False, False]),
+                None,
+            )
+            create(
+                "IfcRelConnectsStructuralMember",
+                ifcopenshell.guid.new(),
+                None,
+                None,
+                None,
+                member,
+                connection,
+                None,
+                None,
+                None,
+                None,
+            )
+            group.RelatedObjects = list(group.RelatedObjects) + [connection]
+
+        group = next(
+            relation
+            for relation in model.by_type("IfcRelAssignsToGroup")
+            if main in relation.RelatedObjects
+        )
+        support((TORSION_LA, 0.0, 0.0), main)
+        support((TORSION_LA, TORSION_LB, 0.0), arm)
+        for relation in model.by_type("IfcRelConnectsStructuralMember"):
+            if (
+                relation.RelatingStructuralMember == arm
+                and relation.RelatedStructuralConnection == joint
+            ):
+                relation.AppliedCondition = _node_condition(
+                    model, [True, True, True, False, False, False]
+                )
+        # The load halfway along the arm, half of it for the joint
+        action = model.by_type("IfcStructuralPointAction")[0]
+        action.Representation = shape((TORSION_LA, TORSION_LB / 2, 0.0))
+        path = str(tmp_path / "held_joint.ifc")
+        model.write(path)
+
+        data = _run(path, tmp_path, 0.1)
+
+        self._assert_balanced(data)
+        at_joint = [
+            s
+            for s in data["supports"]
+            if s["position_m"] == pytest.approx([TORSION_LA, 0.0, 0.0])
+        ]
+        (reaction,) = [s["by_load_case"] for s in at_joint]
+        (force,) = reaction.values()
+        assert force["fz_N"] == pytest.approx(TORSION_P / 2, rel=1e-3)
