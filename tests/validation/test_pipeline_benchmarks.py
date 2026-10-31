@@ -48,6 +48,9 @@ from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
 )
+from ifc_structural_mechanics.visualization.output_files import (  # noqa: E402
+    AnalysisOutput,
+)
 
 IFC_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 CANTILEVER = os.path.join(IFC_DIR, "cantilever_01.ifc")
@@ -7996,3 +7999,64 @@ class TestNodesTiedToSupports:
         (reaction,) = [s["by_load_case"] for s in at_joint]
         (force,) = reaction.values()
         assert force["fz_N"] == pytest.approx(TORSION_P / 2, rel=1e-3)
+
+    def test_hinge_where_a_support_holds_only_the_copy(self, tmp_path):
+        """The tie cannot make the held copy depend on anything (`aiz.106`).
+
+        It was left out then, and the two slabs came apart at that node with
+        the reactions balancing all the same.
+        """
+        model = ifcopenshell.open(_two_slabs_in_line(tmp_path, hinged=True))
+        create = model.create_entity
+        (_, second) = model.by_type("IfcStructuralSurfaceMember")
+        context = model.by_type("IfcGeometricRepresentationContext")[0]
+        vertex = create("IfcVertexPoint", create("IfcCartesianPoint", (2.0, 0.0, 0.0)))
+        topology = create(
+            "IfcTopologyRepresentation", context, "Reference", "Vertex", [vertex]
+        )
+        support = create(
+            "IfcStructuralPointConnection",
+            ifcopenshell.guid.new(),
+            None,
+            "Support",
+            None,
+            None,
+            second.ObjectPlacement,
+            create("IfcProductDefinitionShape", None, None, [topology]),
+            _node_condition(model, [True, True, True, False, False, False]),
+            None,
+        )
+        create(
+            "IfcRelConnectsStructuralMember",
+            ifcopenshell.guid.new(),
+            None,
+            None,
+            None,
+            second,
+            support,
+            None,
+            None,
+            None,
+            None,
+        )
+        group = next(
+            relation
+            for relation in model.by_type("IfcRelAssignsToGroup")
+            if second in relation.RelatedObjects
+        )
+        group.RelatedObjects = list(group.RelatedObjects) + [support]
+        path = str(tmp_path / "held_copy.ifc")
+        model.write(path)
+
+        data = _run(path, tmp_path, 0.25)
+
+        total = data["global_reactions"]["by_load_case"]["Imposed"]
+        assert total["imbalance_N"] < 1e-6 * 2.0e4
+        output = AnalysisOutput(str(tmp_path / "out_0.25"))
+        at_support = np.linalg.norm(
+            output.mesh.points - np.array([2.0, 0.0, 0.0]), axis=1
+        )
+        nodes = np.flatnonzero(at_support < 1e-6)
+        assert len(nodes) == 2
+        moved = np.linalg.norm(output.displacement("Imposed")[nodes], axis=1)
+        assert moved == pytest.approx([0.0, 0.0], abs=1e-9)

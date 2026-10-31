@@ -259,7 +259,7 @@ Command-line interface:
   - Tier 2: `test_pipeline_benchmarks.py` — full pipeline (IFC → results) against closed-form beam and plate theory and the Code_Aster references. Add a case here whenever a change touches sections, orientation, supports, joints, shells or loads
 - **Test data**: Located in `tests/test_data/`
 - **Fixtures**: Common test fixtures in `tests/conftest.py`
-- **Slow tests**: A failing one fails CI. End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 15 minutes in total with its three load cases and 17 load combinations, and 3.1 GB of memory). Skip with `-m "not slow"`.
+- **Slow tests**: A failing one fails CI. End-to-end `building_02` tests are marked `@pytest.mark.slow` and share one analysis through the session fixture `building_02_run` in `tests/conftest.py` (about 15 minutes in total with its three load cases and 17 load combinations, and 3.1 GB of memory). Skip with `-m "not slow"`. **They are CI's to run** (decision 2026-10-31): most development machines do not have the memory, so run `pytest -m "not slow"` locally, commit to `main` and push without a branch or a local slow run, and look at CI's result on that commit. A release is tagged only on a commit whose CI run passed.
 
 ### Note on Gmsh File Formats
 - **`.msh` format (preferred)**: Mesh files used in the production workflow. Fully supported, no external dependencies.
@@ -1083,6 +1083,9 @@ rotational degrees of freedom**. This drives everything about joints:
   that edge gets copies of the edge nodes (`_release_hinged_edges()`), tied to
   the originals in DOF 1-3 (`_write_edge_hinges()`); a row of ball joints along
   a line is a hinge about it. Both nodes of each pair are knots (see Skew supports).
+  Where a support holds the copy and not the original, the original is the
+  dependent side of the tie (`aiz.106`); it was once left out, and the members
+  came apart at that node with the reactions balancing.
 - **A curve member lying in a surface member bears on it along its length**,
   connected in the IFC or not (`_build_line_bearings()`). Example models
   connect a slab at its corners only; without this the edge beams carry

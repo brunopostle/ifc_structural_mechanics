@@ -2575,11 +2575,15 @@ class UnifiedCalculixWriter:
         file.write("** Hinged edges between surface members\n")
         for copy, original in pairs:
             for dof in (1, 2, 3):
+                # A support holds one of them: the other leans on it (``aiz.106``)
+                dependent, independent = copy, original
                 if (copy, dof) in constrained_node_dofs:
+                    dependent, independent = original, copy
+                if (dependent, dof) in constrained_node_dofs:
                     continue
                 file.write("*EQUATION\n2\n")
-                file.write(f"{copy},{dof},1.0,{original},{dof},-1.0\n")
-                constrained_node_dofs.add((copy, dof))
+                file.write(f"{dependent},{dof},1.0,{independent},{dof},-1.0\n")
+                constrained_node_dofs.add((dependent, dof))
                 self._note_equation_nodes((copy, original))
                 self._note_translation_tie(copy, original)
         file.write("**\n")

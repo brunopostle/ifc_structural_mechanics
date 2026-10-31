@@ -133,11 +133,19 @@ class TestHingedEdge:
         assert writer.nodes[6] == writer.nodes[2]
 
     def test_supported_copy_gets_no_equation(self):
-        """A DOF already fixed by a support must not also depend on an equation."""
+        """A DOF fixed by a support does not depend on an equation: the original does."""
         writer = _slab_on_wall(slab_release=[4, 5, 6])
         writer._release_hinged_edges()
         out = io.StringIO()
         writer._write_edge_hinges(out, {(5, 1), (5, 2), (5, 3)})
+        assert {node for node, _, _ in _equations(out.getvalue())} == {2, 6}
+
+    def test_nothing_to_tie_where_both_are_held(self):
+        writer = _slab_on_wall(slab_release=[4, 5, 6])
+        writer._release_hinged_edges()
+        out = io.StringIO()
+        held = {(node, dof) for node in (2, 5) for dof in (1, 2, 3)}
+        writer._write_edge_hinges(out, held)
         assert {node for node, _, _ in _equations(out.getvalue())} == {6}
 
 
