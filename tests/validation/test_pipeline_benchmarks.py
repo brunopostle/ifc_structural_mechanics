@@ -6056,8 +6056,15 @@ class TestSurfaceSupports:
         expected = SLAB_Q * length**4 / (8 * stiffness) + root * length
         assert _max_vertical_deflection(data) == pytest.approx(expected, rel=0.03)
 
-    def test_condition_differing_by_direction_needs_a_plane(self, tmp_path):
-        model = ifcopenshell.open(_slab_on(tmp_path, (True, True, 1.0e7)))
+    def test_plain_face_takes_the_plane_through_its_corners(self, tmp_path):
+        """A condition differing by direction on an IfcFace with no surface.
+
+        It was refused (94g.30); Bonsai writes such faces. The plane through
+        the corners gives the axes the slab's own IfcPlane does.
+        """
+        (tmp_path / "plane").mkdir()
+        shipped = _slab_on(tmp_path / "plane", (True, True, 1.0e7))
+        model = ifcopenshell.open(shipped)
         (connection,) = model.by_type("IfcStructuralSurfaceConnection")
         face = connection.Representation.Representations[0].Items[0]
         connection.Representation.Representations[0].Items = [
@@ -6065,8 +6072,18 @@ class TestSurfaceSupports:
         ]
         path = str(tmp_path / "no_plane.ifc")
         model.write(path)
-        with pytest.raises(ModelExtractionError, match="no plane"):
-            analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"))
+        output = str(tmp_path / "out")
+        result = analyze_ifc(ifc_path=path, output_dir=output, mesh_size=0.5)
+        assert result["status"] == "success", result.get("errors")
+        assert "W-IFC-004" in [w["code"] for w in result["warnings"]]
+        with open(os.path.join(output, "results.json")) as fh:
+            data = json.load(fh)
+        reference = _run(shipped, tmp_path / "plane", mesh_size=0.5)
+        (support,) = data["supports"]
+        assert support["restrained"] == ["tx", "ty"]
+        assert _max_vertical_deflection(data) == pytest.approx(
+            _max_vertical_deflection(reference), rel=1e-9
+        )
 
     def test_slab_edges_on_springs(self, tmp_path):
         """Both edges on vertical and rotational springs per metre.

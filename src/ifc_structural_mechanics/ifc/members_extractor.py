@@ -20,6 +20,7 @@ from ..ifc.entity_identifier import (
     get_coordinate,
     get_item_transformation,
     get_representation,
+    implied_face_axes,
     transform_vectors,
 )
 from ..utils.error_handling import ModelExtractionError
@@ -111,6 +112,7 @@ class MembersExtractor:
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict[str, Any]] = []
         self._disagreeing_psets: List[str] = []
+        self._faces_without_surface: List[str] = []
 
     def extract_all_members(self) -> List[StructuralMember]:
         """
@@ -303,7 +305,14 @@ class MembersExtractor:
                 "The outline of its face cannot be read.", code="E-IFC-002"
             )
 
-        _, holes = self._face_loops(representation.Items[0], self.length_scale)
+        face = representation.Items[0]
+        _, holes = self._face_loops(face, self.length_scale)
+        implied_normal = None
+        if not face.is_a("IfcFaceSurface"):
+            try:
+                _, implied_normal = implied_face_axes(geometry)
+            except ValueError as error:
+                raise ModelExtractionError(str(error), code="E-IFC-002") from error
         transformation = get_item_transformation(entity, self.length_scale)
         if transformation:
             geometry = transform_vectors(geometry, transformation)
@@ -327,7 +336,16 @@ class MembersExtractor:
             ),
             ifc_guid=entity.GlobalId,
         )
-        member.normal = self._surface_normal(representation, transformation)
+        if implied_normal is None:
+            member.normal = self._surface_normal(representation, transformation)
+        else:
+            if transformation:
+                rotation = np.array(transformation["rotationMatrix"], dtype=float)
+                implied_normal = rotation @ implied_normal
+            member.normal = [float(v) for v in implied_normal]
+            if entity.GlobalId not in self._faces_without_surface:
+                self._faces_without_surface.append(entity.GlobalId)
+            self._warn_faces_without_surface()
         member.holes = [[[float(v) for v in corner] for corner in h] for h in holes]
         return member
 
@@ -484,11 +502,27 @@ class MembersExtractor:
                 )
             return ends
 
-        if item.is_a("IfcFaceSurface") and item.Bounds:
+        # An IfcFaceSurface is an IfcFace; a plain one has its plane implied
+        if item.is_a("IfcFace") and item.Bounds:
             outline, _ = self._face_loops(item, unit_scale)
             return outline or None
 
         return None
+
+    def _warn_faces_without_surface(self) -> None:
+        """One W-IFC-004 for every surface member that is a plain IfcFace."""
+        found = self._faces_without_surface
+        self.warnings = [w for w in self.warnings if w["code"] != "W-IFC-004"]
+        self.warnings.append(
+            warning(
+                "W-IFC-004",
+                f"{len(found)} surface member(s) are an IfcFace with no surface "
+                f"({', '.join(found[:3])}{', ...' if len(found) > 3 else ''}), "
+                "where IFC wants an IfcFaceSurface. Each is read on the plane "
+                "through its corners, its local z by the winding of its outline.",
+                ifc_guids=found,
+            )
+        )
 
     def _warn_once(self, code: str, message: str) -> None:
         """Record a warning for the results, once however many members share it."""

@@ -65,6 +65,21 @@ _KINDS = [
         "No longer given: such members stop the analysis (E-SEC-001).",
         retired=True,
     ),
+    MessageKind(
+        "W-IFC-004",
+        "Face with no surface",
+        "A surface member or surface connection is an IfcFace, where IFC wants "
+        "an IfcFaceSurface whose plane gives its axes (Bonsai's face template "
+        "writes the former). It is read on the plane through its corners: local "
+        "z by the right-hand winding of its outer bound, local x the default of "
+        "IfcAxis2Placement3D (global x made square to z, or global y if z is "
+        "along x). Only the sense of a member's normal (a temperature "
+        "difference across it, the side its surface results are given from) "
+        "and the axes of a surface support's condition, when it differs by "
+        "direction, depend on them. A face that is not plane stops the "
+        "analysis. Write an IfcFaceSurface on an IfcPlane to give the axes "
+        "yourself.",
+    ),
     # Materials
     MessageKind(
         "W-MAT-001",
@@ -480,10 +495,11 @@ _ERRORS = [
         "E-IFC-002",
         "Member geometry cannot be read",
         "A curve member needs an IfcEdge representation and a surface member an "
-        "IfcFaceSurface or IfcFace, with vertices that have coordinates, and "
-        "one outer bound (IfcFaceOuterBound) if it has more than one. Other "
-        "bounds are openings: they must lie clear inside the outline and of "
-        "each other. The message names the member and what is missing.",
+        "IfcFaceSurface (or a plane IfcFace, W-IFC-004), with vertices that "
+        "have coordinates, and one outer bound (IfcFaceOuterBound) if it has "
+        "more than one. Other bounds are openings: they must lie clear inside "
+        "the outline and of each other. The message names the member and what "
+        "is missing.",
     ),
     MessageKind(
         "E-IFC-003",

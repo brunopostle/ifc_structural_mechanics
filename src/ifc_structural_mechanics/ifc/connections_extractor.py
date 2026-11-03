@@ -18,6 +18,7 @@ from ..domain.structural_connection import (
     create_connection_from_stiffness,
 )
 from ..utils.error_handling import ModelExtractionError
+from ..utils.messages import warning
 from .entity_identifier import (
     get_connection_input,  # Integration with get_connection_input function
 )
@@ -28,6 +29,7 @@ from .entity_identifier import (
     get_coordinate,
     get_item_transformation,
     get_representation,
+    implied_face_axes,
     transform_vectors,
 )
 
@@ -77,6 +79,10 @@ class ConnectionsExtractor:
         self.unit_scales = unit_scales or {}
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
+
+        # Warnings for the results (``utils.messages.warning``)
+        self.warnings: List[Dict] = []
+        self._faces_without_surface: List[str] = []
 
     def extract_all_connections(self) -> List[StructuralConnection]:
         """
@@ -327,7 +333,9 @@ class ConnectionsExtractor:
             ifc_connection.GlobalId,
         )
         connection.face = face
-        connection.local_axes = self._face_axes(item, transformation, stiffness)
+        connection.local_axes = self._face_axes(
+            item, transformation, stiffness, corners, ifc_connection.GlobalId
+        )
         for member_id in find_connected_elements(ifc_connection):
             connection.connect_member(member_id)
         if not connection.validate():
@@ -355,21 +363,38 @@ class ConnectionsExtractor:
         return [list(point) for point in points]
 
     def _face_axes(
-        self, face, transformation, stiffness
+        self, face, transformation, stiffness, corners, connection_id
     ) -> Optional[List[List[float]]]:
         """The axes a face condition is in: those of its plane's ``Position``.
 
-        None (the global axes) when the face has no plane and the condition
-        treats the three directions alike, where the axes do not matter.
+        A plain ``IfcFace`` (no surface) whose condition treats the
+        directions differently is in the axes of the plane through its
+        ``corners`` (file units, its own axes), with W-IFC-004. None (the
+        global axes) when the face has no plane and the condition treats the
+        three directions alike, where the axes do not matter.
 
         Raises:
             ModelExtractionError: If the condition treats the directions
-                differently and the face has no plane to give its axes.
+                differently and the face has a surface that is not a plane.
         """
         surface = getattr(face, "FaceSurface", None)
+        values = [(stiffness or {}).get(key, 0.0) for key in ("dx", "dy", "dz")]
+        alike = max(values) - min(values) <= 1e-9 * max(1.0, max(values))
+        if not face.is_a("IfcFaceSurface") and not alike:
+            # A plain IfcFace: the plane through its corners (W-IFC-004)
+            try:
+                x_axis, z_axis = implied_face_axes(
+                    [[float(v) * self.length_scale for v in c] for c in corners]
+                )
+            except ValueError as error:
+                raise ModelExtractionError(str(error), code="E-SUP-004") from error
+            if transformation:
+                rotation = np.array(transformation["rotationMatrix"], dtype=float)
+                z_axis, x_axis = rotation.dot(z_axis), rotation.dot(x_axis)
+            self._note_face_without_surface(connection_id)
+            return self._orthonormal_axes(x_axis, z_axis)
         if surface is None or not surface.is_a("IfcPlane"):
-            values = [(stiffness or {}).get(key, 0.0) for key in ("dx", "dy", "dz")]
-            if max(values) - min(values) > 1e-9 * max(1.0, max(values)):
+            if not alike:
                 raise ModelExtractionError(
                     "Its condition differs between directions, and its face has "
                     "no plane whose axes would give them.",
@@ -463,6 +488,24 @@ class ConnectionsExtractor:
                 f"Could not read the local axes of connection {getattr(ifc_connection, 'GlobalId', '?')}: {e}",
                 code="E-IFC-005",
             ) from e
+
+    def _note_face_without_surface(self, connection_id: str) -> None:
+        """One W-IFC-004 for every surface connection read on its corners."""
+        found = self._faces_without_surface
+        if connection_id not in found:
+            found.append(connection_id)
+        self.warnings = [w for w in self.warnings if w["code"] != "W-IFC-004"]
+        self.warnings.append(
+            warning(
+                "W-IFC-004",
+                f"{len(found)} surface connection(s) are an IfcFace with no "
+                f"surface ({', '.join(found[:3])}"
+                f"{', ...' if len(found) > 3 else ''}), where IFC wants an "
+                "IfcFaceSurface, and their condition differs between directions. "
+                "Each is read in the axes of the plane through its corners.",
+                ifc_guids=found,
+            )
+        )
 
     @staticmethod
     def _orthonormal_axes(x_axis, z_axis) -> Optional[List[List[float]]]:

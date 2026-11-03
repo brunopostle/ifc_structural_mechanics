@@ -211,6 +211,53 @@ def face_loops(face, unit_scale: float = 1.0) -> tuple:
     return corners(outer[0]), [corners(b) for b in bounds if b is not outer[0]]
 
 
+#: How far, in metres, a corner of a face may be from its plane
+FACE_PLANE_TOLERANCE = 1e-3
+
+
+def implied_face_axes(corners) -> tuple:
+    """The axes of the plane through a face's corners, for an ``IfcFace``.
+
+    IFC wants an ``IfcFaceSurface`` for a structural surface item, whose
+    plane gives its axes; a plain ``IfcFace`` has none. Its corners give
+    the plane, the right-hand winding of its outer bound gives z (the sense
+    the topology has), and x is what ``IfcAxis2Placement3D`` implies when
+    only its ``Axis`` is given: global x, or global y when z is along x,
+    made square to z.
+
+    Args:
+        corners: The outer bound's corners in its own sense, in metres, in
+            the axes the face is given in.
+
+    Returns:
+        (x, z): unit vectors in those axes.
+
+    Raises:
+        ValueError: If the face has no area or is not plane. The caller
+            raises its own stage's error with this message.
+    """
+    points = np.array(corners, dtype=float)
+    normal = np.zeros(3)
+    for i in range(len(points)):
+        normal += np.cross(points[i], points[(i + 1) % len(points)])
+    length = float(np.linalg.norm(normal))
+    if len(points) < 3 or length < 1e-12:
+        raise ValueError("Its face has no area.")
+    z_axis = normal / length
+    off = float(np.abs((points - points.mean(axis=0)) @ z_axis).max())
+    if off > FACE_PLANE_TOLERANCE:
+        raise ValueError(
+            f"Its face is an IfcFace with no surface and is not plane (a corner "
+            f"is {off:.3g} m off the plane of the others). Give it an "
+            "IfcFaceSurface on an IfcPlane."
+        )
+    x_axis = np.array([1.0, 0.0, 0.0])
+    if abs(z_axis @ x_axis) > 1.0 - 1e-9:
+        x_axis = np.array([0.0, 1.0, 0.0])
+    x_axis = x_axis - (x_axis @ z_axis) * z_axis
+    return x_axis / np.linalg.norm(x_axis), z_axis
+
+
 def get_coordinate(point, unit_scale: float = 1.0):
     """
     Extract coordinates from an IfcCartesianPoint with robust validation.

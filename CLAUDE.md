@@ -804,6 +804,15 @@ pinned to the slab. One that is not clear inside the outline and the others rais
 `E-IFC-002` (`_check_holes()`); a surface connection's face with one raises
 `E-SUP-004`. No example model has one.
 
+**A plain `IfcFace` is read on the plane through its corners** (`94g.30`,
+`entity_identifier.implied_face_axes()`). IFC wants an `IfcFaceSurface` for a
+surface member or connection; Bonsai's face template (`ShapeBuilder.face()`)
+writes an `IfcFace` of an `IfcPolyLoop`, and every surface member made in Bonsai
+was refused. Its normal is the right-hand winding of its outer bound, its x the
+default of `IfcAxis2Placement3D`; one `W-IFC-004` lists them. One that is not
+plane raises `E-IFC-002` (`E-SUP-004` for a connection). A surface connection
+only needs the axes when its condition differs by direction.
+
 **Area loads follow the member's outline.** Where one surface member lies
 inside another (a landing on a floor slab), fragmenting gives each element to
 one of them. `_load_element_sets()` applies an area load to every shell
