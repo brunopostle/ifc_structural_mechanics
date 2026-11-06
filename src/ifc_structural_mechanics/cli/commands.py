@@ -39,6 +39,8 @@ def cli():
         ifc-analysis analyze path/to/model.ifc --output ./results --mesh-size 0.2
 
         ifc-analysis plot ./results --field Mf1 --reactions
+
+        ifc-analysis check path/to/model.ifc
     """
     pass
 
@@ -564,6 +566,50 @@ def plot(
         raise click.ClickException(str(error))
     if written:
         click.echo(f"Written: {written}")
+
+
+@cli.command()
+@click.argument(
+    "ifc_file",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True),
+)
+@click.option(
+    "--tolerance",
+    type=click.FloatRange(min=0.0),
+    default=0.05,
+    show_default=True,
+    help="How far, in metres, a point well inside a member may lie outside its "
+    "element's body",
+)
+@click.option("--json-output", "-j", is_flag=True, help="Output findings as JSON")
+def check(ifc_file: str, tolerance: float, json_output: bool):
+    """Compare the structural members with the building elements they idealise.
+
+    Reads the IfcRelAssignsToProduct links between members and elements and
+    reports where they disagree: position, length or area, section, material,
+    thickness, and elements that carry load with no member. Does not analyse.
+    Exits with status 1 when there are findings.
+    """
+    import ifcopenshell
+
+    from ifc_structural_mechanics.ifc.idealisation import check_idealisation
+
+    try:
+        ifc = ifcopenshell.open(ifc_file)
+    except (OSError, RuntimeError) as error:
+        raise click.ClickException(f"Could not open {ifc_file}: {error}")
+    findings = check_idealisation(ifc, tolerance=tolerance)
+    if json_output:
+        click.echo(json.dumps({"findings": findings}, indent=2))
+    elif findings:
+        for i, found in enumerate(findings, 1):
+            click.echo(
+                click.style(f"{i}. [{found['code']}] {found['message']}", fg="yellow")
+            )
+        click.echo("\nWhat each code means: docs/messages.md")
+    else:
+        click.echo("The structural members agree with their building elements.")
+    sys.exit(1 if findings else 0)
 
 
 if __name__ == "__main__":

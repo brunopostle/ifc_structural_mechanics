@@ -42,6 +42,7 @@ STAGES = {
     "SLV": "The solver",
     "RES": "Reading the results",
     "CHK": "Plausibility of the results",
+    "BLD": "Members against the building elements they idealise",
     "GEN": "Anything else",
 }
 
@@ -492,6 +493,100 @@ _KINDS = [
         "straining, which a static analysis would stop at. Their "
         "frequencies, participation factors and shapes mean nothing. Check "
         "the supports and the connections between members.",
+    ),
+    # Members against the building elements they idealise (ifc-analysis check)
+    MessageKind(
+        "W-BLD-001",
+        "Structural model not linked to the building",
+        "No structural member is linked to a building element by an "
+        "IfcRelAssignsToProduct (either may be the RelatingProduct), so the "
+        "check has nothing to compare. Bonsai's 'assign product' and "
+        "ifcopenshell.api.structural.assign_product make the link.",
+    ),
+    MessageKind(
+        "W-BLD-002",
+        "Material differs from the element's",
+        "The member's material is not the element's, nor that of its "
+        "load-bearing layers (see W-BLD-009 for how they are told), by entity "
+        "or by name. The analysis uses the member's: check it is the one meant.",
+    ),
+    MessageKind(
+        "W-BLD-003",
+        "Thickness differs from the element's",
+        "A surface member's Thickness is not that of its element's load-bearing "
+        "layers (layers with Category 'LoadBearing', else those of the member's "
+        "material) or, with no layer set, of its body across the member, to "
+        "1 mm. The analysis uses the member's Thickness.",
+    ),
+    MessageKind(
+        "W-BLD-004",
+        "Section differs from the element's",
+        "A curve member's profile is neither the element's (through its "
+        "IfcMaterialProfileSet) nor of the same type and dimensions to 0.1 mm. "
+        "Profile names are not compared. The analysis uses the member's.",
+    ),
+    MessageKind(
+        "W-BLD-005",
+        "Load-bearing element with no member",
+        "A beam, column, member, slab, wall, plate, footing, pile, roof, stair "
+        "or ramp whose Pset_<class>Common.LoadBearing is true or not given has "
+        "no structural member linked to it, nor has any of its parts or the "
+        "element it is part of. If it carries load the analysis leaves it out; "
+        "if it does not, set LoadBearing to false.",
+    ),
+    MessageKind(
+        "W-BLD-006",
+        "Member with no element",
+        "A structural member is linked to no building element, in a file where "
+        "others are. It may be meant (a bracing idealised on its own), or the "
+        "link was not made.",
+    ),
+    MessageKind(
+        "W-BLD-007",
+        "Member outside its element",
+        "Points well inside the member lie outside the element's body by more "
+        "than the tolerance (--tolerance, 0.05 m by default): the quarter "
+        "points of a curve member, and for a surface member points inside its "
+        "face, against the body's extent across the face and the outline of "
+        "the body in its plane (so a window the member does not have is not "
+        "outside: that is W-BLD-008). Ends and edges are not compared, as a "
+        "member usually runs on to the axis of what its element stops at. "
+        "The member may be on the wrong level or grid line, or linked to the "
+        "wrong element.",
+    ),
+    MessageKind(
+        "W-BLD-008",
+        "Length or area differs from the element's",
+        "A curve member's length differs by more than 20% from the extent of "
+        "its element's body along it, or a surface member's area (less its "
+        "openings) from the element body's volume over its thickness across "
+        "the member, which leaves out the element's openings. A member "
+        "reaching from axis to axis is longer than its element by the elements "
+        "it frames into, which this allows for. A member with no openings in "
+        "an element with windows has their weight and stiffness: give its "
+        "face the openings, or leave it so knowingly.",
+    ),
+    MessageKind(
+        "W-BLD-009",
+        "Load-bearing layers cannot be told",
+        "The element has a layer set, no layer of it has Category "
+        "'LoadBearing' and none is of the member's material, so the member's "
+        "Thickness was not compared: adding up all layers would count plaster "
+        "and insulation. Set the Category of the layers that carry load.",
+    ),
+    MessageKind(
+        "W-BLD-010",
+        "Member of no length or area",
+        "A curve member whose edge starts where it ends, or a surface member "
+        "whose face has no area. The analysis stops on it (E-IFC-002 or a "
+        "meshing error); give it its geometry.",
+    ),
+    MessageKind(
+        "W-BLD-011",
+        "Pair that cannot be compared",
+        "The member has no edge or face that can be read, or the element has "
+        "no body IfcOpenShell can make, so where they lie was not compared. "
+        "Material, section and thickness still are.",
     ),
 ]
 
