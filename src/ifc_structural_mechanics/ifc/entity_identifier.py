@@ -6,7 +6,7 @@ structural analysis-related IFC entities.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import ifcopenshell
 import numpy as np
@@ -954,6 +954,7 @@ def get_connection_input(
     unit_scale: float = 1.0,
     force_scale: float = 1.0,
     unit_scales: Optional[Dict[str, float]] = None,
+    undeclared_units: Optional[Set[str]] = None,
 ):
     """
     Extract connection input properties.
@@ -965,6 +966,9 @@ def get_connection_input(
         force_scale: Scale factor to convert force to SI units
         unit_scales: The scales of the units the file declares; a stiffness
             whose unit it does not declare is made of length and force
+        undeclared_units: If given, gets the unit types the file does not
+            declare in which a stiffness that depends on the length unit was
+            read (a number other than zero; 94g.32)
 
     Returns:
         Dictionary of connection properties with values in SI units, or None
@@ -1022,6 +1026,15 @@ def get_connection_input(
                         code="E-SUP-007",
                     )
                 value = getattr(value, "wrappedValue", value)
+                if (
+                    undeclared_units is not None
+                    and declared is None
+                    and power != 0
+                    and not isinstance(value, bool)
+                    and not (ifc2x3 and value == -1)
+                    and value != 0
+                ):
+                    undeclared_units.add(unit)
                 result[key] = _ifc_stiffness_to_float(
                     True if ifc2x3 and value == -1 else value,
                     lambda v, f, u, p=power, d=declared: (

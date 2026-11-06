@@ -42,6 +42,10 @@ No longer given: such members stop the analysis (E-SEC-001).
 
 A surface member or surface connection is an IfcFace, where IFC wants an IfcFaceSurface whose plane gives its axes (Bonsai's face template writes the former). It is read on the plane through its corners: local z by the right-hand winding of its outer bound, local x the default of IfcAxis2Placement3D (global x made square to z, or global y if z is along x). Only the sense of a member's normal (a temperature difference across it, the side its surface results are given from) and the axes of a surface support's condition, when it differs by direction, depend on them. A face that is not plane stops the analysis. Write an IfcFaceSurface on an IfcPlane to give the axes yourself.
 
+### W-IFC-005: Load or stiffness in a unit the file does not declare
+
+The file's lengths are not in metres, and it gives line or area loads, point moments or support stiffnesses without declaring a unit for them in its IfcUnitAssignment (Bonsai's default project declares none). IFC does not say what such a value means; it is read in units made of the file's length and force units, so in a file in millimetres an area load is in N/mm², and 5000 meant as 5 kN/m² is a million times too large. The message says how each kind was read. Check the loads and reactions in the results, and declare the unit (an IfcDerivedUnit or IfcSIUnit of the type named, such as PLANARFORCEUNIT) to make the file say what it means.
+
 ## Materials
 
 ### E-MAT-001: Member without a material

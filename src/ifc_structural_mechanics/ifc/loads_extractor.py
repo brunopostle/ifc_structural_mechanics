@@ -117,6 +117,22 @@ class LoadsExtractor:
         # Extractor passes these on to the results
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict[str, Any]] = []
+        # Derived units that depend on the length unit and that the file does
+        # not declare, with the GlobalIds of the actions read in them (94g.32)
+        self.undeclared_units: Dict[str, List[str]] = {}
+
+    def _note_undeclared_unit(self, unit_type: str, ifc_load, values) -> None:
+        """Note an action whose values are in a unit the file does not declare.
+
+        Such a unit is made of the length and force units (94g.25), which is an
+        interpretation; ``Extractor`` warns about it when lengths are not in
+        metres (``W-IFC-005``).
+        """
+        if unit_type in self.unit_scales or not any(values):
+            return
+        found = self.undeclared_units.setdefault(unit_type, [])
+        if ifc_load.GlobalId not in found:
+            found.append(ifc_load.GlobalId)
 
     def extract_all_loads(self) -> List[Load]:
         """
@@ -496,6 +512,16 @@ class LoadsExtractor:
                 )
 
             scale = self.linear_force_scale
+            read = list(
+                self._extract_line_samples(
+                    ifc_load, applied_load, length / self.length_scale
+                )
+            )
+            self._note_undeclared_unit(
+                "LINEARFORCEUNIT",
+                ifc_load,
+                [f for _, vector in read for f in vector],
+            )
             samples = [
                 (
                     location * self.length_scale,
@@ -505,9 +531,7 @@ class LoadsExtractor:
                         axis / length if length > 0 else axis,
                     ),
                 )
-                for location, vector in self._extract_line_samples(
-                    ifc_load, applied_load, length / self.length_scale
-                )
+                for location, vector in read
             ]
             force_vector = [
                 float(np.mean([vector[i] for _, vector in samples])) for i in range(3)
@@ -582,6 +606,7 @@ class LoadsExtractor:
                 force_y = getattr(applied_load, "PlanarForceY", 0.0) or 0.0
                 force_z = getattr(applied_load, "PlanarForceZ", 0.0) or 0.0
                 force_vector = [force_x, force_y, force_z]
+                self._note_undeclared_unit("PLANARFORCEUNIT", ifc_load, force_vector)
 
                 force_vector = [f * self.planar_force_scale for f in force_vector]
             else:
@@ -793,14 +818,10 @@ class LoadsExtractor:
                 for f in self._components(applied_load, ("ForceX", "ForceY", "ForceZ"))
             ],
         )
+        moments = self._components(applied_load, ("MomentX", "MomentY", "MomentZ"))
+        self._note_undeclared_unit("TORQUEUNIT", ifc_load, moments)
         moment = self._in_global_axes(
-            ifc_load,
-            [
-                m * self.torque_scale
-                for m in self._components(
-                    applied_load, ("MomentX", "MomentY", "MomentZ")
-                )
-            ],
+            ifc_load, [m * self.torque_scale for m in moments]
         )
 
         magnitude = np.array(force_vector, dtype=float)

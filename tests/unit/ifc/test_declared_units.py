@@ -454,3 +454,113 @@ class TestStiffness:
             if found.id == support.GlobalId
         ]
         assert connection.stiffness_properties["dx"] == pytest.approx(2000.0)
+
+
+def _unit_warnings(model):
+    return [
+        found
+        for found in Extractor(model).extract_model().analysis_warnings
+        if found["code"] == "W-IFC-005"
+    ]
+
+
+def _undeclare(model, unit_type):
+    (assignment,) = model.by_type("IfcUnitAssignment")
+    assignment.Units = [
+        unit
+        for unit in assignment.Units
+        if getattr(unit, "UnitType", None) != unit_type
+    ]
+
+
+class TestUndeclaredUnitsAreReported:
+    """A unit the file leaves open is an interpretation where lengths are not
+    in metres (``94g.32``): Bonsai's default project is in millimetres and
+    declares no unit for loads, so 5000 meant as 5 kN/m² is 5000 N/mm²."""
+
+    def test_area_load_in_millimetres(self):
+        model = _open("building_01")
+        _undeclare(model, "PLANARFORCEUNIT")
+        action = model.by_type("IfcStructuralPlanarAction")[0]
+        (found,) = _unit_warnings(model)
+        assert "area loads as N/mm²" in found["message"]
+        assert "PLANARFORCEUNIT" in found["message"]
+        assert action.GlobalId in found["ifc_guids"]
+
+    def test_line_load_in_inches_names_the_units_taken(self):
+        model = _open("portal_01")
+        _undeclare(model, "LINEARFORCEUNIT")
+        (found,) = _unit_warnings(model)
+        assert "line loads as lbf/in (LINEARFORCEUNIT; 1," in found["message"]
+
+    def test_none_when_the_file_declares_them(self):
+        assert _unit_warnings(_open("building_01")) == []
+        assert _unit_warnings(_open("portal_01")) == []
+
+    def test_none_in_metres(self):
+        """slab_01 declares nothing but its length unit, the metre."""
+        model = _open("slab_01")
+        connection = model.by_type("IfcStructuralCurveConnection")[0]
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryEdgeCondition",
+            None,
+            model.create_entity("IfcModulusOfLinearSubgradeReactionMeasure", 2.0),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcBoolean", False),
+        )
+        assert _unit_warnings(model) == []
+
+    def test_moment_per_length_does_not_depend_on_the_length_unit(self):
+        """N.mm/mm is N.m/m: nothing to warn of."""
+        model = _open("portal_01")
+        _undeclare(model, "LINEARMOMENTUNIT")
+        action = model.by_type("IfcStructuralCurveAction")[0]
+        action.PredefinedType = "CONST"
+        action.AppliedLoad = model.create_entity(
+            "IfcStructuralLoadLinearForce", LinearMomentY=2.0
+        )
+        assert _unit_warnings(model) == []
+
+    def test_point_support_stiffness(self):
+        model = _open("cantilever_01")
+        connection = model.by_type("IfcStructuralPointConnection")[0]
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryNodeCondition",
+            None,
+            model.create_entity("IfcLinearStiffnessMeasure", 2.0),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcRotationalStiffnessMeasure", 0.0),
+            model.create_entity("IfcBoolean", True),
+        )
+        undeclared = set()
+        get_connection_input(
+            connection,
+            "point",
+            0.001,
+            unit_scales={"LENGTHUNIT": 0.001},
+            undeclared_units=undeclared,
+        )
+        # Rigid, free and zero mean the same in any unit
+        assert undeclared == {"LINEARSTIFFNESSUNIT"}
+
+    def test_edge_rotational_stiffness_does_not_depend_on_the_length_unit(self):
+        model = _open("slab_01")
+        connection = model.by_type("IfcStructuralCurveConnection")[0]
+        connection.AppliedCondition = model.create_entity(
+            "IfcBoundaryEdgeCondition",
+            None,
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcBoolean", True),
+            model.create_entity("IfcModulusOfRotationalSubgradeReactionMeasure", 3.0),
+            model.create_entity("IfcBoolean", False),
+            model.create_entity("IfcBoolean", False),
+        )
+        undeclared = set()
+        get_connection_input(connection, "line", 0.001, undeclared_units=undeclared)
+        assert undeclared == set()

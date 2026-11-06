@@ -80,6 +80,20 @@ _KINDS = [
         "analysis. Write an IfcFaceSurface on an IfcPlane to give the axes "
         "yourself.",
     ),
+    MessageKind(
+        "W-IFC-005",
+        "Load or stiffness in a unit the file does not declare",
+        "The file's lengths are not in metres, and it gives line or area "
+        "loads, point moments or support stiffnesses without declaring a unit "
+        "for them in its IfcUnitAssignment (Bonsai's default project declares "
+        "none). IFC does not say what such a value means; it is read in units "
+        "made of the file's length and force units, so in a file in "
+        "millimetres an area load is in N/mm², and 5000 meant as 5 kN/m² is a "
+        "million times too large. The message says how each kind was read. "
+        "Check the loads and reactions in the results, and declare the unit "
+        "(an IfcDerivedUnit or IfcSIUnit of the type named, such as "
+        "PLANARFORCEUNIT) to make the file say what it means.",
+    ),
     # Materials
     MessageKind(
         "W-MAT-001",

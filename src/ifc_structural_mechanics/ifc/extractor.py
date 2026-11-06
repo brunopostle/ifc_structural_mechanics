@@ -238,9 +238,80 @@ class Extractor:
         self._pass_on_warnings(model)
         return model
 
+    # What each derived unit that depends on the length unit is used for, and
+    # how one the file does not declare is read, from its length unit ``L``
+    # and force unit ``F`` (94g.25). A moment per length (LINEARMOMENTUNIT)
+    # does not depend on the length unit, nor does a rotational stiffness
+    # along an edge.
+    _UNDECLARED_UNITS = {
+        "LINEARFORCEUNIT": ("line loads", "{F}/{L}"),
+        "PLANARFORCEUNIT": ("area loads", "{F}/{L}²"),
+        "TORQUEUNIT": ("point moments", "{F}·{L}"),
+        "LINEARSTIFFNESSUNIT": ("point support translational stiffnesses", "{F}/{L}"),
+        "ROTATIONALSTIFFNESSUNIT": (
+            "point support rotational stiffnesses",
+            "{F}·{L}/rad",
+        ),
+        "MODULUSOFLINEARSUBGRADEREACTIONUNIT": (
+            "line support translational stiffnesses",
+            "{F}/{L}²",
+        ),
+        "MODULUSOFSUBGRADEREACTIONUNIT": ("surface support stiffnesses", "{F}/{L}³"),
+    }
+
+    def _unit_symbol(self, unit_type: str, default: str) -> str:
+        """The symbol of a project unit, ``default`` if the file declares none."""
+        unit = ifcopenshell.util.unit.get_project_unit(self.ifc, unit_type)
+        if not unit:
+            return default
+        return ifcopenshell.util.unit.get_unit_symbol(unit) or unit.Name
+
+    def _undeclared_unit_warnings(self) -> List[Dict[str, Any]]:
+        """``W-IFC-005`` if values were read in units the file leaves open.
+
+        IFC does not say what a derived unit the file does not declare means.
+        It is taken as made of the length and force units, which is what the
+        file's author meant only by chance when lengths are not in metres:
+        Bonsai's default project has millimetres and declares no unit for
+        loads, so 5000 meant as 5 kN/m² is read as 5000 N/mm² (94g.32).
+        """
+        if abs(self.unit_scales.get("LENGTHUNIT", 1.0) - 1.0) < 1e-9:
+            return []
+        found: Dict[str, List[str]] = {}
+        for extractor in (self.loads_extractor, self.connections_extractor):
+            for unit_type, guids in getattr(extractor, "undeclared_units", {}).items():
+                listed = found.setdefault(unit_type, [])
+                listed.extend(g for g in guids if g not in listed)
+        if not found:
+            return []
+        symbols = {
+            "L": self._unit_symbol("LENGTHUNIT", "m"),
+            "F": self._unit_symbol("FORCEUNIT", "N"),
+        }
+        parts, guids = [], []
+        for unit_type, (kind, unit) in self._UNDECLARED_UNITS.items():
+            if unit_type not in found:
+                continue
+            ids = found[unit_type]
+            parts.append(
+                f"{kind} as {unit.format(**symbols)} ({unit_type}; {len(ids)}, "
+                f"first {', '.join(ids[:3])})"
+            )
+            guids.extend(g for g in ids if g not in guids)
+        return [
+            warning(
+                "W-IFC-005",
+                f"The file's lengths are in {symbols['L']} and it declares no unit "
+                f"for some of the values it gives, which are read in units made of "
+                f"its length and force units: {'; '.join(parts)}. Declare those "
+                "units to make the file say what it means.",
+                ifc_guids=guids,
+            )
+        ]
+
     def _pass_on_warnings(self, model: StructuralModel) -> None:
         """Put the extractors' warnings where the results pick them up."""
-        messages = list(self.warnings)
+        messages = list(self.warnings) + self._undeclared_unit_warnings()
         for extractor in (
             self.members_extractor,
             self.connections_extractor,

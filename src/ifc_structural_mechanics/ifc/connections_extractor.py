@@ -7,7 +7,7 @@ domain model objects.
 """
 
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Set, Union
 
 import ifcopenshell
 import numpy as np
@@ -83,6 +83,16 @@ class ConnectionsExtractor:
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict] = []
         self._faces_without_surface: List[str] = []
+        # Stiffness units that depend on the length unit and that the file
+        # does not declare, with the connections read in them (94g.32)
+        self.undeclared_units: Dict[str, List[str]] = {}
+
+    def _note_undeclared_units(self, ifc_connection, units: Set[str]) -> None:
+        """Note a connection whose stiffness is in a unit the file does not declare."""
+        for unit in sorted(units):
+            found = self.undeclared_units.setdefault(unit, [])
+            if ifc_connection.GlobalId not in found:
+                found.append(ifc_connection.GlobalId)
 
     def extract_all_connections(self) -> List[StructuralConnection]:
         """
@@ -191,13 +201,16 @@ class ConnectionsExtractor:
         position = self._extract_position(ifc_connection)
 
         # Extract stiffness properties using get_connection_input
+        undeclared: Set[str] = set()
         stiffness_props = get_connection_input(
             ifc_connection,
             self._determine_geometry_type(ifc_connection),
             self.length_scale,
             self.force_scale,
             self.unit_scales,
+            undeclared,
         )
+        self._note_undeclared_units(ifc_connection, undeclared)
 
         # CREATE CONNECTION WITHOUT VALIDATION
         connection = None
@@ -318,13 +331,16 @@ class ConnectionsExtractor:
                 "connection cannot join members.",
                 code="E-SUP-004",
             )
+        undeclared: Set[str] = set()
         stiffness = get_connection_input(
             ifc_connection,
             "surface",
             self.length_scale,
             self.force_scale,
             self.unit_scales,
+            undeclared,
         )
+        self._note_undeclared_units(ifc_connection, undeclared)
         connection = create_connection_from_stiffness(
             ifc_connection.GlobalId,
             [float(v) for v in centre],
