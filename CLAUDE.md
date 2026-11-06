@@ -328,7 +328,11 @@ The other derived units are read as declared too (`94g.25`, `Extractor._get_unit
 line and planar forces, torques, moments per length, moduli, thermal expansion and the
 five stiffnesses (`portal_01` has lbf·in per degree). Undeclared, each is made of the
 length, force, pressure and temperature units, a rotational stiffness per radian;
-Bonsai's templates declare none of them. A property's own
+Bonsai's templates declare none of them. Where that depends on a length unit other
+than the metre (line and area loads, point moments, the stiffnesses but the
+rotational one along an edge), `W-IFC-005` says how each kind was read (`94g.32`,
+`Extractor._undeclared_unit_warnings()`, from the extractors' `undeclared_units`):
+in Bonsai's millimetres 5000 meant as 5 kN/m² is 5000 N/mm². A property's own
 `IfcPropertySingleValue.Unit` goes before the project's (`_own_scale()`), so a test that
 restates a value of `beam_01` or `building_01`, whose materials give units, has to set
 it too. Poisson's ratio from E and G is worked out in SI, as they may differ.
