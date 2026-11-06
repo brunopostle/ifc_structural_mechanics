@@ -83,6 +83,13 @@ ifc-analysis analyze model.ifc --output ./results --analysis-type modal --modes 
 ifc-analysis analyze model.ifc --output ./results --verbose --json-output
 ```
 
+### Checking members against the building
+```bash
+# Members against the building elements they idealise (IfcRelAssignsToProduct);
+# reports W-BLD codes, does not analyse, exits 1 when there are findings
+ifc-analysis check model.ifc [--tolerance 0.05] [--json-output]
+```
+
 ### Visualization
 ```bash
 # Deformed shape of the first load case (needs the viz extra)
@@ -130,6 +137,17 @@ Extracts structural information from IFC files:
 - `ConnectionsExtractor`: Extracts structural connections with stiffness properties
 - `LoadsExtractor`: Extracts loads, load groups, and load combinations
 - `entity_identifier.py`: Utilities for identifying and classifying IFC structural entities
+- `idealisation.py`: `ifc-analysis check` (`94g.33`): each member against the
+  building element an `IfcRelAssignsToProduct` links it to, either way round
+  (`ifcopenshell.api.structural.assign_product` and homemaker-addon make the
+  member the `RelatingProduct`). Position is tested at points well inside the
+  member (quarter points; points inside a face, against the body's thickness band
+  and outline hull, so a window is an area difference, not a misplacement), never
+  at ends, which run on to axes. The load-bearing layers are those with `Category`
+  'LoadBearing', else those of the member's material, else none (`W-BLD-009`):
+  homemaker's walls are 0.20 of 0.33 m with plaster. Its query functions
+  (`element_member_pairs()`, `reference_points()`) are candidates for an
+  `ifcopenshell.util.structural` (`94g.34.16`)
 
 #### 3. Converters (`src/ifc_structural_mechanics/converters/`)
 Stateless functions that turn domain properties into what the solver needs:

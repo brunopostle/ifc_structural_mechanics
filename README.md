@@ -37,6 +37,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge), whether or not those are parallel to the global ones: a roller on an incline reacts along its normal, and a line support along a diagonal wall can hold rotation about its edge alone. Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
+- **Members against the building**: `ifc-analysis check` compares each structural member with the building element it idealises (`IfcRelAssignsToProduct`, either way round): where it lies, its length or area, section, material and thickness, and finds elements that may carry load with no member
 - **Pictures of the results**: `ifc-analysis plot` draws deformed shapes coloured by displacement or von Mises stress, section force diagrams along the members, supports, reactions, loads and mode shapes, for any load case, combination or mode (PyVista, optional)
 
 ### Known Limitations
@@ -345,6 +346,34 @@ if result["status"] == "success":
 else:
     print(f"Errors: {result['errors']}")
 ```
+
+### Checking members against the building
+
+`ifc-analysis check` reads the `IfcRelAssignsToProduct` links between
+structural members and the building elements they stand for, and reports
+where they disagree, with `W-BLD` codes (see `docs/messages.md`). It does not
+analyse, and it exits with status 1 when there are findings.
+
+```bash
+ifc-analysis check model.ifc
+ifc-analysis check model.ifc --tolerance 0.1 --json-output
+```
+
+- **Position**: the quarter points of a curve member, and points inside a
+  surface member's face, are to lie in the element's body (within
+  `--tolerance`, 0.05 m). Ends are not compared, as a member usually runs on
+  to the axis of what its element stops at.
+- **Length or area** within 20% of the element's: along a curve member, and
+  the body's volume over its thickness for a surface member, so a window the
+  member does not have shows here.
+- **Section** (type and dimensions, not name) and **material**.
+- **Thickness** of a surface member against the element's load-bearing
+  layers: those with `Category` 'LoadBearing', else those of the member's
+  material. Plaster and insulation are not counted; when neither rule finds a
+  layer it says so rather than adding them all up.
+- **Elements with no member** (beams, columns, members, slabs, walls, plates,
+  footings, piles, roofs, stairs and ramps whose `LoadBearing` is true or not
+  given, unless a part or their whole has one) and **members with no element**.
 
 ### Pictures
 
