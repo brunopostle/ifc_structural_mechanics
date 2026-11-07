@@ -1371,11 +1371,14 @@ class TestEccentricMembers:
         assert max(forces["max_Mf1_Nm"], forces["max_Mf2_Nm"]) == pytest.approx(
             moment, rel=1e-4
         )
-        # The force's line passes through the support: it holds no moment
+        # The force's line passes through the support: it holds no moment.
+        # CalculiX 2.21 has the clamped root wrong, and the member end that
+        # replaces it is good to 4e-5 (`94g.7`)
+        rel = 1e-6 if solver_reports_clamped_reactions() else 1e-4
         total = data["global_reactions"]["total"]
-        assert total["fx_N"] == pytest.approx(-ECCENTRIC_P, rel=1e-6)
-        assert abs(total["my_Nm"]) < 1e-6 * moment
-        assert total["moment_imbalance_Nm"] < 1e-6 * moment
+        assert total["fx_N"] == pytest.approx(-ECCENTRIC_P, rel=rel)
+        assert abs(total["my_Nm"]) < rel * moment
+        assert total["moment_imbalance_Nm"] < rel * moment
 
     def test_a_tee_bends_towards_its_web(self, tmp_path):
         """Its depth is across the plane, so it bends out of it: no plane hold."""
