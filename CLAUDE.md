@@ -342,6 +342,10 @@ unassigned density is in kg/m³, the spec's "usually", and one that cannot be st
 analysis (`E-MAT-005`); an unassigned inertia is in m⁴. Pset_ProfileMechanical of a
 profile is used where it agrees with the dimensions to a factor of 1.5, else the
 dimensions are, with `W-SEC-005` (`94g.24`): Bonsai can write m⁴ under a declared mm⁴.
+Where the value as written agrees with them, the message says it looks to be in m⁴ (or
+m²) under the unit declared and what to change (`94g.27`); it is not read so (decision
+2026-11-07): the file is read as it declares, and the outline's inertias are the
+tables' to 1e-4.
 The other derived units are read as declared too (`94g.25`, `Extractor._get_unit_scales()`):
 line and planar forces, torques, moments per length, moduli, thermal expansion and the
 five stiffnesses (`portal_01` has lbf·in per degree). Undeclared, each is made of the
