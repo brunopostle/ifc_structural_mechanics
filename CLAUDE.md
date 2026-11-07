@@ -339,7 +339,7 @@ units are all made of their length unit, so none of them shows a mix.
 IfcOpenShell's scales are to grams, which makes a pound 453.6). IFC does not say what
 an unassigned unit means. An unassigned area is in the length unit squared; an
 unassigned density is in kg/m³, the spec's "usually", and one that cannot be stops the
-analysis (`E-MAT-005`); an unassigned inertia is in m⁴. Pset_ProfileMechanical of an I
+analysis (`E-MAT-005`); an unassigned inertia is in m⁴. Pset_ProfileMechanical of a
 profile is used where it agrees with the dimensions to a factor of 1.5, else the
 dimensions are, with `W-SEC-005` (`94g.24`): Bonsai can write m⁴ under a declared mm⁴.
 The other derived units are read as declared too (`94g.25`, `Extractor._get_unit_scales()`):
@@ -816,6 +816,20 @@ with an entry in `TORSION_MATCHED_SECTIONS` if it is closed). In the extractors,
 ones: `IfcCircleHollowProfileDef.is_a("IfcCircleProfileDef")` is true. A
 channel is `IfcUShapeProfileDef`. A profile with no handler raises
 `ModelExtractionError`; never fall back to a default section.
+
+**The open profiles' A, Iy and Iz come from their outline** (`94g.26`,
+`converters/profile_geometry.py`): IfcOpenShell's corners for I, asymmetric I,
+T, L and U, fillets and edge radii as tangent arcs in 256 pieces, integrated
+by Green's theorem. HEB 160 and IPE 300 are their tables' to 1e-4; the plates
+alone were 3.6% short in area and 3.2% in Iy. IfcOpenShell's own
+triangulation draws a fillet as one chord (0.6% too much area), so do not use
+it for this. An asymmetric I is about its own centroid (its flanges were once
+averaged); its `dimensions` stay averaged. A sloped flange or leg follows
+IfcOpenShell (an I's thickness at the flange edge, the others' nearer the
+web; IFC's text does not say), with `W-SEC-004` unless Pset_ProfileMechanical
+gives A, Iy and Iz. The torsion constant and shear areas are still those of
+the plates. A dimension IFC requires that is missing raises `E-SEC-004`; T,
+L, U and asymmetric I once took 0.1 or 0.01 m in its place.
 
 **A surface member's openings are the other bounds of its face** (`2uq`,
 `SurfaceMember.holes`, `entity_identifier.face_loops()`). Only `Bounds[0]` was once
