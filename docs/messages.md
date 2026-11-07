@@ -182,6 +182,10 @@ With --open-sections user-element, U1 beams pass no moment to native beams or sh
 
 The connection between members is of a type the writer does not model: a spring joint between members, or a type it does not know. A model read from an IFC file has neither (members are joined rigidly unless their relation releases them, and springs act against the ground); one built by hand can. Report it.
 
+### E-JNT-005: Joint cannot be tied
+
+Members are joined in translation by an equation between their nodes, and every node of it is decided already by another joint's equation, so this one cannot be written. Left out, the members would come apart there. No model is known to reach this: report it with the file.
+
 ### W-JNT-001: Curve members tied to the surface members they lie in
 
 A beam along the edge of a slab, or a column in a wall, with no connection in the file along their length, is tied to the surface in translation along it, as a slab bears on its beams. Without this a slab connected at its corners spans corner to corner. The member's section forces are its share only; where force passes between the two at a point they change abruptly and depend on the mesh size. Use --strict-connections to analyse only the connections in the file.

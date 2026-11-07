@@ -1160,6 +1160,15 @@ rotational degrees of freedom**. This drives everything about joints:
   Where a support holds the copy and not the original, the original is the
   dependent side of the tie (`aiz.106`); it was once left out, and the members
   came apart at that node with the reactions balancing.
+- **A joint's tie leans on whichever node is free** (`aiz.107`,
+  `_write_tie()`, used by release hinges, ball joints and hinged edges): a
+  support holding a released member's end and not the joint once left the
+  tie out, and the other beam came loose. Where every node of a tie is decided
+  already and supports do not hold them all, `E-JNT-005` stops the analysis;
+  no example model reaches it. A support that holds a rotation is checked
+  against the ends of every member with an element at its nodes, tied ones
+  too (`_member_ends_at()`): with the support's own members alone a correct
+  solver force was taken for a mistake and halved.
 - **A curve member lying in a surface member bears on it along its length**,
   connected in the IFC or not (`_build_line_bearings()`). Example models
   connect a slab at its corners only; without this the edge beams carry
