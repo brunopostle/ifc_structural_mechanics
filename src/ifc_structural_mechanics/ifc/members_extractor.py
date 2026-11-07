@@ -41,6 +41,42 @@ MIN_DENSITY, MAX_DENSITY = 1.0, 1.0e6
 # constant from the dimensions leaves out the fillets, a fifth of a rolled I's.
 PSET_AGREEMENT = 1.5
 
+# Units a section property is commonly given in, by their size in SI
+_SECTION_UNIT_NAMES = {
+    "area": {1e-6: "mm2", 1e-4: "cm2", 0.0254**2: "in2"},
+    "inertia": {1e-12: "mm4", 1e-8: "cm4", 0.0254**4: "in4"},
+}
+
+
+def _agrees(value: float, from_dimensions: float) -> bool:
+    """Whether a stated section property agrees with its profile's dimensions."""
+    return 1 / PSET_AGREEMENT <= value / from_dimensions <= PSET_AGREEMENT
+
+
+def _unit_slip(name: str, stated: float, scale: float, attribute: str, prop) -> str:
+    """What to say of a value that agrees with the dimensions as it is written.
+
+    Bonsai can write a value in m4 under a declared mm4 (94g.27): read in SI
+    it is right, read in the unit declared it is 1e12 times too small.
+    """
+    kind = "area" if attribute == "area" else "inertia"
+    si_name = "m2" if kind == "area" else "m4"
+    unit = next(
+        (
+            unit_name
+            for size, unit_name in _SECTION_UNIT_NAMES[kind].items()
+            if abs(scale / size - 1) < 1e-6
+        ),
+        f"{scale:.4g} {si_name}",
+    )
+    whose = "its own unit" if getattr(prop, "Unit", None) else "the project's unit"
+    return (
+        f" ({stated:.4g} as written: it looks to be in {si_name} where "
+        f"{whose} is {unit}; give {name} in {unit}, or give the property "
+        f"a Unit of {si_name})"
+    )
+
+
 # How the warning about sloped flanges begins, so it is given once
 _SLOPED_FLANGES = "The sloped flanges or legs of"
 
@@ -930,9 +966,11 @@ class MembersExtractor:
             if name not in stated:
                 continue
             prop = stated[name]
-            value = prop.NominalValue.wrappedValue * self._own_scale(prop, scale)
+            stated_value = prop.NominalValue.wrappedValue
+            unit_scale = self._own_scale(prop, scale)
+            value = stated_value * unit_scale
             from_dimensions = getattr(section, attribute)
-            if 1 / PSET_AGREEMENT <= value / from_dimensions <= PSET_AGREEMENT:
+            if _agrees(value, from_dimensions):
                 setattr(section, attribute, value)
                 taken.add(attribute)
             else:
@@ -940,6 +978,10 @@ class MembersExtractor:
                     f"{name} of '{section.name}' is {value:.4g} in SI units, "
                     f"where its dimensions give {from_dimensions:.4g}"
                 )
+                if unit_scale != 1.0 and _agrees(stated_value, from_dimensions):
+                    disagreement += _unit_slip(
+                        name, stated_value, unit_scale, attribute, prop
+                    )
                 if disagreement not in self._disagreeing_psets:
                     self._disagreeing_psets.append(disagreement)
 
@@ -954,7 +996,7 @@ class MembersExtractor:
                     "Pset_ProfileMechanical are far from what the profile's "
                     "dimensions give, and the dimensions are used instead: "
                     + "; ".join(self._disagreeing_psets[:3])
-                    + ". Check the file's units.",
+                    + ". Correct the value or the unit.",
                 )
             )
         return taken

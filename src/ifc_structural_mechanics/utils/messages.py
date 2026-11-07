@@ -173,8 +173,11 @@ _KINDS = [
         "the profile's dimensions give, so it is in another unit than the file "
         "declares or about another axis. The dimensions are used: area and "
         "inertias of the profile's outline as IfcOpenShell draws it, fillets "
-        "included, and a torsion constant of plates. Correct the "
-        "value or the project's unit.",
+        "included, and a torsion constant of plates. Where the value as "
+        "written agrees with the dimensions, the message says so: it is in "
+        "m2 or m4 under a declared unit such as mm4. It "
+        "is not read so, since that would be reading the file other than as "
+        "it declares. Correct the value or the unit.",
     ),
     MessageKind(
         "W-MSH-001",

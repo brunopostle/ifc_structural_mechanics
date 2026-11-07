@@ -171,6 +171,52 @@ class TestMembers:
         assert section.area == pytest.approx(expected)
         (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-SEC-005"]
         assert "MomentOfInertiaY of 'W10X30'" in found["message"]
+        # Read in SI it agrees: the message names the slip (94g.27)
+        assert "it looks to be in m4 where the project's unit is in4" in (
+            found["message"]
+        )
+
+    def test_profile_value_in_m4_under_declared_mm4_is_named(self):
+        """Bonsai's slip: 2.494e-05 for an HEB 160 under a declared mm4 (94g.27)."""
+        model = _open("portal_01")
+        expected = self._section(_open("portal_01")).moment_of_inertia_y
+        for prop in model.by_type("IfcPropertySingleValue"):
+            if prop.Name == "MomentOfInertiaY":
+                prop.NominalValue.wrappedValue = expected
+                millimetre = model.create_entity(
+                    "IfcSIUnit", UnitType="LENGTHUNIT", Prefix="MILLI", Name="METRE"
+                )
+                prop.Unit = model.create_entity(
+                    "IfcDerivedUnit",
+                    Elements=[
+                        model.create_entity("IfcDerivedUnitElement", millimetre, 4)
+                    ],
+                    UnitType="MOMENTOFINERTIAUNIT",
+                )
+        extracted = Extractor(model).extract_model()
+        # The value is not read in another unit than the file declares
+        assert extracted.members[0].section.moment_of_inertia_y == pytest.approx(
+            170 * 0.0254**4, rel=3e-3
+        )
+        (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-SEC-005"]
+        assert "it looks to be in m4 where its own unit is mm4" in found["message"]
+        assert "give MomentOfInertiaY in mm4" in found["message"]
+
+    def test_profile_value_about_the_other_axis_is_no_unit_slip(self):
+        """Iz stated as Iy: in the right unit, about another axis."""
+        model = _open("portal_01")
+        stated = {
+            prop.Name: prop
+            for prop in model.by_type("IfcPropertySingleValue")
+            if prop.Name in ("MomentOfInertiaY", "MomentOfInertiaZ")
+        }
+        stated["MomentOfInertiaY"].NominalValue.wrappedValue = stated[
+            "MomentOfInertiaZ"
+        ].NominalValue.wrappedValue
+        extracted = Extractor(model).extract_model()
+        (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-SEC-005"]
+        assert "MomentOfInertiaY of 'W10X30'" in found["message"]
+        assert "looks to be in" not in found["message"]
 
     def test_material_without_poisson_ratio_gets_a_warning(self):
         model = _open("cantilever_01")
