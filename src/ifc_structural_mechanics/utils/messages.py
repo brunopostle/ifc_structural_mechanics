@@ -799,6 +799,15 @@ _ERRORS = [
         "rigidly unless their relation releases them, and springs act "
         "against the ground); one built by hand can. Report it.",
     ),
+    MessageKind(
+        "E-JNT-005",
+        "Joint cannot be tied",
+        "Members are joined in translation by an equation between their "
+        "nodes, and every node of it is decided already by another joint's "
+        "equation, so this one cannot be written. Left out, the members "
+        "would come apart there. No model is known to reach this: report it "
+        "with the file.",
+    ),
     # Supports
     MessageKind(
         "E-SUP-001",

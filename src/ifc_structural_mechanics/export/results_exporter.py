@@ -18,7 +18,7 @@ import logging
 import math
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -1870,7 +1870,9 @@ class ResultsExporter:
         if springs:
             entry["springs"] = self._spring_conditions(connection, kind)
         entry["forces"] = "solver"
-        ends = self._member_ends_at(connection, position) if held_rotations else {}
+        ends = (
+            self._member_ends_at(connection, position, nodes) if held_rotations else {}
+        )
         balanced = all(self._reactions_balance(index) for index in range(len(steps)))
         # The solver is known to go wrong at member ends that hold a
         # rotation; a support with those is not taken on trust
@@ -2285,8 +2287,16 @@ class ResultsExporter:
             turned.update({key: float(v) for key, v in zip(keys, vector)})
         return turned
 
-    def _member_ends_at(self, connection, position: np.ndarray) -> Optional[Dict]:
+    def _member_ends_at(
+        self, connection, position: np.ndarray, nodes: Iterable[int] = ()
+    ) -> Optional[Dict]:
         """The member ends a support holds, for its reaction moments.
+
+        Those of the members it names, and of every member with an element at
+        one of its nodes: the solver's force there has theirs too, a member
+        tied to a node the support holds as much as one sharing it
+        (``aiz.107``; it was once taken for the solver's mistake and replaced
+        by the support's own member alone).
 
         Returns ``{member_id: (sign, {load_case: record})}`` with the section
         force record of the end cross-section nearest the support and the sign
@@ -2301,6 +2311,13 @@ class ResultsExporter:
         member_ids = list(getattr(connection, "connected_members", None) or [])
         if not member_ids:
             return None
+        at_nodes = getattr(self.model, "support_node_elements", None) or {}
+        owners = getattr(self.model, "analysis_element_to_member", None) or {}
+        for node in nodes:
+            for element in at_nodes.get(node, (None, {}))[1]:
+                member_id = owners.get(element)
+                if member_id is not None and member_id not in member_ids:
+                    member_ids.append(member_id)
         ends: Dict[str, tuple] = {}
         for member_id in member_ids:
             member = self.model.get_member(member_id)

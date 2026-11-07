@@ -2585,16 +2585,10 @@ class UnifiedCalculixWriter:
         for copy, original in pairs:
             for dof in (1, 2, 3):
                 # A support holds one of them: the other leans on it (``aiz.106``)
-                dependent, independent = copy, original
-                if (copy, dof) in constrained_node_dofs:
-                    dependent, independent = original, copy
-                if (dependent, dof) in constrained_node_dofs:
-                    continue
-                file.write("*EQUATION\n2\n")
-                file.write(f"{dependent},{dof},1.0,{independent},{dof},-1.0\n")
-                constrained_node_dofs.add((dependent, dof))
-                self._note_equation_nodes((copy, original))
-                self._note_translation_tie(copy, original)
+                terms = [(copy, dof, 1.0), (original, dof, -1.0)]
+                if self._write_tie(file, terms, constrained_node_dofs, None):
+                    self._note_equation_nodes((copy, original))
+                    self._note_translation_tie(copy, original)
         file.write("**\n")
 
     # Length of the stiff arms that carry a partial end release.
@@ -4701,6 +4695,7 @@ class UnifiedCalculixWriter:
         # - "DOF detected on dependent side of two different MPC's"
         # - "DOF detected on dependent side of a MPC and a SPC"
         constrained_node_dofs = set(bc_node_dofs)  # Start with boundary condition DOFs
+        self._support_held_dofs = set(bc_node_dofs)
 
         self._write_edge_hinges(file, constrained_node_dofs)
 
@@ -4845,14 +4840,12 @@ class UnifiedCalculixWriter:
         hinges = hinges.get(conn.id, {}) if isinstance(hinges, dict) else {}
         for equations in hinges.values():
             for terms in equations:
-                node, dof, _ = terms[0]
-                if (node, dof) in constrained_node_dofs:
+                if not self._write_tie(file, terms, constrained_node_dofs, conn):
                     continue
-                self._write_equation(file, terms)
-                constrained_node_dofs.add((node, dof))
                 self._note_equation_nodes(n for n, _, _ in terms)
-                if len(terms) == 2 and terms[0][1] == terms[1][1] and dof <= 3:
-                    self._note_translation_tie(node, terms[1][0])
+                (node, dof, _), (other, other_dof, _) = terms[0], terms[-1]
+                if len(terms) == 2 and dof == other_dof and dof <= 3:
+                    self._note_translation_tie(node, other)
         connection_pairs = [
             (m, n)
             for m, n in self._find_connection_nodes_at_location(
@@ -4865,23 +4858,11 @@ class UnifiedCalculixWriter:
 
         _, ref_node = connection_pairs[0]
 
-        equations_written = 0
-        equations_skipped = 0
-
         def _write_eq(node, dof, ref):
-            nonlocal equations_written, equations_skipped
-            if (node, dof) in constrained_node_dofs:
-                logger.debug(
-                    f"Connection {conn.id}: Skipping node {node} DOF {dof} (already constrained)"
-                )
-                equations_skipped += 1
-                return
-            file.write("*EQUATION\n2\n")
-            file.write(f"{node},{dof},1.0,{ref},{dof},-1.0\n")
-            constrained_node_dofs.add((node, dof))
-            self._note_equation_nodes((node, ref))
-            self._note_translation_tie(node, ref)
-            equations_written += 1
+            terms = [(node, dof, 1.0), (ref, dof, -1.0)]
+            if self._write_tie(file, terms, constrained_node_dofs, conn):
+                self._note_equation_nodes((node, ref))
+                self._note_translation_tie(node, ref)
 
         # Translations (DOF 1-3): couple all nodes to ref_node, except a node
         # that a rigid link already joins to it. The two ends of a link are
@@ -4901,12 +4882,73 @@ class UnifiedCalculixWriter:
         # an end release, and a partial release with no hinge is reported by
         # _warn_partial_releases.
 
-        if equations_skipped > 0:
-            logger.info(
-                f"Connection {conn.id}: Wrote {equations_written} equations, skipped {equations_skipped} (shared nodes)"
-            )
-
         file.write("**\n")
+
+    def _write_tie(
+        self,
+        file: TextIO,
+        terms: List[Tuple[int, int, float]],
+        constrained_node_dofs: set,
+        conn,
+    ) -> bool:
+        """Write a joint's equation with a term nothing else depends on first.
+
+        The first term of an ``*EQUATION`` is the one it eliminates, and a DOF
+        that a support or an earlier equation has eliminated already cannot be
+        again. Any other term can take its place: where a support holds the
+        released member's end and not the joint, the joint leans on the
+        member end (``aiz.107``, and ``aiz.106`` for hinged edges; it was once
+        left out, and the members came apart there with the reactions
+        balancing).
+
+        Args:
+            conn: The connection the equation is for, None for a hinged edge.
+
+        Returns:
+            Whether it was written: not where supports hold every term already.
+
+        Raises:
+            AnalysisError: Every term is decided already, and not all by
+                supports, so the tie cannot be made.
+        """
+        free = next(
+            (
+                i
+                for i, (node, dof, coefficient) in enumerate(terms)
+                if coefficient and (node, dof) not in constrained_node_dofs
+            ),
+            None,
+        )
+        if free is None:
+            held = getattr(self, "_support_held_dofs", set())
+            if all((node, dof) in held for node, dof, c in terms if c):
+                return False
+            node, dof, _ = terms[0]
+            where = (
+                f"Connection {conn.id}"
+                if conn is not None
+                else "A hinged edge between surface members"
+            )
+            raise AnalysisError(
+                f"{where} cannot tie node {node} at "
+                f"({', '.join(f'{c:.3f}' for c in self.nodes[node])}) in DOF "
+                f"{dof}: every "
+                "node of the tie is decided already by another joint, so the "
+                "members would come apart there.",
+                code="E-JNT-005",
+                ifc_guids=self._ifc_guids([conn.id] if conn is not None else []),
+            )
+        # The same equation with the free term first, and positive
+        sign = 1.0 if terms[free][2] > 0 else -1.0
+        terms = [
+            (node, dof, sign * coefficient)
+            for node, dof, coefficient in [terms[free]]
+            + terms[:free]
+            + terms[free + 1 :]
+        ]
+        self._write_equation(file, terms)
+        constrained_node_dofs.add(terms[0][:2])
+        return True
 
     def _get_member_endpoints(self, member_id: str):
         """

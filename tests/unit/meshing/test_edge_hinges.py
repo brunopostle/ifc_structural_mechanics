@@ -3,6 +3,8 @@
 import io
 import re
 
+import pytest
+
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
 from ifc_structural_mechanics.domain.structural_connection import (
     PointConnection,
@@ -13,6 +15,7 @@ from ifc_structural_mechanics.domain.structural_model import StructuralModel
 from ifc_structural_mechanics.meshing.unified_calculix_writer import (
     UnifiedCalculixWriter,
 )
+from ifc_structural_mechanics.utils.error_handling import AnalysisError
 
 # Release axes of a relation whose x runs along an edge parallel to global Y
 ALONG_Y = [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
@@ -77,7 +80,9 @@ def _equations(text):
     """Return (dependent node, dof, independent node) for each equation."""
     return [
         (int(a), int(dof), int(b))
-        for a, dof, b in re.findall(r"^(\d+),(\d),1\.0,(\d+),\d,-1\.0$", text, re.M)
+        for a, dof, b in re.findall(
+            r"^(\d+),(\d),1(?:\.0)?,(\d+),\d,-1(?:\.0)?$", text, re.M
+        )
     ]
 
 
@@ -145,8 +150,19 @@ class TestHingedEdge:
         writer._release_hinged_edges()
         out = io.StringIO()
         held = {(node, dof) for node in (2, 5) for dof in (1, 2, 3)}
+        writer._support_held_dofs = set(held)
         writer._write_edge_hinges(out, held)
         assert {node for node, _, _ in _equations(out.getvalue())} == {6}
+
+    def test_both_decided_by_other_joints_stops_the_analysis(self):
+        """Left out, the slab would come away from the wall there (`aiz.107`)."""
+        writer = _slab_on_wall(slab_release=[4, 5, 6])
+        writer._release_hinged_edges()
+        held = {(node, dof) for node in (2, 5) for dof in (1, 2, 3)}
+        writer._support_held_dofs = {(5, 1), (5, 2), (5, 3)}
+        with pytest.raises(AnalysisError) as raised:
+            writer._write_edge_hinges(io.StringIO(), held)
+        assert raised.value.code == "E-JNT-005"
 
 
 class TestRigidLinkedJoint:

@@ -8097,8 +8097,13 @@ class TestNodesTiedToSupports:
         self._assert_balanced(data)
         assert not [w for w in data["warnings"] if w["code"] == "W-RES-001"]
 
-    def test_beam_released_at_a_joint_another_beam_is_held_at(self, tmp_path):
-        """A ball joint leaning on a node that a support of the other beam holds."""
+    @pytest.mark.parametrize("held", ["main", "arm"])
+    def test_beam_released_at_a_joint_another_beam_is_held_at(self, tmp_path, held):
+        """A ball joint leaning on a node that a support of one of the beams holds.
+
+        Held at the released arm's own node, the tie of that node to the joint
+        was left out (`aiz.107`), and the main beam came loose there.
+        """
         path = _balcony_frame(
             tmp_path, "IfcRectangleProfileDef", {"XDim": 0.1, "YDim": 0.2}
         )
@@ -8164,7 +8169,7 @@ class TestNodesTiedToSupports:
             for relation in model.by_type("IfcRelAssignsToGroup")
             if main in relation.RelatedObjects
         )
-        support((TORSION_LA, 0.0, 0.0), main)
+        support((TORSION_LA, 0.0, 0.0), main if held == "main" else arm)
         support((TORSION_LA, TORSION_LB, 0.0), arm)
         for relation in model.by_type("IfcRelConnectsStructuralMember"):
             if (
@@ -8177,6 +8182,28 @@ class TestNodesTiedToSupports:
         # The load halfway along the arm, half of it for the joint
         action = model.by_type("IfcStructuralPointAction")[0]
         action.Representation = shape((TORSION_LA, TORSION_LB / 2, 0.0))
+        if held == "arm":
+            # The main beam loaded as well, so that it shows if it comes loose
+            on_main = create(
+                "IfcStructuralPointAction",
+                GlobalId=ifcopenshell.guid.new(),
+                Name="Load on main",
+                ObjectPlacement=placement,
+                Representation=shape((TORSION_LA / 2, 0.0, 0.0)),
+                AppliedLoad=action.AppliedLoad,
+                GlobalOrLocal="GLOBAL_COORDS",
+            )
+            create(
+                "IfcRelConnectsStructuralActivity",
+                ifcopenshell.guid.new(),
+                None,
+                None,
+                None,
+                main,
+                on_main,
+            )
+            (in_case,) = action.HasAssignments
+            in_case.RelatedObjects = list(in_case.RelatedObjects) + [on_main]
         path = str(tmp_path / "held_joint.ifc")
         model.write(path)
 
@@ -8189,8 +8216,19 @@ class TestNodesTiedToSupports:
             if s["position_m"] == pytest.approx([TORSION_LA, 0.0, 0.0])
         ]
         (reaction,) = [s["by_load_case"] for s in at_joint]
-        (force,) = reaction.values()
-        assert force["fz_N"] == pytest.approx(TORSION_P / 2, rel=1e-3)
+        ((case, force),) = reaction.items()
+        share = 0.5 if held == "main" else 1.0
+        assert force["fz_N"] == pytest.approx(share * TORSION_P, rel=1e-3)
+        # Both beams' nodes at the joint stay where the support holds them
+        output = AnalysisOutput(str(tmp_path / "out_0.1"))
+        at_support = np.linalg.norm(
+            output.mesh.points - np.array([TORSION_LA, 0.0, 0.0]), axis=1
+        )
+        nodes = np.flatnonzero(at_support < 1e-6)
+        assert len(nodes) == 2
+        moved = np.linalg.norm(output.displacement(case)[nodes], axis=1)
+        # The mean over a cross-section turning about a pin is 1e-8 m off
+        assert moved == pytest.approx([0.0, 0.0], abs=1e-7)
 
     def test_hinge_where_a_support_holds_only_the_copy(self, tmp_path):
         """The tie cannot make the held copy depend on anything (`aiz.106`).

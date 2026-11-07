@@ -70,6 +70,8 @@ def _make_writer_stub(node_pairs=None):
     writer._write_point_connection = (
         UnifiedCalculixWriter._write_point_connection.__get__(writer)
     )
+    writer._write_tie = UnifiedCalculixWriter._write_tie.__get__(writer)
+    writer._write_equation = UnifiedCalculixWriter._write_equation
     return writer
 
 
