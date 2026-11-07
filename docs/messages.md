@@ -8,7 +8,7 @@ Every warning and error the analysis gives has a code, which the command line pr
 
 ### E-IFC-001: No structural members
 
-The file has no IfcStructuralCurveMember or IfcStructuralSurfaceMember. The analysis reads the structural analysis model (the analytical view), not the building elements: create one first, in Bonsai with the structural tools.
+The file has no IfcStructuralCurveMember or IfcStructuralSurfaceMember. The analysis reads the structural analysis model (the analytical view), not the building elements: create one first.
 
 ### E-IFC-002: Member geometry cannot be read
 
@@ -40,11 +40,11 @@ No longer given: such members stop the analysis (E-SEC-001).
 
 ### W-IFC-004: Face with no surface
 
-A surface member or surface connection is an IfcFace, where IFC wants an IfcFaceSurface whose plane gives its axes (Bonsai's face template writes the former). It is read on the plane through its corners: local z by the right-hand winding of its outer bound, local x the default of IfcAxis2Placement3D (global x made square to z, or global y if z is along x). Only the sense of a member's normal (a temperature difference across it, the side its surface results are given from) and the axes of a surface support's condition, when it differs by direction, depend on them. A face that is not plane stops the analysis. Write an IfcFaceSurface on an IfcPlane to give the axes yourself.
+A surface member or surface connection is an IfcFace, where IFC wants an IfcFaceSurface whose plane gives its axes. It is read on the plane through its corners: local z by the right-hand winding of its outer bound, local x the default of IfcAxis2Placement3D (global x made square to z, or global y if z is along x). Only the sense of a member's normal (a temperature difference across it, the side its surface results are given from) and the axes of a surface support's condition, when it differs by direction, depend on them. A face that is not plane stops the analysis. Write an IfcFaceSurface on an IfcPlane to give the axes yourself.
 
 ### W-IFC-005: Load or stiffness in a unit the file does not declare
 
-The file's lengths are not in metres, and it gives line or area loads, point moments or support stiffnesses without declaring a unit for them in its IfcUnitAssignment (Bonsai's default project declares none). IFC does not say what such a value means; it is read in units made of the file's length and force units, so in a file in millimetres an area load is in N/mm², and 5000 meant as 5 kN/m² is a million times too large. The message says how each kind was read. Check the loads and reactions in the results, and declare the unit (an IfcDerivedUnit or IfcSIUnit of the type named, such as PLANARFORCEUNIT) to make the file say what it means.
+The file's lengths are not in metres, and it gives line or area loads, point moments or support stiffnesses without declaring a unit for them in its IfcUnitAssignment. IFC does not say what such a value means; it is read in units made of the file's length and force units, so in a file in millimetres an area load is in N/mm², and 5000 meant as 5 kN/m² is a million times too large. The message says how each kind was read. Check the loads and reactions in the results, and declare the unit (an IfcDerivedUnit or IfcSIUnit of the type named, such as PLANARFORCEUNIT) to make the file say what it means.
 
 ## Materials
 
@@ -242,7 +242,7 @@ Only point, curve and surface connections are supported.
 
 ### E-SUP-007: Condition cannot be read
 
-The boundary condition lacks a value the analysis needs, or does not pass validation. The message says which.
+The boundary condition lacks a value the analysis needs, is of another kind than its connection, or does not pass validation. The message says which. IFC does not say what an unset stiffness means, so it is neither free nor fixed: set each of the six (three on a face) to IfcBoolean false for free, true for fixed, or a stiffness. A new condition made by an authoring tool can start with all of them unset.
 
 ### E-SUP-008: Elastic support cannot be applied
 
@@ -460,7 +460,7 @@ A modal analysis found modes with no frequency (below 0.01 Hz, or a negative eig
 
 ### W-BLD-001: Structural model not linked to the building
 
-No structural member is linked to a building element by an IfcRelAssignsToProduct (either may be the RelatingProduct), so the check has nothing to compare. Bonsai's 'assign product' and ifcopenshell.api.structural.assign_product make the link.
+No structural member is linked to a building element by an IfcRelAssignsToProduct (either may be the RelatingProduct), so the check has nothing to compare. Link each member to the element it idealises.
 
 ### W-BLD-002: Material differs from the element's
 

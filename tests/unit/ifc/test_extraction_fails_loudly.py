@@ -382,6 +382,34 @@ class TestConnections:
         with pytest.raises(ModelExtractionError, match="TranslationalStiffnessZ"):
             Extractor(model).extract_model()
 
+    def test_unset_stiffnesses_are_named_together_with_how_to_set_them(self):
+        """A pin with its rotations left unset, as a new condition starts (94g.31)."""
+        model = _open("cantilever_01")
+        connection = model.by_type("IfcStructuralPointConnection")[0]
+        condition = connection.AppliedCondition
+        for axis in "XYZ":
+            setattr(condition, f"RotationalStiffness{axis}", None)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-SUP-007"
+        assert connection.GlobalId in error.value.ifc_guids
+        message = str(error.value)
+        assert (
+            "gives no RotationalStiffnessX, RotationalStiffnessY, "
+            "RotationalStiffnessZ." in message
+        )
+        assert "IfcBoolean false for free, true for fixed, or a stiffness" in message
+
+    def test_unset_edge_stiffness_says_how_to_set_it(self):
+        model = _open("slab_01")
+        condition = model.by_type("IfcStructuralCurveConnection")[0].AppliedCondition
+        condition.RotationalStiffnessByLengthX = None
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert "gives no RotationalStiffnessByLengthX. IFC does not say" in str(
+            error.value
+        )
+
     def test_stiffness_per_length_and_per_area_follow_the_length_unit(self):
         """N/m at a point, N/m per metre along an edge, N/m per m² over a face."""
         model = _open("slab_01")

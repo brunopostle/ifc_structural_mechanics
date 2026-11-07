@@ -362,6 +362,22 @@ def edge_without_length(start, end, item: str) -> Optional[str]:
     )
 
 
+def _unset_stiffness_message(condition, unset: List[str], ifc2x3: bool) -> str:
+    """What to say of a boundary condition with values left unset (94g.31).
+
+    IFC gives an unset value no meaning, so it is neither free nor fixed.
+    """
+    how = (
+        "a stiffness, 0 for free or -1 for fixed"
+        if ifc2x3
+        else "IfcBoolean false for free, true for fixed, or a stiffness"
+    )
+    return (
+        f"Its {condition.is_a()} gives no {', '.join(unset)}. IFC does not say "
+        f"what an unset value means: set each to {how}."
+    )
+
+
 def get_representation(element, rep_type):
     """
     Find representation of specific type from an entity with fallbacks.
@@ -1054,6 +1070,20 @@ def get_connection_input(
         # IFC2X3 calls translations "Linear", has numbers only and -1 for rigid;
         # IFC4 forbids that -1, where a negative stiffness is a real one
         ifc2x3 = condition.file.schema == "IFC2X3"
+        # Every value left unset, so that one message names them all
+        unset = []
+        for template in names[geometryType]:
+            for axis in "XYZ" if template else "":
+                attribute = template.format(axis)
+                if ifc2x3:
+                    attribute = attribute.replace("Translational", "Linear")
+                if getattr(condition, attribute, False) is None:
+                    unset.append(attribute)
+        if unset:
+            raise ModelExtractionError(
+                _unset_stiffness_message(condition, unset, ifc2x3),
+                code="E-SUP-007",
+            )
         result = {}
         for kind, (template, power, unit) in enumerate(
             zip(names[geometryType], length_powers[geometryType], units[geometryType])
@@ -1073,11 +1103,6 @@ def get_connection_input(
                         code="E-SUP-007",
                     )
                 value = getattr(condition, attribute)
-                if value is None:
-                    raise ModelExtractionError(
-                        f"Its {condition.is_a()} gives no {attribute}.",
-                        code="E-SUP-007",
-                    )
                 value = getattr(value, "wrappedValue", value)
                 if (
                     undeclared_units is not None
