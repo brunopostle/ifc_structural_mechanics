@@ -13,8 +13,8 @@ import ifcopenshell.api.geometry
 import ifcopenshell.api.material
 import ifcopenshell.api.pset
 import ifcopenshell.api.root
-import ifcopenshell.api.structural
 import ifcopenshell.api.unit
+import ifcopenshell.guid
 import numpy as np
 import pytest
 from click.testing import CliRunner
@@ -142,6 +142,20 @@ class _Model:
             self.f.create_entity("IfcCartesianPoint", [float(c) for c in xyz]),
         )
 
+    def _topology(self, item, kind):
+        """A 'Reference' representation of one topological item.
+
+        Built by hand: api.geometry.add_topology_representation is not in
+        ifcopenshell 0.8.4, the last release for Python 3.9.
+        """
+        return self.f.create_entity(
+            "IfcTopologyRepresentation",
+            ContextOfItems=self.reference,
+            RepresentationIdentifier="Reference",
+            RepresentationType=kind,
+            Items=[item],
+        )
+
     def _place(self, item):
         ifcopenshell.api.geometry.edit_object_placement(
             self.f, product=item, matrix=np.eye(4)
@@ -157,11 +171,7 @@ class _Model:
         edge = self.f.create_entity("IfcEdge", self._point(start), self._point(end))
         item.Representation = self.f.create_entity(
             "IfcProductDefinitionShape",
-            Representations=[
-                ifcopenshell.api.geometry.add_topology_representation(
-                    self.f, context=self.reference, item=edge
-                )
-            ],
+            Representations=[self._topology(edge, "Edge")],
         )
         return item
 
@@ -173,18 +183,17 @@ class _Model:
         self._place(item)
         loop = self.f.create_entity(
             "IfcPolyLoop",
-            [self.f.create_entity("IfcCartesianPoint", c) for c in corners],
+            [
+                self.f.create_entity("IfcCartesianPoint", [float(v) for v in c])
+                for c in corners
+            ],
         )
         face = self.f.create_entity(
             "IfcFace", [self.f.create_entity("IfcFaceOuterBound", loop, True)]
         )
         item.Representation = self.f.create_entity(
             "IfcProductDefinitionShape",
-            Representations=[
-                ifcopenshell.api.geometry.add_topology_representation(
-                    self.f, context=self.reference, item=face
-                )
-            ],
+            Representations=[self._topology(face, "Face")],
         )
         return item
 
@@ -204,8 +213,13 @@ class _Model:
             relating, related = member, element
         else:
             relating, related = element, member
-        ifcopenshell.api.structural.assign_product(
-            self.f, relating_product=relating, related_object=related
+        # By hand: api.structural.assign_product is not in ifcopenshell 0.8.4,
+        # the last release for Python 3.9
+        self.f.create_entity(
+            "IfcRelAssignsToProduct",
+            GlobalId=ifcopenshell.guid.new(),
+            RelatedObjects=[related],
+            RelatingProduct=relating,
         )
 
     def move_edge(self, member, start, end):
