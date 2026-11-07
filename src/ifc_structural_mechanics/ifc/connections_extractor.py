@@ -24,12 +24,14 @@ from .entity_identifier import (
 )
 from .entity_identifier import (
     analyze_connection_type,
+    edge_without_length,
     face_loops,
     find_connected_elements,
     get_coordinate,
     get_item_transformation,
     get_representation,
     implied_face_axes,
+    missing_edge_message,
     transform_vectors,
 )
 
@@ -239,6 +241,9 @@ class ConnectionsExtractor:
                     raise ModelExtractionError(
                         "The ends of its edge cannot be read.", code="E-SUP-005"
                     )
+                no_length = edge_without_length(geometry[0], geometry[1], "connection")
+                if no_length:
+                    raise ModelExtractionError(no_length, code="E-SUP-005")
                 midpoint = [(geometry[0][i] + geometry[1][i]) / 2 for i in range(3)]
 
                 connection = create_connection_from_stiffness(
@@ -256,7 +261,8 @@ class ConnectionsExtractor:
                 ]
             else:
                 raise ModelExtractionError(
-                    "It has no edge representation.", code="E-SUP-005"
+                    missing_edge_message(ifc_connection, "connection"),
+                    code="E-SUP-005",
                 )
 
         for member_id in find_connected_elements(ifc_connection):

@@ -6,6 +6,7 @@ structural analysis-related IFC entities.
 """
 
 import logging
+import math
 from typing import Dict, List, Optional, Set
 
 import ifcopenshell
@@ -307,6 +308,58 @@ def get_coordinate(point, unit_scale: float = 1.0):
         raise ModelExtractionError(
             _unreadable(point, "its coordinates", e), code="E-IFC-005"
         ) from e
+
+
+# An edge shorter than this has no length: nothing structural is a hundredth
+# of a millimetre long, and the mesh merges points closer than it
+MIN_EDGE_LENGTH = 1e-5
+
+
+def missing_edge_message(element, item: str) -> str:
+    """What to say of a curve member or connection with no edge (94g.28).
+
+    Names the representations it has, so a user can see what was written in
+    the edge's place (Bonsai can leave a Body and an Axis only).
+    """
+    found = [
+        f"{rep.RepresentationIdentifier or 'no identifier'}/"
+        f"{rep.RepresentationType or 'no type'}"
+        for rep in (
+            getattr(getattr(element, "Representation", None), "Representations", None)
+            or []
+        )
+    ]
+    has = (
+        f"Its representations are {', '.join(found)}"
+        if found
+        else "It has no representation"
+    )
+    return (
+        f"It has no edge representation. {has}; it needs an "
+        "IfcTopologyRepresentation 'Reference' of type 'Edge' holding an IfcEdge "
+        f"whose vertices are the ends of the {item}."
+    )
+
+
+def edge_without_length(start, end, item: str) -> Optional[str]:
+    """What to say of an edge whose ends are one point, or None if it has length.
+
+    Such an edge once got past extraction and stopped the mesh with "Start and
+    end points of line should be different" (94g.28).
+
+    Args:
+        start: Its first end, in metres and global coordinates
+        end: Its other end, likewise
+        item: "member" or "connection", for the message
+    """
+    length = math.dist(start, end)
+    if length >= MIN_EDGE_LENGTH:
+        return None
+    where = ", ".join(f"{value:.6g}" for value in start)
+    return (
+        f"Its edge has no length: both ends are at ({where}) m, {length:.3g} m "
+        f"apart. Give it an IfcEdge from one end of the {item} to the other."
+    )
 
 
 def get_representation(element, rep_type):

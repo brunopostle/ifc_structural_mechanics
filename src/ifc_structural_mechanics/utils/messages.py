@@ -607,12 +607,13 @@ _ERRORS = [
     MessageKind(
         "E-IFC-002",
         "Member geometry cannot be read",
-        "A curve member needs an IfcEdge representation and a surface member an "
+        "A curve member needs an IfcEdge representation ('Reference', of type "
+        "'Edge') whose vertices are its ends, apart, and a surface member an "
         "IfcFaceSurface (or a plane IfcFace, W-IFC-004), with vertices that "
         "have coordinates, and one outer bound (IfcFaceOuterBound) if it has "
         "more than one. Other bounds are openings: they must lie clear inside "
-        "the outline and of each other. The message names the member and what "
-        "is missing.",
+        "the outline and of each other. The message names the member, what "
+        "is missing and, for a missing edge, the representations it has.",
     ),
     MessageKind(
         "E-IFC-003",
@@ -815,7 +816,9 @@ _ERRORS = [
     MessageKind(
         "E-SUP-005",
         "Curve connection without an edge",
-        "A curve connection needs an IfcEdge representation whose ends can be " "read.",
+        "A curve connection needs an IfcEdge representation ('Reference', of "
+        "type 'Edge') whose ends can be read and are apart. The message says "
+        "which representations it has instead.",
     ),
     MessageKind(
         "E-SUP-006",

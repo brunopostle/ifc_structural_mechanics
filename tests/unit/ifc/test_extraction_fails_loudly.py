@@ -60,6 +60,45 @@ class TestMembers:
         assert "no edge representation" in str(error.value)
         assert error.value.ifc_guids == [member.GlobalId]
 
+    def test_member_without_edge_says_what_it_has_and_needs(self):
+        """Bonsai can leave a Body and an Axis only (94g.28)."""
+        model = _open("cantilever_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        existing = member.Representation.Representations[0]
+        context, items = existing.ContextOfItems, existing.Items
+        member.Representation.Representations = [
+            model.create_entity(
+                "IfcShapeRepresentation", context, "Body", "SweptSolid", items
+            ),
+            model.create_entity(
+                "IfcShapeRepresentation", context, "Axis", "Curve3D", items
+            ),
+        ]
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-IFC-002"
+        assert error.value.ifc_guids == [member.GlobalId]
+        message = str(error.value)
+        assert "Its representations are Body/SweptSolid, Axis/Curve3D" in message
+        assert "IfcTopologyRepresentation 'Reference' of type 'Edge'" in message
+
+    def test_member_whose_edge_has_no_length_is_an_error(self):
+        """It once failed in Gmsh: 'Start and end points of line should be
+        different' (94g.28)."""
+        model = _open("cantilever_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        (edge,) = {
+            item
+            for item in model.traverse(member.Representation)
+            if item.is_a("IfcEdge")
+        }
+        edge.EdgeEnd = edge.EdgeStart
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-IFC-002"
+        assert error.value.ifc_guids == [member.GlobalId]
+        assert "Its edge has no length: both ends are at (" in str(error.value)
+
     def test_material_without_stiffness_is_an_error(self):
         """It used to be analysed as steel."""
         model = _open("cantilever_01")
@@ -282,6 +321,47 @@ class TestMembers:
 
 
 class TestConnections:
+    @staticmethod
+    def _curve_connection(model):
+        connection = model.by_type("IfcStructuralCurveConnection")[0]
+        (edge,) = [
+            item
+            for rep in connection.Representation.Representations
+            for item in rep.Items
+            if item.is_a("IfcEdge")
+        ]
+        return connection, edge
+
+    def test_curve_connection_without_edge_says_what_it_needs(self):
+        """94g.28: it once said only that it had no edge representation."""
+        model = _open("slab_01")
+        connection, _ = self._curve_connection(model)
+        connection.Representation = None
+        # A position of its own, so that the edge is what is missing
+        connection.ObjectPlacement = model.create_entity(
+            "IfcLocalPlacement",
+            RelativePlacement=model.create_entity(
+                "IfcAxis2Placement3D",
+                model.create_entity("IfcCartesianPoint", (1.0, 0.0, 0.0)),
+            ),
+        )
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-SUP-005"
+        assert connection.GlobalId in error.value.ifc_guids
+        assert "It has no representation; it needs an" in str(error.value)
+        assert "the ends of the connection" in str(error.value)
+
+    def test_curve_connection_whose_edge_has_no_length_is_an_error(self):
+        model = _open("slab_01")
+        connection, edge = self._curve_connection(model)
+        edge.EdgeEnd = edge.EdgeStart
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-SUP-005"
+        assert connection.GlobalId in error.value.ifc_guids
+        assert "Its edge has no length" in str(error.value)
+
     def test_connection_without_position_is_an_error(self):
         """It used to be put at the origin."""
         model = _open("cantilever_01")

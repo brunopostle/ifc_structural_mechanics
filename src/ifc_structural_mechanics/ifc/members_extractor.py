@@ -16,12 +16,14 @@ from ..converters import profile_geometry
 from ..domain.property import Material, Section, Thickness
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
+    edge_without_length,
     face_loops,
     get_1D_orientation,
     get_coordinate,
     get_item_transformation,
     get_representation,
     implied_face_axes,
+    missing_edge_message,
     transform_vectors,
 )
 from ..utils.error_handling import ModelExtractionError
@@ -288,7 +290,7 @@ class MembersExtractor:
         representation = get_representation(entity, "Edge")
         if not representation:
             raise ModelExtractionError(
-                "It has no edge representation.", code="E-IFC-002"
+                missing_edge_message(entity, "member"), code="E-IFC-002"
             )
 
         material_profile = self._get_material_profile(entity)
@@ -319,6 +321,9 @@ class MembersExtractor:
                 orientation = transform_vectors(
                     orientation, transformation, include_translation=False
                 )
+        no_length = edge_without_length(geometry[0], geometry[-1], "member")
+        if no_length:
+            raise ModelExtractionError(no_length, code="E-IFC-002")
 
         return CurveMember(
             id=entity.GlobalId,
