@@ -7,7 +7,6 @@ once turned every hollow section into a solid one.
 """
 
 import math
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,9 +29,8 @@ def _profile(ifc_class, **attributes):
 
 
 def _from_members_extractor(profile, length_scale=1.0):
-    extractor = MagicMock(spec=MembersExtractor)
-    extractor.length_scale = length_scale
-    return MembersExtractor._create_section(extractor, profile)
+    extractor = MembersExtractor(profile.file, {"LENGTHUNIT": length_scale})
+    return extractor._create_section(profile)
 
 
 EXTRACTORS = pytest.mark.parametrize("extract", [_from_members_extractor])

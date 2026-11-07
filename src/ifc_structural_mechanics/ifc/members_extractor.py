@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 import ifcopenshell
 import numpy as np
 
+from ..converters import profile_geometry
 from ..domain.property import Material, Section, Thickness
 from ..domain.structural_member import CurveMember, StructuralMember, SurfaceMember
 from ..ifc.entity_identifier import (
@@ -36,9 +37,12 @@ logger = logging.getLogger(__name__)
 # What a density given with no unit can be, in kg/m3
 MIN_DENSITY, MAX_DENSITY = 1.0, 1.0e6
 
-# How far a profile's stated value may be from its dimensions'. The fillets of
-# a rolled section add a few percent to its inertia and a fifth to its torsion.
+# How far a profile's stated value may be from its dimensions'. The torsion
+# constant from the dimensions leaves out the fillets, a fifth of a rolled I's.
 PSET_AGREEMENT = 1.5
+
+# How the warning about sloped flanges begins, so it is given once
+_SLOPED_FLANGES = "The sloped flanges or legs of"
 
 
 class MembersExtractor:
@@ -90,6 +94,7 @@ class MembersExtractor:
         self.unit_scales = unit_scales or {}
         self.length_scale = self.unit_scales.get("LENGTHUNIT", 1.0)
         self.area_scale = self.unit_scales.get("AREAUNIT", self.length_scale**2)
+        self.angle_scale = self.unit_scales.get("PLANEANGLEUNIT", 1.0)
         self.force_scale = self.unit_scales.get("FORCEUNIT", 1.0)
         self.density_scale = self.unit_scales.get("MASSDENSITYUNIT")
         self.inertia_scale = self.unit_scales.get("MOMENTOFINERTIAUNIT", 1.0)
@@ -112,6 +117,7 @@ class MembersExtractor:
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict[str, Any]] = []
         self._disagreeing_psets: List[str] = []
+        self._sloped_profiles: List[str] = []
         self._faces_without_surface: List[str] = []
 
     def extract_all_members(self) -> List[StructuralMember]:
@@ -800,19 +806,115 @@ class MembersExtractor:
         if unit:
             own_scales[key] = unit_to_si(unit)
 
-    def _take_mechanical_properties(self, section: Section, profile) -> None:
+    def _dimension(self, profile, name: str, default: Optional[float] = None) -> float:
+        """A length of a profile in metres.
+
+        ``default`` is for what IFC itself says an omitted value means (no
+        fillet, an L's width its depth); a required one that is missing raises.
+        """
+        value = getattr(profile, name, None)
+        if value is None:
+            if default is None:
+                raise ModelExtractionError(
+                    f"Its profile {profile.ProfileName or profile.is_a()!r} gives "
+                    f"no {name}.",
+                    code="E-SEC-004",
+                )
+            return default
+        return convert_length(value, self.length_scale)
+
+    def _slope(self, profile, name: str) -> float:
+        """A slope of a profile in radians; none given is none."""
+        value = getattr(profile, name, None)
+        return float(value) * self.angle_scale if value else 0.0
+
+    @staticmethod
+    def _outline(profile, build, *args, **kwargs):
+        """Call a function of ``profile_geometry``; its ValueError is the profile's."""
+        try:
+            return build(*args, **kwargs)
+        except ValueError as error:
+            raise ModelExtractionError(
+                f"Its profile {profile.ProfileName or profile.is_a()!r}: {error}",
+                code="E-SEC-004",
+            ) from error
+
+    def _section_of_outline(
+        self, profile, outline, section_type, default_name, dimensions, slopes
+    ) -> Section:
+        """A section whose area and inertias are those of the profile's outline.
+
+        Pset_ProfileMechanical still goes first where it agrees. A sloped
+        flange is drawn as IfcOpenShell draws it, which the specification does
+        not confirm, so a section that relies on it says so (W-SEC-004).
+        """
+        properties = self._outline(
+            profile, profile_geometry.outline_properties, outline
+        )
+        section = Section(
+            id=profile.id() if hasattr(profile, "id") else str(uuid.uuid4()),
+            name=getattr(profile, "ProfileName", None) or default_name,
+            section_type=section_type,
+            area=properties.area,
+            dimensions=dimensions,
+        )
+        section.area = properties.area
+        # Profile y is the member's local z: bending in the depth is about x
+        section.moment_of_inertia_y = properties.i_xx
+        section.moment_of_inertia_z = properties.i_yy
+        taken = self._take_mechanical_properties(section, profile)
+        sloped = [name for name in slopes if getattr(profile, name, None)]
+        if (
+            sloped
+            and not {
+                "area",
+                "moment_of_inertia_y",
+                "moment_of_inertia_z",
+            }
+            <= taken
+        ):
+            self._sloped_profiles.append(section.name)
+            self.warnings = [
+                found
+                for found in self.warnings
+                if not (
+                    found["code"] == "W-SEC-004"
+                    and found["message"].startswith(_SLOPED_FLANGES)
+                )
+            ]
+            names = sorted(set(self._sloped_profiles))
+            self.warnings.append(
+                warning(
+                    "W-SEC-004",
+                    f"{_SLOPED_FLANGES} {len(names)} profile(s) "
+                    f"({', '.join(map(repr, names[:3]))}) are taken as "
+                    "IfcOpenShell draws them: an I section's flange thickness "
+                    "at the flange's edge, the others' nearer the web. IFC does "
+                    "not say where it is measured, and steel tables differ. Give "
+                    "Pset_ProfileMechanical's CrossSectionArea, MomentOfInertiaY "
+                    "and MomentOfInertiaZ to be sure.",
+                )
+            )
+        return section
+
+    def _take_mechanical_properties(self, section: Section, profile) -> set:
         """
         Give a section the values its profile's Pset_ProfileMechanical states.
 
-        They include the fillets of a rolled section, which the dimensions do
-        not. A value far from what the dimensions give is in another unit than
+        They are the table's, where the dimensions give the outline drawn
+        (``profile_geometry``) and a torsion constant of plates. A value far
+        from what the dimensions give is in another unit than
         the file declares or about another axis, so the dimensions stand and
         the user is told.
 
         Args:
             section: The section, with the properties of its dimensions
             profile: The IFC profile
+
+        Returns:
+            The attributes of the section it set
         """
+        taken: set = set()
         stated = {}
         for pset in getattr(profile, "HasProperties", None) or []:
             if pset.Name == "Pset_ProfileMechanical":
@@ -832,6 +934,7 @@ class MembersExtractor:
             from_dimensions = getattr(section, attribute)
             if 1 / PSET_AGREEMENT <= value / from_dimensions <= PSET_AGREEMENT:
                 setattr(section, attribute, value)
+                taken.add(attribute)
             else:
                 disagreement = (
                     f"{name} of '{section.name}' is {value:.4g} in SI units, "
@@ -854,6 +957,7 @@ class MembersExtractor:
                     + ". Check the file's units.",
                 )
             )
+        return taken
 
     def _density_in_si(
         self, value: float, material_name: str, own_scale: Optional[float] = None
@@ -940,146 +1044,165 @@ class MembersExtractor:
                 height=convert_length(profile.YDim, self.length_scale),
             )
 
-        # Handle I-shape profile (symmetric)
+        # The open profiles of steel tables: their area and inertias come
+        # from their outline, fillets, rounded edges and sloped flanges
+        # included, as IfcOpenShell draws it (94g.26)
         elif profile.is_a("IfcIShapeProfileDef"):
-            width = convert_length(profile.OverallWidth, self.length_scale)
-            height = convert_length(profile.OverallDepth, self.length_scale)
-            web_thickness = convert_length(profile.WebThickness, self.length_scale)
-            flange_thickness = convert_length(
-                profile.FlangeThickness, self.length_scale
+            width = self._dimension(profile, "OverallWidth")
+            height = self._dimension(profile, "OverallDepth")
+            web_thickness = self._dimension(profile, "WebThickness")
+            flange_thickness = self._dimension(profile, "FlangeThickness")
+            outline = self._outline(
+                profile,
+                profile_geometry.i_shape,
+                width,
+                height,
+                web_thickness,
+                flange_thickness,
+                bottom_fillet=self._dimension(profile, "FilletRadius", 0.0),
+                bottom_edge=self._dimension(profile, "FlangeEdgeRadius", 0.0),
+                bottom_slope=self._slope(profile, "FlangeSlope"),
             )
-            fillet_radius = convert_length(
-                getattr(profile, "FilletRadius", None) or 0.0, self.length_scale
-            )
-
-            section = Section(
-                id=profile_id(),
-                name=getattr(profile, "ProfileName", None) or "I-Section",
-                section_type="i",
-                area=(
-                    2 * width * flange_thickness
-                    + web_thickness * (height - 2 * flange_thickness)
-                ),
-                dimensions={
+            return self._section_of_outline(
+                profile,
+                outline,
+                "i",
+                "I-Section",
+                {
                     "width": width,
                     "height": height,
                     "web_thickness": web_thickness,
                     "flange_thickness": flange_thickness,
-                    "fillet_radius": fillet_radius,
+                    "fillet_radius": self._dimension(profile, "FilletRadius", 0.0),
                 },
+                ("FlangeSlope",),
             )
-            self._take_mechanical_properties(section, profile)
-            return section
 
-        # Handle asymmetric I-shape (averaged flanges → stored as "i")
+        # An asymmetric I keeps averaged flanges for its dimensions (stress
+        # fibres, depths); its area and inertias are those of its outline,
+        # about its own centroid
         elif profile.is_a("IfcAsymmetricIShapeProfileDef"):
-            b_bot = convert_length(
-                getattr(profile, "BottomFlangeWidth", 0.1), self.length_scale
+            b_bot = self._dimension(profile, "BottomFlangeWidth")
+            b_top = self._dimension(profile, "TopFlangeWidth")
+            h = self._dimension(profile, "OverallDepth")
+            tw = self._dimension(profile, "WebThickness")
+            tf_bot = self._dimension(profile, "BottomFlangeThickness")
+            tf_top = self._dimension(profile, "TopFlangeThickness", tf_bot)
+            outline = self._outline(
+                profile,
+                profile_geometry.i_shape,
+                b_bot,
+                h,
+                tw,
+                tf_bot,
+                top_width=b_top,
+                top_flange_thickness=tf_top,
+                bottom_fillet=self._dimension(profile, "BottomFlangeFilletRadius", 0.0),
+                top_fillet=self._dimension(profile, "TopFlangeFilletRadius", 0.0),
+                bottom_edge=self._dimension(profile, "BottomFlangeEdgeRadius", 0.0),
+                top_edge=self._dimension(profile, "TopFlangeEdgeRadius", 0.0),
+                bottom_slope=self._slope(profile, "BottomFlangeSlope"),
+                top_slope=self._slope(profile, "TopFlangeSlope"),
             )
-            b_top = convert_length(
-                getattr(profile, "TopFlangeWidth", b_bot), self.length_scale
-            )
-            h = convert_length(getattr(profile, "OverallDepth", 0.2), self.length_scale)
-            tw = convert_length(
-                getattr(profile, "WebThickness", 0.01), self.length_scale
-            )
-            tf_bot = convert_length(
-                getattr(profile, "BottomFlangeThickness", 0.01), self.length_scale
-            )
-            tf_top = convert_length(
-                getattr(profile, "TopFlangeThickness", tf_bot), self.length_scale
-            )
-            bf = (b_bot + b_top) / 2.0
-            tf = (tf_bot + tf_top) / 2.0
-            h_web = max(h - tf_bot - tf_top, 0.0)
-            area = b_bot * tf_bot + b_top * tf_top + tw * h_web
-            return Section(
-                id=str(uuid.uuid4()),
-                name=getattr(profile, "ProfileName", "Asymmetric-I"),
-                section_type="i",
-                area=max(1e-6, area),
-                dimensions={
-                    "width": bf,
+            return self._section_of_outline(
+                profile,
+                outline,
+                "i",
+                "Asymmetric-I",
+                {
+                    "width": (b_bot + b_top) / 2.0,
                     "height": h,
                     "web_thickness": tw,
-                    "flange_thickness": tf,
+                    "flange_thickness": (tf_bot + tf_top) / 2.0,
                     "fillet_radius": 0.0,
                 },
+                ("BottomFlangeSlope", "TopFlangeSlope"),
             )
 
-        # Handle L-shape (angle) profile
         elif profile.is_a("IfcLShapeProfileDef"):
-            depth = convert_length(getattr(profile, "Depth", 0.1), self.length_scale)
-            width = convert_length(getattr(profile, "Width", depth), self.length_scale)
-            thickness = convert_length(
-                getattr(profile, "Thickness", 0.01), self.length_scale
+            depth = self._dimension(profile, "Depth")
+            width = self._dimension(profile, "Width", depth)
+            thickness = self._dimension(profile, "Thickness")
+            outline = self._outline(
+                profile,
+                profile_geometry.l_shape,
+                depth,
+                width,
+                thickness,
+                fillet=self._dimension(profile, "FilletRadius", 0.0),
+                edge=self._dimension(profile, "EdgeRadius", 0.0),
+                leg_slope=self._slope(profile, "LegSlope"),
             )
-            area = (depth + width - thickness) * thickness
-            return Section(
-                id=str(uuid.uuid4()),
-                name=getattr(profile, "ProfileName", "L-Section"),
-                section_type="l",
-                area=max(1e-6, area),
-                dimensions={
-                    "width": width,
-                    "height": depth,
-                    "thickness": thickness,
-                },
+            return self._section_of_outline(
+                profile,
+                outline,
+                "l",
+                "L-Section",
+                {"width": width, "height": depth, "thickness": thickness},
+                ("LegSlope",),
             )
 
-        # Handle T-shape profile
         elif profile.is_a("IfcTShapeProfileDef"):
-            depth = convert_length(getattr(profile, "Depth", 0.2), self.length_scale)
-            flange_width = convert_length(
-                getattr(profile, "FlangeWidth", 0.1), self.length_scale
+            depth = self._dimension(profile, "Depth")
+            flange_width = self._dimension(profile, "FlangeWidth")
+            web_thickness = self._dimension(profile, "WebThickness")
+            flange_thickness = self._dimension(profile, "FlangeThickness")
+            outline = self._outline(
+                profile,
+                profile_geometry.t_shape,
+                depth,
+                flange_width,
+                web_thickness,
+                flange_thickness,
+                fillet=self._dimension(profile, "FilletRadius", 0.0),
+                flange_edge=self._dimension(profile, "FlangeEdgeRadius", 0.0),
+                web_edge=self._dimension(profile, "WebEdgeRadius", 0.0),
+                web_slope=self._slope(profile, "WebSlope"),
+                flange_slope=self._slope(profile, "FlangeSlope"),
             )
-            web_thickness = convert_length(
-                getattr(profile, "WebThickness", 0.01), self.length_scale
-            )
-            flange_thickness = convert_length(
-                getattr(profile, "FlangeThickness", 0.01), self.length_scale
-            )
-            web_height = max(depth - flange_thickness, 0.0)
-            area = flange_width * flange_thickness + web_height * web_thickness
-            return Section(
-                id=str(uuid.uuid4()),
-                name=getattr(profile, "ProfileName", "T-Section"),
-                section_type="t",
-                area=max(1e-6, area),
-                dimensions={
+            return self._section_of_outline(
+                profile,
+                outline,
+                "t",
+                "T-Section",
+                {
                     "width": flange_width,
                     "height": depth,
                     "web_thickness": web_thickness,
                     "flange_thickness": flange_thickness,
                 },
+                ("WebSlope", "FlangeSlope"),
             )
 
-        # Handle channel profile (IfcUShapeProfileDef; there is no
-        # IfcChannelProfileDef in IFC)
+        # A channel (IfcUShapeProfileDef; there is no IfcChannelProfileDef)
         elif profile.is_a("IfcUShapeProfileDef"):
-            depth = convert_length(getattr(profile, "Depth", 0.2), self.length_scale)
-            flange_width = convert_length(
-                getattr(profile, "FlangeWidth", 0.1), self.length_scale
+            depth = self._dimension(profile, "Depth")
+            flange_width = self._dimension(profile, "FlangeWidth")
+            web_thickness = self._dimension(profile, "WebThickness")
+            flange_thickness = self._dimension(profile, "FlangeThickness")
+            outline = self._outline(
+                profile,
+                profile_geometry.u_shape,
+                depth,
+                flange_width,
+                web_thickness,
+                flange_thickness,
+                fillet=self._dimension(profile, "FilletRadius", 0.0),
+                edge=self._dimension(profile, "EdgeRadius", 0.0),
+                flange_slope=self._slope(profile, "FlangeSlope"),
             )
-            web_thickness = convert_length(
-                getattr(profile, "WebThickness", 0.01), self.length_scale
-            )
-            flange_thickness = convert_length(
-                getattr(profile, "FlangeThickness", 0.01), self.length_scale
-            )
-            web_height = max(depth - 2 * flange_thickness, 0.0)
-            area = web_thickness * web_height + 2 * flange_width * flange_thickness
-            return Section(
-                id=str(uuid.uuid4()),
-                name=getattr(profile, "ProfileName", "C-Section"),
-                section_type="c",
-                area=max(1e-6, area),
-                dimensions={
+            return self._section_of_outline(
+                profile,
+                outline,
+                "c",
+                "C-Section",
+                {
                     "width": flange_width,
                     "height": depth,
                     "web_thickness": web_thickness,
                     "flange_thickness": flange_thickness,
                 },
+                ("FlangeSlope",),
             )
 
         # Analysing some other section in its place would give results that

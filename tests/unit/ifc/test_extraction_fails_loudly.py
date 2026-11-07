@@ -166,9 +166,8 @@ class TestMembers:
                 prop.NominalValue.wrappedValue = 7.076e-5
         extracted = Extractor(model).extract_model()
         section = extracted.members[0].section
-        width, height, web, flange = (5.81, 10.5, 0.3, 0.51)
-        plain = (width * height**3 - (width - web) * (height - 2 * flange) ** 3) / 12
-        assert section.moment_of_inertia_y == pytest.approx(plain * 0.0254**4)
+        # The outline's, fillets included (94g.26): AISC's 170 in4 to 0.3%
+        assert section.moment_of_inertia_y == pytest.approx(170 * 0.0254**4, rel=3e-3)
         assert section.area == pytest.approx(expected)
         (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-SEC-005"]
         assert "MomentOfInertiaY of 'W10X30'" in found["message"]

@@ -2748,6 +2748,39 @@ class TestStatedProfileValues:
         )
 
 
+class TestRolledSectionFromItsDimensions:
+    """A HEB 160 with no Pset_ProfileMechanical bends as its tables say (94g.26).
+
+    Its fillets were left out: 3.6% of its area and 3.2% of its strong
+    inertia. The reference is Timoshenko's cantilever with the published area
+    and inertia and the web's shear area, which the library takes.
+    """
+
+    AREA, STRONG = 54.25e-4, 2492e-8
+
+    def test_cantilever_under_its_weight(self, tmp_path):
+        model = ifcopenshell.open(CANTILEVER)
+        model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+            "IfcIShapeProfileDef",
+            ProfileType="AREA",
+            ProfileName="HEB160",
+            OverallWidth=0.16,
+            OverallDepth=0.16,
+            WebThickness=0.008,
+            FlangeThickness=0.013,
+            FilletRadius=0.015,
+        )
+        path = str(tmp_path / "heb.ifc")
+        model.write(path)
+        data = _run(path, tmp_path, gravity=True)
+        assert _max_vertical_deflection(data) == pytest.approx(
+            _cantilever_self_weight(self.AREA, self.STRONG, 0.16 * 0.008), rel=1e-3
+        )
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            CANT_RHO * G_ACCEL * self.AREA * CANT_L, rel=1e-3
+        )
+
+
 class TestDensityWithNoUnit:
     """A density with no MASSDENSITYUNIT is in kg/m3, as in Bonsai (``94g.23``).
 

@@ -124,7 +124,7 @@ Something of the member's section could not be represented exactly; the message 
 
 ### W-SEC-005: A profile's stated property far from its dimensions
 
-A value of Pset_ProfileMechanical differs by more than half from what the profile's dimensions give, so it is in another unit than the file declares or about another axis. The dimensions are used, without the fillets of a rolled section: a few percent too flexible. Correct the value or the project's unit.
+A value of Pset_ProfileMechanical differs by more than half from what the profile's dimensions give, so it is in another unit than the file declares or about another axis. The dimensions are used: area and inertias of the profile's outline as IfcOpenShell draws it, fillets included, and a torsion constant of plates. Correct the value or the project's unit.
 
 ## Meshing
 
