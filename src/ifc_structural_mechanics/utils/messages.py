@@ -713,6 +713,23 @@ _ERRORS = [
         "made of members analysed with them (--open-sections user-element). "
         "Analyse the model with equivalent sections.",
     ),
+    MessageKind(
+        "E-SEC-007",
+        "Profile turned by its Position",
+        "The profile's Position turns it in the member's section through an "
+        "angle other than 180 degrees, which would turn its inertias too; "
+        "that is not done yet. Leave the profile unturned and give the "
+        "member's Axis the direction of its depth.",
+    ),
+    MessageKind(
+        "E-SEC-008",
+        "Eccentric member with user elements",
+        "The member's centroid is off its reference curve (an asymmetric "
+        "profile, or one its Position moves), which is analysed with a stiff "
+        "link from each node of the curve to the centroid. User elements "
+        "(--open-sections user-element) cannot be joined to links. Analyse "
+        "the model with equivalent sections.",
+    ),
     # Meshing
     MessageKind(
         "E-MSH-001",

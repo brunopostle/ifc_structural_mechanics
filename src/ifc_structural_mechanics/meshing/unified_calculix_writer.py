@@ -242,8 +242,12 @@ class UnifiedCalculixWriter:
         """Whether turning a section about its member changes the analysis.
 
         It does not for a circle or a round tube, nor for a square or a
-        square tube, whose bending stiffness is the same about every axis.
+        square tube, whose bending stiffness is the same about every axis,
+        unless its centroid is off the member's reference curve.
         """
+        offset = getattr(section, "centroid_offset", None)
+        if offset is not None and math.hypot(*offset) > 0.0:
+            return True
         kind = getattr(section, "section_type", None)
         if kind in ("circular", "hollow_circular"):
             return False
@@ -328,6 +332,10 @@ class UnifiedCalculixWriter:
             # Step 2c11: Hold the whole thickness of shells where an equation
             # acts on them
             self._knot_shell_nodes_on_equations()
+
+            # Step 2c12: Carry eccentric members from their reference curve
+            # to their centroid
+            self._offset_eccentric_members()
 
             # Step 2d: Register node→member memberships for result export
             self._register_node_memberships()
@@ -1066,7 +1074,8 @@ class UnifiedCalculixWriter:
                 gravity_direction=self.analysis_config.get_gravity_direction(),
                 u1_node_masses=self._u1_node_masses,
                 u1_element_sets=self._u1_element_sets,
-                elements_data=dict(self.elements),
+                elements_data=self._elements_on_reference_curves(),
+                weighed_elements=dict(self.elements),
                 temperatures=temperatures,
                 num_modes=self.analysis_config.get_num_modes(),
             )
@@ -2322,7 +2331,7 @@ class UnifiedCalculixWriter:
                         member_set, []
                     )
                     nodes_of[member_id] = {
-                        n
+                        self._on_reference_curve(n)
                         for elem_id in elems
                         if elem_id in self.elements
                         for n in self.elements[elem_id]["nodes"]
@@ -3107,6 +3116,180 @@ class UnifiedCalculixWriter:
         self._helper_nodes = helpers
         if knotted:
             logger.info(f"Made knots of {knotted} shell nodes on equations")
+
+    def _centroid_shift(self, member: CurveMember) -> np.ndarray:
+        """Where a member's centroid lies from its reference curve, in global axes.
+
+        ``Section.centroid_offset`` is along the member's local y and z; z is
+        the direction its section is written with, and y is z cross x.
+        """
+        offset_y, offset_z = member.section.centroid_offset
+        start = np.array(member.geometry[0], dtype=float)
+        end = np.array(member.geometry[-1], dtype=float)
+        x_axis = end - start
+        x_axis = x_axis / float(np.linalg.norm(x_axis))
+        z_axis = np.array(
+            self._orthogonal_beam_normal(self._get_beam_normal(member), tuple(x_axis))
+        )
+        y_axis = np.cross(z_axis, x_axis)
+        return offset_y * y_axis + offset_z * z_axis
+
+    def _eccentric_members(self) -> List[CurveMember]:
+        """The curve members whose centroid is off their reference curve."""
+        found = []
+        for member in self.domain_model.members:
+            section = getattr(member, "section", None)
+            offset = getattr(section, "centroid_offset", None)
+            if (
+                isinstance(member, CurveMember)
+                and offset is not None
+                and math.hypot(*offset) > self._COINCIDENT_TOL
+            ):
+                found.append(member)
+        return found
+
+    def _offset_eccentric_members(self) -> None:
+        """Put the elements of an eccentric member on its centroid (94g.35).
+
+        IFC puts a profile's origin on the member's reference curve, and an
+        asymmetric profile (a T, an asymmetric I, an L or a channel) or one
+        its Position moves has its centroid off it. Every joint, support,
+        load and tie of the member is on the curve, and is made on its
+        nodes as for any member, up to here. Last, the member's elements are
+        given a copy of each node at the centroid, and a stiff link joins
+        each copy to its node: a force on the curve then acts on the member
+        with its lever arm, and a member framing in at the curve is
+        eccentric. Members in line with one offset share their copies.
+
+        CalculiX's ``OFFSET1`` and ``OFFSET2`` of ``*BEAM SECTION`` move the
+        expanded section and nothing else: a force along an offset
+        cantilever stretched it and bent it not at all (measured on 2.23).
+
+        The links are sized by ``_offset_link_side()``.
+
+        Raises:
+            AnalysisError: E-SEC-008 for an eccentric member analysed with
+                user elements, which cannot be joined to links.
+        """
+        self._offset_references: Dict[int, int] = {}
+        self._offset_link_sides: Dict[int, float] = {}
+        eccentric = self._eccentric_members()
+        if not eccentric:
+            return
+        with_user_elements = [m.id for m in eccentric if m.id in self._u1_members]
+        if with_user_elements:
+            raise AnalysisError(
+                f"{len(with_user_elements)} member(s) "
+                f"({', '.join(with_user_elements[:3])}) have their centroid off "
+                "their reference curve and are analysed with user elements, "
+                "which cannot be joined to the links that carry them to it.",
+                code="E-SEC-008",
+                ifc_guids=self._ifc_guids(with_user_elements),
+            )
+        links = list(getattr(self, "_rigid_links", []))
+        next_node = max(self.nodes.keys(), default=0) + 1
+        next_elem = (
+            max(
+                [max(self.elements.keys(), default=0)]
+                + [e for e, _, _ in links]
+                + [e for e, _, _ in getattr(self, "_knot_links", [])]
+                + [e for e, _, _ in getattr(self, "_spring_elements", [])]
+            )
+            + 1
+        )
+        copies: Dict[Tuple[int, Tuple[float, ...]], int] = {}
+        for member in eccentric:
+            shift = self._centroid_shift(member)
+            key = tuple(round(float(v), 9) for v in shift)
+            side = self._offset_link_side(member, float(np.linalg.norm(shift)))
+            member_set = f"MEMBER_{self._get_short_id(member.id)}"
+            for elem_id in self.element_sets.get(member_set, []):
+                elem = self.elements.get(elem_id)
+                if elem is None or elem["type"] not in BEAM_ELEMENT_TYPES:
+                    continue
+                placed = []
+                for node in elem["nodes"]:
+                    if (node, key) not in copies:
+                        self.nodes[next_node] = tuple(
+                            float(v) for v in np.array(self.nodes[node]) + shift
+                        )
+                        self._offset_references[next_node] = node
+                        links.append((next_elem, next_node, node))
+                        self._offset_link_sides[next_elem] = side
+                        copies[(node, key)] = next_node
+                        next_node += 1
+                        next_elem += 1
+                    placed.append(copies[(node, key)])
+                elem["nodes"] = placed
+        self._rigid_links = links
+        self._member_node_cache = {}
+        logger.info(
+            f"Carried {len(eccentric)} eccentric member(s) to their centroid "
+            f"with {len(copies)} links"
+        )
+
+    # The share of a member's deflection its offset links may add
+    _OFFSET_LINK_GIVE = 1e-5
+
+    def _offset_link_side(self, member: CurveMember, offset: float) -> float:
+        """How thick the links of an eccentric member are, in m.
+
+        A link carries the member's moment from its centroid to its curve,
+        and turns ``M e / (E' I')`` doing it, where the member turns
+        ``M L / (E I)`` along its length: the links add about
+        ``e E I / (E' I' L)`` to its deflection: measured, that to 5 % for
+        a bar pulled along its curve, at any mesh. They are made just thick
+        enough for ``_OFFSET_LINK_GIVE`` of it; the root link of a
+        cantilever under its weight adds more (3.6e-4 where that was 1e-4),
+        and 1e-5 left every case tried within 3e-5 of beam theory. Thicker
+        is no better: a link far thicker than it is long is a badly shaped
+        solid, and one of 0.5 m on a 5 mm offset put the balance of a
+        cantilever's reactions out by 2e-4 (measured on 2.23).
+        """
+        section = member.section
+        inertia = max(
+            v
+            for v in (
+                getattr(section, "moment_of_inertia_y", None),
+                getattr(section, "moment_of_inertia_z", None),
+                0.0,
+            )
+            if v is not None
+        )
+        modulus = getattr(getattr(member, "material", None), "elastic_modulus", None)
+        start = np.array(member.geometry[0], dtype=float)
+        end = np.array(member.geometry[-1], dtype=float)
+        length = float(np.linalg.norm(end - start))
+        if not inertia or not modulus or length <= 0.0:
+            return self._RIGID_LINK_SIDE
+        link_inertia = (
+            offset
+            * modulus
+            * inertia
+            / (self._RIGID_LINK_MODULUS * length * self._OFFSET_LINK_GIVE)
+        )
+        return float((12.0 * link_inertia) ** 0.25)
+
+    def _on_reference_curve(self, node: int) -> int:
+        """The node of the reference curve an eccentric member's node hangs from."""
+        return getattr(self, "_offset_references", {}).get(node, node)
+
+    def _elements_on_reference_curves(self) -> Dict[int, Dict]:
+        """The elements with eccentric members' nodes on their reference curve.
+
+        Loads along a member act on its reference curve, as IFC places them.
+        """
+        references = getattr(self, "_offset_references", {})
+        if not references:
+            return dict(self.elements)
+        return {
+            elem_id: (
+                {**elem, "nodes": [references.get(n, n) for n in elem["nodes"]]}
+                if any(n in references for n in elem["nodes"])
+                else elem
+            )
+            for elem_id, elem in self.elements.items()
+        }
 
     def _write_knot_drilling(self, file: TextIO) -> None:
         """Tie the links of shell knots against turning about the shells' normal."""
@@ -4453,8 +4636,9 @@ class UnifiedCalculixWriter:
         They are kept out of ``self.elements`` and ``EALL`` so they carry no
         self-weight and belong to no member.
         """
+        sides = getattr(self, "_offset_link_sides", {})
         links = [
-            (elem_id, a, b, self._RIGID_LINK_SIDE, "RIGID_LINK")
+            (elem_id, a, b, sides.get(elem_id, self._RIGID_LINK_SIDE), "RIGID_LINK")
             for elem_id, a, b in getattr(self, "_rigid_links", [])
         ] + [
             (elem_id, a, b, self._KNOT_LINK, "KNOT_LINK")
@@ -4818,7 +5002,10 @@ class UnifiedCalculixWriter:
                 node_set = set()
                 for elem_id in member_elements:
                     if elem_id in self.elements:
-                        node_set.update(self.elements[elem_id]["nodes"])
+                        node_set.update(
+                            self._on_reference_curve(n)
+                            for n in self.elements[elem_id]["nodes"]
+                        )
                 self._member_node_cache[member_set] = node_set
             node_set = self._member_node_cache[member_set]
 

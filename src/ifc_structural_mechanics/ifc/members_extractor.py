@@ -6,6 +6,7 @@ members from IFC files and converts them to domain model objects.
 """
 
 import logging
+import math
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
@@ -903,6 +904,15 @@ class MembersExtractor:
         # Profile y is the member's local z: bending in the depth is about x
         section.moment_of_inertia_y = properties.i_xx
         section.moment_of_inertia_z = properties.i_yy
+        # The centroid from the middle of the bounding box, where IFC puts
+        # the origin of these profiles, and the farthest fibres from it
+        # (94g.35); _create_section adds the profile's Position
+        cx, cy = properties.centroid
+        section.centroid_offset = (cx, cy)
+        section.fibre_distances = (
+            max(abs(y - cy) for _, y in outline),
+            max(abs(x - cx) for x, _ in outline),
+        )
         taken = self._take_mechanical_properties(section, profile)
         sloped = [name for name in slopes if getattr(profile, name, None)]
         if (
@@ -1041,7 +1051,8 @@ class MembersExtractor:
 
     def _create_section(self, profile):
         """
-        Create a domain section object from an IFC profile.
+        Create a domain section object from an IFC profile, placed as IFC
+        places it on the member's reference curve.
 
         Args:
             profile: IFC profile
@@ -1051,6 +1062,64 @@ class MembersExtractor:
         """
         if not profile:
             return None
+        section = self._section_of_profile(profile)
+        self._place_section(section, profile)
+        return section
+
+    def _place_section(self, section: Section, profile) -> None:
+        """Put the section's centroid where the profile's ``Position`` puts it.
+
+        IFC inserts a profile into a structural curve member with the origin
+        of its own axes on the member's reference curve, x along the
+        member's local y and y along its local z
+        (``IfcStructuralCurveMember``, Material Profile Set Usage). A profile
+        is centric only where that origin is its centroid: a parameterised
+        profile has the middle of its bounding box there, and an asymmetric
+        one needs ``Position.Location`` to move it. The centroid is then off
+        the curve, and the member is eccentric (94g.35).
+
+        Raises:
+            ModelExtractionError: E-SEC-007 for a profile its Position turns
+                through other than 180 degrees: its inertias would turn too.
+        """
+        cx, cy = section.centroid_offset
+        position = getattr(profile, "Position", None)
+        if position is None:
+            return
+        flip = 1.0
+        direction = getattr(position, "RefDirection", None)
+        if direction is not None:
+            ratios = [float(v) for v in direction.DirectionRatios[:2]]
+            length = math.hypot(*ratios)
+            if length <= 0.0:
+                raise ModelExtractionError(
+                    f"Its profile {profile.ProfileName or profile.is_a()!r} has "
+                    "a Position whose RefDirection has no length.",
+                    code="E-SEC-007",
+                )
+            ux, uy = ratios[0] / length, ratios[1] / length
+            if abs(uy) > 1e-9:
+                angle = math.degrees(math.atan2(uy, ux))
+                raise ModelExtractionError(
+                    f"Its profile {profile.ProfileName or profile.is_a()!r} is "
+                    f"turned {angle:.4g} degrees by its Position. A profile "
+                    "turned upside down (180 degrees) can be analysed; one "
+                    "turned through any other angle cannot yet. Give the member's Axis the "
+                    "direction instead.",
+                    code="E-SEC-007",
+                )
+            flip = 1.0 if ux > 0 else -1.0
+        location = getattr(position, "Location", None)
+        coordinates = (
+            [float(v) for v in location.Coordinates[:2]] if location else [0.0, 0.0]
+        )
+        section.centroid_offset = (
+            convert_length(coordinates[0], self.length_scale) + flip * cx,
+            convert_length(coordinates[1], self.length_scale) + flip * cy,
+        )
+
+    def _section_of_profile(self, profile) -> Section:
+        """The section of a profile, in the profile's own axes."""
 
         def profile_id():
             if hasattr(profile, "id") and callable(profile.id):

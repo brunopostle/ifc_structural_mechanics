@@ -202,6 +202,14 @@ class Section:
         self.dimensions = dimensions
         self.allow_incomplete_dims = allow_incomplete_dims
         self.approximations: List[str] = list(approximations) if approximations else []
+        #: Where the centroid lies from the member's reference curve, in m
+        #: along its local y and z (94g.35). IFC puts the profile's origin on
+        #: the curve, and an asymmetric profile's centroid is not there.
+        self.centroid_offset: Tuple[float, float] = (0.0, 0.0)
+        #: Distances from the centroid to the farthest fibre along the depth
+        #: (local z) and across the width (local y), where the outline gives
+        #: them; ``get_extreme_fibre_distances()`` goes by them first
+        self.fibre_distances: Optional[Tuple[float, float]] = None
 
         self._validate()
         self._calculate_properties()
@@ -601,6 +609,8 @@ class Section:
         Used for utilisation ratio calculation: σ_max = |N|/A + |My|/Iy*y_max + |Mz|/Iz*z_max.
         Returns (None, None) when the section geometry is unknown.
         """
+        if self.fibre_distances is not None:
+            return self.fibre_distances
         d = self.dimensions
         t = self.section_type
         if t == "rectangular":

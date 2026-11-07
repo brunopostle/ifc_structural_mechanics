@@ -1279,6 +1279,148 @@ class TestTeeAngleAndChannel:
             analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"), gravity=True)
 
 
+def _eccentric_cantilever(tmp_path, profile_class=None, position=None, **attributes):
+    """A 3 m cantilever along X, clamped at A, pulled by 10 kN along X at B.
+
+    The force is on the member's reference curve. With no ``profile_class``
+    the member is ``plane_model``'s 0.1 m square bar; ``position`` is the
+    ``(x, y)`` of the profile's Position in metres, along the member's
+    local y (in the X-Z plane) and z (across it, along global Y).
+    """
+    path = plane_model(
+        str(tmp_path / "eccentric.ifc"),
+        nodes={"A": (0, 0), "B": (ECCENTRIC_L, 0)},
+        members=[("A", "B")],
+        supports={"A": PLANE_FIXED},
+        loads={"B": (ECCENTRIC_P, 0.0)},
+        hinged=False,
+    )
+    model = ifcopenshell.open(path)
+    old = model.by_type("IfcRectangleProfileDef")[0]
+    profile = old
+    if profile_class is not None:
+        profile = model.create_entity(
+            profile_class, ProfileType="AREA", ProfileName="eccentric", **attributes
+        )
+        for user in model.get_inverse(old):
+            for name, value in user.get_info(recursive=False).items():
+                if value == old:
+                    setattr(user, name, profile)
+    if position is not None:
+        profile.Position = model.create_entity(
+            "IfcAxis2Placement2D",
+            model.create_entity("IfcCartesianPoint", [float(v) for v in position]),
+        )
+    model.write(path)
+    return path
+
+
+ECCENTRIC_L = 3.0
+ECCENTRIC_P = 10000.0
+# The T of OPEN_SECTIONS, its depth across the plane (local z, global Y)
+_TEE_CLASS, _TEE_ATTRIBUTES, _TEE_PLATES = OPEN_SECTIONS["T"][:3]
+
+
+def _tee_centroid_and_inertia():
+    """Height of the T's centroid above the middle of its depth, and its Iy."""
+    area, about_depth, _ = _inertia_of_rectangles(_TEE_PLATES)
+    centre = sum(
+        (x1 - x0) * (y1 - y0) * (y0 + y1) / 2 for x0, x1, y0, y1 in _TEE_PLATES
+    )
+    return centre / area - I_H / 2, about_depth
+
+
+def _tip(data: dict) -> dict:
+    """The movement of the free end of the member's axis."""
+    shape = _only_curve_member(data)["deflected_shapes"]["Load"]
+    return {axis: shape[f"u{axis}_m"][-1] for axis in "xyz"}
+
+
+class TestEccentricMembers:
+    """Members whose centroid is off their reference curve (94g.35).
+
+    IFC puts the origin of the profile on the curve, and a T, an asymmetric
+    I, an angle or a channel has the middle of its bounding box there, or
+    the profile's Position moves it. A force along the curve then bends the
+    member by its offset e: a cantilever pulled at its free end bends under
+    a constant moment P e, and its end moves P e L² / 2 E I. Each was once
+    analysed with its centroid on the curve, and only stretched.
+    """
+
+    def test_a_bar_moved_by_its_position_bends_under_a_pull(self, tmp_path):
+        offset = 0.05
+        path = _eccentric_cantilever(tmp_path, position=(offset, 0.0))
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.25
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        inertia = 0.1**4 / 12
+        moment = ECCENTRIC_P * offset
+        tip = _tip(data)
+        # In the X-Z plane, across the member
+        assert abs(tip["z"]) == pytest.approx(
+            moment * ECCENTRIC_L**2 / (2 * PLANE_E * inertia), rel=1e-4
+        )
+        assert tip["x"] == pytest.approx(
+            ECCENTRIC_P * ECCENTRIC_L / (PLANE_E * 0.01), rel=1e-3
+        )
+        forces = _only_curve_member(data)["envelope"]["section_forces"]
+        assert forces["max_N_N"] == pytest.approx(ECCENTRIC_P, rel=1e-4)
+        assert max(forces["max_Mf1_Nm"], forces["max_Mf2_Nm"]) == pytest.approx(
+            moment, rel=1e-4
+        )
+        # The force's line passes through the support: it holds no moment
+        total = data["global_reactions"]["total"]
+        assert total["fx_N"] == pytest.approx(-ECCENTRIC_P, rel=1e-6)
+        assert abs(total["my_Nm"]) < 1e-6 * moment
+        assert total["moment_imbalance_Nm"] < 1e-6 * moment
+
+    def test_a_tee_bends_towards_its_web(self, tmp_path):
+        """Its depth is across the plane, so it bends out of it: no plane hold."""
+        offset, inertia = _tee_centroid_and_inertia()
+        path = _eccentric_cantilever(tmp_path, _TEE_CLASS, **_TEE_ATTRIBUTES)
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.25
+        )
+        assert result["status"] == "success", result.get("errors")
+        assert not any(w["code"] == "W-SUP-002" for w in result["warnings"])
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        tip = _tip(data)
+        assert abs(tip["y"]) == pytest.approx(
+            ECCENTRIC_P * offset * ECCENTRIC_L**2 / (2 * PLANE_E * inertia),
+            rel=1e-4,
+        )
+        assert abs(tip["z"]) < 1e-6 * abs(tip["y"])
+
+    def test_a_tee_on_its_centroid_only_stretches(self, tmp_path):
+        offset, _ = _tee_centroid_and_inertia()
+        path = _eccentric_cantilever(
+            tmp_path, _TEE_CLASS, position=(0.0, -offset), **_TEE_ATTRIBUTES
+        )
+        result = analyze_ifc(
+            ifc_path=path, output_dir=str(tmp_path / "out"), mesh_size=0.25
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(tmp_path / "out" / "results.json") as fh:
+            data = json.load(fh)
+        tip = _tip(data)
+        assert max(abs(tip["y"]), abs(tip["z"])) < 1e-6 * tip["x"]
+
+    def test_user_elements_are_refused(self, tmp_path):
+        path = _eccentric_cantilever(tmp_path, _TEE_CLASS, **_TEE_ATTRIBUTES)
+        result = analyze_ifc(
+            ifc_path=path,
+            output_dir=str(tmp_path / "out"),
+            mesh_size=0.25,
+            open_sections="user_element",
+        )
+        assert result["status"] == "failed"
+        assert [e["code"] for e in result["errors"]] == ["E-SEC-008"]
+
+
 class TestFixedFixedISectionBeam:
     """beam_01 with the I section as an equivalent rectangle, under applied loads."""
 

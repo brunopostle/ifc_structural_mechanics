@@ -71,6 +71,9 @@ def _make_writer(members, nodes, elements, element_sets):
     writer._find_connection_nodes_at_location = (
         UnifiedCalculixWriter._find_connection_nodes_at_location.__get__(writer)
     )
+    writer._on_reference_curve = UnifiedCalculixWriter._on_reference_curve.__get__(
+        writer
+    )
     return writer
 
 
@@ -255,6 +258,9 @@ class TestFallbackWithoutGeometry:
         )
         writer._find_connection_nodes_at_location = (
             UnifiedCalculixWriter._find_connection_nodes_at_location.__get__(writer)
+        )
+        writer._on_reference_curve = UnifiedCalculixWriter._on_reference_curve.__get__(
+            writer
         )
 
         # Connection 300 mm from node 1; old 500 mm tolerance would match

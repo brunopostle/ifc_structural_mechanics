@@ -155,6 +155,8 @@ def create_mock_ifc_file():
     )
     mock_profile.XDim = 0.2
     mock_profile.YDim = 0.3
+    # A profile with no Position is at the reference curve, as IFC allows
+    mock_profile.Position = None
 
     # Mock material profile
     mock_material_profile = Mock()

@@ -262,6 +262,18 @@ def plane_normal(
             return None
         if not _in_or_across(depth / float(np.linalg.norm(depth)) @ normal):
             return None
+    # A member whose centroid is off the plane bends out of it (94g.35)
+    for member in members:
+        offset = getattr(getattr(member, "section", None), "centroid_offset", None)
+        if not isinstance(member, CurveMember) or not offset or not any(offset):
+            continue
+        axes = getattr(member, "local_axis", None)
+        if axes is None:
+            return None
+        axes = np.array(axes, dtype=float)
+        shift = offset[0] * axes[1] + offset[1] * axes[2]
+        if abs(float(shift @ normal)) > _FLAT * size:
+            return None
     for connection in domain_model.connections:
         for held in support_resistance(connection) or ():
             if not _in_or_across(share_in_span(held, normal)):

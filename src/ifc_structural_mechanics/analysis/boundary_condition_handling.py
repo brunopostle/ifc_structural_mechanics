@@ -1482,11 +1482,16 @@ def write_analysis_steps(
     elements_data: Optional[Dict[int, Dict]] = None,
     temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]] = None,
     num_modes: int = 10,
+    weighed_elements: Optional[Dict[int, Dict]] = None,
 ) -> None:
     """
     Write the analysis steps, and record the loads they put on support nodes.
 
-    See ``_write_analysis_steps`` for the arguments. Afterwards
+    See ``_write_analysis_steps`` for the arguments. ``weighed_elements``
+    are the elements as the solver weighs them, where they differ from
+    ``elements_data``, which loads are shared out over: an eccentric
+    member's loads act on its reference curve, its weight at its centroid
+    (94g.35). Afterwards
     ``domain_model.support_node_loads`` holds, for each step in order, the
     load applied directly at each support node, ``{node: [fx, fy, fz, mx,
     my, mz, sx, sy, sz, px, py, pz]}``: the results exporter takes it off
@@ -1556,9 +1561,10 @@ def write_analysis_steps(
     moments = []
     for step in recorder.steps:
         everywhere = {node: np.array(force) for node, force in step["nodal"].items()}
-        if step["gravity"] is not None and elements_data and node_coords:
+        weighed = weighed_elements if weighed_elements is not None else elements_data
+        if step["gravity"] is not None and weighed and node_coords:
             for node, weight in _weight_on_nodes(
-                domain_model, elements_data, node_coords, None, step["gravity"]
+                domain_model, weighed, node_coords, None, step["gravity"]
             ).items():
                 everywhere[node] = everywhere.get(node, np.zeros(12)) + np.append(
                     weight, np.zeros(9)

@@ -106,6 +106,14 @@ A curve member of no length, or with ends that cannot be read, has no direction 
 
 CalculiX gives its U1 elements no mass, so a modal analysis cannot be made of members analysed with them (--open-sections user-element). Analyse the model with equivalent sections.
 
+### E-SEC-007: Profile turned by its Position
+
+The profile's Position turns it in the member's section through an angle other than 180 degrees, which would turn its inertias too; that is not done yet. Leave the profile unturned and give the member's Axis the direction of its depth.
+
+### E-SEC-008: Eccentric member with user elements
+
+The member's centroid is off its reference curve (an asymmetric profile, or one its Position moves), which is analysed with a stiff link from each node of the curve to the centroid. User elements (--open-sections user-element) cannot be joined to links. Analyse the model with equivalent sections.
+
 ### W-SEC-001: Torsion of solid rectangles corrected
 
 CalculiX makes a solid rectangular beam too stiff in torsion (18.5 % for a square) and in shear (it shears with its whole area, not 5/6 of it). The shear stiffness along the member's depth is set to Timoshenko's and the one across its width is changed until its torsion is right; it is then off by the percentage given, a few percent for a section up to twice as deep as wide. A deeper section would need a modulus across its width above the material's, so that one is held at the material's and the one along the depth raised instead: its shear stiffness along the depth is then too high by the second percentage given (4 % at 3:1, 14 % at 10:1). Bending is not affected. Nothing needs doing unless a result depends on that shear.
