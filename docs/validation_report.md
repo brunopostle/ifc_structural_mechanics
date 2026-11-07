@@ -289,12 +289,13 @@ two agree: 2.172 mm with equivalent rectangles and 2.181 mm with U1 at a 0.25 m 
 **T, angle and channel**, all 200 × 400 mm, as cantilevers under self-weight about both
 axes (0.05 m mesh, tolerance 3%). The reference uses the second moments about the
 centroidal axes parallel to the legs, computed in the test from the section's rectangles.
+Measured again on 2026-11-07, with each member at its centroid (below):
 
 | Section | Strong axis: theory / pipeline | Weak axis: theory / pipeline |
 |---------|-------------------------------|------------------------------|
-| T | 0.2405 / 0.2401 mm (0.2%) | 2.1608 / 2.1501 mm (0.5%) |
-| Angle | 0.2264 / 0.2261 mm (0.2%) | 1.2464 / 1.2423 mm (0.3%) |
-| Channel | 0.1419 / 0.1417 mm (0.2%) | 0.8772 / 0.8721 mm (0.6%) |
+| T | 0.2405 / 0.2405 mm (< 0.1%) | 2.1608 / 2.1608 mm (< 0.1%) |
+| Angle | 0.2264 / 0.2265 mm (< 0.1%) | 1.2464 / 1.2464 mm (< 0.1%) |
+| Channel | 0.1419 / 0.1419 mm (< 0.1%) | 0.8772 / 0.8772 mm (< 0.1%) |
 
 For the angle this is the library's assumption rather than the whole truth: its principal
 axes are rotated, and a real angle also moves sideways. A channel is an
@@ -302,6 +303,24 @@ axes are rotated, and a real angle also moves sideways. A channel is an
 not exist in IFC, so every real channel became a default 0.1 × 0.2 m rectangle without a
 word (682% out on this case). A profile the library cannot read, a Z section for
 instance, now stops the analysis with an error naming the member and the profile.
+
+**Eccentric members** (`TestEccentricMembers`, 2026-11-07). IFC puts a profile's origin
+on the member's reference curve; a T has the middle of its depth there, and any profile
+can be moved off it by its `Position`. A 3 m cantilever pulled by 10 kN along its curve
+at its free end then bends under a constant moment P e, and its end moves
+P e L² / 2 E I (0.25 m mesh, tolerance 0.01%):
+
+| Member | Offset e | Theory | Pipeline | Error |
+|--------|----------|--------|----------|-------|
+| 0.1 m square bar, moved by its Position | 50.00 mm | 1.28571 mm | 1.28573 mm | 1.2e-5 |
+| The T above, depth across the plane | 92.56 mm | 0.16021 mm | 0.16021 mm | 1.2e-5 |
+
+Its axial force is P and its moment P e along its length, and the support holds no
+moment, as the force's line passes through it. The T placed on its centroid by its
+`Position` only stretches. Until then every member was analysed with its centroid on the
+curve, and these only stretched. CalculiX's own `OFFSET1` and `OFFSET2` move the expanded
+section and nothing else, so the member is meshed at its centroid and joined to its curve
+by a stiff link at every node, as thick as keeps it within 1e-5.
 
 **Simply supported beam**: `beam_01` on a pin and a roller, 0.25 m mesh.
 

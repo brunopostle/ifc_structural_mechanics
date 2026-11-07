@@ -167,10 +167,17 @@ the ones a user needs to know before trusting a result.
   there**, with a warning, like a beam lying in a slab. `--strict-connections`
   turns both off. A line connection in the file between a beam and a slab is
   always honoured, as a hinge along the line.
-- **Section approximations.** No product of inertia and no offset between
-  centroid and member axis. `IfcAsymmetricIShapeProfileDef` has its flanges averaged, and
-  L (angle) sections are analysed about their leg-parallel axes rather than
-  their rotated principal axes.
+- **Section approximations.** No product of inertia: L (angle) sections are
+  analysed about their leg-parallel axes rather than their rotated principal
+  axes. The torsion constant and shear areas of an
+  `IfcAsymmetricIShapeProfileDef` are those of its flanges averaged.
+- **Eccentric members.** IFC puts a profile's origin on the member's
+  reference curve. A T, an asymmetric I, an angle or a channel has its
+  centroid elsewhere, and so has any profile whose `Position` moves it: the
+  member is analysed at its centroid, joined to its curve by a stiff link at
+  every node, so that a force on the curve bends it by its offset. A profile
+  that its `Position` turns through other than 180 degrees is refused
+  (`E-SEC-007`).
 - **Beam results.** For every beam and column and every load case
   `results.json` gives the largest axial force (tension and compression
   separately), shear forces, bending moments and torque, and the largest

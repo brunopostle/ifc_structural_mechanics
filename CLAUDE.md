@@ -835,6 +835,31 @@ gives A, Iy and Iz. The torsion constant and shear areas are still those of
 the plates. A dimension IFC requires that is missing raises `E-SEC-004`; T,
 L, U and asymmetric I once took 0.1 or 0.01 m in its place.
 
+**A member whose centroid is off its reference curve is eccentric** (`94g.35`).
+IFC puts the origin of the profile, after its `Position`, on the curve, x along
+local y and y along local z; a parameterised profile has the middle of its
+bounding box there. `Section.centroid_offset` (local y, z, in m) is the
+outline's centroid moved by `Position` (`MembersExtractor._place_section()`);
+a `Position` turned other than 180 degrees raises `E-SEC-007`, as the
+inertias would turn too. `Section.fibre_distances` are the outline's, from the
+centroid, for `max_normal_stress_Pa`. Everything is built on the curve's nodes
+as for any member; last, `_offset_eccentric_members()` gives the member's
+elements copies of its nodes at the centroid, each joined to its node by a
+stiff link (in `_rigid_links`), and `_offset_references` maps a copy back.
+Lookups by member nodes at write time (`_support_member_nodes()`,
+`_find_connection_nodes_at_location()`) map them, and loads along the member
+are shared out on the curve (`_elements_on_reference_curves()`), its weight on
+the elements as they are (`weighed_elements`). **CalculiX's `OFFSET1` and
+`OFFSET2` are no use**: they move the expanded section and nothing else, and
+a pull on an offset cantilever's node bent it not at all (measured on 2.23).
+**The links are sized by stiffness** (`_offset_link_side()`): one adds about
+`e E I / (E' I' L)` to a member's deflection, made 1e-5; a link much thicker
+than its length is a badly shaped solid and put a cantilever's reactions out
+by 2e-4, and one much thinner bent 8%. A centroid across the plane of a plane
+frame makes it no plane structure. U1 members cannot be eccentric
+(`E-SEC-008`). `TestEccentricMembers` pulls a bar moved by its Position and a
+T along their curves against P e L² / 2 E I (1e-5).
+
 **A surface member's openings are the other bounds of its face** (`2uq`,
 `SurfaceMember.holes`, `entity_identifier.face_loops()`). Only `Bounds[0]` was once
 read, so an opening was solid, and the hole's outline became the member if it came
