@@ -271,7 +271,7 @@ the ones a user needs to know before trusting a result.
 
 Install these separately before installing this library:
 
-- **Python 3.9 or later** (CI tests 3.9, 3.10 and 3.11)
+- **Python 3.10 or later** (CI tests 3.10 and 3.11)
 - **CalculiX** (`ccx` executable) — finite element solver. The unmodified distribution package is the supported target; 2.23 or later for exact support reactions (see Known Limitations)
 - **Gmsh with Python API** — mesh generation (`pip install gmsh`)
 - **IfcOpenShell** — IFC file parsing (`pip install ifcopenshell`)

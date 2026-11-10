@@ -310,7 +310,7 @@ Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 ## Code Style
 
 - Line length: 88 characters (Black default)
-- Python versions: 3.9, 3.10, 3.11 (the CI matrix)
+- Python versions: 3.10, 3.11 (the CI matrix; 3.9 dropped at its end of life)
 - Type hints: Required for public APIs. mypy is configured but not run in CI
 - Docstrings: Required for all public classes and functions (Google style)
 - Import order: isort with Black profile
