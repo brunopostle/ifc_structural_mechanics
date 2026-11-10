@@ -93,6 +93,18 @@ _KINDS = [
         "(an IfcDerivedUnit or IfcSIUnit of the type named, such as "
         "PLANARFORCEUNIT) to make the file say what it means.",
     ),
+    MessageKind(
+        "W-IFC-006",
+        "Derived unit of a single unit",
+        "The file declares an IfcDerivedUnit made of one unit to the power one, "
+        "such as a modulus of elasticity in psi alone. IFC does not allow it "
+        "(IfcDerivedUnit WR1: more than one element, or an exponent other than "
+        "one), so other tools may refuse the file or ignore the unit. It is "
+        "read as the unit it is made of, which is what it plainly means. To "
+        "make the file valid, write the unit from two or more units (kN and "
+        "mm to the power -2 for GPa), or leave it out where the file's other "
+        "units give it: a modulus not declared is in the pressure unit.",
+    ),
     # Materials
     MessageKind(
         "W-MAT-001",

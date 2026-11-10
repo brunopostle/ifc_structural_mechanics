@@ -67,7 +67,13 @@ def _metre(model):
 
 
 def _gigapascal(model, unit_type):
-    return _derived(model, unit_type, (_si(model, "PASCAL", "PRESSUREUNIT", "GIGA"), 1))
+    """GPa as kN/mm²: IFC does not allow a derived unit of GPa alone (WR1)."""
+    return _derived(
+        model,
+        unit_type,
+        (_si(model, "NEWTON", "FORCEUNIT", "KILO"), 1),
+        (_si(model, "METRE", "LENGTHUNIT", "MILLI"), -2),
+    )
 
 
 def _loads(model):
@@ -564,3 +570,43 @@ class TestUndeclaredUnitsAreReported:
         undeclared = set()
         get_connection_input(connection, "line", 0.001, undeclared_units=undeclared)
         assert undeclared == set()
+
+
+def _single_unit_warnings(model):
+    return [
+        found
+        for found in Extractor(model).extract_model().analysis_warnings
+        if found["code"] == "W-IFC-006"
+    ]
+
+
+class TestDerivedUnitOfASingleUnit:
+    """IFC does not allow a derived unit of one unit to the power one
+    (``IfcDerivedUnit`` WR1). ``portal_01`` has its moduli so, in psi: they
+    are read as psi, and the run says the file is invalid there."""
+
+    def test_portal_01_moduli(self):
+        model = _open("portal_01")
+        (found,) = _single_unit_warnings(model)
+        assert "2 derived unit(s)" in found["message"]
+        assert "MODULUSOFELASTICITYUNIT (#122) as psi" in found["message"]
+        assert "SHEARMODULUSUNIT (#159) as psi" in found["message"]
+        # Read as the unit it is made of, as before
+        material = _material_of_first_member(Extractor(model).extract_model())
+        assert material.elastic_modulus == pytest.approx(2.9e7 * 6894.7572932)
+
+    def test_none_for_valid_units(self):
+        assert _single_unit_warnings(_open("building_01")) == []
+        model = _open("portal_01")
+        _assign(model, _gigapascal(model, "MODULUSOFELASTICITYUNIT"))
+        _assign(model, _gigapascal(model, "SHEARMODULUSUNIT"))
+        for unit in model.by_type("IfcDerivedUnit"):
+            if len(unit.Elements) == 1:
+                model.remove(unit)
+        assert _single_unit_warnings(model) == []
+
+    def test_exponent_other_than_one_is_valid(self):
+        """A cubic metre written as a derived unit is allowed."""
+        model = _open("building_01")
+        _derived(model, "SECTIONMODULUSUNIT", (_si(model, "METRE", "LENGTHUNIT"), 3))
+        assert _single_unit_warnings(model) == []

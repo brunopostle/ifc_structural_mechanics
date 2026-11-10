@@ -309,9 +309,46 @@ class Extractor:
             )
         ]
 
+    def _single_unit_derived_unit_warnings(self) -> List[Dict[str, Any]]:
+        """``W-IFC-006`` for derived units that are one unit to the power one.
+
+        IFC forbids them (``IfcDerivedUnit`` WR1), but they say plainly what
+        they mean, so each is read as the unit it is made of. Constructivity
+        writes its moduli so (``portal_01``: psi for MODULUSOFELASTICITYUNIT).
+        """
+        found = [
+            unit
+            for unit in self.ifc.by_type("IfcDerivedUnit")
+            if len(unit.Elements) == 1 and unit.Elements[0].Exponent == 1
+        ]
+        if not found:
+            return []
+        parts = []
+        for unit in found:
+            named = unit.Elements[0].Unit
+            unit_type = (
+                unit.UserDefinedType
+                if unit.UnitType == "USERDEFINED" and unit.UserDefinedType
+                else unit.UnitType
+            )
+            symbol = ifcopenshell.util.unit.get_unit_symbol(named) or named.Name
+            parts.append(f"{unit_type} (#{unit.id()}) as {symbol}")
+        return [
+            warning(
+                "W-IFC-006",
+                f"The file has {len(found)} derived unit(s) made of a single unit "
+                f"to the power one, which IFC does not allow (IfcDerivedUnit WR1); "
+                f"each is read as that unit: {'; '.join(parts)}.",
+            )
+        ]
+
     def _pass_on_warnings(self, model: StructuralModel) -> None:
         """Put the extractors' warnings where the results pick them up."""
-        messages = list(self.warnings) + self._undeclared_unit_warnings()
+        messages = (
+            list(self.warnings)
+            + self._undeclared_unit_warnings()
+            + self._single_unit_derived_unit_warnings()
+        )
         for extractor in (
             self.members_extractor,
             self.connections_extractor,

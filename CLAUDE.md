@@ -358,6 +358,10 @@ in Bonsai's millimetres 5000 meant as 5 kN/m² is 5000 N/mm². A property's own
 `IfcPropertySingleValue.Unit` goes before the project's (`_own_scale()`), so a test that
 restates a value of `beam_01` or `building_01`, whose materials give units, has to set
 it too. Poisson's ratio from E and G is worked out in SI, as they may differ.
+A derived unit of one unit to the power one (`portal_01`'s moduli in psi) breaks
+`IfcDerivedUnit` WR1: it is read as that unit, with `W-IFC-006` (`xxa`). Write GPa as
+kN·mm⁻² in tests; every file in `tests/test_data` must pass `ifcopenshell.validate`
+with EXPRESS rules (`tests/unit/test_test_data_is_valid.py`).
 
 **Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
 representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the

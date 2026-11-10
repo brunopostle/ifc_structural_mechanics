@@ -2982,13 +2982,14 @@ class TestDeclaredUnits:
                 UnitType=unit_type,
             )
 
-        gigapascal = model.create_entity(
-            "IfcSIUnit", UnitType="PRESSUREUNIT", Prefix="GIGA", Name="PASCAL"
+        # GPa as kN/mm²: IFC does not allow a derived unit of GPa alone (WR1)
+        millimetre = model.create_entity(
+            "IfcSIUnit", UnitType="LENGTHUNIT", Prefix="MILLI", Name="METRE"
         )
         declared = [
             derived("LINEARFORCEUNIT", (kilonewton, 1), (metre, -1)),
-            derived("MODULUSOFELASTICITYUNIT", (gigapascal, 1)),
-            derived("SHEARMODULUSUNIT", (gigapascal, 1)),
+            derived("MODULUSOFELASTICITYUNIT", (kilonewton, 1), (millimetre, -2)),
+            derived("SHEARMODULUSUNIT", (kilonewton, 1), (millimetre, -2)),
         ]
         moduli = {prop.UnitType: prop for prop in declared[1:]}
         (assignment,) = model.by_type("IfcUnitAssignment")
@@ -8293,3 +8294,265 @@ class TestNodesTiedToSupports:
         assert len(nodes) == 2
         moved = np.linalg.norm(output.displacement("Imposed")[nodes], axis=1)
         assert moved == pytest.approx([0.0, 0.0], abs=1e-9)
+
+
+def _api_cantilever(path: str) -> None:
+    """A cantilever written with ``ifcopenshell.api`` as Bonsai would (``14q``).
+
+    2 m of 100 x 200 mm steel along global x, clamped at x = 0. Load case
+    ``Point``: 1 kN down at the tip, on its point connection. Load case ``UDL``:
+    2 kN/m down along the member. Combination ``ULS``: 1.35 UDL + 1.5 Point.
+    What the API leaves undone is done here as a user would: the condition's
+    six values are set (a new one has them unset, which stops the analysis),
+    and each action is put in its case (``add_structural_activity`` groups
+    nothing). ``LoadedBy`` is left unset: this library does not need it.
+    """
+    import ifcopenshell.api
+
+    run = ifcopenshell.api.run
+    model = ifcopenshell.file(schema="IFC4")
+    run("root.create_entity", model, ifc_class="IfcProject", name="Cantilever")
+    run(
+        "unit.assign_unit",
+        model,
+        units=[
+            run("unit.add_si_unit", model, unit_type=unit_type)
+            for unit_type in (
+                "LENGTHUNIT",
+                "FORCEUNIT",
+                "PRESSUREUNIT",
+                "MASSUNIT",
+                "PLANEANGLEUNIT",
+            )
+        ],
+    )
+    body = run("context.add_context", model, context_type="Model")
+    reference = run(
+        "context.add_context",
+        model,
+        context_type="Model",
+        context_identifier="Reference",
+        target_view="GRAPH_VIEW",
+        parent=body,
+    )
+    analysis_model = run("structural.add_structural_analysis_model", model)
+
+    def vertex(x):
+        return model.createIfcVertexPoint(model.createIfcCartesianPoint((x, 0.0, 0.0)))
+
+    def topology(product, item):
+        run("geometry.edit_object_placement", model, product=product)
+        run(
+            "geometry.assign_representation",
+            model,
+            product=product,
+            representation=run(
+                "geometry.add_topology_representation",
+                model,
+                context=reference,
+                item=item,
+            ),
+        )
+
+    root, tip = vertex(0.0), vertex(2.0)
+    member = run(
+        "root.create_entity",
+        model,
+        ifc_class="IfcStructuralCurveMember",
+        predefined_type="RIGID_JOINED_MEMBER",
+        name="Cantilever",
+    )
+    topology(member, model.createIfcEdge(root, tip))
+    # edit_structural_item_axis cannot set an unset Axis before IfcOpenShell
+    # 0.9.0.post1's successors (94g.34.1)
+    member.Axis = model.createIfcDirection((0.0, 0.0, 1.0))
+
+    steel = run("material.add_material", model, name="Steel", category="steel")
+    for pset, properties in (
+        ("Pset_MaterialMechanical", {"YoungModulus": 210e9, "PoissonRatio": 0.3}),
+        ("Pset_MaterialCommon", {"MassDensity": 7850.0}),
+    ):
+        run(
+            "pset.edit_pset",
+            model,
+            pset=run("pset.add_pset", model, product=steel, name=pset),
+            properties=properties,
+        )
+    profiles = run(
+        "material.add_material_set",
+        model,
+        name="R100x200",
+        set_type="IfcMaterialProfileSet",
+    )
+    run(
+        "material.add_profile",
+        model,
+        profile_set=profiles,
+        material=steel,
+        profile=model.createIfcRectangleProfileDef("AREA", "R100x200", None, 0.1, 0.2),
+    )
+    run(
+        "material.assign_material",
+        model,
+        products=[member],
+        type="IfcMaterialProfileSetUsage",
+        material=profiles,
+    )
+
+    connections = []
+    for name, item in (("Root", root), ("Tip", tip)):
+        connection = run(
+            "root.create_entity",
+            model,
+            ifc_class="IfcStructuralPointConnection",
+            name=name,
+        )
+        topology(connection, item)
+        run(
+            "structural.add_structural_member_connection",
+            model,
+            relating_structural_member=member,
+            related_structural_connection=connection,
+        )
+        connections.append(connection)
+    condition = run(
+        "structural.add_structural_boundary_condition",
+        model,
+        connection=connections[0],
+    )
+    run(
+        "structural.edit_structural_boundary_condition",
+        model,
+        condition=condition,
+        attributes={
+            f"{kind}Stiffness{axis}": {"type": "IfcBoolean", "value": True}
+            for kind in ("Translational", "Rotational")
+            for axis in "XYZ"
+        },
+    )
+    run(
+        "structural.assign_structural_analysis_model",
+        model,
+        products=[member, *connections],
+        structural_analysis_model=analysis_model,
+    )
+
+    cases = {}
+    for name, ifc_class, item, values in (
+        ("Point", "IfcStructuralLoadSingleForce", connections[1], {"ForceZ": -1e3}),
+        ("UDL", "IfcStructuralLoadLinearForce", member, {"LinearForceZ": -2e3}),
+    ):
+        load = run("structural.add_structural_load", model, ifc_class=ifc_class)
+        for attribute, value in values.items():
+            setattr(load, attribute, value)
+        action = run(
+            "structural.add_structural_activity",
+            model,
+            applied_load=load,
+            structural_member=item,
+            ifc_class=(
+                "IfcStructuralPointAction"
+                if item.is_a("IfcStructuralPointConnection")
+                else "IfcStructuralCurveAction"
+            ),
+            predefined_type=None if item.is_a("IfcStructuralConnection") else "CONST",
+        )
+        cases[name] = run("structural.add_structural_load_case", model, name=name)
+        run("group.assign_group", model, products=[action], group=cases[name])
+
+    factors = {"UDL": 1.35, "Point": 1.5}
+    structural = ifcopenshell.api.structural
+    if hasattr(structural, "add_structural_load_combination"):
+        combination = run(
+            "structural.add_structural_load_combination", model, name="ULS"
+        )
+        for name, factor in factors.items():
+            run(
+                "structural.assign_structural_load_combination",
+                model,
+                load_case=cases[name],
+                load_combination=combination,
+                factor=factor,
+            )
+    else:  # IfcOpenShell 0.9.0.post1, CI's, has no combinations (94g.34.9)
+        combination = run(
+            "root.create_entity",
+            model,
+            ifc_class="IfcStructuralLoadGroup",
+            predefined_type="LOAD_COMBINATION",
+            name="ULS",
+        )
+        combination.ActionType = combination.ActionSource = "NOTDEFINED"
+        for name, factor in factors.items():
+            model.create_entity(
+                "IfcRelAssignsToGroupByFactor",
+                GlobalId=ifcopenshell.guid.new(),
+                RelatedObjects=[cases[name]],
+                RelatingGroup=combination,
+                Factor=factor,
+            )
+    model.write(path)
+
+
+class TestModelBuiltWithTheApi:
+    """A file written with ``ifcopenshell.api.structural`` analyses as written
+    (``14q``): tip deflections against Timoshenko's cantilever, and the
+    combination against its cases."""
+
+    E, NU, L, B, H = 210e9, 0.3, 2.0, 0.1, 0.2
+    P, W = 1e3, 2e3
+
+    @pytest.fixture(scope="class")
+    def data(self, tmp_path_factory):
+        tmp_path = tmp_path_factory.mktemp("api_cantilever")
+        path = str(tmp_path / "api_cantilever.ifc")
+        _api_cantilever(path)
+        return _run(path, tmp_path, 0.25)
+
+    def test_file_is_valid(self, tmp_path):
+        import ifcopenshell.validate
+
+        path = str(tmp_path / "api_cantilever.ifc")
+        _api_cantilever(path)
+        logger = ifcopenshell.validate.json_logger()
+        ifcopenshell.validate.validate(
+            ifcopenshell.open(path), logger, express_rules=True
+        )
+        assert [str(s["message"]).splitlines()[0] for s in logger.statements] == []
+
+    def _timoshenko(self):
+        inertia = self.B * self.H**3 / 12
+        shear = 5 / 6 * self.E / (2 * (1 + self.NU)) * self.B * self.H
+        bending = self.E * inertia
+        point = self.P * self.L**3 / (3 * bending) + self.P * self.L / shear
+        udl = self.W * self.L**4 / (8 * bending) + self.W * self.L**2 / (2 * shear)
+        return {"Point": point, "UDL": udl}
+
+    @staticmethod
+    def _tip(member, shapes, name):
+        return -member[shapes][name]["uz_m"][-1]
+
+    def test_tip_deflections(self, data):
+        (member,) = data["members"]
+        for name, expected in self._timoshenko().items():
+            assert self._tip(member, "deflected_shapes", name) == pytest.approx(
+                expected, rel=1e-4
+            ), name
+
+    def test_combination(self, data):
+        """1.35 UDL + 1.5 Point at the clamped root, about the origin there."""
+        combination = data["global_reactions"]["by_load_combination"]["ULS"]
+        force = 1.35 * self.W * self.L + 1.5 * self.P
+        moment = 1.35 * self.W * self.L**2 / 2 + 1.5 * self.P * self.L
+        assert combination["applied_load_N"][2] == pytest.approx(-force, rel=1e-6)
+        assert combination["fz_N"] == pytest.approx(force, rel=1e-6)
+        assert abs(combination["my_Nm"]) == pytest.approx(moment, rel=1e-5)
+
+    def test_reactions_balance(self, data):
+        reactions = data["global_reactions"]
+        for name, case in {
+            **reactions["by_load_case"],
+            **reactions["by_load_combination"],
+        }.items():
+            assert case["imbalance_N"] < 1e-3, name
+            assert case["moment_imbalance_Nm"] < 1e-2, name
