@@ -5778,6 +5778,32 @@ class TestBeamContinuousOverASupport:
                 share * w * self.SPAN, rel=0.01
             ), x
 
+    @pytest.mark.parametrize("held_at_a", [False, True], ids=["sliding", "held"])
+    def test_free_to_slide_along_itself(self, tmp_path, held_at_a):
+        """``Two_Span_Beam.ifc`` had all three supports free along the beam
+        (``zb7``): solved without a word, it moved 5.8 mm along its length.
+        The run says so; holding x at one support takes it away."""
+        a = PLANE_PIN if held_at_a else self.HOLDING_TWIST
+        data, warnings = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 0), "C": (8, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": a, "B": self.HOLDING_TWIST, "C": self.HOLDING_TWIST},
+            loads={},
+            line_loads={("B", "C"): {"values": [(0.0, -25000.0)]}},
+            hinged=False,
+            mesh_size=0.5,
+        )
+        found = [w for w in warnings if w.startswith("Nothing resists")]
+        if held_at_a:
+            assert found == []
+        else:
+            (message,) = found
+            assert "1 movement(s) of the whole structure: along x." in message
+        # Forces are not affected: nothing loads it along x
+        b = _support_at(data, (4.0, 0.0, 0.0))["by_load_case"]["Load"]
+        assert b["fz_N"] == pytest.approx(5 / 8 * 25000.0 * self.SPAN, rel=0.01)
+
 
 INCLINE = math.radians(30.0)
 # A support on a plane that rises along X: z is its normal, x runs up it

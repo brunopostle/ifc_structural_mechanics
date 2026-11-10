@@ -319,6 +319,9 @@ class UnifiedCalculixWriter:
             # Step 2c7: Hold members that nothing stops spinning about their axis
             self._hold_spinning_members()
 
+            # Step 2c7b: Report what can still move the whole structure
+            self._report_free_movements()
+
             # Step 2c8: Fix an arm to supports that hold skew rotations, those
             # of step 2c7 among them
             self._build_support_arms()
@@ -4424,6 +4427,38 @@ class UnifiedCalculixWriter:
                 f"{' ...' if len(loose) > 5 else ''}",
                 ifc_guids=self._ifc_guids(loose),
             )
+
+    def _report_free_movements(self) -> None:
+        """``W-SUP-008`` for movements of the whole structure nothing resists.
+
+        After the writer's own holds (the plane, members spinning), which
+        resist what they hold: the structure is one rigid body here
+        (``analysis/rigid_body.py``), so only a real mechanism is reported.
+        """
+        from ..analysis.plane_structure import in_plane_axes
+        from ..analysis.rigid_body import describe, free_movements
+
+        held = [np.eye(3)[dof - 4] for _, _, dof in getattr(self, "_torsion_holds", [])]
+        plane = getattr(self, "_plane_normal", None)
+        if plane is not None and getattr(self, "_spin_arm_equations", None):
+            # Spin arms hold rotations about the two axes of a skew plane
+            held.extend(in_plane_axes(plane))
+        movements = free_movements(self.domain_model, plane, held)
+        if not movements:
+            return
+        described = "; ".join(describe(movement) for movement in movements)
+        self._warn_user(
+            "W-SUP-008",
+            f"Nothing resists {len(movements)} movement(s) of the whole "
+            f"structure: {described}. Its displacements include an arbitrary "
+            "amount of it; hold it at a support.",
+            ifc_guids=[
+                conn.ifc_guid
+                for conn in self.domain_model.connections
+                if getattr(conn, "ifc_guid", None)
+                and getattr(conn, "stiffness_properties", None)
+            ],
+        )
 
     def _build_spin_arms(self, conn, member_id: str, normal: np.ndarray) -> None:
         """Hold a member's rotations about the axes of a skew plane at a joint.

@@ -342,6 +342,25 @@ _KINDS = [
         "the analysis will fail. Add supports (connections with an "
         "AppliedCondition).",
     ),
+    MessageKind(
+        "W-SUP-008",
+        "Structure free to move as a whole",
+        "Taken as one rigid body, the whole structure can still move this "
+        "way: no support resists it, nor anything the analysis holds of its "
+        "own (W-SUP-001, W-SUP-002), so however the members are joined "
+        "nothing inside can stop it. The message names each movement: a "
+        "translation (every support of a building released in the same "
+        "horizontal direction, sliding bearings all along a bridge or a "
+        "beam) or a rotation about an axis (horizontal restraint at a single "
+        "point lets a plan turn about a vertical axis through it). CalculiX "
+        "solves such a model where "
+        "nothing loads that movement, and its displacements then include an "
+        "arbitrary amount of it; forces and moments are not affected. Where "
+        "a load does, it may stop at a zero pivot or give results without "
+        "meaning. Restrain the movement at a support: the translation in "
+        "that direction at one of them, or for a rotation a horizontal "
+        "restraint at a second support away from the axis.",
+    ),
     # Loads
     MessageKind(
         "W-LOD-001",

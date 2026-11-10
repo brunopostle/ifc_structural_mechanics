@@ -1251,6 +1251,14 @@ rotational degrees of freedom**. This drives everything about joints:
   to a surface (`_curve_members_on_surfaces()`) or one joined to a member
   it does not count as held, so it misses mechanisms through slabs rather
   than invent ones there.
+- **A movement of the whole structure that nothing resists is reported**
+  (`zb7`, `W-SUP-008`, `analysis/rigid_body.py`, `_report_free_movements()`
+  after the writer's own holds). The structure is one rigid body there, so it
+  finds only real mechanisms and misses those inside it (spinning and the
+  plane hold look for those). `Two_Span_Beam.ifc` had three supports free
+  along the beam: CalculiX solved it without a word, the whole beam 5.8 mm
+  along its length. Not held for the user: which support should hold it is
+  theirs to say.
 - **A plane truss or frame that can leave its plane is held in it**
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve and surface members in one plane
