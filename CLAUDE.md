@@ -361,7 +361,11 @@ it too. Poisson's ratio from E and G is worked out in SI, as they may differ.
 A derived unit of one unit to the power one (`portal_01`'s moduli in psi) breaks
 `IfcDerivedUnit` WR1: it is read as that unit, with `W-IFC-006` (`xxa`). Write GPa as
 kN·mm⁻² in tests; every file in `tests/test_data` must pass `ifcopenshell.validate`
-with EXPRESS rules (`tests/unit/test_test_data_is_valid.py`).
+with EXPRESS rules (`tests/unit/test_test_data_is_valid.py`). A value is in the
+unit of its measure type: IFC4's `Pset_MaterialMechanical.ShearModulus` is an
+`IfcModulusOfElasticityMeasure`, in the `MODULUSOFELASTICITYUNIT`; only an
+`IfcShearModulusMeasure` is in the `SHEARMODULUSUNIT` (`lo7`: Bonsai declares the
+first only, and 81000 N/mm² was read as 81000 Pa).
 
 **Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
 representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the
@@ -617,8 +621,14 @@ here. This section only records the constraints that shape day-to-day work.
   separate and the values are already one-sided. Members in line that are
   joined rigidly share nodes as two elements of one member do
   (`_ends_shared()`), and their end cross-section is one more with a jump to
-  find, of which the member has its half; its moment gets the value the
-  member's own last middle leads to. The envelope in `results.json` is
+  find, of which the member has its half; its moment always gets the value
+  the member's own last middle leads to (a 2% threshold once left 24 700 and
+  24 830 N·m over a support for 24 765, `lo7`). **Change a section force with
+  `_shift()`**, which moves the record's `force` and `moment` vectors with it:
+  the supports are checked against those vectors, and a shear restored in
+  `Vf1` alone left both members' ends at a support between them with the
+  mean, which cancelled, and the support came out as zero (`lo7`,
+  `Two_Span_Beam.ifc`). The envelope in `results.json` is
   taken from these diagrams, never from the raw cross-sections: beside a
   jump the mean can be larger than either side's own value.
 - **A moment curved along an element is put right** (`aiz.89`,

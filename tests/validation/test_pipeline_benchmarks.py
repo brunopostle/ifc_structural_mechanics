@@ -5673,25 +5673,37 @@ class TestBeamContinuousOverASupport:
     hinge every member meeting at it, which made this two simply supported
     beams: no moment over the support, P L / 4 under the loads and 8.0 mm of
     deflection for 3.4 (``aiz.78``).
+
+    Supports that also hold the rotations about x and z, as Bonsai's
+    ``Two_Span_Beam.ifc`` has them (free along x and about y), are checked
+    against the ends of the members: there the two members share the node,
+    and the force vectors of their ends were left averaged, so they
+    cancelled and the middle support came out as zero, with ``W-RES-001``.
     """
 
     LOAD, SPAN = 10000.0, 4.0
+    HOLDING_TWIST = (False, True, True, True, False, True)
+    SUPPORTS = {
+        "pinned": {"A": PLANE_PIN, "B": PLANE_ROLLER, "C": PLANE_ROLLER},
+        "holding twist": {"A": PLANE_PIN, "B": HOLDING_TWIST, "C": HOLDING_TWIST},
+    }
 
-    def _beam(self, tmp_path):
+    @pytest.fixture(params=list(SUPPORTS), scope="class")
+    def beam(self, request, tmp_path_factory):
+        tmp_path = tmp_path_factory.mktemp("continuous")
         data, _ = _plane_run(
             tmp_path,
             nodes={"A": (0, 0), "M": (2, 0), "B": (4, 0), "N": (6, 0), "C": (8, 0)},
             members=[("A", "M"), ("M", "B"), ("B", "N"), ("N", "C")],
-            supports={"A": PLANE_PIN, "B": PLANE_ROLLER, "C": PLANE_ROLLER},
+            supports=self.SUPPORTS[request.param],
             loads={"M": (0.0, -self.LOAD), "N": (0.0, -self.LOAD)},
             hinged=False,
             mesh_size=0.25,
         )
-        return data
+        return data, _member_names(str(tmp_path / "plane.ifc"))
 
-    def test_moments(self, tmp_path):
-        data = self._beam(tmp_path)
-        names = _member_names(str(tmp_path / "plane.ifc"))
+    def test_moments(self, beam):
+        data, names = beam
         moments = {
             names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
             for m in data["members"]
@@ -5705,13 +5717,66 @@ class TestBeamContinuousOverASupport:
         assert abs(moments["NC"][0]) == pytest.approx(under_load, rel=0.01)
         assert abs(moments["AM"][0]) < 0.01 * under_load
 
-    def test_reactions(self, tmp_path):
-        data = self._beam(tmp_path)
+    def test_moment_is_one_over_the_support(self, beam):
+        """No moment is applied at B: both members end with the same one.
+
+        The solver's value there is the mean of theirs; each member's own was
+        once only put in where it was 2% away, and 0.5% stayed.
+        """
+        data, names = beam
+        moments = {
+            names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
+            for m in data["members"]
+        }
+        assert moments["MB"][-1] == pytest.approx(moments["BN"][0], rel=1e-4)
+
+    def test_reactions(self, beam):
+        data, _ = beam
         for x, share in ((0.0, 5 / 16), (4.0, 11 / 8), (8.0, 5 / 16)):
             support = _support_at(data, (x, 0.0, 0.0))
             assert support["by_load_case"]["Load"]["fz_N"] == pytest.approx(
                 share * self.LOAD, rel=0.01
             )
+            # CalculiX 2.21 has a support that holds a rotation wrong, and the
+            # member ends replace it (``94g.7``); 2.23 is right
+            assert support["forces"] == "solver" or (
+                not solver_reports_clamped_reactions()
+                and support["forces"] == "member_end_forces"
+            )
+        total = data["global_reactions"]["by_load_case"]["Load"]
+        rel = 1e-6 if solver_reports_clamped_reactions() else 1e-4
+        assert total["imbalance_N"] < rel * 2 * self.LOAD
+        assert total["moment_imbalance_Nm"] < rel * 2 * self.LOAD * self.SPAN
+
+    def test_one_span_loaded(self, tmp_path):
+        """``Two_Span_Beam.ifc``: w along the second span only, supports
+        holding twist. Over B the moment is w L² / 16, the same at both
+        member ends; A holds the beam down with w L / 16, B and C take
+        5 w L / 8 and 7 w L / 16."""
+        w = 25000.0
+        data, _ = _plane_run(
+            tmp_path,
+            nodes={"A": (0, 0), "B": (4, 0), "C": (8, 0)},
+            members=[("A", "B"), ("B", "C")],
+            supports={"A": PLANE_PIN, "B": self.HOLDING_TWIST, "C": self.HOLDING_TWIST},
+            loads={},
+            line_loads={("B", "C"): {"values": [(0.0, -w)]}},
+            hinged=False,
+            mesh_size=0.25,
+        )
+        names = _member_names(str(tmp_path / "plane.ifc"))
+        moments = {
+            names[m["ifc_guid"]]: m["section_force_diagrams"]["Load"]["Mf2_Nm"]
+            for m in data["members"]
+        }
+        over_b = w * self.SPAN**2 / 16
+        assert abs(moments["AB"][-1]) == pytest.approx(over_b, rel=0.01)
+        assert moments["AB"][-1] == pytest.approx(moments["BC"][0], rel=1e-4)
+        for x, share in ((0.0, -1 / 16), (4.0, 5 / 8), (8.0, 7 / 16)):
+            support = _support_at(data, (x, 0.0, 0.0))
+            assert support["by_load_case"]["Load"]["fz_N"] == pytest.approx(
+                share * w * self.SPAN, rel=0.01
+            ), x
 
 
 INCLINE = math.radians(30.0)

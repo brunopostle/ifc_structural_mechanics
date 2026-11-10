@@ -1170,6 +1170,42 @@ class ResultsExporter:
     # the shear does not account for is a jump: an applied moment.
     _MOMENTS_AND_SHEARS = (("Mf1", "Vf1"), ("Mf2", "Vf2"))
 
+    # Where each section force lies in the record's vectors, in the axes of
+    # ``_member_axes()``: force = N x + Vf1 e1 + Vf2 e2 and
+    # moment = T x + Mf2 e1 - Mf1 e2 (``analysis/section_forces.py``)
+    _VECTOR_PARTS = {
+        "N": ("force", "x", 1.0),
+        "Vf1": ("force", "1", 1.0),
+        "Vf2": ("force", "2", 1.0),
+        "T": ("moment", "x", 1.0),
+        "Mf2": ("moment", "1", 1.0),
+        "Mf1": ("moment", "2", -1.0),
+    }
+
+    @classmethod
+    def _shift(
+        cls,
+        record: Dict,
+        key: str,
+        amount: float,
+        axes: Optional[Dict[str, List[float]]],
+    ) -> None:
+        """Change one section force of a record, and its vector with it.
+
+        The vectors are what a support is checked against (``_member_ends_at()``):
+        a jump restored in ``Vf1`` alone once left the averaged force in the
+        vector, and at a support between two members in line their ends
+        cancelled, the reaction coming out as zero.
+        """
+        if not amount:
+            return
+        record[key] = record.get(key, 0.0) + amount
+        vector, axis, sign = cls._VECTOR_PARTS[key]
+        if axes is not None and vector in record:
+            record[vector] = [
+                float(v) + sign * amount * d for v, d in zip(record[vector], axes[axis])
+            ]
+
     def _ends_shared(self, elem_ids: set) -> set:
         """Elements of a member that share nodes with an element of another.
 
@@ -1262,9 +1298,8 @@ class ResultsExporter:
 
         def set_apart(left: Dict, right: Dict, key: str, jump: float) -> None:
             if abs(jump) > self._JUMP_FRACTION * scales[key]:
-                average = left.get(key, 0.0)
-                left[key] = average - jump / 2.0
-                right[key] = average + jump / 2.0
+                self._shift(left, key, -jump / 2.0, axes)
+                self._shift(right, key, jump / 2.0, axes)
 
         # The outermost cross-sections, where they are shared with a member
         # that runs on: (record, its element's own middle)
@@ -1320,7 +1355,7 @@ class ResultsExporter:
                 if record is not None and (
                     abs(jumps.get(n, 0.0)) > 2.0 * self._JUMP_FRACTION * scales[key]
                 ):
-                    record[key] = record.get(key, 0.0) + side * jumps[n] / 2.0
+                    self._shift(record, key, side * jumps[n] / 2.0, axes)
 
         self._correct_curvature(middles, ends, axes)
 
@@ -1356,13 +1391,16 @@ class ResultsExporter:
                 jump = b.get(moment, 0.0) - a.get(moment, 0.0) - sheared
                 set_apart(*found, moment, jump)
             for record, middle in outer:
+                # The solver's value there is the mean with the other member,
+                # never this one's own, however close: always the value this
+                # member's middle leads to. A threshold once kept the mean
+                # where the two sides were 0.5% apart, and the moment over a
+                # support was 24 700 at one member's end and 24 830 at the
+                # other's for 24 765 (``Two_Span_Beam.ifc``)
                 reach = record["distance"] - middle["distance"]
                 mean_shear = 0.5 * (middle.get(shear, 0.0) + record.get(shear, 0.0))
                 value = middle.get(moment, 0.0) + sign * mean_shear * reach
-                if abs(value - record.get(moment, 0.0)) > (
-                    self._JUMP_FRACTION * scales[moment]
-                ):
-                    record[moment] = value
+                self._shift(record, moment, value - record.get(moment, 0.0), axes)
 
     @classmethod
     def _correct_curvature(
@@ -1406,17 +1444,7 @@ class ResultsExporter:
             }
 
         def shift(record: Dict, moment: str, amount: float) -> None:
-            if not amount:
-                return
-            record[moment] = record.get(moment, 0.0) + amount
-            if axes is not None and "moment" in record:
-                # The vector is T x + Mf2 e1 - Mf1 e2
-                direction = axes["1"] if moment == "Mf2" else axes["2"]
-                sign = 1.0 if moment == "Mf2" else -1.0
-                record["moment"] = [
-                    float(v) + sign * amount * d
-                    for v, d in zip(record["moment"], direction)
-                ]
+            cls._shift(record, moment, amount, axes)
 
         # The start of the next element at the end of each, and back
         by_place = {

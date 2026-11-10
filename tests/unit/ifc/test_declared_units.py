@@ -196,15 +196,43 @@ class TestMaterials:
         assert material.poisson_ratio == pytest.approx(0.25)
 
     def test_poisson_ratio_comes_from_moduli_in_different_units(self):
-        """E in psi and G in GPa: their raw ratio would be nonsense."""
+        """E in psi and G in GPa: their raw ratio would be nonsense.
+
+        G is an IfcShearModulusMeasure here, which is in the SHEARMODULUSUNIT.
+        """
         model = _open("portal_01")
         _assign(model, _gigapascal(model, "SHEARMODULUSUNIT"))
         psi = 6894.7572932
-        self._values(model, "ShearModulus").NominalValue.wrappedValue = (
-            2.9e7 * psi / (2.5 * 1e9)
+        self._values(model, "ShearModulus").NominalValue = model.create_entity(
+            "IfcShearModulusMeasure", 2.9e7 * psi / (2.5 * 1e9)
         )
         material = _material_of_first_member(Extractor(model).extract_model())
         assert material.poisson_ratio == pytest.approx(0.25, rel=1e-6)
+
+    def test_shear_modulus_as_a_modulus_of_elasticity(self):
+        """IFC4's Pset_MaterialMechanical.ShearModulus is an
+        IfcModulusOfElasticityMeasure, in the MODULUSOFELASTICITYUNIT.
+
+        Bonsai declares that unit (N/mm² in a project in millimetres) and
+        no SHEARMODULUSUNIT nor PRESSUREUNIT: G = 81000 was read as 81000 Pa
+        (``Two_Span_Beam.ifc``), where E = 210000 was N/mm².
+        """
+        model = _open("portal_01")
+        newton_per_mm2 = _derived(
+            model,
+            "MODULUSOFELASTICITYUNIT",
+            (_si(model, "NEWTON", "FORCEUNIT"), 1),
+            (_si(model, "METRE", "LENGTHUNIT", "MILLI"), -2),
+        )
+        _assign(model, newton_per_mm2)
+        _undeclare(model, "SHEARMODULUSUNIT")
+        self._values(model, "YoungModulus").NominalValue.wrappedValue = 210000.0
+        self._values(model, "ShearModulus").NominalValue.wrappedValue = 84000.0
+        extractor = Extractor(model)
+        material = _material_of_first_member(extractor.extract_model())
+        assert material.elastic_modulus == pytest.approx(210e9)
+        # No Poisson's ratio in portal_01: it comes from E and G
+        assert material.poisson_ratio == pytest.approx(0.25)
 
     def test_thermal_expansion(self):
         """Per megakelvin, a unit no base unit of the file makes."""

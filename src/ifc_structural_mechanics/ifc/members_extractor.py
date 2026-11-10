@@ -666,6 +666,10 @@ class MembersExtractor:
         # The scale of a property that gives a unit of its own, which goes
         # before the one the project assigns
         own_scales = {}
+        # The measure each value is given in, whose unit it is in: IFC4's
+        # Pset_MaterialMechanical.ShearModulus is an
+        # IfcModulusOfElasticityMeasure, in the MODULUSOFELASTICITYUNIT
+        measures = {}
 
         # First pass: standard pset names (preferred)
         for pset in psets:
@@ -676,6 +680,7 @@ class MembersExtractor:
                 for prop in pset.Properties:
                     propName = prop.Name[0].lower() + prop.Name[1:]
                     value = prop.NominalValue.wrappedValue
+                    measures[propName] = prop.NominalValue.is_a()
                     self._note_own_unit(own_scales, propName, prop)
                     if pset.Name == "Pset_MaterialMechanical":
                         mechProps[propName] = value
@@ -723,6 +728,7 @@ class MembersExtractor:
                         poisson_ratio = value
                     elif "shearmodulus" in lower_name and shear_modulus_raw is None:
                         shear_modulus_raw = value
+                        measures["shearModulus"] = prop.NominalValue.is_a()
                         self._note_own_unit(own_scales, "shearModulus", prop)
                     elif (
                         "thermalexpansioncoefficient" in lower_name
@@ -762,8 +768,16 @@ class MembersExtractor:
         # in place of Poisson's ratio is the same information
         shear_modulus = None
         if shear_modulus_raw is not None:
+            # Bonsai writes it so and declares a MODULUSOFELASTICITYUNIT
+            # only: read in the shear modulus unit, 81000 meant as N/mm² was
+            # 81000 Pa (``Two_Span_Beam.ifc``)
+            project_scale = (
+                self.shear_modulus_scale
+                if measures.get("shearModulus") == "IfcShearModulusMeasure"
+                else self.modulus_scale
+            )
             shear_modulus = shear_modulus_raw * own_scales.get(
-                "shearModulus", self.shear_modulus_scale
+                "shearModulus", project_scale
             )
         if poisson_ratio is None and shear_modulus is not None:
             if not shear_modulus > 0:
