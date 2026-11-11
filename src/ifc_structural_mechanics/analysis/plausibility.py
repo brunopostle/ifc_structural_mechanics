@@ -207,10 +207,12 @@ def plausibility_warnings(
 
     * the largest displacement against the size of the model (``MODEL_LIMIT``):
       beyond it the model is probably a mechanism;
-    * each member's distortion, the largest difference in displacement between
-      its own points, against its own size (``MEMBER_LIMIT``): beyond it the
-      member is probably not connected or supported as intended. The worst
-      member is named and the others counted;
+    * each member's distortion (``max_distortion_m``: the largest difference
+      in displacement between its own points once the rigid motion that fits
+      them best is taken off, so a member that only turns does not distort),
+      against its own size (``MEMBER_LIMIT``): beyond it the member is
+      probably not connected or supported as intended. The worst member is
+      named and the others counted;
     * modes with no frequency to speak of, which are mechanisms.
 
     Args:
@@ -264,9 +266,7 @@ def plausibility_warnings(
         for member in members:
             size = sizes.get(member.get("id"))
             relative = (
-                member.get("by_load_case", {})
-                .get(case, {})
-                .get("max_relative_displacement_m")
+                member.get("by_load_case", {}).get(case, {}).get("max_distortion_m")
             )
             if size and relative and relative > MEMBER_LIMIT * size:
                 distorted.append((relative / size, relative, size, member["id"]))

@@ -32,7 +32,7 @@ def _model():
 
 
 def _results(cases):
-    """``cases`` maps a load case to ``{member: (largest, relative)}`` in metres."""
+    """``cases`` maps a load case to ``{member: (largest, distortion)}`` in metres."""
     members = {}
     for case, values in cases.items():
         for member_id, (largest, relative) in values.items():
@@ -41,6 +41,7 @@ def _results(cases):
             ][case] = {
                 "max_displacement_m": largest,
                 "max_relative_displacement_m": relative,
+                "max_distortion_m": relative,
             }
     return {
         "load_cases": list(cases),
@@ -72,6 +73,15 @@ def test_member_distorting_by_more_than_a_hundredth_of_its_size():
         messages[0]
     )
     assert "other member" not in messages[0]
+
+
+def test_member_that_only_turns_is_not_blamed():
+    """An unloaded overhang turning with the span beside it (bxl)."""
+    results = _results({"Dead": {"column": (0.2, 0.0)}})
+    case = results["members"][0]["by_load_case"]["Dead"]
+    case["max_relative_displacement_m"] = 0.2
+
+    assert plausibility_warnings(results, _model()) == []
 
 
 def test_member_carried_along_by_others_is_not_blamed():

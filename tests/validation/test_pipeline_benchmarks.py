@@ -1370,6 +1370,20 @@ class TestGerberBeam:
         assert shape["ry_rad"][-1] == pytest.approx(theta, rel=1e-3)
         assert shape["uz_m"][0] == pytest.approx(theta * self.OVERHANG, rel=1e-3)
 
+    def test_the_overhang_turns_without_distorting(self, data):
+        """H-B turns with B-C by theta_B: 10 mm over 0.8 m, 1/78, but no bending.
+
+        W-CHK-001 once said it distorted and was probably not connected as
+        intended (bxl).
+        """
+        (overhang,) = [
+            m for m in data["members"] if m["ifc_guid"] == "2mdGHpUOv3hA1zGGWNX2lu"
+        ]
+        (case,) = overhang["by_load_case"].values()
+        assert case["max_relative_displacement_m"] > 0.008
+        assert case["max_distortion_m"] < 1e-4
+        assert not [w for w in data["warnings"] if w["code"] == "W-CHK-001"]
+
 
 class TestAnglesBendAboutTheirPrincipalAxes:
     """An unequal angle cantilever under its weight moves towards its upright leg.

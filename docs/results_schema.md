@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.14**.
+calculation report. This page describes schema **1.15**.
 
 It is read together with the IFC file it was made from, which
 `run.input_file` names and pins with its SHA-256: check that before going
@@ -85,12 +85,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
 | 1.13 | 2026-10-18 | `deflected_shapes` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
 | 1.14 | 2026-11-11 | An angle's `section_axes` are its principal axes, and its section forces and `max_normal_stress_Pa` are about them; they were along its legs, about which it was analysed. No key changes. |
+| 1.15 | 2026-11-11 | `max_distortion_m` of members, per load case, per combination and in their envelopes: how much a member changes shape, without the rigid motion that fits it best. `max_relative_displacement_m` is unchanged, but is described as it always was: it leaves out a translation of the member as a whole, not a turn. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.14",
+  "schema_version": "1.15",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m",
             "frequency": "Hz", "mass": "kg"},
@@ -121,6 +122,7 @@ instance). Absent means unknown; never read it as zero.
       "envelope": {
         "max_displacement_m": 0.001,
         "max_relative_displacement_m": 0.0008,
+        "max_distortion_m": 0.0008,
         "max_von_mises_Pa": 1.5e6,
         "max_normal_stress_Pa": 1.4e6,
         "utilisation_ratio": 0.006,
@@ -496,9 +498,20 @@ of a line support); the last gives the same reactions along them.
 
 ## Members: `members[]`
 
-`max_relative_displacement_m` is how much a member distorts: the largest
-difference in displacement between two of its points in any one global
-direction, so without what the member moves as a whole.
+`max_relative_displacement_m` is the largest difference in displacement
+between two of a member's points in any one global direction: it leaves out a
+translation of the member as a whole, but not a turn, so a member that only
+turns (an unloaded overhang beyond a support, turning with the span beside
+it) has one.
+
+`max_distortion_m` (schema 1.15) is how much a member changes shape: the same
+difference once the rigid motion, rotation and translation, that takes the
+member's points where they went best (in least squares) is taken off. A
+member that only moves or turns has none, whatever the size of the turn. On a
+bent member the best-fitting turn takes part of the bending with it: a
+cantilever's is about a fifth of its tip deflection, a simply supported
+span's its whole deflection. It is present when the result file gives the
+positions of the member's points, which it does in an analysis.
 
 ### Section forces
 

@@ -49,7 +49,7 @@ def _load_results_json(output_dir: str) -> dict:
 
 def _assert_schema(data: dict) -> None:
     """Assert top-level results.json schema is present and well-formed."""
-    assert data.get("schema_version") == "1.14"
+    assert data.get("schema_version") == "1.15"
     units = data.get("units", {})
     assert units.get("displacement") == "m"
     assert units.get("stress") == "Pa"

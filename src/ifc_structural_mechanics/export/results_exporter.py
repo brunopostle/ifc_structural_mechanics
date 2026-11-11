@@ -76,7 +76,7 @@ class ResultsExporter:
             curve members; without them there are none.
     """
 
-    SCHEMA_VERSION = "1.14"
+    SCHEMA_VERSION = "1.15"
 
     # A mode below this frequency (a period of 100 s) is a movement the
     # structure does not resist: no building sways that slowly, and a
@@ -963,32 +963,59 @@ class ResultsExporter:
         """Return per-load-case displacement stats for the given node set.
 
         ``max_displacement_m`` is the largest displacement of any of the
-        member's points. ``max_relative_displacement_m`` is how much the
-        member distorts: the largest difference between two of its points in
-        any one global direction, which leaves out whatever the member moves
-        as a whole.
+        member's points. ``max_relative_displacement_m`` is the largest
+        difference between two of its points in any one global direction: it
+        leaves out a translation of the member as a whole, but not a turn.
+        ``max_distortion_m`` is the same difference once the member's rigid
+        motion, the translation and small rotation that fit its points best,
+        is taken off: how much it changes shape (``_distortion()``).
         """
         stats = {
             lc: {"max_displacement_m": value}
             for lc, value in self._member_max("displacement", node_ids).items()
         }
         index = self._translation_index()
-        ranges: Dict[str, List[List[float]]] = {}
+        by_case: Dict[str, Dict[int, List[float]]] = defaultdict(dict)
         for nid in node_ids:
             for lc, translation in index.get(nid, ()):
-                low_high = ranges.get(lc)
-                if low_high is None:
-                    ranges[lc] = [list(translation), list(translation)]
-                    continue
-                for i in range(3):
-                    low_high[0][i] = min(low_high[0][i], translation[i])
-                    low_high[1][i] = max(low_high[1][i], translation[i])
-        for lc, (low, high) in ranges.items():
-            if lc in stats:
-                stats[lc]["max_relative_displacement_m"] = max(
-                    high[i] - low[i] for i in range(3)
-                )
+                by_case[lc][nid] = translation
+        for lc, moved in by_case.items():
+            if lc not in stats:
+                continue
+            values = np.array(list(moved.values()), float)
+            stats[lc]["max_relative_displacement_m"] = float(
+                np.max(values.max(axis=0) - values.min(axis=0))
+            )
+            distortion = self._distortion(moved)
+            if distortion is not None:
+                stats[lc]["max_distortion_m"] = distortion
         return stats
+
+    def _distortion(self, moved: Dict[int, List[float]]) -> Optional[float]:
+        """Return how much the points ``{node: translation}`` change shape.
+
+        The rigid motion (rotation and translation) that takes the points
+        where they went best, in least squares (Kabsch), is taken off, and the
+        largest difference between two of the points in any one global
+        direction is returned, as for ``max_relative_displacement_m``. An
+        unloaded overhang turning with the span beside it does not change
+        shape; a cantilever does, by about a fifth of its tip deflection (the
+        rest is the turn that fits its bent shape best). ``None`` without the
+        positions of all the points.
+        """
+        if any(n not in self.node_coordinates for n in moved):
+            return None
+        nodes = list(moved)
+        before = np.array([self.node_coordinates[n] for n in nodes], float)
+        after = before + np.array([moved[n] for n in nodes], float)
+        before -= before.mean(axis=0)
+        after -= after.mean(axis=0)
+        u, _, vt = np.linalg.svd(before.T @ after)
+        turn = np.eye(3)
+        turn[2, 2] = np.sign(np.linalg.det(vt.T @ u.T)) or 1.0
+        rotation = vt.T @ turn @ u.T
+        residual = after - before @ rotation.T
+        return float(np.max(residual.max(axis=0) - residual.min(axis=0)))
 
     def _member_stresses(self, node_ids: set) -> Dict[str, Dict[str, float]]:
         """Return per-load-case von Mises stats for the given node set.

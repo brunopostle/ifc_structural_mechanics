@@ -160,9 +160,11 @@ here. This section only records the constraints that shape day-to-day work.
   the signed diagram.
 - **`analysis/plausibility.py` warns about results too large to believe**:
   a member distorting by more than 1/100 of its size
-  (`max_relative_displacement_m`, which leaves out moving as a whole but not
-  turning: an unloaded overhang turning with the span beside it is flagged,
-  `TestGerberBeam`'s H-B at 1/78), or any
+  (`max_distortion_m`, without the rigid motion that fits it best, so an
+  unloaded overhang turning with the span beside it is not flagged:
+  `TestGerberBeam`'s H-B was at 1/78 when the check went by
+  `max_relative_displacement_m`, bxl; a cantilever's distortion is about a
+  fifth of its tip deflection, a simply supported span's all of it), or any
   displacement over 5% of the model's size. `building_02` with
   `--strict-connections` is the case it was written for. A warning here
   means look at connections and supports before anything else.

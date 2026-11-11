@@ -508,7 +508,8 @@ _KINDS = [
         "W-CHK-001",
         "Member distorts too much",
         "The member bends or stretches by more than 1/100 of its size, "
-        "leaving out how it moves as a whole. It is probably not connected or "
+        "leaving out how it moves and turns as a whole (max_distortion_m). It "
+        "is probably not connected or "
         "supported as intended: look at its connections and supports first.",
     ),
     MessageKind(

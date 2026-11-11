@@ -1,5 +1,6 @@
 """Per-member results are attributed through the result file's own elements."""
 
+import numpy as np
 import pytest
 
 from ifc_structural_mechanics.domain.property import Material, Section, Thickness
@@ -148,6 +149,73 @@ class TestRelativeDisplacement:
 
         assert by_case["Dead"]["max_relative_displacement_m"] == pytest.approx(0.01)
         assert by_case["Live"]["max_relative_displacement_m"] == pytest.approx(0.05)
+
+
+class TestDistortion:
+    """How much a member changes shape, without the rigid motion that fits it."""
+
+    # The beam's expanded nodes 101-106: a 2 m beam, 0.2 m deep
+    PLACES = {
+        101: [0.0, 0.0, -0.1],
+        102: [0.0, 0.0, 0.1],
+        103: [1.0, 0.0, -0.1],
+        104: [1.0, 0.0, 0.1],
+        105: [2.0, 0.0, -0.1],
+        106: [2.0, 0.0, 0.1],
+    }
+
+    def _beam(self, translations):
+        parsed = _parsed([_moved(n, t) for n, t in translations.items()])
+        exporter = ResultsExporter(
+            _model(), parsed, element_nodes=EXPANDED, node_coordinates=self.PLACES
+        )
+        members = {m["id"]: m for m in exporter._build()["members"]}
+        return members["beam"]["by_load_case"]["Dead"]
+
+    def _turned(self, angle):
+        """Each point turned by ``angle`` about the y axis through node 101."""
+        turn = np.array(
+            [
+                [np.cos(angle), 0.0, np.sin(angle)],
+                [0.0, 1.0, 0.0],
+                [-np.sin(angle), 0.0, np.cos(angle)],
+            ]
+        )
+        origin = np.array(self.PLACES[101])
+        return {
+            n: list(turn @ (np.array(p) - origin) + origin - np.array(p))
+            for n, p in self.PLACES.items()
+        }
+
+    def test_a_member_that_only_turns_does_not_distort(self):
+        beam = self._beam(self._turned(0.0125))
+
+        assert beam["max_relative_displacement_m"] == pytest.approx(0.025, rel=1e-3)
+        assert beam["max_distortion_m"] == pytest.approx(0.0, abs=1e-12)
+
+    def test_nor_by_a_large_turn(self):
+        beam = self._beam(self._turned(0.5))
+
+        assert beam["max_distortion_m"] == pytest.approx(0.0, abs=1e-12)
+
+    def test_a_bent_member_does(self):
+        """The middle 40 mm down, the ends where they were: no turn fits that."""
+        moved = {n: [0.0, 0.0, 0.0] for n in self.PLACES}
+        moved[103] = moved[104] = [0.0, 0.0, -0.04]
+        beam = self._beam(moved)
+
+        assert beam["max_relative_displacement_m"] == pytest.approx(0.04)
+        assert beam["max_distortion_m"] == pytest.approx(0.04)
+
+    def test_needs_the_positions_of_all_its_points(self):
+        parsed = _parsed([_moved(n, (0.0, 0.0, -0.01)) for n in (101, 103, 105)])
+        places = {101: self.PLACES[101]}
+        exporter = ResultsExporter(
+            _model(), parsed, element_nodes=EXPANDED, node_coordinates=places
+        )
+        beam = {m["id"]: m for m in exporter._build()["members"]}["beam"]
+
+        assert "max_distortion_m" not in beam["by_load_case"]["Dead"]
 
 
 class TestElementsTheResultFileDoesNotList:

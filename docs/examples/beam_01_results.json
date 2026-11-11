@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.14",
+  "schema_version": "1.15",
   "units": {
     "length": "m",
     "force": "N",
@@ -14,7 +14,7 @@
     "name": "beam example.EDB"
   },
   "run": {
-    "created": "2026-11-11T09:27:59+00:00",
+    "created": "2026-11-11T13:22:37+00:00",
     "library": {
       "name": "ifc_structural_mechanics",
       "version": "0.2.0"
@@ -50,6 +50,7 @@
       "envelope": {
         "max_displacement_m": 0.000427927,
         "max_relative_displacement_m": 0.0004279270000000002,
+        "max_distortion_m": 0.0004279270000001264,
         "max_von_mises_Pa": 2879373.2360489634,
         "max_normal_stress_Pa": 2876198.333333431,
         "section_forces": {
@@ -67,6 +68,7 @@
         "Dead": {
           "max_displacement_m": 0.000427927,
           "max_relative_displacement_m": 0.0004279270000000002,
+          "max_distortion_m": 0.0004279270000001264,
           "max_von_mises_Pa": 2879373.2360489634,
           "section_forces": {
             "max_N_N": 9.894234596218345e-10,
@@ -112,6 +114,7 @@
         "DCon1": {
           "max_displacement_m": 0.0006418905,
           "max_relative_displacement_m": 0.0006418905000000003,
+          "max_distortion_m": 0.0006418904999999642,
           "max_von_mises_Pa": 4319059.854073445,
           "section_forces": {
             "max_N_N": 1.4841351894327519e-09,
@@ -128,6 +131,7 @@
         "DCon2": {
           "max_displacement_m": 0.0006418905,
           "max_relative_displacement_m": 0.0006418905000000003,
+          "max_distortion_m": 0.0006418904999999642,
           "max_von_mises_Pa": 4319059.854073445,
           "section_forces": {
             "max_N_N": 1.4841351894327519e-09,
@@ -165,6 +169,7 @@
       "combination_envelope": {
         "max_displacement_m": 0.0006418905,
         "max_relative_displacement_m": 0.0006418905000000003,
+        "max_distortion_m": 0.0006418904999999642,
         "max_von_mises_Pa": 4319059.854073445,
         "max_normal_stress_Pa": 4314297.500000146,
         "section_forces": {
