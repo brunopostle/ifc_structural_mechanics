@@ -618,6 +618,18 @@ class Section:
 
         return wy, wz
 
+    def is_turned_by(self, product_of_inertia: float) -> bool:
+        """Whether a product of inertia turns this section's principal axes.
+
+        One within rounding of the second moments (1e-9 of them) does not:
+        a symmetric outline's is about 1e-16 of them, not zero.
+        """
+        i_y = self.moment_of_inertia_y
+        i_z = self.moment_of_inertia_z
+        if not i_y or not i_z:
+            return False
+        return abs(product_of_inertia) > 1e-9 * (i_y + i_z)
+
     def turn_to_principal_axes(self, outline: Sequence[Tuple[float, float]]) -> None:
         """Put the section on its principal axes, if they are not its local ones.
 
@@ -640,9 +652,7 @@ class Section:
         i_y = self.moment_of_inertia_y
         i_z = self.moment_of_inertia_z
         product = self.product_of_inertia
-        if not i_y or not i_z or self.principal_angle:
-            return
-        if abs(product) <= 1e-9 * (i_y + i_z):
+        if self.principal_angle or not self.is_turned_by(product):
             return
         angle, i_1, i_2 = principal_axes(i_y, i_z, product)
         cos, sin = math.cos(angle), math.sin(angle)

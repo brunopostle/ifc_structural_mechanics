@@ -189,6 +189,17 @@ class TestAnglesOnTheirPrincipalAxes:
         )
         assert section.moment_of_inertia_y > found.moment_of_inertia_y
 
+    def test_a_symmetric_shape_takes_no_stated_product(self):
+        """Bonsai's HEB 160 gives a MomentOfInertiaYZ of 3.14e-7 m4, its
+        torsion constant; its outline's is 6e-22, rounding. It was compared
+        and the user warned (W-SEC-005), on a donated Gerber beam."""
+        profile = _heb_160()
+        extractor = _extractor(profile)
+        _stated(profile, MomentOfInertiaYZ=3.14e-7)
+        section = extractor._create_section(profile)
+        assert section.principal_angle == 0.0
+        assert not [w for w in extractor.warnings if w["code"] == "W-SEC-005"]
+
     def test_symmetric_shapes_are_not_turned(self):
         for profile in (
             _heb_160(),

@@ -1313,6 +1313,64 @@ class TestTeeAngleAndChannel:
             analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"), gravity=True)
 
 
+class TestGerberBeam:
+    """A Gerber beam drawn in Bonsai and donated by Robert (2026-11-11).
+
+    HEB 160, A pinned at 0, a hinge at H (3.2 m, a moment release), rollers
+    at B (4 m) and C (8 m), 25 kN/m on B-C only. The overhang H-B is a single
+    element at the default mesh: its end at B shares the solver's nodes with
+    B-C, and was once left with their mean, half B's 50 kN of shear. The
+    support check took that for the solver's mistake and replaced B's correct
+    reaction with 25 kN (W-RES-001), out of balance by 25 kN and 100 kN m.
+    """
+
+    MODEL = os.path.join("tests", "test_data", "gerber_two_span_beam.ifc")
+    W, SPAN, OVERHANG = 25000.0, 4.0, 0.8
+
+    @pytest.fixture(scope="class")
+    def data(self, tmp_path_factory):
+        output = str(tmp_path_factory.mktemp("gerber"))
+        result = analyze_ifc(ifc_path=self.MODEL, output_dir=output)
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output, "results.json")) as fh:
+            return json.load(fh)
+
+    def test_reactions_are_those_of_statics(self, data):
+        expected = {0.0: 0.0, 4.0: 50000.0, 8.0: 50000.0}
+        for support in data["supports"]:
+            (case,) = support["by_load_case"].values()
+            assert case["fz_N"] == pytest.approx(
+                expected[round(support["position_m"][0], 3)], abs=1.0
+            )
+            assert support["forces"] == "solver"
+        assert not [w for w in data["warnings"] if w["code"] == "W-RES-001"]
+        (total,) = data["global_reactions"]["by_load_case"].values()
+        assert total["moment_imbalance_Nm"] < 1.0
+
+    def test_the_overhang_carries_nothing(self, data):
+        (overhang,) = [
+            m
+            for m in data["members"]
+            if m["type"] == "curve" and m["ifc_guid"] == "2mdGHpUOv3hA1zGGWNX2lu"
+        ]
+        (diagram,) = overhang["section_force_diagrams"].values()
+        for name in ("Vf1_N", "Mf1_Nm"):
+            assert max(abs(v) for v in diagram[name]) < 1.0, name
+
+    def test_the_hinge_rises_as_b_turns(self, data):
+        """Robert's own check: H rises theta_B times the overhang."""
+        model = Extractor(self.MODEL).extract_model()
+        member = model.members[0]
+        bending = member.material.elastic_modulus * member.section.moment_of_inertia_y
+        theta = self.W * self.SPAN**3 / (24 * bending)
+        (overhang,) = [
+            m for m in data["members"] if m["ifc_guid"] == "2mdGHpUOv3hA1zGGWNX2lu"
+        ]
+        (shape,) = overhang["deflected_shapes"].values()
+        assert shape["ry_rad"][-1] == pytest.approx(theta, rel=1e-3)
+        assert shape["uz_m"][0] == pytest.approx(theta * self.OVERHANG, rel=1e-3)
+
+
 class TestAnglesBendAboutTheirPrincipalAxes:
     """An unequal angle cantilever under its weight moves towards its upright leg.
 

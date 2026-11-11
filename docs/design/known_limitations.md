@@ -160,7 +160,9 @@ here. This section only records the constraints that shape day-to-day work.
   the signed diagram.
 - **`analysis/plausibility.py` warns about results too large to believe**:
   a member distorting by more than 1/100 of its size
-  (`max_relative_displacement_m`, which leaves out rigid movement), or any
+  (`max_relative_displacement_m`, which leaves out moving as a whole but not
+  turning: an unloaded overhang turning with the span beside it is flagged,
+  `TestGerberBeam`'s H-B at 1/78), or any
   displacement over 5% of the model's size. `building_02` with
   `--strict-connections` is the case it was written for. A warning here
   means look at connections and supports before anything else.
@@ -189,7 +191,13 @@ here. This section only records the constraints that shape day-to-day work.
   separate and the values are already one-sided. Members in line that are
   joined rigidly share nodes as two elements of one member do
   (`_ends_shared()`), and their end cross-section is one more with a jump to
-  find, of which the member has its half; its moment always gets the value
+  find, of which the member has its half (`_shared_sides()` says which end
+  of an element shares the nodes; a one-element member once counted as
+  shared at both ends, kept the solver's mean at the one that was, and a
+  correct reaction was replaced by half of it: a donated Gerber beam's
+  0.8 m overhang, `TestGerberBeam`). With fewer than four elements a jump
+  is found only at an end whose other end is the member's own, the load
+  taken as uniform; one element is enough for that. Its moment always gets the value
   the member's own last middle leads to (a 2% threshold once left 24 700 and
   24 830 N·m over a support for 24 765, `lo7`). **Change a section force with
   `_shift()`**, which moves the record's `force` and `moment` vectors with it:

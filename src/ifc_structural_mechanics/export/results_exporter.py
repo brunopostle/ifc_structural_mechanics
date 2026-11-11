@@ -1102,9 +1102,10 @@ class ResultsExporter:
                 case = rec.get("load_case", "_combined")
                 (placed if "distance" in rec else unplaced)[case].append(dict(rec))
         axes = self._member_axes(member, elem_ids) if member is not None else None
-        shared = self._ends_shared(elem_ids) if placed else set()
+        shared_nodes = self._ends_shared(elem_ids) if placed else {}
         by_case: Dict[str, List[Dict]] = {}
         for case, records in placed.items():
+            shared = self._shared_sides(shared_nodes, records)
             records.sort(key=lambda r: (round(r["distance"], 9), -r["position"]))
             scales = {
                 key: max((abs(r.get(key, 0.0)) for r in records), default=0.0)
@@ -1206,8 +1207,9 @@ class ResultsExporter:
                 float(v) + sign * amount * d for v, d in zip(record[vector], axes[axis])
             ]
 
-    def _ends_shared(self, elem_ids: set) -> set:
-        """Elements of a member that share nodes with an element of another.
+    def _ends_shared(self, elem_ids: set) -> Dict[int, List[int]]:
+        """Elements of a member that share nodes with an element of another,
+        with those nodes.
 
         Members in line that are joined rigidly are expanded into solids that
         share the nodes of the cross-section between them, as two elements of
@@ -1220,12 +1222,46 @@ class ResultsExporter:
                 for node in nodes:
                     at_node[node].append(element)
             self._elements_at_node = at_node
-        return {
-            element
-            for element in elem_ids
-            for node in self.element_nodes.get(element, ())
-            if any(other not in elem_ids for other in self._elements_at_node[node])
-        }
+        shared: Dict[int, List[int]] = {}
+        for element in elem_ids:
+            for node in self.element_nodes.get(element, ()):
+                if any(other not in elem_ids for other in self._elements_at_node[node]):
+                    shared.setdefault(element, []).append(node)
+        return shared
+
+    def _shared_sides(
+        self, shared_nodes: Dict[int, List[int]], records: List[Dict]
+    ) -> set:
+        """``(element, position)`` of the end cross-sections that are shared.
+
+        A node shared with another member is at the end of its element it is
+        nearest to. A member of one element was once taken to be shared at
+        both ends when it was at one, and kept the solver's mean with its
+        neighbour there (a Gerber beam's 0.8 m hinged overhang, 2026-11-11).
+        Where a position cannot be had, both ends are.
+        """
+        centres: Dict[int, Dict[float, np.ndarray]] = defaultdict(dict)
+        for record in records:
+            if record.get("position") in (-1.0, 1.0) and "centre" in record:
+                centres[record["element_id"]][record["position"]] = np.array(
+                    record["centre"], dtype=float
+                )
+        sides = set()
+        for element, nodes in shared_nodes.items():
+            ends = centres.get(element, {})
+            for node in nodes:
+                place = self.node_coordinates.get(node)
+                if len(ends) < 2 or place is None:
+                    sides.update({(element, -1.0), (element, 1.0)})
+                    continue
+                point = np.array(place, dtype=float)
+                sides.add(
+                    (
+                        element,
+                        min(ends, key=lambda p: float(np.linalg.norm(point - ends[p]))),
+                    )
+                )
+        return sides
 
     def _restore_jumps(
         self,
@@ -1261,9 +1297,11 @@ class ResultsExporter:
         elements have no middle cross-section and are left as they are.
 
         The end of a member that runs on into another in line
-        (``shared_ends``: the elements that share nodes with another
-        member's) is averaged with that member, which is not in ``records``.
-        It is treated as one more cross-section with a jump to find.
+        (``shared_ends``: ``(element, position)`` of the end cross-sections
+        that share nodes with another member's, ``_shared_sides()``) is
+        averaged with that member, which is not in ``records``. It is treated
+        as one more cross-section with a jump to find. A member of one
+        element has it found too, when its other end is its own.
 
         Once the shear forces are one-sided, the bending moments are put
         right where a load acts along an element (``_correct_curvature()``),
@@ -1274,7 +1312,7 @@ class ResultsExporter:
             (r for r in records if r["position"] == 0.0), key=lambda r: r["distance"]
         )
         ends = {(r["element_id"], r["position"]): r for r in records}
-        if len(middles) < 2:
+        if not middles:
             self._correct_curvature(middles, ends, axes)
             return
         pairs = [
@@ -1307,7 +1345,9 @@ class ResultsExporter:
         outer_start = outer_end = None
         for middle, position in ((middles[0], -1.0), (middles[-1], 1.0)):
             record = ends.get((middle["element_id"], position))
-            if record is not None and middle["element_id"] in (shared_ends or ()):
+            if record is not None and (middle["element_id"], position) in (
+                shared_ends or ()
+            ):
                 outer.append((record, middle))
                 if position < 0.0:
                     outer_start = record
@@ -1518,7 +1558,8 @@ class ResultsExporter:
 
         A member with fewer than four elements has too few for that: the
         line then goes through its two ends, where they have no jump to
-        find, and is level through one. The end of a member that runs on
+        find, and is level through one (the load uniform along the member).
+        One element is enough for a jump at one end. The end of a member that runs on
         into another (``start_shared``, ``end_shared``) is a cross-section
         ``-1`` or ``len(excess) - 1`` with a jump of its own.
 
@@ -1526,7 +1567,7 @@ class ResultsExporter:
         value is missing.
         """
         count = len(excess)
-        if count < 2 or any(value is None for value in excess):
+        if count < 1 or any(value is None for value in excess):
             return {}
         # At cross-section n - 1, for n from 0: the sum so far and where it
         # is plotted

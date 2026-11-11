@@ -998,8 +998,12 @@ class MembersExtractor:
         ):
             if name not in stated:
                 continue
-            if attribute == "product_of_inertia" and not section.product_of_inertia:
-                # A symmetric section's is zero, nothing to compare with
+            if attribute == "product_of_inertia" and not section.is_turned_by(
+                section.product_of_inertia
+            ):
+                # A symmetric section's is zero, or rounding of its outline
+                # (6e-22 m4 for an HEB 160, whose Bonsai pset gives 3.1e-7,
+                # its torsion constant), and there is nothing to compare
                 continue
             prop = stated[name]
             stated_value = prop.NominalValue.wrappedValue
