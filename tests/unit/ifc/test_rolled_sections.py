@@ -43,6 +43,7 @@ def _stated(profile, **values):
         "CrossSectionArea": "IfcAreaMeasure",
         "MomentOfInertiaY": "IfcMomentOfInertiaMeasure",
         "MomentOfInertiaZ": "IfcMomentOfInertiaMeasure",
+        "MomentOfInertiaYZ": "IfcMomentOfInertiaMeasure",
     }
     profile.file.create_entity(
         "IfcProfileProperties",
@@ -151,6 +152,56 @@ class TestTheOtherShapes:
         _stated(profile, CrossSectionArea=found.area * 1.01e6)
         section = _extractor(profile)._create_section(profile)
         assert section.area == pytest.approx(found.area * 1.01)
+
+
+class TestAnglesOnTheirPrincipalAxes:
+    """An angle is analysed about its principal axes (94g.37)."""
+
+    def test_an_equal_angle_is_turned_45_degrees(self):
+        profile = _profile(
+            "IfcLShapeProfileDef", Depth=100.0, Width=100.0, Thickness=10.0
+        )
+        section = _extractor(profile)._create_section(profile)
+        assert section.principal_angle == pytest.approx(math.pi / 4)
+        # L 100 x 100 x 10, sharp: 286.6 and 73.4 cm4 about u and v
+        assert section.moment_of_inertia_y == pytest.approx(286.6e-8, rel=1e-3)
+        assert section.moment_of_inertia_z == pytest.approx(73.4e-8, rel=2e-3)
+        assert section.product_of_inertia < 0
+        # Equal legs: the shear areas are as they were, 2/3 of a leg
+        assert section.shear_area_y == pytest.approx(2 / 3 * 0.1 * 0.01)
+        assert section.shear_area_z == pytest.approx(2 / 3 * 0.1 * 0.01)
+        # The heel from the axis across the diagonal through it, the toes
+        # from the diagonal; the centroid is from the middle of the box
+        cx, cy = section.centroid_offset
+        heel = math.hypot(cx + 0.05, cy + 0.05)
+        assert section.fibre_distances[1] == pytest.approx(heel, rel=1e-6)
+        assert section.fibre_distances[0] == pytest.approx(0.1 / math.sqrt(2))
+
+    def test_the_stated_product_of_inertia_is_taken(self):
+        profile = _profile(
+            "IfcLShapeProfileDef", Depth=100.0, Width=100.0, Thickness=10.0
+        )
+        found = _extractor(profile)._create_section(profile)
+        _stated(profile, MomentOfInertiaYZ=found.product_of_inertia * 1.01)
+        section = _extractor(profile)._create_section(profile)
+        assert section.product_of_inertia == pytest.approx(
+            found.product_of_inertia * 1.01
+        )
+        assert section.moment_of_inertia_y > found.moment_of_inertia_y
+
+    def test_symmetric_shapes_are_not_turned(self):
+        for profile in (
+            _heb_160(),
+            _profile(
+                "IfcUShapeProfileDef",
+                Depth=200.0,
+                FlangeWidth=80.0,
+                WebThickness=8.0,
+                FlangeThickness=12.0,
+            ),
+        ):
+            section = _extractor(profile)._create_section(profile)
+            assert section.principal_angle == 0.0
 
 
 def test_an_asymmetric_i_is_about_its_own_centroid():

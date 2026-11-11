@@ -133,6 +133,28 @@ def outline_properties(points: Sequence[Tuple[float, float]]) -> OutlineProperti
     )
 
 
+def principal_axes(i_xx: float, i_yy: float, i_xy: float) -> Tuple[float, float, float]:
+    """The principal second moments of a section and how far they are turned.
+
+    ``i_xx``, ``i_yy`` and ``i_xy`` are about centroidal axes along x and y of
+    the profile (``OutlineProperties``). The first principal direction is the
+    profile's y turned by the angle returned, positive from y towards -x: the
+    member's local z turned right-handed about its x. Along it the section is
+    stiffest, and across it least stiff; the product of inertia about them is
+    zero. An angle has one 45 degrees from its legs if they are equal.
+
+    Returns:
+        The angle in radians, in (-pi/2, pi/2], then the second moment for
+        bending along the first direction and that along the second
+    """
+    mean = (i_xx + i_yy) / 2.0
+    radius = math.hypot((i_xx - i_yy) / 2.0, i_xy)
+    if radius == 0.0:
+        return 0.0, i_xx, i_yy
+    angle = math.atan2(-2.0 * i_xy, i_xx - i_yy) / 2.0
+    return angle, mean + radius, mean - radius
+
+
 def i_shape(
     bottom_width: float,
     depth: float,

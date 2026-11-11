@@ -918,6 +918,7 @@ class MembersExtractor:
         # Profile y is the member's local z: bending in the depth is about x
         section.moment_of_inertia_y = properties.i_xx
         section.moment_of_inertia_z = properties.i_yy
+        section.product_of_inertia = properties.i_xy
         # The centroid from the middle of the bounding box, where IFC puts
         # the origin of these profiles, and the farthest fibres from it
         # (94g.35); _create_section adds the profile's Position
@@ -928,6 +929,8 @@ class MembersExtractor:
             max(abs(x - cx) for x, _ in outline),
         )
         taken = self._take_mechanical_properties(section, profile)
+        # Last, as it changes the axes everything above is about (94g.37)
+        section.turn_to_principal_axes(outline)
         sloped = [name for name in slopes if getattr(profile, name, None)]
         if (
             sloped
@@ -991,8 +994,12 @@ class MembersExtractor:
             ("MomentOfInertiaY", "moment_of_inertia_y", self.inertia_scale),
             ("MomentOfInertiaZ", "moment_of_inertia_z", self.inertia_scale),
             ("TorsionalConstantX", "torsional_constant", self.inertia_scale),
+            ("MomentOfInertiaYZ", "product_of_inertia", self.inertia_scale),
         ):
             if name not in stated:
+                continue
+            if attribute == "product_of_inertia" and not section.product_of_inertia:
+                # A symmetric section's is zero, nothing to compare with
                 continue
             prop = stated[name]
             stated_value = prop.NominalValue.wrappedValue

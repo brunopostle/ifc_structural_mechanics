@@ -101,6 +101,14 @@ class TestPlaneNormal:
         model.members[0].geometry[1][Y] = 0.5
         assert _axis(plane_normal(model)) is None
 
+    def test_a_section_turned_to_its_principal_axes_bends_out_of_the_plane(
+        self, tmp_path
+    ):
+        """An angle loaded in the plane moves across it too (94g.37)."""
+        model = _truss(tmp_path, {"A": PLANE_PIN, "C": PLANE_ROLLER})
+        model.members[0].section.principal_angle = 0.26
+        assert _axis(plane_normal(model)) is None
+
     @staticmethod
     def _add_wall(model, outline):
         material = Material(

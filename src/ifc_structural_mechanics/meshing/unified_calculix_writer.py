@@ -1808,6 +1808,33 @@ class UnifiedCalculixWriter:
         n = n / n_len
         return (float(n[0]), float(n[1]), float(n[2]))
 
+    def _principal_direction(
+        self,
+        member: CurveMember,
+        normal: Tuple[float, float, float],
+        beam_axis: Tuple[float, float, float],
+    ) -> Tuple[float, float, float]:
+        """The section's first direction turned to its principal axes (94g.37).
+
+        ``normal`` is the member's local z across an element, ``beam_axis``
+        the element's direction. ``Section.principal_angle`` turns it
+        right-handed about the member's x, from the first point of its
+        geometry to the last, whichever way the element's nodes run. Only a
+        section with a product of inertia (an angle) is turned; the centroid
+        offset stays in local y and z (``_centroid_shift()``).
+        """
+        angle = getattr(getattr(member, "section", None), "principal_angle", 0.0)
+        if not angle:
+            return normal
+        axis = np.array(beam_axis, dtype=float)
+        x_axis = np.array(self._compute_beam_axis(None, member), dtype=float)
+        if float(axis @ x_axis) < 0.0:
+            axis = -axis
+        n = np.array(normal, dtype=float)
+        turned = n * math.cos(angle) + np.cross(axis, n) * math.sin(angle)
+        turned = turned / float(np.linalg.norm(turned))
+        return (float(turned[0]), float(turned[1]), float(turned[2]))
+
     def _write_beam_section_for_set(
         self,
         file: TextIO,
@@ -1829,7 +1856,9 @@ class UnifiedCalculixWriter:
         is parallel/near-parallel to the beam axis can never reach CalculiX.
         """
         beam_axis = self._compute_beam_axis(elem_ids, member)
-        beam_normal = self._orthogonal_beam_normal(beam_normal, beam_axis)
+        beam_normal = self._principal_direction(
+            member, self._orthogonal_beam_normal(beam_normal, beam_axis), beam_axis
+        )
         # Section forces are recovered in these axes after the analysis
         for elem_id in elem_ids or []:
             self.domain_model.beam_section_frames[elem_id] = (
@@ -2009,7 +2038,9 @@ class UnifiedCalculixWriter:
         # the axis) via the same helper used by the native B31 path.
         beam_normal_raw = self._get_beam_normal(member)
         beam_axis = self._compute_beam_axis(elem_ids, member)
-        beam_normal = self._orthogonal_beam_normal(beam_normal_raw, beam_axis)
+        beam_normal = self._principal_direction(
+            member, self._orthogonal_beam_normal(beam_normal_raw, beam_axis), beam_axis
+        )
 
         file.write(
             f"*BEAM SECTION, SECTION=GENERAL, ELSET={elset},"

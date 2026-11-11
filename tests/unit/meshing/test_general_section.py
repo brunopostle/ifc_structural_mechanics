@@ -43,6 +43,9 @@ def _make_writer(member):
     writer._orthogonal_beam_normal = (
         UnifiedCalculixWriter._orthogonal_beam_normal.__get__(writer)
     )
+    writer._principal_direction = UnifiedCalculixWriter._principal_direction.__get__(
+        writer
+    )
     return writer
 
 

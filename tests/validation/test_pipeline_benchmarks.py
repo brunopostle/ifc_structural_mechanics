@@ -1177,6 +1177,37 @@ def _inertia_of_rectangles(rectangles):
     return area, about_x, about_y
 
 
+def _product_of_rectangles(rectangles):
+    """Centroidal product of inertia ``∫ x y dA`` of a section of rectangles."""
+    area = sum((x1 - x0) * (y1 - y0) for x0, x1, y0, y1 in rectangles)
+    cx = sum((x1 - x0) * (y1 - y0) * (x0 + x1) / 2 for x0, x1, y0, y1 in rectangles)
+    cy = sum((x1 - x0) * (y1 - y0) * (y0 + y1) / 2 for x0, x1, y0, y1 in rectangles)
+    cx, cy = cx / area, cy / area
+    return sum(
+        (x1 - x0) * (y1 - y0) * ((x0 + x1) / 2 - cx) * ((y0 + y1) / 2 - cy)
+        for x0, x1, y0, y1 in rectangles
+    )
+
+
+def _cantilever_self_weight_both_ways(rectangles, shear_area, weak=False):
+    """Tip deflection of the example cantilever under its weight, down and across.
+
+    Unsymmetric bending (94g.37): with second moments ``I_l`` for bending in
+    the loaded direction, ``I_c`` across it and a product ``I_lc``, the tip
+    moves ``w L^4 / 8 E`` times ``I_c / D`` in the load's direction and
+    ``|I_lc| / D`` across it, ``D = I_l I_c - I_lc^2``. Shear adds to the
+    first only, the section's shear areas being along its legs.
+    """
+    area, strong, weak_inertia = _inertia_of_rectangles(rectangles)
+    product = _product_of_rectangles(rectangles)
+    loaded, across = (weak_inertia, strong) if weak else (strong, weak_inertia)
+    determinant = loaded * across - product**2
+    w = CANT_RHO * area * G_ACCEL
+    bending = w * CANT_L**4 / (8 * CANT_E)
+    shear = w * CANT_L**2 / (2 * CANT_G * shear_area)
+    return bending * across / determinant + shear, bending * abs(product) / determinant
+
+
 # T, angle and channel, 200 wide and 400 deep. Each entry: IFC class, its
 # attributes, the rectangles the section is made of, and the shear areas for
 # loads along the depth and along the width.
@@ -1226,10 +1257,11 @@ OPEN_SECTIONS = {
 class TestTeeAngleAndChannel:
     """cantilever_01 with a T, an angle and a channel, about both axes.
 
-    The reference is beam theory with the section's second moments about its
-    centroidal axes parallel to its legs, worked out here from its rectangles.
-    For the angle that is the library's assumption, not the whole truth: an
-    angle's principal axes are rotated, and a real one also moves sideways.
+    The reference is beam theory with the section's second moments and
+    product of inertia, worked out here from its rectangles. The angle, 400 by
+    200, is unequal: its principal axes are turned about 15 degrees from its
+    legs, and it moves sideways as well as down (94g.37; it was once analysed
+    about its legs, as if it did not).
     """
 
     @pytest.mark.parametrize("shape", sorted(OPEN_SECTIONS))
@@ -1238,7 +1270,7 @@ class TestTeeAngleAndChannel:
         ifc_class, attributes, rectangles, shear_depth, shear_width = OPEN_SECTIONS[
             shape
         ]
-        area, strong, weak_inertia = _inertia_of_rectangles(rectangles)
+        area, _, _ = _inertia_of_rectangles(rectangles)
         model = ifcopenshell.open(CANTILEVER)
         if weak:
             member = model.by_type("IfcStructuralCurveMember")[0]
@@ -1249,13 +1281,15 @@ class TestTeeAngleAndChannel:
         path = str(tmp_path / "variant.ifc")
         model.write(path)
         data = _run(path, tmp_path, gravity=True)
-        expected = _cantilever_self_weight(
-            area,
-            weak_inertia if weak else strong,
-            shear_width if weak else shear_depth,
+        down, across = _cantilever_self_weight_both_ways(
+            rectangles, shear_width if weak else shear_depth, weak
         )
         assert _max_vertical_deflection(data) == pytest.approx(
-            expected, rel=DEFLECTION_TOLERANCE
+            down, rel=DEFLECTION_TOLERANCE
+        )
+        # Across the load: global Y, both ways round
+        assert data["global_displacements"]["envelope"]["max_ty_m"] == pytest.approx(
+            across, rel=DEFLECTION_TOLERANCE, abs=1e-3 * down
         )
         assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
             CANT_RHO * G_ACCEL * area * CANT_L, rel=1e-4
@@ -1277,6 +1311,69 @@ class TestTeeAngleAndChannel:
         model.write(path)
         with pytest.raises(Exception, match="IfcZShapeProfileDef.*not supported"):
             analyze_ifc(ifc_path=path, output_dir=str(tmp_path / "out"), gravity=True)
+
+
+class TestAnglesBendAboutTheirPrincipalAxes:
+    """An unequal angle cantilever under its weight moves towards its upright leg.
+
+    cantilever_01 runs along X with its local z up, so its local y is +Y. The
+    angle's upright leg is on its -y side (IfcLShapeProfileDef), and a load
+    down a leg bends it the way its weaker principal axis lies: down and
+    towards -Y (94g.37).
+    """
+
+    ANGLE = OPEN_SECTIONS["angle"]
+
+    def _write(self, tmp_path, centric=False) -> str:
+        ifc_class, attributes, rectangles, _, _ = self.ANGLE
+        model = ifcopenshell.open(CANTILEVER)
+        if centric:
+            # Origin of the profile on its centroid, for user elements
+            # (E-SEC-008); from the middle of the bounding box
+            area, _, _ = _inertia_of_rectangles(rectangles)
+            cx = sum(
+                (x1 - x0) * (y1 - y0) * (x0 + x1) / 2 for x0, x1, y0, y1 in rectangles
+            )
+            cy = sum(
+                (x1 - x0) * (y1 - y0) * (y0 + y1) / 2 for x0, x1, y0, y1 in rectangles
+            )
+            attributes = dict(
+                attributes,
+                Position=model.createIfcAxis2Placement2D(
+                    model.createIfcCartesianPoint(
+                        (-(cx / area - I_B / 2), -(cy / area - I_H / 2))
+                    )
+                ),
+            )
+        model.by_type("IfcMaterialProfile")[0].Profile = model.create_entity(
+            ifc_class, ProfileType="AREA", ProfileName="angle", **attributes
+        )
+        path = str(tmp_path / "angle.ifc")
+        model.write(path)
+        return path
+
+    def _tip(self, data) -> dict:
+        (member,) = [m for m in data["members"] if m["type"] == "curve"]
+        (shape,) = member["deflected_shapes"].values()
+        return {key: values[-1] for key, values in shape.items()}, member
+
+    @pytest.mark.parametrize("open_sections", ["equivalent", "user_element"])
+    def test_tip_moves_down_and_towards_the_upright_leg(self, tmp_path, open_sections):
+        _, _, rectangles, shear_depth, _ = self.ANGLE
+        path = self._write(tmp_path, centric=open_sections == "user_element")
+        data = _run(path, tmp_path, gravity=True, open_sections=open_sections)
+        down, across = _cantilever_self_weight_both_ways(rectangles, shear_depth)
+        tip, member = self._tip(data)
+        assert tip["uz_m"] == pytest.approx(-down, rel=DEFLECTION_TOLERANCE)
+        assert tip["uy_m"] == pytest.approx(-across, rel=DEFLECTION_TOLERANCE)
+        # Section forces are about the principal axes: the first direction
+        # is local z turned towards -y
+        _, strong, weak = _inertia_of_rectangles(rectangles)
+        product = _product_of_rectangles(rectangles)
+        angle = math.atan2(-2 * product, strong - weak) / 2
+        assert member["section_axes"]["1"] == pytest.approx(
+            [0.0, -math.sin(angle), math.cos(angle)], abs=1e-6
+        )
 
 
 def _eccentric_cantilever(tmp_path, profile_class=None, position=None, **attributes):

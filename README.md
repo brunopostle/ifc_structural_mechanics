@@ -35,7 +35,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections). Elements are quadratic by default: three-node beams (B32R) and six-node triangular shells (S6)
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
-- **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas, so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
+- **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas (an angle's about its principal axes), so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge), whether or not those are parallel to the global ones: a roller on an incline reacts along its normal, and a line support along a diagonal wall can hold rotation about its edge alone. Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Members against the building**: `ifc-analysis check` compares each structural member with the building element it idealises (`IfcRelAssignsToProduct`, either way round): where it lies, its length or area, section, material and thickness, and finds elements that may carry load with no member
 - **Pictures of the results**: `ifc-analysis plot` draws deformed shapes coloured by displacement or von Mises stress, section force diagrams along the members, supports, reactions, loads and mode shapes, for any load case, combination or mode (PyVista, optional)
@@ -113,7 +113,20 @@ the ones a user needs to know before trusting a result.
   when every member of the model is such a section: stock CalculiX crashes
   when a U1 element shares a model with any other beam or shell element.
   With U1, a release about one or two axes becomes a full pin (with a
-  warning) and the reactions are reported with the wrong sign.
+  warning) and the reactions are reported with the wrong sign. A member
+  whose centroid is off its curve (any angle, T, channel or asymmetric I as
+  IFC places them) cannot be a U1 element (`E-SEC-008`); to analyse one
+  about its centroid, give its profile a `Position` whose `Location` is
+  minus the centroid, measured from the middle of the profile's bounding
+  box:
+
+  ```python
+  from ifc_structural_mechanics.converters.profile_geometry import (
+      l_shape, outline_properties)
+  cx, cy = outline_properties(l_shape(depth, width, thickness)).centroid
+  profile.Position = model.createIfcAxis2Placement2D(
+      model.createIfcCartesianPoint((-cx, -cy)))
+  ```
 - **Unsupported profiles stop the analysis.** A Z section, a lipped C or an
   arbitrary profile raises an error that names the member and the profile.
 - **Nothing the file leaves out is made up.** The analysis stops, with an
@@ -167,10 +180,11 @@ the ones a user needs to know before trusting a result.
   there**, with a warning, like a beam lying in a slab. `--strict-connections`
   turns both off. A line connection in the file between a beam and a slab is
   always honoured, as a hinge along the line.
-- **Section approximations.** No product of inertia: L (angle) sections are
-  analysed about their leg-parallel axes rather than their rotated principal
-  axes. The torsion constant and shear areas of an
-  `IfcAsymmetricIShapeProfileDef` are those of its flanges averaged.
+- **Section approximations.** The torsion constant and shear areas of an
+  `IfcAsymmetricIShapeProfileDef` are those of its flanges averaged. An L
+  (angle) section is analysed about its principal axes, so that it moves
+  sideways under a load along a leg; its section forces are about those
+  axes too (`section_axes` in `results.json`).
 - **Eccentric members.** IFC puts a profile's origin on the member's
   reference curve. A T, an asymmetric I, an angle or a channel has its
   centroid elsewhere, and so has any profile whose `Position` moves it: the

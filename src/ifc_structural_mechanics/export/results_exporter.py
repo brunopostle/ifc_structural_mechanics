@@ -76,7 +76,7 @@ class ResultsExporter:
             curve members; without them there are none.
     """
 
-    SCHEMA_VERSION = "1.13"
+    SCHEMA_VERSION = "1.14"
 
     # A mode below this frequency (a period of 100 s) is a movement the
     # structure does not resist: no building sways that slowly, and a

@@ -152,7 +152,8 @@ rotational degrees of freedom**. This drives everything about joints:
   (`_hold_plane_structure()`, `94g.3`). `analysis/plane_structure.py`:
   `plane_normal()` recognises one (curve and surface members in one plane
   of any direction, loads, the self-weight of load cases and gravity in it,
-  section axes and supports in and across it; a straight run takes the
+  section axes (principal ones: an angle is no plane structure, `94g.37`)
+  and supports in and across it; a straight run takes the
   plane of its loads) and returns its unit normal, exactly a global axis
   when it is one (`global_axis()`). `out_of_plane_freedoms()` counts what
   nothing restrains, with members and joints as rigid bodies tied by the

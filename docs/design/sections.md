@@ -85,6 +85,24 @@ gives A, Iy and Iz. The torsion constant and shear areas are still those of
 the plates. A dimension IFC requires that is missing raises `E-SEC-004`; T,
 L, U and asymmetric I once took 0.1 or 0.01 m in its place.
 
+**An angle is analysed about its principal axes** (`94g.37`). Its product
+of inertia (`Section.product_of_inertia`, from the outline or
+Pset_ProfileMechanical's `MomentOfInertiaYZ`) turns them from its legs, 45
+degrees for equal legs. `Section.turn_to_principal_axes()` sets
+`principal_angle` (right-handed about the member's x, from local z) and makes
+the second moments, shear areas (their flexibilities turned as a tensor) and
+fibre distances those about the principal axes;
+`profile_geometry.principal_axes()` does the arithmetic. The writer turns the section's first
+direction by it (`_principal_direction()`), for equivalent rectangles and
+U1 alike, so section forces and `section_axes` are about the principal axes.
+The centroid offset stays in local y and z (`_centroid_shift()` goes by the
+untouched `_get_beam_normal()`). A turned section bends out of a plane frame,
+which is then no plane structure. Measured: a 400 x 200 x 20 angle
+cantilever under its weight is within 0.4% of unsymmetric bending down and
+across, towards its upright leg (`TestAnglesBendAboutTheirPrincipalAxes`);
+about its legs it did not move across at all. A T, channel or I has no
+product of inertia and is not turned.
+
 **A member whose centroid is off its reference curve is eccentric** (`94g.35`).
 IFC puts the origin of the profile, after its `Position`, on the curve, x along
 local y and y along local z; a parameterised profile has the middle of its

@@ -12,6 +12,7 @@ from ifc_structural_mechanics.converters.profile_geometry import (
     i_shape,
     l_shape,
     outline_properties,
+    principal_axes,
     rounded_outline,
     t_shape,
     u_shape,
@@ -94,6 +95,38 @@ def test_an_equal_angle_has_a_product_of_inertia():
     assert found.i_xy < 0
     # Principal values of the sharp angle, from its rectangles
     assert found.i_xx + abs(found.i_xy) == pytest.approx(286.6e-8, rel=1e-3)
+
+
+def test_an_equal_angle_is_turned_45_degrees():
+    """Its stiff direction is across the heel: profile y turned towards -x."""
+    found = outline_properties(l_shape(0.1, 0.1, 0.01))
+    angle, i_1, i_2 = principal_axes(found.i_xx, found.i_yy, found.i_xy)
+    assert angle == pytest.approx(math.pi / 4)
+    assert i_1 == pytest.approx(found.i_xx + abs(found.i_xy))
+    assert i_2 == pytest.approx(found.i_xx - abs(found.i_xy))
+
+
+@pytest.mark.parametrize("i_xx, i_yy, i_xy", [(3.0, 1.0, -0.8), (1.0, 3.0, 0.5)])
+def test_principal_axes_have_no_product_of_inertia(i_xx, i_yy, i_xy):
+    angle, i_1, i_2 = principal_axes(i_xx, i_yy, i_xy)
+    first = (-math.sin(angle), math.cos(angle))
+    second = (math.cos(angle), math.sin(angle))
+
+    def inertia(u, v):
+        # ∫ (r.u)(r.v) dA from the tensor about x and y of the profile
+        return (
+            i_yy * u[0] * v[0] + i_xx * u[1] * v[1] + i_xy * (u[0] * v[1] + u[1] * v[0])
+        )
+
+    assert inertia(first, first) == pytest.approx(i_1)
+    assert inertia(second, second) == pytest.approx(i_2)
+    assert inertia(first, second) == pytest.approx(0.0, abs=1e-12)
+    assert i_1 >= i_2
+    assert i_1 + i_2 == pytest.approx(i_xx + i_yy)
+
+
+def test_a_symmetric_section_is_not_turned():
+    assert principal_axes(3.0, 1.0, 0.0) == (0.0, 3.0, 1.0)
 
 
 def test_a_flange_slope_thickens_the_flanges_at_the_web():

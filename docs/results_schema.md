@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.13**.
+calculation report. This page describes schema **1.14**.
 
 It is read together with the IFC file it was made from, which
 `run.input_file` names and pins with its SHA-256: check that before going
@@ -84,12 +84,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.11 | 2026-10-18 | `prescribed_displacements` on supports the file moves. |
 | 1.12 | 2026-10-18 | Modal analysis: `analysis_type` `"modal"`, `modal` with the frequencies, participation factors and effective masses; `frequency` and `mass` in `units`; `num_modes` in `run.settings`. |
 | 1.13 | 2026-10-18 | `deflected_shapes` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
+| 1.14 | 2026-11-11 | An angle's `section_axes` are its principal axes, and its section forces and `max_normal_stress_Pa` are about them; they were along its legs, about which it was analysed. No key changes. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.13",
+  "schema_version": "1.14",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m",
             "frequency": "Hz", "mass": "kg"},
@@ -516,7 +517,8 @@ load case: parallel lists `distance_m` (from the member's start), `N_N`,
 `Vf1_N`, `Vf2_N`, `T_Nm`, `Mf1_Nm`, `Mf2_Nm`. A distance listed twice
 is a jump, before and after. `section_axes` gives the directions they refer
 to: `x` from the first point of the member's IFC edge to the last, `1`
-the section's first direction (the profile's depth) and `2 = x cross 1`.
+the section's first direction (the profile's depth; for an angle, the
+principal axis nearer it, schema 1.14) and `2 = x cross 1`.
 Each force is what the part of the member beyond the cross-section exerts on
 the part before it: N is positive in tension, Mf1 is positive when the +1 side
 is in tension, Mf2 when the +2 side is, T is right-handed about x.

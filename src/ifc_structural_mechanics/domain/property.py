@@ -6,7 +6,12 @@ used in structural analysis models.
 """
 
 import math
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
+
+from ifc_structural_mechanics.converters.profile_geometry import (
+    outline_properties,
+    principal_axes,
+)
 
 
 class Material:
@@ -210,6 +215,16 @@ class Section:
         #: (local z) and across the width (local y), where the outline gives
         #: them; ``get_extreme_fibre_distances()`` goes by them first
         self.fibre_distances: Optional[Tuple[float, float]] = None
+        #: How far the section is turned about the member's x from its local
+        #: axes to its principal axes, in radians, right-handed: its first
+        #: direction is the local z turned by it (94g.37). Zero for a section
+        #: symmetric about either axis; an angle has one. Once turned
+        #: (``turn_to_principal_axes()``) the second moments, shear areas and
+        #: fibre distances are about the principal axes.
+        self.principal_angle: float = 0.0
+        #: ``∫ y z dA`` about the centroid in the member's local y and z, in
+        #: m4; it stays so when the section is turned
+        self.product_of_inertia: float = 0.0
 
         self._validate()
         self._calculate_properties()
@@ -440,9 +455,9 @@ class Section:
         t = self.dimensions["thickness"]
 
         # Vertical leg plus the rest of the horizontal leg. The values are
-        # about the geometric (leg-parallel) centroidal axes, which is the frame
-        # the section is written in. An angle's principal axes are rotated from
-        # these (non-zero product of inertia); that coupling is not modelled.
+        # about the geometric (leg-parallel) centroidal axes. The extractor
+        # takes them from the outline instead and turns the section to its
+        # principal axes (turn_to_principal_axes(), 94g.37).
         self.moment_of_inertia_y, self.moment_of_inertia_z, _ = (
             self._inertia_of_rectangles(
                 [
@@ -602,6 +617,49 @@ class Section:
             wz = None
 
         return wy, wz
+
+    def turn_to_principal_axes(self, outline: Sequence[Tuple[float, float]]) -> None:
+        """Put the section on its principal axes, if they are not its local ones.
+
+        A section with a product of inertia about the member's local y and z
+        bends sideways under a load along either: an angle loaded along a leg
+        moves across it too, and is less stiff than either leg-parallel
+        second moment says. About its principal axes it bends as any other,
+        so it is analysed about them (94g.37): ``principal_angle`` is set, the
+        second moments become the principal ones, the shear areas are turned
+        with them (their flexibilities as a tensor) and the fibre distances
+        are taken again from the outline.
+
+        It goes by ``product_of_inertia`` and does nothing when that is
+        negligible or the section is already turned.
+
+        Args:
+            outline: The profile's outline, x along local y and y along local
+                z, in m (``converters.profile_geometry``)
+        """
+        i_y = self.moment_of_inertia_y
+        i_z = self.moment_of_inertia_z
+        product = self.product_of_inertia
+        if not i_y or not i_z or self.principal_angle:
+            return
+        if abs(product) <= 1e-9 * (i_y + i_z):
+            return
+        angle, i_1, i_2 = principal_axes(i_y, i_z, product)
+        cos, sin = math.cos(angle), math.sin(angle)
+        self.principal_angle = angle
+        self.moment_of_inertia_y = i_1
+        self.moment_of_inertia_z = i_2
+        if self.shear_area_y and self.shear_area_z:
+            along_depth, across = 1.0 / self.shear_area_y, 1.0 / self.shear_area_z
+            self.shear_area_y = 1.0 / (cos * cos * along_depth + sin * sin * across)
+            self.shear_area_z = 1.0 / (sin * sin * along_depth + cos * cos * across)
+        if outline:
+            cx, cy = outline_properties(outline).centroid
+            first, second = (-sin, cos), (cos, sin)
+            self.fibre_distances = tuple(
+                max(abs((x - cx) * u + (y - cy) * v) for x, y in outline)
+                for u, v in (first, second)
+            )
 
     def get_extreme_fibre_distances(self) -> Tuple[Optional[float], Optional[float]]:
         """Return distances from neutral axis to extreme fibres (y_max, z_max) in m.

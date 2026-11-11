@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.13",
+  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.14",
   "title": "results.json",
-  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.13: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
+  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.14: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     "supports"
   ],
   "properties": {
-    "schema_version": {"const": "1.13"},
+    "schema_version": {"const": "1.14"},
     "units": {
       "type": "object",
       "additionalProperties": false,

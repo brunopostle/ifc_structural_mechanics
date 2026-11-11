@@ -262,6 +262,12 @@ def plane_normal(
             return None
         if not _in_or_across(depth / float(np.linalg.norm(depth)) @ normal):
             return None
+    # A section whose principal axes are turned from its member's axes (an
+    # angle) bends across the plane under a load in it (94g.37)
+    for member in members:
+        section = getattr(member, "section", None)
+        if isinstance(member, CurveMember) and getattr(section, "principal_angle", 0.0):
+            return None
     # A member whose centroid is off the plane bends out of it (94g.35)
     for member in members:
         offset = getattr(getattr(member, "section", None), "centroid_offset", None)

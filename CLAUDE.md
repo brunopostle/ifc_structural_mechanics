@@ -38,7 +38,13 @@ pytest tests/unit/ifc/test_entity_identifier.py
 
 # Run a single test
 pytest tests/unit/ifc/test_entity_identifier.py::TestClassName::test_method_name
+
+# /tmp is a 2.9 GB tmpfs that Claude sessions and pytest fill; when a run fails
+# with EDQUOT ("Disk quota exceeded"), keep the run's temporary files on disk
+T=$HOME/.cache/ism-test-tmp; mkdir -p $T
+TMPDIR=$T pytest -m "not slow" --basetemp=$T/pt; rm -rf $T
 ```
+pytest-xdist is not installed: no `-n`. The non-slow suite takes about 4 minutes.
 
 ### Code Quality
 ```bash

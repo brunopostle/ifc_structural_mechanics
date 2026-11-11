@@ -116,7 +116,7 @@ The profile's Position turns it in the member's section through an angle other t
 
 ### E-SEC-008: Eccentric member with user elements
 
-The member's centroid is off its reference curve (an asymmetric profile, or one its Position moves), which is analysed with a stiff link from each node of the curve to the centroid. User elements (--open-sections user-element) cannot be joined to links. Analyse the model with equivalent sections.
+The member's centroid is off its reference curve (an asymmetric profile, or one its Position moves), which is analysed with a stiff link from each node of the curve to the centroid. User elements (--open-sections user-element) cannot be joined to links. Analyse the model with equivalent sections, or, if the member is meant to lie on its centroid, give its profile a Position whose Location is minus the centroid from the middle of the profile's bounding box (README, Beam Sections).
 
 ### W-SEC-001: Torsion of solid rectangles corrected
 
