@@ -21,6 +21,7 @@ EXAMPLES = os.path.join(
 BEAM_01 = os.path.join(EXAMPLES, "ifcFiles", "beam_01.ifc")
 SLAB_01 = os.path.join(EXAMPLES, "ifcFiles", "slab_01.ifc")
 CANTILEVER_01 = os.path.join(EXAMPLES, "ifcFiles", "cantilever_01.ifc")
+BUILDING_01 = os.path.join(EXAMPLES, "ifcFiles", "building_01.ifc")
 
 INPUT = """** a hand-written input
 *NODE
@@ -280,6 +281,30 @@ class TestPicture:
         )
         with open(path, "rb") as fh:
             assert fh.read(8) == b"\x89PNG\r\n\x1a\n"
+
+    def test_shells_are_not_shaded_across_their_corners(self, tmp_path):
+        """A node where a wall meets a slab is lit as part of each, not with
+        the mean of their normals, which drew a band like a crack along the
+        joint (er0). Not structure_01: its wall and slab share no node."""
+        from ifc_structural_mechanics.visualization.plot import render
+
+        output = _analyse(BUILDING_01, tmp_path, mesh_size=2.0)
+        plotter = render(output, off_screen=True, window_size=(400, 300))
+        (shells,) = [
+            actor.mapper.dataset
+            for actor in plotter.actors.values()
+            if getattr(actor, "mapper", None) is not None
+            and getattr(actor.mapper.dataset, "n_faces_strict", 0)
+            and "value" in actor.mapper.dataset.point_data
+        ]
+        plotter.close()
+        triangles = shells.faces.reshape(-1, 4)[:, 1:]
+        corners = shells.points[triangles]
+        faces = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+        faces /= np.linalg.norm(faces, axis=1)[:, None]
+        normals = shells.point_data["Normals"][triangles]
+        alignment = np.abs(np.einsum("tij,tj->ti", normals, faces))
+        assert alignment.min() > np.cos(np.radians(30))
 
     def test_command(self, beam_01, tmp_path):
         from click.testing import CliRunner

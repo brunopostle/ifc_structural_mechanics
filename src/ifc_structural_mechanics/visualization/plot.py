@@ -340,6 +340,9 @@ def _draw_deformed(
             cmap="viridis",
             clim=clim,
             smooth_shading=True,
+            # A node where a wall meets a slab is lit as part of each: their
+            # mean normal drew a band like a crack along the joint (er0)
+            split_sharp_edges=True,
             scalar_bar_args=bar_args,
         )
         if edges:
