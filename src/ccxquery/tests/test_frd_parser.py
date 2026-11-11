@@ -179,3 +179,20 @@ class TestConcatenatedValues:
         disp = get_displacements(data)
         assert sorted(disp) == [302, 303]
         assert disp[302][:3] == pytest.approx([-4.9414e-06, -3.15202e-05, -4.36021e-06])
+
+
+class TestWindowsNumbers:
+    """A Windows build writes three exponent digits: positive numbers run
+    together too, and a negative one is 13 characters wide."""
+
+    def test_node_line(self):
+        from ccxquery.parsers.frd_parser import _parse_node_line
+
+        line = " -1        273.20000E+0000.00000E+000-1.17290E-001\n"
+        assert _parse_node_line(line) == (27, (3.2, 0.0, -0.11729))
+
+    def test_result_line(self):
+        from ccxquery.parsers.frd_parser import _parse_result_line
+
+        line = " -1         13.20000E+0001.50000E+001-2.00000E-0021.00000E+000\n"
+        assert _parse_result_line(line) == (1, [3.2, 15.0, -0.02, 1.0])

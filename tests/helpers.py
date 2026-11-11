@@ -3,6 +3,7 @@
 import functools
 import math
 import os
+import re
 import subprocess
 import tempfile
 
@@ -602,3 +603,26 @@ def solver_reports_clamped_reactions() -> bool:
         with open(os.path.join(folder, "clamped.dat")) as fh:
             lines = [line.split() for line in fh if line.strip()]
     return abs(float(lines[-1][2]) - 1000.0) < 1.0
+
+
+_LINUX_FRD_NUMBER = re.compile(r"[ -]\d\.\d{5}E[+-]\d\d(?!\d)")
+
+
+def as_written_on_windows(frd_path: str) -> None:
+    """Rewrite an FRD file as a Windows build of CalculiX writes it.
+
+    Its C library prints ``%12.5E`` with three exponent digits, so a positive
+    number fills its 12 columns with no space before it and a negative one
+    takes 13: ``3.20000E+0000.00000E+000-1.17290E-001`` (a CalculiX 2.23
+    from calculix/CalculiX-Windows, reported 2026-11-11).
+    """
+
+    def three_digits(match):
+        text = match.group()
+        sign = "-" if text[0] == "-" else ""
+        return f"{sign}{text[1:-2]}0{text[-2:]}"
+
+    with open(frd_path) as fh:
+        text = fh.read()
+    with open(frd_path, "w") as fh:
+        fh.write(_LINUX_FRD_NUMBER.sub(three_digits, text))

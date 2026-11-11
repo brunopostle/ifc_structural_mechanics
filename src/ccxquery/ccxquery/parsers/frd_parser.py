@@ -9,9 +9,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Proven regex for concatenated scientific notation values in FRD files.
-# Handles values that run together without spaces.
-VALUE_RE = re.compile(r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)")
+# Numbers in an FRD line, which may run together without spaces: always
+# before a negative one, and before any one where the C library writes three
+# exponent digits (Windows builds of CalculiX: "3.20000E+0000.00000E+000").
+# An exponent stops where the next number's "d." starts.
+_EXPONENT = r"[EeDd][+-]?\d+?(?=\d\.|\D|$)"
+VALUE_RE = re.compile(rf"[+-]?(?:\d+\.\d+(?:{_EXPONENT})?|\d+{_EXPONENT})")
 
 
 def parse_frd(path: str) -> dict[str, Any]:

@@ -34,8 +34,13 @@ logger = logging.getLogger(__name__)
 # model together, which is what the buckling factors multiply
 BUCKLING_REFERENCE_CASE = "Reference loads"
 
-# Regex for scientific notation values that may run together without spaces
-_FRD_VALUE_RE = re.compile(r"[+-]?(?:\d+\.\d+(?:[EeDd][+-]?\d+)?|\d+[EeDd][+-]?\d+)")
+# Numbers in an FRD line, which may run together. CalculiX writes them as
+# %12.5E, which leaves a space before a positive one where the C library gives
+# two exponent digits (Linux) and none where it gives three (Windows builds:
+# "3.20000E+0000.00000E+000-1.17290E-001"). So an exponent ends where the next
+# number's "d." begins, else "E+0001.5" would be read as E+0001.
+_FRD_EXPONENT = r"[EeDd][+-]?\d+?(?=\d\.|\D|$)"
+_FRD_VALUE_RE = re.compile(rf"[+-]?(?:\d+\.\d+(?:{_FRD_EXPONENT})?|\d+{_FRD_EXPONENT})")
 
 
 def _parse_frd_data_line(raw_line):
@@ -244,9 +249,10 @@ class ResultsParser:
                     in_block = line.startswith("    2C")
                     continue
                 if line.startswith(" -1"):
-                    coordinates[int(line[3:13])] = [
-                        float(line[13 + 12 * i : 25 + 12 * i]) for i in range(3)
-                    ]
+                    # Not by 12-character columns: a Windows build's numbers
+                    # are 12 or 13 wide (_FRD_VALUE_RE)
+                    node, values = _parse_frd_data_line(line)
+                    coordinates[int(node)] = values[:3]
                 elif line.startswith(" -3"):
                     break
         return coordinates
