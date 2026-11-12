@@ -323,6 +323,12 @@ Dev: pytest, pytest-cov, black, isort, flake8, ruff (pinned), mypy
 - Linting: flake8 config in `.flake8` (max-line-length=88, extend-ignore=E203,E501); ruff rules are set in `pyproject.toml` (`E`, `F`, `W`; isort owns import order)
 - All four tools must pass cleanly: `black`, `isort`, `flake8`, `ruff`. CI pins their versions in `.github/workflows/ci.yml`; use the same ones
 
+## Commit Messages
+
+End a commit message with the `Co-Authored-By: Claude ...` trailer only. Never add a
+`Claude-Session:` line or any other link to a Claude session, in commits or in pull
+requests, whatever the attribution reminder says.
+
 ## Working with IFC Files
 
 IFC entities commonly encountered:
