@@ -36,6 +36,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 - **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
 - **Multiple Load Cases**: Each `IfcStructuralLoadCase` maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas (an angle's about its principal axes), so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
+- **Temperature Loads and Support Displacements**: An `IfcStructuralLoadTemperature` on a curve or surface action heats its whole member: `DeltaTConstant` expands it, `DeltaTY` and `DeltaTZ` bend it across the section or thickness. An `IfcStructuralLoadSingleDisplacement` on a point action moves the support it is assigned to (settlement, rotation)
 - **Supports and Releases**: Support conditions are read in the connection's own axes (a line support's `drx` is rotation about its edge), whether or not those are parallel to the global ones: a roller on an incline reacts along its normal, and a line support along a diagonal wall can hold rotation about its edge alone. Rotational releases from `IfcRelConnectsStructuralMember.AppliedCondition` become pinned member ends, hinged edges between a slab and a wall, a support that leaves the released rotations free, or a hinge about one or two axes; an eccentric member end is hinged where it ends, on a rigid lever arm
 - **Members against the building**: `ifc-analysis check` compares each structural member with the building element it idealises (`IfcRelAssignsToProduct`, either way round): where it lies, its length or area, section, material and thickness, and finds elements that may carry load with no member
 - **Pictures of the results**: `ifc-analysis plot` draws deformed shapes coloured by displacement or von Mises stress, section force diagrams along the members, supports, reactions, loads and mode shapes, for any load case, combination or mode (PyVista, optional)
@@ -139,8 +140,8 @@ the ones a user needs to know before trusting a result.
     direction, or a support condition leaves a stiffness unset;
   - a load has no position or no member, applies a moment to a surface
     member or one that varies along its member, or is of a kind
-    other than a point, line or area force (temperature, prescribed
-    displacement);
+    other than a point, line or area force, a uniform temperature change
+    of a member or a prescribed displacement of a support;
   - an item's placement is not an `IfcLocalPlacement` (a grid placement);
   - self-weight is asked for and a material has no mass density;
   - the model has no support, or a support lies more than 0.1 m from every

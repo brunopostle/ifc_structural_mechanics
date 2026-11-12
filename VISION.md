@@ -144,9 +144,8 @@ What holds it back:
 - **Releases.** End releases on members with user elements (open sections,
   opt-in) are full pins.
 - **Input the tool cannot handle.** It now stops, naming the entity, rather
-  than substitute a default; what it does not support at all (temperature
-  loads, prescribed displacements, grid placements) is listed
-  in the README.
+  than substitute a default; what it does not support at all (grid
+  placements, non-uniform temperature changes) is listed in the README.
 - **Validation coverage.** Pinned supports, open sections, area loads and a
   torsion frame now have benchmarks; a multi-storey frame does not.
 
