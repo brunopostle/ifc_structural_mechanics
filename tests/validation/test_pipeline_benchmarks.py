@@ -4105,6 +4105,9 @@ def _placed_variant(
     for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
         for entity in model.by_type(kind):
             entity.ObjectPlacement = placement
+    # Loads in GLOBAL_COORDS are in the axes of the model's SharedPlacement
+    for analysis_model in model.by_type("IfcStructuralAnalysisModel"):
+        analysis_model.SharedPlacement = placement
     path = str(tmp_path / f"{name}_placed.ifc")
     model.write(path)
     return path
@@ -4301,6 +4304,78 @@ class TestPlacedModel:
                 assert found[key] == pytest.approx(
                     expected["Gravity"][key], abs=0.002 * weight
                 )
+
+    def test_global_coords_are_those_of_the_shared_placement(self, tmp_path):
+        """A model with Z down, as RFEM writes, and an action with no placement.
+
+        IFC's GLOBAL_COORDS are the axes of the analysis model's
+        SharedPlacement (``0io``), not the project's nor those of an action's
+        own placement, which it need not have. ``beam_01`` (4 m, simply
+        supported) is placed with its z turned over; its 20 kN point load is
+        written upwards in those axes, so it pushes down, and a line load of
+        5 kN/m with no placement is added, upwards in the file too. Read in
+        the project's axes it would lift the beam. The self-weight of its
+        Dead case is turned over with them: its load case is in the model
+        through its combinations only.
+        """
+        import ifcopenshell
+        import ifcopenshell.guid
+
+        path = _placed_variant(tmp_path, "beam_01", z_axis=(0.0, 0.0, -1.0))
+        model = ifcopenshell.open(path)
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        point_action = model.by_type("IfcStructuralPointAction")[0]
+        point_action.AppliedLoad.ForceZ = -point_action.AppliedLoad.ForceZ
+        action = model.create_entity(
+            "IfcStructuralLinearAction",
+            ifcopenshell.guid.new(),
+            point_action.OwnerHistory,
+            "line load, no placement",
+            None,
+            None,
+            None,
+            member.Representation,
+            # N/mm, the file's linear force unit
+            model.create_entity("IfcStructuralLoadLinearForce", None, 0.0, 0.0, 5.0),
+            "GLOBAL_COORDS",
+            None,
+            "TRUE_LENGTH",
+        )
+        model.create_entity(
+            "IfcRelConnectsStructuralActivity",
+            ifcopenshell.guid.new(),
+            point_action.OwnerHistory,
+            None,
+            None,
+            member,
+            action,
+        )
+        (case,) = [
+            c for c in model.by_type("IfcStructuralLoadCase") if c.Name == "Dead"
+        ]
+        case.SelfWeightCoefficients = (0.0, 0.0, 1.0)
+        model.create_entity(
+            "IfcRelAssignsToGroup",
+            ifcopenshell.guid.new(),
+            point_action.OwnerHistory,
+            None,
+            None,
+            [action],
+            None,
+            case,
+        )
+        model.write(path)
+
+        shipped = _run(os.path.join(IFC_DIR, "beam_01.ifc"), tmp_path / "shipped")
+        data = _run(path, tmp_path / "placed")
+        _needs_solver_reactions()
+        # 20 kN and the weight, upwards: the reaction to loads downwards
+        weight = shipped["global_reactions"]["by_load_case"]["Dead"]["fz_N"]
+        assert weight > 20000.0
+        reaction = data["global_reactions"]["by_load_case"]["Dead"]
+        assert reaction["fz_N"] == pytest.approx(weight + 5000.0 * 4.0, rel=1e-4)
+        assert abs(reaction["fx_N"]) < 1e-3
+        assert abs(reaction["fy_N"]) < 1e-3
 
 
 COMBINED_DEAD, COMBINED_LIVE = 1.35, 1.5
@@ -5293,6 +5368,8 @@ def _shear_wall(tmp_path, turn: float) -> str:
     for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
         for entity in model.by_type(kind):
             entity.ObjectPlacement = placement
+    # The push is in GLOBAL_COORDS, the axes of the model's SharedPlacement
+    model.by_type("IfcStructuralAnalysisModel")[0].SharedPlacement = placement
     path = str(tmp_path / "wall.ifc")
     model.write(path)
     return path
@@ -6243,6 +6320,9 @@ class TestSkewSupports:
             for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
                 for entity in model.by_type(kind):
                     entity.ObjectPlacement = placement
+            # The push is in the axes of the model's SharedPlacement
+            analysis_model = model.by_type("IfcStructuralAnalysisModel")[0]
+            analysis_model.SharedPlacement = placement
             path = str(tmp_path / f"{label}.ifc")
             model.write(path)
             found[label] = _run(path, tmp_path / label, mesh_size=0.25)

@@ -30,8 +30,89 @@ from ..utils.messages import warning
 from .entity_identifier import (
     find_member_endpoints,
     get_item_transformation,
+    get_transformation,
     transform_vectors,
 )
+
+
+def _analysis_models(item) -> list:
+    """The analysis models a structural item or load group is part of.
+
+    As ``ifcopenshell.util.structural.get_analysis_models`` (0io), and a
+    load case that no model is loaded by directly is in the models of the
+    combinations it is in: ``beam_01``'s models list only the combinations.
+    """
+    if item.is_a("IfcStructuralLoadGroup"):
+        models = list(getattr(item, "LoadGroupFor", None) or [])
+        if not models:
+            for group in _load_groups_of(item):
+                if group.PredefinedType == "LOAD_COMBINATION":
+                    models += list(getattr(group, "LoadGroupFor", None) or [])
+        return list(dict.fromkeys(models))
+    return [
+        rel.RelatingGroup
+        for rel in getattr(item, "HasAssignments", None) or []
+        if rel.is_a("IfcRelAssignsToGroup")
+        and rel.RelatingGroup.is_a("IfcStructuralAnalysisModel")
+    ]
+
+
+def _load_groups_of(entity) -> list:
+    """The load groups an activity or load group is grouped into."""
+    return [
+        rel.RelatingGroup
+        for rel in getattr(entity, "HasAssignments", None) or []
+        if rel.is_a("IfcRelAssignsToGroup")
+        and rel.RelatingGroup.is_a("IfcStructuralLoadGroup")
+    ]
+
+
+def _activity_load_cases(activity) -> list:
+    """The load cases an activity is in, directly or through load groups.
+
+    As ``ifcopenshell.util.structural.get_activity_load_cases`` (0io).
+    """
+    cases: Dict[Any, None] = {}
+    groups, seen = _load_groups_of(activity), set()
+    while groups:
+        group = groups.pop(0)
+        if group in seen:
+            continue
+        seen.add(group)
+        if group.PredefinedType == "LOAD_CASE" or group.is_a("IfcStructuralLoadCase"):
+            cases[group] = None
+        elif group.PredefinedType == "LOAD_GROUP":
+            groups.extend(_load_groups_of(group))
+    return list(cases)
+
+
+def global_axes_placement(activity):
+    """The placement whose axes an activity's GLOBAL_COORDS values are in.
+
+    IFC calls the coordinate system of an analysis model "global": values in
+    GLOBAL_COORDS are in the axes of the model's ``SharedPlacement``, which
+    need not be the project's (RFEM writes Z down). This is the
+    SharedPlacement of the analysis model of the activity's item, or of its
+    load cases, else the activity's own ObjectPlacement, else None for the
+    project's axes. The rule of ``ifcopenshell.util.structural.get_global_axes``
+    (0io).
+    """
+    models = []
+    for rel in getattr(activity, "AssignedToStructuralItem", None) or []:
+        models += _analysis_models(rel.RelatingElement)
+        break
+    for case in _activity_load_cases(activity):
+        models += _analysis_models(case)
+    return _shared_placement(models) or getattr(activity, "ObjectPlacement", None)
+
+
+def _shared_placement(models):
+    """The first SharedPlacement of the analysis models, or None."""
+    for model in models:
+        # IFC2X3's analysis models have no SharedPlacement
+        if getattr(model, "SharedPlacement", None):
+            return model.SharedPlacement
+    return None
 
 
 class LoadsExtractor:
@@ -242,7 +323,17 @@ class LoadsExtractor:
             )
             coefficients = case_entity.SelfWeightCoefficients
             if coefficients is not None:
-                load_case.self_weight_coefficients = [float(c) for c in coefficients]
+                # In the "global" axes, the analysis model's SharedPlacement
+                load_case.self_weight_coefficients = [
+                    float(c)
+                    for c in transform_vectors(
+                        [[float(c) for c in coefficients]],
+                        get_transformation(
+                            _shared_placement(_analysis_models(case_entity))
+                        ),
+                        include_translation=False,
+                    )[0]
+                ]
             all_groups[case_id] = load_case
 
         # Process direct assignments of loads to regular load groups
@@ -978,13 +1069,14 @@ class LoadsExtractor:
     def _in_global_axes(self, ifc_load, force_vector: List[float]) -> List[float]:
         """Turn a force given in "global" coordinates to the global axes.
 
-        IFC's GLOBAL_COORDS are the axes of the action's ObjectPlacement,
-        which need not be the global ones. A load in LOCAL_COORDS is in the
-        axes of the item it is assigned to and is turned when it is written.
+        IFC's GLOBAL_COORDS are the axes of the analysis model's
+        SharedPlacement (``global_axes_placement()``), which need not be the
+        project's. A load in LOCAL_COORDS is in the axes of the item it is
+        assigned to and is turned when it is written.
         """
         if self._coordinate_system(ifc_load) == "local":
             return force_vector
-        transformation = get_item_transformation(ifc_load)
+        transformation = get_transformation(global_axes_placement(ifc_load))
         if not transformation:
             return force_vector
         return transform_vectors(

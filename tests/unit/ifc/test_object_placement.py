@@ -22,6 +22,9 @@ from ifc_structural_mechanics.ifc.entity_identifier import (  # noqa: E402
     get_transformation,
 )
 from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
+from ifc_structural_mechanics.ifc.loads_extractor import (  # noqa: E402
+    global_axes_placement,
+)
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
 )
@@ -172,6 +175,9 @@ def _place_everything(model, scale, kind):
     for kind in ("IfcStructuralItem", "IfcStructuralActivity"):
         for entity in model.by_type(kind):
             entity.ObjectPlacement = placement
+    # Loads in GLOBAL_COORDS are in the axes of the model's SharedPlacement
+    for analysis_model in model.by_type("IfcStructuralAnalysisModel"):
+        analysis_model.SharedPlacement = placement
 
 
 def _moved(points):
@@ -281,7 +287,7 @@ class TestPlacedModel:
         for before, after in zip(_loads(original), _loads(placed)):
             force = np.asarray(before.get_force_vector(), dtype=float)
             if getattr(before, "coordinate_system", "global") != "local":
-                # "Global" forces are in the axes of the action's placement
+                # "Global" forces are in the axes of the SharedPlacement
                 force = _turned([force])[0]
             np.testing.assert_allclose(
                 after.get_force_vector(), force, atol=1e-9 * max(1.0, abs(force).max())
@@ -292,6 +298,88 @@ class TestPlacedModel:
                     np.testing.assert_allclose(
                         getattr(after, attribute), _moved([point])[0], atol=1e-9
                     )
+
+
+class TestGlobalAxes:
+    """GLOBAL_COORDS are the axes of the analysis model's SharedPlacement (0io).
+
+    IFC calls an analysis model's coordinate system global; it need not be
+    the project's (RFEM writes Z down). An action with no placement of its
+    own, or another one, still gives its "global" forces in those axes.
+    """
+
+    def _beam(self):
+        model = ifcopenshell.open(os.path.join(IFC_DIR, "beam_01.ifc"))
+        placement = _nested_placement(model, 0.001)
+        (analysis_model,) = model.by_type("IfcStructuralAnalysisModel")
+        analysis_model.SharedPlacement = placement
+        (action,) = model.by_type("IfcStructuralPointAction")
+        return model, placement, action
+
+    def _force(self, model):
+        extracted = Extractor(model).extract_model()
+        (load,) = {id(load): load for load in _loads(extracted)}.values()
+        return np.asarray(load.get_force_vector(), dtype=float)
+
+    def test_unplaced_action_is_in_the_shared_axes(self):
+        model, _, action = self._beam()
+        action.ObjectPlacement = None
+        np.testing.assert_allclose(
+            self._force(model), _turned([[0.0, 0.0, -20000.0]])[0], atol=1e-6
+        )
+
+    def test_shared_axes_go_before_the_action_placement(self):
+        model, _, action = self._beam()
+        action.ObjectPlacement = model.create_entity(
+            "IfcLocalPlacement",
+            RelativePlacement=_axes(
+                model, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0, 0, 1.0)
+            ),
+        )
+        np.testing.assert_allclose(
+            self._force(model), _turned([[0.0, 0.0, -20000.0]])[0], atol=1e-6
+        )
+
+    def test_without_shared_placement_the_action_placement(self):
+        model, placement, action = self._beam()
+        model.by_type("IfcStructuralAnalysisModel")[0].SharedPlacement = None
+        action.ObjectPlacement = placement
+        np.testing.assert_allclose(
+            self._force(model), _turned([[0.0, 0.0, -20000.0]])[0], atol=1e-6
+        )
+
+    def test_local_coords_are_not_turned_here(self):
+        model, _, action = self._beam()
+        action.GlobalOrLocal = "LOCAL_COORDS"
+        np.testing.assert_allclose(self._force(model), [0.0, 0.0, -20000.0])
+
+    def test_action_on_no_item_takes_its_load_case_model(self):
+        model, placement, action = self._beam()
+        for rel in action.AssignedToStructuralItem:
+            model.remove(rel)
+        (analysis_model,) = model.by_type("IfcStructuralAnalysisModel")
+        (case,) = [
+            c for c in model.by_type("IfcStructuralLoadCase") if c.Name == "Dead"
+        ]
+        analysis_model.LoadedBy = list(analysis_model.LoadedBy) + [case]
+        assert global_axes_placement(action) == placement
+
+    def test_load_case_of_a_combination_takes_its_model(self):
+        """beam_01's model is loaded by its combinations only."""
+        model, placement, action = self._beam()
+        for rel in action.AssignedToStructuralItem:
+            model.remove(rel)
+        assert global_axes_placement(action) == placement
+
+    def test_self_weight_coefficients_are_turned(self):
+        model, _, _ = self._beam()
+        extracted = Extractor(model).extract_model()
+        (dead,) = [
+            g for g in extracted.load_groups if g.name == "Dead" and g.is_load_case
+        ]
+        np.testing.assert_allclose(
+            dead.self_weight_coefficients, _turned([[0.0, 0.0, -1.0]])[0], atol=1e-12
+        )
 
 
 class TestTransformation:
