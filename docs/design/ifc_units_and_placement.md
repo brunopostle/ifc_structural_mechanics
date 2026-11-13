@@ -37,8 +37,15 @@ unit of its measure type: IFC4's `Pset_MaterialMechanical.ShearModulus` is an
 first only, and 81000 N/mm² was read as 81000 Pa).
 
 **Everything an item gives is in the axes of its `ObjectPlacement`**: the points of its
-representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`, and the
-forces of a load in `GLOBAL_COORDS`. `get_item_transformation(item, length_scale)`
+representation, a member's `Axis`, a connection's `ConditionCoordinateSystem`. The values
+of a load in `GLOBAL_COORDS`, and a load case's `SelfWeightCoefficients`, are not: IFC
+calls the analysis model's coordinate system global, so they are in the axes of the
+model's `SharedPlacement`, which need not be the project's (RFEM writes Z down; `0io`).
+`loads_extractor.global_axes_placement()` takes the SharedPlacement of the model of the
+action's item, else of its load cases, else the action's own `ObjectPlacement`, the rule
+of `ifcopenshell.util.structural.get_global_axes`; a load case that no model is loaded by
+directly is in the models of its combinations (`beam_01`). Every example's
+SharedPlacement is the identity. `get_item_transformation(item, length_scale)`
 returns the whole chain of placements with its offset in metres; apply it with
 `transform_vectors()` to coordinates that are already in metres. No example model has a
 placement away from the origin, so nothing but `tests/unit/ifc/test_object_placement.py`
