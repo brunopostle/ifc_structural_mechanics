@@ -198,6 +198,10 @@ The connection between members is of a type the writer does not model: a spring 
 
 Members are joined in translation by an equation between their nodes, and every node of it is decided already by another joint's equation, so this one cannot be written. Left out, the members would come apart there. No model is known to reach this: report it with the file.
 
+### E-JNT-006: Eccentric joint that cannot be read
+
+The member is drawn up to its connection and its IfcRelConnectsWithEccentricity gives an offset that cannot be analysed: a point off the member however it is read, an offset across the member, at a connection along its span, of a surface member, or at a line or surface connection. Left out, the member would be longer and stiffer than the file says. Draw the member where it is, apart from the connection: a gap at a member end is bridged by a rigid link.
+
 ### W-JNT-001: Curve members tied to the surface members they lie in
 
 A beam along the edge of a slab, or a column in a wall, with no connection in the file along their length, is tied to the surface in translation along it, as a slab bears on its beams. Without this a slab connected at its corners spans corner to corner. The member's section forces are its share only; where force passes between the two at a point they change abruptly and depend on the mesh size. Use --strict-connections to analyse only the connections in the file.
@@ -237,6 +241,14 @@ No longer given: such a connection stops the analysis (E-JNT-004).
 ### W-JNT-010: Connection of an unknown type (retired)
 
 No longer given: such a connection stops the analysis (E-JNT-004).
+
+### W-JNT-011: Eccentricity measured from the connection
+
+The member reaches its connection, and the eccentricity of its end is given only in the PointOnRelatingElement of its IfcRelConnectsWithEccentricity. IFC measures that point in the member's axes from the start of its reference curve, where it lies off the member; measured from the connection, as some programs write it, it lies on the member, and it is read so: the member is cut back to it and joined to the connection by a rigid link. Check the member's length in the results.
+
+### W-JNT-012: Joint in a surface member joined to it
+
+A point connection is joined to one member only, which stops short of it (an eccentric end), and it lies on a surface member the file does not join to it: a column top framed into a slab, with only the column related to the joint. With nothing else there the rigid link from the member's end would bridge to nothing and the end would hang free, so the surface member is joined to the connection, rigidly. Relate the surface member to the connection in the file (IfcRelConnectsStructuralMember) to say so, or release it.
 
 ## Supports
 

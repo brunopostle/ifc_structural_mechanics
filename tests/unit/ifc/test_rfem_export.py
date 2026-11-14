@@ -100,7 +100,8 @@ class TestPlacement:
         column = _points(extracted.get_member(COLUMN).geometry)
         np.testing.assert_allclose(slab[:, 2], 3.0, atol=1e-9)
         assert sorted({round(z, 9) for z in wall[:, 2]}) == [0.0, 3.0]
-        assert sorted({round(z, 9) for z in column[:, 2]}) == [0.0, 3.0]
+        # Cut back to its eccentric top, 0.15 m below the joint (d36)
+        assert sorted({round(z, 9) for z in column[:, 2]}) == [0.0, 2.85]
         assert set(slab[:, 1].round(9)) == {0.0, 4.0}
         assert "W-IFC-007" in _codes(extracted)
 

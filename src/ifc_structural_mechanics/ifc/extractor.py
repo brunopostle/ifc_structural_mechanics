@@ -19,6 +19,7 @@ from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
 from ..utils.units import unit_to_si
 from .connections_extractor import ConnectionsExtractor
+from .eccentricity import apply_eccentricities
 from .entity_identifier import (
     is_structural_connection,
     is_structural_curve_member,
@@ -249,6 +250,10 @@ class Extractor:
             )
             self._extract_items_directly(model)
 
+        # Before the loads: a load on the part of a member cut away is off it
+        self.warnings.extend(
+            apply_eccentricities(self.ifc, model, self.members_extractor.length_scale)
+        )
         self._extract_loads_for_model(model)
         self._pass_on_warnings(model)
         return model

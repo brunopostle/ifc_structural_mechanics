@@ -4117,16 +4117,19 @@ class TestRfemExport:
     """structure_01 exported by RFEM 6.16 (``examples/rfem``), as exported.
 
     RFEM's own result for its model is 0.441 mm in the slab at a 0.25 m mesh;
-    Code_Aster's for the ifc2ca file is 0.427 mm. They differ in two things the
-    export carries: RFEM holds the wall foot against turning about the wall's
-    y as well, and puts the 0.15 m eccentricity of the column tops only in
-    IfcRelConnectsWithEccentricity, which is not read (the columns reach the
-    slab directly; ``ifc_structural_mechanics-d36``). Before RFEM's unplaced
-    surface members were read in the SharedPlacement, the slab lay 3 m below
-    ground, apart from the columns, and moved 3.6e5 km.
+    Code_Aster's for the ifc2ca file is 0.427 mm. RFEM draws the columns up to
+    the slab and puts the 0.15 m eccentricity of their tops only in
+    IfcRelConnectsWithEccentricity, measured from the joint (``W-JNT-011``),
+    and relates the joints to the columns and not the slab (``W-JNT-012``).
+    Read so, the export gives what the ifc2ca file does to four figures; with
+    the eccentricity left out, the columns moved 0.046 mm instead of 0.082
+    (``ifc_structural_mechanics-d36``). Before RFEM's unplaced surface members
+    were read in the SharedPlacement, the slab lay 3 m below ground, apart
+    from the columns, and moved 3.6e5 km.
     """
 
     PATH = os.path.join("examples", "rfem", "structure_01_rfem.ifc")
+    COLUMNS = ("3YkvmL4l5C5hq2iKoNYoDq", "1uwSyyteX2ux$W68ASMOEp")
 
     def test_slab_deflection_matches_rfem(self, tmp_path):
         data = _run(self.PATH, tmp_path, mesh_size=0.5, gravity=True)
@@ -4136,8 +4139,69 @@ class TestRfemExport:
         )
         assert _max_vertical_deflection(data) == pytest.approx(4.41e-4, rel=0.03)
         codes = {w["code"] for w in data["warnings"]}
-        assert {"W-IFC-007", "W-SUP-009"} <= codes
-        assert not codes & {"W-CHK-001", "W-CHK-002", "W-RES-001"}
+        assert {"W-IFC-007", "W-SUP-009", "W-JNT-011", "W-JNT-012"} <= codes
+        assert not codes & {"W-CHK-001", "W-CHK-002"}
+        # CalculiX 2.21 misreports the reactions at the clamped column feet,
+        # and they are taken from the members' end forces instead
+        if solver_reports_clamped_reactions():
+            assert "W-RES-001" not in codes
+
+    def test_columns_move_as_in_the_ifc2ca_file(self, tmp_path):
+        rfem = _run(self.PATH, tmp_path / "rfem", mesh_size=0.5, gravity=True)
+        ifc2ca = _run(
+            os.path.join(IFC_DIR, "structure_01.ifc"),
+            tmp_path / "ifc2ca",
+            mesh_size=0.5,
+            gravity=True,
+        )
+        columns = sorted(
+            m["envelope"]["max_displacement_m"]
+            for m in rfem["members"]
+            if m["id"] in self.COLUMNS
+        )
+        expected = sorted(
+            m["envelope"]["max_displacement_m"]
+            for m in ifc2ca["members"]
+            if m["type"] == "curve"
+        )
+        assert columns == pytest.approx(expected, rel=0.01)
+        assert _max_vertical_deflection(rfem) == pytest.approx(
+            _max_vertical_deflection(ifc2ca), rel=0.01
+        )
+
+
+class TestEccentricityStatedOnly:
+    """A column drawn up to its joint, its eccentricity only in the relation.
+
+    ``structure_01`` draws its columns 0.15 m short of the slab and states it
+    in IfcConnectionPointEccentricity as well. Drawn up to the slab, the
+    point the relation gives (2.85 m along the column from its start, as IFC
+    measures it) cuts them back to where they were (``d36``): the results are
+    the file's as shipped.
+    """
+
+    def test_same_results_as_the_drawn_gap(self, tmp_path):
+        shipped = os.path.join(IFC_DIR, "structure_01.ifc")
+        model = ifcopenshell.open(shipped)
+        for relation in model.by_type("IfcRelConnectsWithEccentricity"):
+            edge = relation.RelatingStructuralMember.Representation.Representations[
+                0
+            ].Items[0]
+            top = edge.EdgeEnd.VertexGeometry
+            assert top.Coordinates[2] == pytest.approx(2.85)
+            top.Coordinates = (*[float(v) for v in top.Coordinates[:2]], 3.0)
+        drawn_to_the_joint = str(tmp_path / "structure_01_to_the_joint.ifc")
+        model.write(drawn_to_the_joint)
+
+        stated = _run(drawn_to_the_joint, tmp_path / "stated", 0.5, gravity=True)
+        drawn = _run(shipped, tmp_path / "drawn", 0.5, gravity=True)
+        assert {
+            m["id"]: m["envelope"]["max_displacement_m"] for m in stated["members"]
+        } == pytest.approx(
+            {m["id"]: m["envelope"]["max_displacement_m"] for m in drawn["members"]},
+            rel=1e-6,
+        )
+        assert not {w["code"] for w in stated["warnings"]} & {"W-JNT-011", "W-JNT-012"}
 
 
 class TestSurfaceFields:
