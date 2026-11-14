@@ -15,6 +15,36 @@ rotational degrees of freedom**. This drives everything about joints:
   member reaches the connection (`building_02` has two, with 115 links for
   its 117 eccentric ends) the nearest member end is the joint and the others
   are linked to it: the connection itself has no node (`aiz.88`).
+- **An eccentricity stated only in `IfcRelConnectsWithEccentricity` is drawn
+  before meshing** (`d36`, `ifc/eccentricity.py`). Where the member stops
+  short of the connection, the geometry is the eccentricity and the
+  `ConnectionConstraint` is not read: writers disagree about it. IFC measures
+  `PointOnRelatingElement` in the member's axes from the start of its
+  reference curve (u = 0); ifc2ca from the member's start *joint*
+  (`building_01`'s beams give 8000 mm for 7550 mm members with 225 mm gaps at
+  each end, and `EccentricityInX` with the opposite sign to IFC's); RFEM 6
+  from the connection. Where the member is drawn up to the connection (RFEM's
+  `structure_01`), the member's end is cut back to the point the constraint
+  gives, and the link above joins it. The point is the first of these to fall
+  on the member: IFC's reading, then `EccentricityInX/Y/Z` from the
+  connection with IFC's sign, then measured from the connection
+  (`W-JNT-011`, Bruno's decision 2026-11-14; not when `EccentricityIn*` state
+  an offset). On no reading, across the member, along its span, of a surface
+  member or at a line or surface connection, `E-JNT-006`: left out, the
+  member would be longer and stiffer than the file says (RFEM's columns
+  0.046 mm instead of 0.082). In all eight example models and the test files
+  only RFEM's two columns are cut.
+- **A joint in a surface that one eccentric member is joined to joins the
+  surface** (`W-JNT-012`, Bruno's decision 2026-11-14). RFEM relates its
+  column tops to the column alone; the slab runs through them. With one
+  member that does not reach the connection the link has nothing to bridge to
+  and the end hangs free (the slab flew off at 6e8 m). The surface members the
+  connection lies on are joined to it, rigidly, as ifc2ca's file states: RFEM's
+  `structure_01` then gives ifc2ca's results to four figures (columns 0.082
+  and 0.092 mm, slab 0.433 at 0.5 m; RFEM's own is 0.441). Only one member:
+  where several meet they are linked to each other already, and
+  `building_02`'s 59 joints that lie in a slab off every member are left as
+  they were.
 - **A point force on a beam node is put on a knot** (`aiz.76`, `aiz.91`,
   `_knot_point_loaded_nodes()`). On a beam node that is not a knot CalculiX
   puts a force on the four corners of the expanded cross-section, a quarter
@@ -103,7 +133,8 @@ rotational degrees of freedom**. This drives everything about joints:
   rounding of `_coord_key()` too, `9ot`). Rigid (neither member released
   about the line): the nodes are merged, or joined by a rigid link where the
   beam is eccentric (a downstand beam; `IfcRelConnectsWithEccentricity` is
-  taken from the geometry, as at points), in `_merge_rigid_connection_nodes()`.
+  taken from the geometry, and one stated only in the relation is
+  `E-JNT-006`), in `_merge_rigid_connection_nodes()`.
   Released: each beam node is tied in DOF 1-3 to the slab node at its foot,
   through a link where eccentric (`_build_line_joints()`). **Not with arms
   or equations**: tying a slab's middle surface reaches neither its normals

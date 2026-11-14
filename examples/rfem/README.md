@@ -13,9 +13,12 @@ tools do not:
 - material properties named `Young modulus`, `Poisson's ratio`, `Density`;
 - an `IfcStructuralSurfaceConnection` with no condition on each surface member (left
   out, `W-SUP-009`);
-- the eccentricity of the column tops only in `IfcRelConnectsWithEccentricity`, which is
-  not read yet (`ifc_structural_mechanics-d36`);
-- no relation between the slab and the column tops (tied by `W-JNT-003`).
+- the columns drawn up to the slab, and the 0.15 m eccentricity of their tops only in
+  `IfcRelConnectsWithEccentricity`, its `PointOnRelatingElement` measured from the joint
+  and not from the start of the member as IFC says (read so, `W-JNT-011`;
+  `ifc_structural_mechanics-d36`);
+- no relation between the slab and the column tops (the slab is joined to them,
+  `W-JNT-012`).
 
 `tests/validation/test_pipeline_benchmarks.py::TestRfemExport` checks it against RFEM's
-own 0.441 mm.
+own 0.441 mm, and that its columns move as in the ifc2ca file.
