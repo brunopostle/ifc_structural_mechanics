@@ -339,3 +339,53 @@ class TestPicture:
         )
         assert result.exit_code != 0
         assert "No load case 'Live'" in result.output
+
+
+class TestReactionNoise:
+    """A support that carries nothing is not drawn with its round-off (hmy)."""
+
+    @staticmethod
+    def _results(key, name, forces):
+        return {
+            "supports": [
+                {
+                    "position_m": [4.0 * i, 0.0, 0.0],
+                    key: {name: {"fx_N": f[0], "fy_N": f[1], "fz_N": f[2]}},
+                }
+                for i, f in enumerate(forces)
+            ]
+        }
+
+    def test_round_off_is_left_out(self):
+        """Robert's Gerber beam, Dead Load: the support at x = 0 carries
+        nothing and reported 5.8e-9 kN, which was drawn and labelled."""
+        from ifc_structural_mechanics.visualization.plot import _carried_reactions
+
+        results = self._results(
+            "by_load_case",
+            "Dead Load",
+            [
+                (-5.237656e-06, -1.793673e-06, 1.574091e-06),
+                (-2.086531e-09, -1.191895e-05, 50000.003),
+                (-2.69608e-09, -2.95353e-08, 50000.003),
+            ],
+        )
+        tails, vectors, idle = _carried_reactions(results, "Dead Load", None)
+        assert [tuple(p) for p in tails] == [(4.0, 0.0, 0.0), (8.0, 0.0, 0.0)]
+        assert [v[2] for v in vectors] == [50000.003, 50000.003]
+        assert idle == 1
+
+    def test_small_reactions_that_are_results_are_kept(self):
+        from ifc_structural_mechanics.visualization.plot import _carried_reactions
+
+        results = self._results(
+            "by_load_combination", "ULS", [(0.0, 0.0, 1.0), (0.0, 0.0, 1e5)]
+        )
+        tails, vectors, idle = _carried_reactions(results, None, "ULS")
+        assert len(vectors) == 2 and idle == 0
+
+    def test_no_load_draws_nothing(self):
+        from ifc_structural_mechanics.visualization.plot import _carried_reactions
+
+        results = self._results("by_load_case", "Empty", [(0.0, 0.0, 0.0)] * 2)
+        assert _carried_reactions(results, "Empty", None) == ([], [], 2)

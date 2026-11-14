@@ -548,22 +548,50 @@ def _arrows(plotter, heads, vectors, length, color, size, labels=None):
         )
 
 
-def _draw_reactions(plotter, output, case, combination, size) -> List[str]:
+# A reaction smaller than this share of the largest is the solver's round-off
+_REACTION_NOISE = 1e-6
+
+
+def _carried_reactions(results, case, combination):
+    """The reaction forces at the supports, without those that are round-off.
+
+    A support that carries nothing reports a force of the order of 1e-9 of the
+    others (hmy): drawn and labelled, it looks like a result.
+
+    Returns:
+        The positions of the supports that carry a force, the forces in N,
+        and the number of supports that carry nothing.
+    """
     key = "by_load_combination" if combination is not None else "by_load_case"
     name = combination if combination is not None else case
-    tails, vectors, labels = [], [], []
-    for support in output.results.get("supports", []):
+    tails, vectors = [], []
+    for support in results.get("supports", []):
         values = support.get(key, {}).get(name)
         if not values or "fx_N" not in values:
             continue
-        vector = np.array([values["fx_N"], values["fy_N"], values["fz_N"]])
-        position = np.array(support["position_m"], dtype=float)
-        tails.append(position)
-        vectors.append(vector)
+        vectors.append(np.array([values["fx_N"], values["fy_N"], values["fz_N"]]))
+        tails.append(np.array(support["position_m"], dtype=float))
+    largest = max((float(np.linalg.norm(v)) for v in vectors), default=0.0)
+    carried = [
+        (p, v)
+        for p, v in zip(tails, vectors)
+        if np.linalg.norm(v) > _REACTION_NOISE * largest
+    ]
+    return (
+        [p for p, _ in carried],
+        [v for _, v in carried],
+        len(vectors) - len(carried),
+    )
+
+
+def _draw_reactions(plotter, output, case, combination, size) -> List[str]:
+    tails, vectors, idle = _carried_reactions(output.results, case, combination)
+    nothing = f", {_count(idle, 'support')} carrying nothing" if idle else ""
     if not vectors:
-        return []
+        return [f"Reactions: none{nothing}"] if idle else []
+    labels = []
     largest = max(float(np.linalg.norm(v)) for v in vectors)
-    length = _ARROW_SHARE * size / largest if largest > 0 else 0.0
+    length = _ARROW_SHARE * size / largest
     # Drawn pushing on the structure from outside, ending at the support
     if len(vectors) <= 12:
         labels = [
@@ -580,7 +608,7 @@ def _draw_reactions(plotter, output, case, combination, size) -> List[str]:
             (h - v * length, text) for h, v, (_, text) in zip(heads, vectors, labels)
         ]
     _arrows(plotter, heads, vectors, length, _REACTION, size, labels)
-    return [f"Reactions (green), largest {largest / 1e3:.3g} kN"]
+    return [f"Reactions (green), largest {largest / 1e3:.3g} kN{nothing}"]
 
 
 def _draw_loads(plotter, output, case, combination, size) -> List[str]:
