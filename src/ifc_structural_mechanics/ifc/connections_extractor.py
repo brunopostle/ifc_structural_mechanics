@@ -85,6 +85,7 @@ class ConnectionsExtractor:
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict] = []
         self._faces_without_surface: List[str] = []
+        self._idle_connections: List[str] = []
         # Stiffness units that depend on the length unit and that the file
         # does not declare, with the connections read in them (94g.32)
         self.undeclared_units: Dict[str, List[str]] = {}
@@ -112,7 +113,9 @@ class ConnectionsExtractor:
             "IfcStructuralSurfaceConnection",
         ):
             for entity in self.ifc.by_type(entity_type):
-                connections.append(self._create_domain_connection(entity))
+                connection = self.extract_connection(entity)
+                if connection is not None:
+                    connections.append(connection)
 
         self.logger.info(f"Extracted {len(connections)} structural connections")
         return connections
@@ -138,7 +141,7 @@ class ConnectionsExtractor:
         ]:
             for entity in self.ifc.by_type(entity_type):
                 if getattr(entity, "GlobalId", None) == connection_id:
-                    return self._create_domain_connection(entity)
+                    return self.extract_connection(entity)
 
         # Not a GlobalId: a numeric STEP id, perhaps
         try:
@@ -146,7 +149,53 @@ class ConnectionsExtractor:
         except (ValueError, TypeError, RuntimeError):
             self.logger.warning(f"Connection with ID {connection_id} not found")
             return None
-        return self._create_domain_connection(entity)
+        return self.extract_connection(entity)
+
+    def extract_connection(self, ifc_connection) -> Optional[StructuralConnection]:
+        """The domain connection of an IFC connection, None if it does nothing.
+
+        A surface connection with no AppliedCondition joined to one member or
+        none supports nothing and joins nothing: RFEM writes one for every
+        surface member. It is left out, with ``W-SUP-009``, as the structure
+        is the same without it.
+
+        Raises:
+            ModelExtractionError: As ``_create_domain_connection``.
+        """
+        if self._joins_nothing(ifc_connection):
+            self._note_idle_connection(ifc_connection.GlobalId)
+            return None
+        return self._create_domain_connection(ifc_connection)
+
+    @staticmethod
+    def _joins_nothing(ifc_connection) -> bool:
+        """Whether a connection is a surface one that supports and joins nothing."""
+        if not ifc_connection.is_a("IfcStructuralSurfaceConnection"):
+            return False
+        if ifc_connection.AppliedCondition:
+            return False
+        members = {
+            rel.RelatingStructuralMember
+            for rel in getattr(ifc_connection, "ConnectsStructuralMembers", None) or []
+        }
+        return len(members) < 2
+
+    def _note_idle_connection(self, connection_id: str) -> None:
+        """One W-SUP-009 for every connection left out as doing nothing."""
+        found = self._idle_connections
+        if connection_id not in found:
+            found.append(connection_id)
+        self.warnings = [w for w in self.warnings if w["code"] != "W-SUP-009"]
+        self.warnings.append(
+            warning(
+                "W-SUP-009",
+                f"{len(found)} surface connection(s) have no AppliedCondition "
+                f"and are joined to one member or none ({', '.join(found[:3])}"
+                f"{', ...' if len(found) > 3 else ''}); they support and join "
+                "nothing, and are left out.",
+                ifc_guids=found,
+            )
+        )
 
     def _create_domain_connection(self, ifc_connection) -> StructuralConnection:
         """

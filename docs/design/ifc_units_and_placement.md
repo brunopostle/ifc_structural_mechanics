@@ -45,7 +45,13 @@ model's `SharedPlacement`, which need not be the project's (RFEM writes Z down; 
 action's item, else of its load cases, else the action's own `ObjectPlacement`, the rule
 of `ifcopenshell.util.structural.get_global_axes`; a load case that no model is loaded by
 directly is in the models of its combinations (`beam_01`). Every example's
-SharedPlacement is the identity. `get_item_transformation(item, length_scale)`
+SharedPlacement is the identity. A structural item with no `ObjectPlacement` is read in its model's SharedPlacement,
+which IFC says "shall be common to all items" of the model: RFEM 6 places curve members
+and connections there (Z down turned up) and surface members nowhere, and read in the
+project's axes its slab lay 3 m below the columns it rests on (`W-IFC-007` when the
+SharedPlacement is not the identity; `E-IFC-006` if the item's models disagree;
+`examples/rfem`, `tests/unit/ifc/test_rfem_export.py`). A rotated SharedPlacement is
+normal and not warned about. `get_item_transformation(item, length_scale)`
 returns the whole chain of placements with its offset in metres; apply it with
 `transform_vectors()` to coordinates that are already in metres. No example model has a
 placement away from the origin, so nothing but `tests/unit/ifc/test_object_placement.py`

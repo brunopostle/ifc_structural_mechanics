@@ -4113,6 +4113,33 @@ def _placed_variant(
     return path
 
 
+class TestRfemExport:
+    """structure_01 exported by RFEM 6.16 (``examples/rfem``), as exported.
+
+    RFEM's own result for its model is 0.441 mm in the slab at a 0.25 m mesh;
+    Code_Aster's for the ifc2ca file is 0.427 mm. They differ in two things the
+    export carries: RFEM holds the wall foot against turning about the wall's
+    y as well, and puts the 0.15 m eccentricity of the column tops only in
+    IfcRelConnectsWithEccentricity, which is not read (the columns reach the
+    slab directly; ``ifc_structural_mechanics-d36``). Before RFEM's unplaced
+    surface members were read in the SharedPlacement, the slab lay 3 m below
+    ground, apart from the columns, and moved 3.6e5 km.
+    """
+
+    PATH = os.path.join("examples", "rfem", "structure_01_rfem.ifc")
+
+    def test_slab_deflection_matches_rfem(self, tmp_path):
+        data = _run(self.PATH, tmp_path, mesh_size=0.5, gravity=True)
+        (slab,) = [m for m in data["members"] if m["id"] == "0MBetTBij3CBOT8x93dlIS"]
+        assert slab["envelope"]["max_displacement_m"] == pytest.approx(
+            4.41e-4, rel=0.03
+        )
+        assert _max_vertical_deflection(data) == pytest.approx(4.41e-4, rel=0.03)
+        codes = {w["code"] for w in data["warnings"]}
+        assert {"W-IFC-007", "W-SUP-009"} <= codes
+        assert not codes & {"W-CHK-001", "W-CHK-002", "W-RES-001"}
+
+
 class TestSurfaceFields:
     """Forces and moments of surface members on their mesh (``94g.13.5``).
 

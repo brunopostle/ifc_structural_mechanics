@@ -24,6 +24,7 @@ from .entity_identifier import (
     is_structural_curve_member,
     is_structural_member,
     is_structural_surface_member,
+    unplaced_items,
 )
 from .loads_extractor import LoadsExtractor
 from .members_extractor import MembersExtractor
@@ -219,6 +220,20 @@ class Extractor:
                         ifc_guids=[m.GlobalId for m in analysis_models[1:]],
                     )
                 )
+            unplaced = unplaced_items(self.ifc)
+            if unplaced:
+                guids = [item.GlobalId for item in unplaced]
+                self.warnings.append(
+                    warning(
+                        "W-IFC-007",
+                        f"{len(unplaced)} structural item(s) have no "
+                        f"ObjectPlacement ({', '.join(guids[:3])}"
+                        f"{', ...' if len(guids) > 3 else ''}); their "
+                        "coordinates are read in the axes of their analysis "
+                        "model's SharedPlacement, which is not the project's.",
+                        ifc_guids=guids,
+                    )
+                )
             model = StructuralModel(
                 model_id or analysis_model.GlobalId,
                 name or analysis_model.Name or "Structural Analysis Model",
@@ -389,9 +404,9 @@ class Extractor:
                 if is_structural_member(item):
                     self._add_member(item, model)
                 elif is_structural_connection(item):
-                    model.add_connection(
-                        self.connections_extractor._create_domain_connection(item)
-                    )
+                    connection = self.connections_extractor.extract_connection(item)
+                    if connection is not None:
+                        model.add_connection(connection)
 
         self.logger.info(f"Added {len(model.members)} structural members to the model")
         self.logger.info(
@@ -419,9 +434,9 @@ class Extractor:
             "IfcStructuralSurfaceConnection",
         ):
             for entity in self.ifc.by_type(entity_type):
-                model.add_connection(
-                    self.connections_extractor._create_domain_connection(entity)
-                )
+                connection = self.connections_extractor.extract_connection(entity)
+                if connection is not None:
+                    model.add_connection(connection)
         self.logger.info(
             f"Added {len(model.connections)} structural connections to the model"
         )

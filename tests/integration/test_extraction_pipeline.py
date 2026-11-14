@@ -106,6 +106,7 @@ def create_mock_ifc_file():
 
     # Mock beam placement
     mock_beam.ObjectPlacement = None  # Default, no transformation
+    mock_beam.HasAssignments = []  # In no analysis model
 
     # Mock beam material and profile
     mock_material = Mock()
@@ -193,6 +194,7 @@ def create_mock_ifc_file():
     )
     mock_connection.ConditionCoordinateSystem = None
     mock_connection.ObjectPlacement = None
+    mock_connection.HasAssignments = []
 
     # Mock connection representation
     mock_conn_representation = Mock()

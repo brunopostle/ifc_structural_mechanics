@@ -105,6 +105,20 @@ _KINDS = [
         "mm to the power -2 for GPa), or leave it out where the file's other "
         "units give it: a modulus not declared is in the pressure unit.",
     ),
+    MessageKind(
+        "W-IFC-007",
+        "Structural items without a placement",
+        "These structural items have no ObjectPlacement, and their analysis "
+        "model's SharedPlacement is not the project's axes. IFC says the "
+        'SharedPlacement "shall be common to all items" of the model, so '
+        "their coordinates are read in its axes, as those of the items it "
+        "places. RFEM writes its coordinates with Z down and turns them up "
+        "with the SharedPlacement, which it gives to curve members and "
+        "connections but not to surface members; read in the project's axes "
+        "these would lie upside down, apart from the rest. Check the model "
+        "in the results is the right way up, and give the items the "
+        "SharedPlacement as their ObjectPlacement to make the file say so.",
+    ),
     # Materials
     MessageKind(
         "W-MAT-001",
@@ -360,6 +374,15 @@ _KINDS = [
         "meaning. Restrain the movement at a support: the translation in "
         "that direction at one of them, or for a rotation a horizontal "
         "restraint at a second support away from the axis.",
+    ),
+    MessageKind(
+        "W-SUP-009",
+        "Surface connections that do nothing",
+        "These surface connections have no AppliedCondition, so they support "
+        "nothing, and are joined to one member or none, so they join nothing. "
+        "They are left out, which does not change the structure. RFEM writes "
+        "one on every surface member. A surface connection with no condition "
+        "between two members still stops the analysis (E-SUP-004).",
     ),
     # Loads
     MessageKind(
@@ -666,6 +689,14 @@ _ERRORS = [
         "the entity and the error. The file may not be valid against its "
         "schema: check it with a validator. Report it with the file if it is "
         "valid.",
+    ),
+    MessageKind(
+        "E-IFC-006",
+        "Unplaced item in models placed differently",
+        "A structural item with no ObjectPlacement is read in the axes of "
+        "its analysis model's SharedPlacement (W-IFC-007), but it is in "
+        "several models whose SharedPlacements differ, so its coordinates "
+        "could be in either. Give it an ObjectPlacement.",
     ),
     # Materials
     MessageKind(

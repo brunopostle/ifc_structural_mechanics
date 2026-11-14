@@ -434,7 +434,25 @@ def get_representation(element, rep_type):
             if mapped_rep:
                 return mapped_rep
 
+    # Last, a topology representation that does not say its type (RFEM writes
+    # $ for both identifier and type): its items say it
+    item_class = _TOPOLOGY_ITEMS.get(rep_type)
+    for representation in element.Representation.Representations:
+        if (
+            item_class
+            and representation.is_a("IfcTopologyRepresentation")
+            and not representation.RepresentationType
+            and representation.Items
+            and all(item.is_a(item_class) for item in representation.Items)
+        ):
+            return representation
+
     return None
+
+
+# The topological item of each type of IfcTopologyRepresentation that
+# get_representation() is asked for
+_TOPOLOGY_ITEMS = {"Vertex": "IfcVertex", "Edge": "IfcEdge", "Face": "IfcFace"}
 
 
 def get_specific_representation(representation, rep_id, rep_type):
@@ -795,10 +813,72 @@ def get_item_transformation(item, length_scale: float = 1.0):
         item: An IfcStructuralItem or IfcStructuralActivity (or None)
         length_scale: Factor from the file's length unit to metres
 
+    A structural item with no ObjectPlacement is in the axes of its analysis
+    model's ``SharedPlacement``, which IFC says "shall be common to all items"
+    of the model: RFEM places its curve members and connections there, with Z
+    down, and its surface members nowhere (``unplaced_items()``, W-IFC-007).
+
     Returns:
         As ``get_transformation``; None when there is nothing to apply.
+
+    Raises:
+        ModelExtractionError: If an unplaced item is in several analysis
+            models whose SharedPlacements differ.
     """
-    return get_transformation(getattr(item, "ObjectPlacement", None), length_scale)
+    if item is None:
+        return None
+    placement = getattr(item, "ObjectPlacement", None)
+    if placement is None and item.is_a("IfcStructuralItem"):
+        placement = shared_placement_of(item)
+    return get_transformation(placement, length_scale)
+
+
+def shared_placement_of(item):
+    """The SharedPlacement of the analysis models a structural item is in.
+
+    Returns:
+        The placement, or None if the item is in no model or its models have
+        none (IFC2X3).
+
+    Raises:
+        ModelExtractionError: If its models have different SharedPlacements.
+    """
+    placements = []
+    for rel in getattr(item, "HasAssignments", None) or []:
+        if rel.is_a("IfcRelAssignsToGroup") and rel.RelatingGroup.is_a(
+            "IfcStructuralAnalysisModel"
+        ):
+            placement = getattr(rel.RelatingGroup, "SharedPlacement", None)
+            if placement is not None and placement not in placements:
+                placements.append(placement)
+    if len(placements) > 1:
+        matrices = [_placement_matrix(placement) for placement in placements]
+        if any(not np.allclose(m, matrices[0]) for m in matrices[1:]):
+            raise ModelExtractionError(
+                "It has no ObjectPlacement and is in several analysis models "
+                "whose SharedPlacements differ, so its coordinates could be in "
+                "the axes of either. Give it an ObjectPlacement.",
+                code="E-IFC-006",
+            )
+    return placements[0] if placements else None
+
+
+def unplaced_items(ifc_file) -> List:
+    """The structural items with no ObjectPlacement that their model places.
+
+    Those whose model's SharedPlacement is the identity are not listed: the
+    placement changes nothing for them.
+    """
+    found = []
+    for item in ifc_file.by_type("IfcStructuralItem"):
+        if getattr(item, "ObjectPlacement", None) is not None:
+            continue
+        placement = shared_placement_of(item)
+        if placement is not None and not np.allclose(
+            _placement_matrix(placement), np.eye(4)
+        ):
+            found.append(item)
+    return found
 
 
 def transform_vectors(geometry, transformation, include_translation=True):

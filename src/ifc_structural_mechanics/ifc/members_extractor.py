@@ -706,8 +706,9 @@ class MembersExtractor:
                 for prop in getattr(
                     pset, "Properties", getattr(pset, "HasProperties", [])
                 ):
-                    prop_name = getattr(prop, "Name", "")
-                    lower_name = prop_name.lower()
+                    prop_name = getattr(prop, "Name", "") or ""
+                    # Letters only: RFEM writes 'Young modulus', 'Poisson's ratio'
+                    lower_name = "".join(c for c in prop_name.lower() if c.isalpha())
                     try:
                         value = prop.NominalValue.wrappedValue
                     except (AttributeError, TypeError):

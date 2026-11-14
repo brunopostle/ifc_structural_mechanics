@@ -26,6 +26,10 @@ The project's units (IfcUnitAssignment) do not say what a value of this kind is 
 
 Reading an entity of the file failed unexpectedly; the message gives the entity and the error. The file may not be valid against its schema: check it with a validator. Report it with the file if it is valid.
 
+### E-IFC-006: Unplaced item in models placed differently
+
+A structural item with no ObjectPlacement is read in the axes of its analysis model's SharedPlacement (W-IFC-007), but it is in several models whose SharedPlacements differ, so its coordinates could be in either. Give it an ObjectPlacement.
+
 ### W-IFC-001: More than one structural analysis model
 
 The file has several IfcStructuralAnalysisModel and only the first is analysed. Split the file, or put the model to analyse first.
@@ -49,6 +53,10 @@ The file's lengths are not in metres, and it gives line or area loads, point mom
 ### W-IFC-006: Derived unit of a single unit
 
 The file declares an IfcDerivedUnit made of one unit to the power one, such as a modulus of elasticity in psi alone. IFC does not allow it (IfcDerivedUnit WR1: more than one element, or an exponent other than one), so other tools may refuse the file or ignore the unit. It is read as the unit it is made of, which is what it plainly means. To make the file valid, write the unit from two or more units (kN and mm to the power -2 for GPa), or leave it out where the file's other units give it: a modulus not declared is in the pressure unit.
+
+### W-IFC-007: Structural items without a placement
+
+These structural items have no ObjectPlacement, and their analysis model's SharedPlacement is not the project's axes. IFC says the SharedPlacement "shall be common to all items" of the model, so their coordinates are read in its axes, as those of the items it places. RFEM writes its coordinates with Z down and turns them up with the SharedPlacement, which it gives to curve members and connections but not to surface members; read in the project's axes these would lie upside down, apart from the rest. Check the model in the results is the right way up, and give the items the SharedPlacement as their ObjectPlacement to make the file say so.
 
 ## Materials
 
@@ -299,6 +307,10 @@ The model has no structural connections, so nothing supports it and the analysis
 ### W-SUP-008: Structure free to move as a whole
 
 Taken as one rigid body, the whole structure can still move this way: no support resists it, nor anything the analysis holds of its own (W-SUP-001, W-SUP-002), so however the members are joined nothing inside can stop it. The message names each movement: a translation (every support of a building released in the same horizontal direction, sliding bearings all along a bridge or a beam) or a rotation about an axis (horizontal restraint at a single point lets a plan turn about a vertical axis through it). CalculiX solves such a model where nothing loads that movement, and its displacements then include an arbitrary amount of it; forces and moments are not affected. Where a load does, it may stop at a zero pivot or give results without meaning. Restrain the movement at a support: the translation in that direction at one of them, or for a rotation a horizontal restraint at a second support away from the axis.
+
+### W-SUP-009: Surface connections that do nothing
+
+These surface connections have no AppliedCondition, so they support nothing, and are joined to one member or none, so they join nothing. They are left out, which does not change the structure. RFEM writes one on every surface member. A surface connection with no condition between two members still stops the analysis (E-SUP-004).
 
 ## Loads, load cases and load combinations
 
