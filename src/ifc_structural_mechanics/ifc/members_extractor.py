@@ -358,7 +358,7 @@ class MembersExtractor:
         implied_normal = None
         if not face.is_a("IfcFaceSurface"):
             try:
-                _, implied_normal = implied_face_axes(geometry)
+                implied_x, implied_normal = implied_face_axes(geometry)
             except ValueError as error:
                 raise ModelExtractionError(str(error), code="E-IFC-002") from error
         transformation = get_item_transformation(entity, self.length_scale)
@@ -386,11 +386,16 @@ class MembersExtractor:
         )
         if implied_normal is None:
             member.normal = self._surface_normal(representation, transformation)
+            member.local_x = self._surface_local_x(
+                representation, transformation, member.normal
+            )
         else:
             if transformation:
                 rotation = np.array(transformation["rotationMatrix"], dtype=float)
                 implied_normal = rotation @ implied_normal
+                implied_x = rotation @ implied_x
             member.normal = [float(v) for v in implied_normal]
+            member.local_x = [float(v) for v in implied_x]
             if entity.GlobalId not in self._faces_without_surface:
                 self._faces_without_surface.append(entity.GlobalId)
             self._warn_faces_without_surface()
@@ -516,6 +521,39 @@ class MembersExtractor:
         if not length > 0:
             return None
         return [float(v) for v in normal / length]
+
+    @staticmethod
+    def _surface_local_x(
+        representation, transformation, normal
+    ) -> Optional[List[float]]:
+        """The local x of a surface member: that of its face's plane.
+
+        The plane's ``Position`` gives it, as ``RefDirection`` made square to
+        the normal; without one, global x (global y where the normal is
+        along x), as ``IfcAxis2Placement3D`` implies. None when the face has
+        no plane.
+        """
+        surface = getattr(representation.Items[0], "FaceSurface", None)
+        if normal is None or surface is None or not surface.is_a("IfcPlane"):
+            return None
+        position = surface.Position
+        if position.RefDirection is not None:
+            x_axis = np.array(position.RefDirection.DirectionRatios, dtype=float)
+        else:
+            axis = np.array(
+                position.Axis.DirectionRatios if position.Axis else (0, 0, 1),
+                dtype=float,
+            )
+            parallel = abs(axis[0]) >= 0.999999 * np.linalg.norm(axis)
+            x_axis = np.array((0.0, 1.0, 0.0) if parallel else (1.0, 0.0, 0.0))
+        if transformation:
+            x_axis = np.array(transformation["rotationMatrix"], dtype=float) @ x_axis
+        z_axis = np.array(normal, dtype=float)
+        x_axis = x_axis - (x_axis @ z_axis) * z_axis
+        length = float(np.linalg.norm(x_axis))
+        if not length > 1e-9:
+            return None
+        return [float(v) for v in x_axis / length]
 
     def _extract_geometry(self, representation, unit_scale: float = 1.0):
         """
@@ -796,16 +834,29 @@ class MembersExtractor:
                     "isotropic material has.",
                     code="E-MAT-004",
                 )
+            shear_modulus = None
         elif poisson_ratio is not None and shear_modulus is not None:
+            # A shear modulus of its own is meant: wood and wood-based panels
+            # are far softer in shear than E / 2 (1 + nu) (v0u)
+            if not shear_modulus > 0:
+                raise ModelExtractionError(
+                    f"Its material '{name}' has a shear modulus of "
+                    f"{shear_modulus:.6g} Pa.",
+                    code="E-MAT-004",
+                )
             implied = elastic_modulus / (2.0 * (1.0 + poisson_ratio))
             if abs(implied - shear_modulus) > 0.01 * abs(implied):
                 self._warn_once(
-                    "W-MAT-003",
+                    "W-MAT-004",
                     f"Material '{name}' has a shear modulus of "
                     f"{shear_modulus:.6g} Pa, where its Young's modulus and "
-                    f"Poisson's ratio {poisson_ratio} give {implied:.6g} Pa; the "
-                    "material is analysed as isotropic with the Poisson's ratio.",
+                    f"Poisson's ratio {poisson_ratio} give {implied:.6g} Pa; it "
+                    "is analysed with the shear modulus given, across the "
+                    "length of beams and in the plane of shells, taken along "
+                    "their local x.",
                 )
+            else:
+                shear_modulus = None
         if poisson_ratio is None:
             poisson_ratio = 0.3
             self._warn_once(
@@ -842,6 +893,7 @@ class MembersExtractor:
             elastic_modulus=elastic_modulus,
             poisson_ratio=poisson_ratio,
             yield_strength=yield_strength,
+            shear_modulus=shear_modulus,
             thermal_expansion_coefficient=(
                 float(expansion_raw)
                 * own_scales.get("thermalExpansionCoefficient", self.expansion_scale)

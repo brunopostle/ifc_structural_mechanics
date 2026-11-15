@@ -5413,16 +5413,41 @@ class TestSkewPlaneStructure:
         )
 
 
-def _shear_wall(tmp_path, turn: float) -> str:
+def _shear_wall(
+    tmp_path, turn: float, shear_modulus=None, local_x_turn: float = 0.0
+) -> str:
     """slab_01 stood up as a wall 5 m high and 3 m wide, pushed sideways.
 
     Its edge at x = 0 is the foot, held in every translation along it and
     free to turn about it; the other edge is free. A uniform push of
     ``SHEAR_WALL_PUSH`` along the slab's y, in its plane, is horizontal.
     The placement of every item turns the wall about Z by ``turn`` degrees
-    from the global X-Z plane.
+    from the global X-Z plane. ``shear_modulus`` is added to the material;
+    ``local_x_turn`` turns the plane's RefDirection, the wall's local x, by
+    that many degrees in the wall's plane.
     """
     model = ifcopenshell.open(SLAB)
+    if shear_modulus is not None:
+        (pset,) = [
+            p
+            for p in model.by_type("IfcMaterialProperties")
+            if p.Name == "Pset_MaterialMechanical"
+        ]
+        pset.Properties = list(pset.Properties) + [
+            model.create_entity(
+                "IfcPropertySingleValue",
+                Name="ShearModulus",
+                NominalValue=model.create_entity(
+                    "IfcModulusOfElasticityMeasure", shear_modulus
+                ),
+            )
+        ]
+    if local_x_turn:
+        angle = math.radians(local_x_turn)
+        (plane,) = model.by_type("IfcPlane")
+        plane.Position.RefDirection = model.create_entity(
+            "IfcDirection", (math.cos(angle), math.sin(angle), 0.0)
+        )
     for relation in model.by_type("IfcRelConnectsStructuralMember"):
         relation.AppliedCondition = None
     foot, top = sorted(
@@ -5539,6 +5564,55 @@ class TestShearWall:
         assert math.hypot(total["fx_N"], total["fy_N"]) == pytest.approx(
             self._push() * self.HEIGHT, rel=1e-5
         )
+
+
+class TestShearWallOfPlywood:
+    """TestShearWall's wall of a material soft in shear, as plywood is (v0u).
+
+    The file gives a shear modulus of E / 16, where Young's modulus and
+    Poisson's ratio give E / 2.4; plywood is about that much softer in
+    shear. Timoshenko's deep cantilever with the shear modulus given, to 5
+    %: the foot, held across its whole width, stops the wall shearing near
+    it over a length that grows with E / G: the wall is 3 % stiffer than
+    Timoshenko's, 0.8 % at E / 2.4, and 5.3 % at E / 40 at a 0.5, 0.25 and
+    0.125 m mesh alike.
+    With the isotropic shear modulus it would be 59 % stiffer.
+    """
+
+    HEIGHT, WIDTH, THICKNESS, E = 5.0, 3.0, 0.2, 2.1e8
+    G = E / 16
+
+    def _run(self, tmp_path, local_x_turn=0.0):
+        output_dir = str(tmp_path / "out")
+        result = analyze_ifc(
+            ifc_path=_shear_wall(
+                tmp_path, 0.0, shear_modulus=self.G, local_x_turn=local_x_turn
+            ),
+            output_dir=output_dir,
+            mesh_size=0.25,
+        )
+        assert result["status"] == "success", result.get("errors")
+        with open(os.path.join(output_dir, "results.json")) as fh:
+            data = json.load(fh)
+        return data["global_displacements"]["envelope"]["max_tx_m"], result
+
+    def test_cantilever_by_hand(self, tmp_path):
+        top, result = self._run(tmp_path)
+        w = SHEAR_WALL_PUSH * self.WIDTH
+        inertia = self.THICKNESS * self.WIDTH**3 / 12
+        shear = self.G * 5 / 6 * self.THICKNESS * self.WIDTH
+        expected = w * self.HEIGHT**4 / (
+            8 * self.E * inertia
+        ) + w * self.HEIGHT**2 / (2 * shear)
+        assert top == pytest.approx(expected, rel=0.05)
+        assert [w["code"] for w in result["warnings"]].count("W-MAT-004") == 1
+
+    def test_grain_across_local_x_is_the_same(self, tmp_path):
+        (tmp_path / "along").mkdir()
+        (tmp_path / "across").mkdir()
+        along, _ = self._run(tmp_path / "along")
+        across, _ = self._run(tmp_path / "across", local_x_turn=90.0)
+        assert across == pytest.approx(along, rel=1e-6)
 
 
 class TestPointLoadAtAFreeEnd:

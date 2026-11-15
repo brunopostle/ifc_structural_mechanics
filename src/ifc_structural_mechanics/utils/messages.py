@@ -139,10 +139,25 @@ _KINDS = [
     MessageKind(
         "W-MAT-003",
         "Shear modulus does not agree with the other constants",
+        "No longer given: a shear modulus given with Young's modulus and "
+        "Poisson's ratio is used as it is (W-MAT-004).",
+        retired=True,
+    ),
+    MessageKind(
+        "W-MAT-004",
+        "Shear modulus of its own",
         "The material gives Young's modulus, Poisson's ratio and a shear "
-        "modulus that an isotropic material cannot have together. The "
-        "analysis uses Young's modulus and Poisson's ratio. Check which of "
-        "the three is right.",
+        "modulus that an isotropic material cannot have together, as wood "
+        "and wood-based panels do: plywood is about six times softer in "
+        "shear than E / 2 (1 + nu). The shear modulus given is used: in "
+        "beams for shear and torsion along the member, in shells for shear "
+        "in their plane and across their thickness. Shells are taken to "
+        "have the grain along or across their local x (the RefDirection of "
+        "the plane of their face); the material is equally stiff along both, "
+        "so only a panel at an angle to its local x is analysed wrongly. "
+        "Members with U1 elements (--open-sections user-element) use "
+        "E / 2 (1 + nu). If the material is isotropic, one of the three "
+        "constants is wrong.",
     ),
     # Sections
     MessageKind(
@@ -747,9 +762,9 @@ _ERRORS = [
     MessageKind(
         "E-MAT-004",
         "Elastic constants that do not fit together",
-        "The material has a shear modulus and no Poisson's ratio, and the two "
-        "moduli give a ratio no isotropic material has (or the shear modulus "
-        "is not positive). Check the constants.",
+        "The material's shear modulus is not positive, or it has a shear "
+        "modulus and no Poisson's ratio and the two moduli give a ratio no "
+        "isotropic material has. Check the constants.",
     ),
     # Sections
     MessageKind(
@@ -759,6 +774,14 @@ _ERRORS = [
         "and this one is below 1 or above 1 000 000. It is in some other unit, "
         "probably tonnes per cubic millimetre or per cubic metre. Add the unit "
         "to the project's IfcUnitAssignment.",
+    ),
+    MessageKind(
+        "E-MAT-006",
+        "Shell of a non-isotropic material without axes",
+        "The material has a shear modulus of its own (W-MAT-004), which needs "
+        "the shell's axes to say which way it lies, and the member's face "
+        "has no IfcPlane to give them. Put the face on a plane, or give the "
+        "material a shear modulus of E / 2 (1 + nu).",
     ),
     MessageKind(
         "E-SEC-001",

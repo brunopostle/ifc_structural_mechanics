@@ -29,6 +29,9 @@ class Material:
         thermal_expansion_coefficient (Optional[float]): Coefficient of thermal expansion in 1/K
         yield_strength (Optional[float]): Yield strength in N/m²
         ultimate_strength (Optional[float]): Ultimate strength in N/m²
+        shear_modulus (Optional[float]): Shear modulus in N/m² that the file
+            gives independently of the other two, for a material that is not
+            isotropic (wood, plywood); None for an isotropic one
     """
 
     def __init__(
@@ -41,6 +44,7 @@ class Material:
         thermal_expansion_coefficient: Optional[float] = None,
         yield_strength: Optional[float] = None,
         ultimate_strength: Optional[float] = None,
+        shear_modulus: Optional[float] = None,
     ):
         """Initialize a Material with its properties.
 
@@ -55,6 +59,9 @@ class Material:
             yield_strength (Optional[float], optional): Yield strength in N/m². Defaults to None.
             ultimate_strength (Optional[float], optional): Ultimate strength in N/m².
                 Defaults to None.
+            shear_modulus (Optional[float], optional): Shear modulus in N/m²
+                independent of the other two moduli. Defaults to None, for
+                ``E / 2 (1 + nu)``.
 
         Raises:
             ValueError: If required properties have invalid values
@@ -67,6 +74,7 @@ class Material:
         self.thermal_expansion_coefficient = thermal_expansion_coefficient
         self.yield_strength = yield_strength
         self.ultimate_strength = ultimate_strength
+        self.shear_modulus = shear_modulus
 
         self._validate()
 
@@ -105,6 +113,11 @@ class Material:
                 f"got {self.thermal_expansion_coefficient}"
             )
 
+        if self.shear_modulus is not None and not self.shear_modulus > 0:
+            raise ValueError(
+                f"Shear modulus must be positive, got {self.shear_modulus}"
+            )
+
         if self.yield_strength is not None and self.yield_strength <= 0:
             raise ValueError(
                 f"Yield strength must be positive, got {self.yield_strength}"
@@ -116,11 +129,13 @@ class Material:
             )
 
     def get_shear_modulus(self) -> float:
-        """Calculate shear modulus from elastic modulus and Poisson's ratio.
+        """The shear modulus: the one given, else ``E / 2 (1 + nu)``.
 
         Returns:
             float: Shear modulus in N/m²
         """
+        if self.shear_modulus is not None:
+            return self.shear_modulus
         return self.elastic_modulus / (2 * (1 + self.poisson_ratio))
 
     def get_bulk_modulus(self) -> float:
@@ -137,7 +152,7 @@ class Material:
         Returns:
             Tuple[float, float]: Lamé parameters (lambda, mu) in N/m²
         """
-        mu = self.get_shear_modulus()
+        mu = self.elastic_modulus / (2 * (1 + self.poisson_ratio))
         lambda_param = (self.elastic_modulus * self.poisson_ratio) / (
             (1 + self.poisson_ratio) * (1 - 2 * self.poisson_ratio)
         )
@@ -158,6 +173,7 @@ class Material:
             "thermal_expansion_coefficient": self.thermal_expansion_coefficient,
             "yield_strength": self.yield_strength,
             "ultimate_strength": self.ultimate_strength,
+            "shear_modulus": self.shear_modulus,
         }
 
 

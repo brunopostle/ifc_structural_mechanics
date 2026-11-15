@@ -623,8 +623,58 @@ class UnifiedCalculixWriter:
 
     @staticmethod
     def _shear_modulus(material) -> float:
-        """Shear modulus of an isotropic material."""
+        """Shear modulus of a material: the one the file gives, if any.
+
+        A material with a shear modulus of its own (wood, W-MAT-004) has it
+        along the member; an isotropic one ``E / 2 (1 + nu)``.
+        """
+        given = getattr(material, "shear_modulus", None)
+        if isinstance(given, (int, float)) and given > 0:
+            return float(given)
         return material.elastic_modulus / (2.0 * (1.0 + material.poisson_ratio))
+
+    @staticmethod
+    def _has_own_shear_modulus(material) -> bool:
+        """Whether a material has a shear modulus not ``E / 2 (1 + nu)``."""
+        given = getattr(material, "shear_modulus", None)
+        return isinstance(given, (int, float)) and given > 0
+
+    @staticmethod
+    def _shell_material_name(material) -> str:
+        """Name of the shell material of one with its own shear modulus."""
+        return f"MAT_{material.id}_SH"
+
+    def _write_shell_orientation(self, file: TextIO, member, member_set) -> str:
+        """Material axes of a shell whose material is not isotropic.
+
+        1 along the member's local x, 2 square to it in its plane: a
+        material with a shear modulus of its own is as stiff along 1 as
+        along 2, and only a grain at an angle to x would differ.
+
+        Returns:
+            The name of the orientation.
+
+        Raises:
+            MeshingError: E-MAT-006 for a member whose face has no plane to
+                give its axes.
+        """
+        normal = getattr(member, "normal", None)
+        local_x = getattr(member, "local_x", None)
+        if normal is None or local_x is None:
+            raise MeshingError(
+                f"Member {member.id}: its material "
+                f"'{getattr(member.material, 'name', None)}' has a shear "
+                "modulus of its own, and its face has no plane whose axes "
+                "would say which way the material lies.",
+                code="E-MAT-006",
+                ifc_guids=self._ifc_guids([member.id]),
+            )
+        along = np.array(local_x, dtype=float)
+        across = np.cross(np.array(normal, dtype=float), along)
+        orientation = f"OR_{member_set}"
+        file.write(f"*ORIENTATION, NAME={orientation}, SYSTEM=RECTANGULAR\n")
+        file.write(", ".join(f"{v:.6e}" for v in (*along, *across)) + "\n")
+        return orientation
 
     def _rectangle_material_name(self, member) -> str:
         """Name of the material of a torsion-corrected rectangular member."""
@@ -1620,6 +1670,34 @@ class UnifiedCalculixWriter:
             self._write_expansion(file, material)
             file.write("\n")
 
+        # Shells of a material with a shear modulus of its own (W-MAT-004):
+        # E and nu alike in every direction, G in the plane and across it,
+        # with 1 and 2 in the shell's plane (_write_shell_orientation)
+        shell_materials = {}
+        for member in self.domain_model.members:
+            material = member.material
+            if isinstance(member, SurfaceMember) and self._has_own_shear_modulus(
+                material
+            ):
+                shell_materials.setdefault(material.id, material)
+        for material in shell_materials.values():
+            modulus = material.elastic_modulus
+            poisson = material.poisson_ratio
+            shear = self._shear_modulus(material)
+            file.write(f"*MATERIAL, NAME={self._shell_material_name(material)}\n")
+            file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
+            file.write(
+                f"{modulus:.6e}, {modulus:.6e}, {modulus:.6e},"
+                f" {poisson:.6e}, {poisson:.6e}, {poisson:.6e},"
+                f" {shear:.6e}, {shear:.6e},\n"
+            )
+            file.write(f"{shear:.6e}\n")
+            if getattr(material, "density", None):
+                file.write("*DENSITY\n")
+                file.write(f"{material.density:.6e}\n")
+            self._write_expansion(file, material)
+            file.write("\n")
+
         # One material per equivalent rectangle, scaled to the real section
         for member in self.domain_model.members:
             if member.id not in self._equivalent_sections or not member.material:
@@ -1632,7 +1710,7 @@ class UnifiedCalculixWriter:
             # section's depth (2) or width (3): the section's shear stiffness
             # in each direction, or for closed and solid sections its
             # torsional stiffness (see equivalent_shear_moduli)
-            shear = material.elastic_modulus / (2.0 * (1.0 + poisson))
+            shear = self._shear_modulus(material)
             isotropic = modulus / (2.0 * (1.0 + poisson))
             shear_areas = [
                 float(getattr(member.section, name, None) or 0.0)
@@ -1648,7 +1726,7 @@ class UnifiedCalculixWriter:
                     self._matched_torsion_constant(member),
                 )[:2]
             else:
-                moduli = (isotropic, isotropic)
+                moduli = (shear * factor, shear * factor)
             file.write(f"*MATERIAL, NAME={self._equivalent_material_name(member)}\n")
             file.write("*ELASTIC, TYPE=ENGINEERING CONSTANTS\n")
             file.write(
@@ -2195,9 +2273,19 @@ class UnifiedCalculixWriter:
                 and member.thickness
             ):
                 thickness_value = getattr(member.thickness, "value", 0.1)
+                material_and_axes = f"MAT_{material_id}"
+                if self._has_own_shear_modulus(member.material):
+                    orientation = self._write_shell_orientation(
+                        file, member, member_set
+                    )
+                    material_and_axes = (
+                        f"{self._shell_material_name(member.material)},"
+                        f" ORIENTATION={orientation}"
+                    )
                 # Note: Nodal thickness is written separately before elements
                 file.write(
-                    f"*SHELL SECTION, ELSET={member_set}, MATERIAL=MAT_{material_id}\n"
+                    f"*SHELL SECTION, ELSET={member_set},"
+                    f" MATERIAL={material_and_axes}\n"
                 )
                 file.write(f"{thickness_value:.6e}\n\n")
                 sections_written += 1

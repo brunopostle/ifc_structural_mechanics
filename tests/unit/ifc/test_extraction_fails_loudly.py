@@ -293,16 +293,33 @@ class TestMembers:
         with pytest.raises(ModelExtractionError, match="no isotropic material"):
             Extractor(model).extract_model()
 
-    def test_shear_modulus_at_odds_with_poisson_ratio_gets_a_warning(self):
+    def test_shear_modulus_at_odds_with_poisson_ratio_is_used(self):
+        """Wood is far softer in shear than E / 2 (1 + nu) (v0u)."""
         model = _open("beam_01")
         self._set_shear_modulus(model, 10000.0)  # E 30000, nu 0.2 give 12500
-        messages = _warnings(model)
-        assert any(
-            "shear modulus" in m and "Poisson's ratio 0.2" in m for m in messages
-        )
+        extracted = Extractor(model).extract_model()
+        material = extracted.members[0].material
+        scale = material.elastic_modulus / 30000.0
+        assert material.shear_modulus == pytest.approx(10000.0 * scale)
+        assert material.get_shear_modulus() == pytest.approx(10000.0 * scale)
+        assert material.poisson_ratio == pytest.approx(0.2)
+        (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-MAT-004"]
+        assert "Poisson's ratio 0.2" in found["message"]
 
     def test_consistent_shear_modulus_raises_no_warning(self):
-        assert not any("shear modulus" in m for m in _warnings(_open("beam_01")))
+        extracted = Extractor(_open("beam_01")).extract_model()
+        assert not any(
+            "shear modulus" in w["message"] for w in extracted.analysis_warnings
+        )
+        # The material is isotropic
+        assert extracted.members[0].material.shear_modulus is None
+
+    def test_shear_modulus_that_is_not_positive_is_an_error(self):
+        model = _open("beam_01")
+        self._set_shear_modulus(model, 0.0)
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-MAT-004"
 
     def test_slab_without_thickness_is_an_error(self):
         """It used to be 0.1 m thick."""

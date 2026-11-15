@@ -281,6 +281,10 @@ class SurfaceMember(StructuralMember):
         # Local z in global axes, the normal of the face's plane, where the
         # file gives one
         self.normal: Optional[List[float]] = None
+        # Local x in global axes: that of the face's plane, or the one
+        # IfcAxis2Placement3D implies for a face without a plane. A material
+        # that is not isotropic has its axis 1 along it
+        self.local_x: Optional[List[float]] = None
         # The outlines of its openings, each a list of corners like geometry
         self.holes: List[List[List[float]]] = []
 
