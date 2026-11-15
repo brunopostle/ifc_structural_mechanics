@@ -152,3 +152,30 @@ one of them. `_load_element_sets()` applies an area load to every shell
 element within the loaded member's outline, whoever owns it, and a load on a
 curve member to the elements in its geometry (`_geometry_element_sets`): a
 beam lying inside another once had its loads left out with a warning.
+
+**A shear modulus the file gives is used** (`v0u`). A material with Young's
+modulus, Poisson's ratio and a shear modulus more than 1% from E / 2 (1 + nu)
+keeps all three (`Material.shear_modulus`, `W-MAT-004`): wood is about 16 times
+softer in shear than E along the grain, and plywood used as sheathing about 6
+times softer than its isotropic G, so its racking stiffness came out 6 times too
+high. Within 1% the material is isotropic and nothing changes; with no Poisson's
+ratio, G gives it (E / 2G − 1) as before.
+
+- Beams: `_shear_modulus()` gives the shear moduli of `MAT_RT_` and `MAT_EQ_` the
+  given G, along the member. `G23` (in the section's plane) stays E-based. U1
+  elements read only E and nu and keep E / 2 (1 + nu).
+- Shells: `MAT_<id>_SH`, `*ELASTIC, TYPE=ENGINEERING CONSTANTS` with E and nu
+  alike in every direction and G for all three planes (no rolling shear: the
+  file has no value for it), and an `*ORIENTATION` per member with 1 along the
+  member's local x (`SurfaceMember.local_x`: the `RefDirection` of the face's
+  `IfcPlane`, or what `IfcAxis2Placement3D` implies) and 2 square to it in the
+  plane. Such a material is equally stiff along 1 and 2, so the orientation
+  matters only for a grain at an angle to local x: at 45° the panel is stiff in
+  shear and soft in tension. A face with no plane raises `E-MAT-006`.
+- Measured: CalculiX applies a shell's orientation exactly (an S8R strip
+  stretched at 45° to its material axes: reaction 2019.2 N, by hand 2019.2 N).
+  `TestShearWallOfPlywood`, the `TestShearWall` wall at G = E / 16, is 3% stiffer
+  than Timoshenko's deep cantilever with that G (0.8% with the isotropic G, 5.3%
+  at E / 40 at a 0.5, 0.25 and 0.125 m mesh alike): its foot, held across the
+  whole width, stops the shearing near it. Turning local x by 90° changes
+  nothing.

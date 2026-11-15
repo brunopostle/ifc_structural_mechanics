@@ -372,7 +372,7 @@ ones.
   buckling and modal analysis.
 - `docs/design/sections.md`: beam section orientation, equivalent rectangles,
   torsion, profile outlines, eccentric members, openings, plain `IfcFace`, area
-  loads.
+  loads, materials with a shear modulus of their own.
 - `docs/design/supports.md`: boundary conditions, skew supports and arms,
   equations on shell nodes and knots, elastic and surface supports, support
   displacements, temperature loads, member-side releases, support nodes.

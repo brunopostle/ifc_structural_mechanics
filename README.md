@@ -134,7 +134,8 @@ the ones a user needs to know before trusting a result.
   error that names the entity, when
   - a member has no geometry, no material, no profile or (a slab or wall) no
     thickness, or its material has no Young's modulus, or a shear modulus
-    (and no Poisson's ratio) that no isotropic material could have;
+    that is not positive or (with no Poisson's ratio) that no isotropic
+    material could have;
   - a connection has no position, a surface connection's face has an
     opening or no plane to give the axes of a condition that differs by
     direction, or a support condition leaves a stiffness unset;
@@ -154,7 +155,8 @@ the ones a user needs to know before trusting a result.
   - a material has no mass density (its members weigh nothing), or neither a
     Poisson's ratio nor a shear modulus (0.3 is assumed; from a shear modulus
     it is E / 2G − 1), or a shear modulus that disagrees with its Poisson's
-    ratio (the Poisson's ratio is used);
+    ratio (the shear modulus is used, as wood and plywood need: along beams,
+    and in shells in their plane and across it);
   - loads of the file belong to no load group or load case (they are not
     applied);
   - a point load lands more than 0.1 m from the nearest mesh node;
