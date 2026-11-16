@@ -235,7 +235,13 @@ here. This section only records the constraints that shape day-to-day work.
   has nothing to go by there. The tie warning says so; nothing is smoothed.
 - **`building_01` solves**; its reactions match the applied loads (282.0 and
   13.5 kN) and its self-weight is dominated by a 202 t/m³ `Masonry` material
-  in the file. `building_02` solves, its reactions match the applied loads and its
+  in the file. ETABS 17.0.1 wrote that material in kPa under a declared MPa
+  (Young's modulus 24.8 TPa, shear modulus and density likewise 1000 and 100
+  times too large; found by a user comparing with RFEM, 2026-11-15), and
+  W-MAT-005 says so. Its first mode is at 0.718 Hz as the file stands; with
+  E, G and the density divided by 1000, 1000 and 100, `ccx` gives 4.250,
+  4.481 and 5.485 Hz for the first three, against 4.25, 4.48 and 5.39 in
+  RFEM. The file in `examples/analysis-models` is kept as it was exported. `building_02` solves, its reactions match the applied loads and its
   deflections are plausible (26 mm under Live at a 2 m mesh), but it has no
   reference, and a 1 m mesh needs more than 5 GB of memory (`aiz.37`).
   Never run it finer than 2 m on the development machine. The knots of `aiz.104`

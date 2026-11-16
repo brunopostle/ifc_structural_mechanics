@@ -23,7 +23,7 @@ again.
 | ![structure_01 under self-weight](docs/images/structure_01_displacement.png) | ![building_01 under live load](docs/images/building_01_live.png) |
 | **Beams and shells together**: `structure_01`, a slab hinged on a wall and carried by two columns, under self-weight, within 2% of Code_Aster. | **`building_01`**: masonry walls, floor slabs and a landing on I-section columns, which stop short of the walls and are joined to them by rigid links. Live load on the floor; mesh edges shown. |
 | ![grid_of_beams bending moments](docs/images/grid_of_beams_moments.png) | ![building_01, first mode](docs/images/building_01_mode_1.png) |
-| **A grid of beams** in three dimensions: secondary beams hinged onto two clamped main beams, with the hogging moment over the supports. | **`building_01`'s first mode**, 0.72 Hz: the heavy masonry box sways on its columns. |
+| **A grid of beams** in three dimensions: secondary beams hinged onto two clamped main beams, with the hogging moment over the supports. | **`building_01`'s first mode**: the masonry box sways on its columns. The file's `Masonry` is written in kPa under a declared MPa (an ETABS 17 export bug, warned of as W-MAT-005), so it is 1000 times too stiff and 100 times too heavy and the mode shown is at 0.72 Hz; with that material corrected the first three modes are at 4.25, 4.48 and 5.49 Hz, as in RFEM (4.25, 4.48, 5.39). |
 
 ## Overview
 
@@ -52,8 +52,10 @@ the ones a user needs to know before trusting a result.
   solves, its reactions match the applied loads and its deflections are
   plausible, but it has no reference. `building_01` solves and its reactions
   match the applied loads to the newton, with no reference either; its
-  `Masonry` material is 202 t/m³ in the file, which makes its `Dead` case
-  (self-weight) 48.5 MN beside 0.3 MN of live load.
+  `Masonry` material is 202 t/m³ in the file (ETABS 17 wrote it in kPa
+  under a declared MPa: Young's modulus 1000 and density 100 times too
+  large; W-MAT-005), which makes its `Dead` case (self-weight) 48.5 MN
+  beside 0.3 MN of live load.
 - **Reactions need CalculiX 2.23 or later to be exact.** CalculiX 2.21 (the
   version in Ubuntu 24.04) misreports the force at a support that holds a
   rotation, by anything up to the size of the load; displacements and member
