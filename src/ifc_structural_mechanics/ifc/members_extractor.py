@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 # What a density given with no unit can be, in kg/m3
 MIN_DENSITY, MAX_DENSITY = 1.0, 1.0e6
+# What real materials have, in SI units: above diamond's Young's modulus
+# (about 1.1 TPa) or osmium's density (22 590 kg/m3), or below anything a
+# member is made of, a value is in another unit than the one declared
+PLAUSIBLE_ELASTIC_MODULUS = (1.0e6, 1.2e12)
+PLAUSIBLE_DENSITY = (1.0, 23000.0)
 
 # How far a profile's stated value may be from its dimensions'. The torsion
 # constant from the dimensions leaves out the fillets, a fifth of a rolled I's.
@@ -883,6 +888,8 @@ class MembersExtractor:
                 if value > 0:
                     yield_strength = value * self._own_scale(prop, self.pressure_scale)
 
+        self._warn_implausible(name, elastic_modulus, density)
+
         # Create material with extracted properties or defaults, converted to SI units
         return Material(
             id=(
@@ -903,6 +910,29 @@ class MembersExtractor:
                 else None
             ),
         )
+
+    def _warn_implausible(
+        self, name: str, elastic_modulus: float, density: Optional[float]
+    ) -> None:
+        """Warn of a Young's modulus or density no real material has (W-MAT-005).
+
+        The values are used as the file gives them: the unit they were
+        written in cannot be known.
+        """
+        found = []
+        low, high = PLAUSIBLE_ELASTIC_MODULUS
+        if not low <= elastic_modulus <= high:
+            found.append(f"a Young's modulus of {elastic_modulus:.4g} Pa")
+        low, high = PLAUSIBLE_DENSITY
+        if density is not None and not low <= density <= high:
+            found.append(f"a mass density of {density:.6g} kg/m3")
+        if found:
+            self._warn_once(
+                "W-MAT-005",
+                f"Material '{name}' has {' and '.join(found)}, which no real "
+                "material has; it is analysed so. Check the unit it was "
+                "written in.",
+            )
 
     @staticmethod
     def _own_scale(prop, project_scale: float) -> float:

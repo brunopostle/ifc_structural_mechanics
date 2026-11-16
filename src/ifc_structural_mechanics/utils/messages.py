@@ -159,6 +159,18 @@ _KINDS = [
         "E / 2 (1 + nu). If the material is isotropic, one of the three "
         "constants is wrong.",
     ),
+    MessageKind(
+        "W-MAT-005",
+        "Material constants no real material has",
+        "The material's Young's modulus is above 1.2 TPa (diamond is about "
+        "1.1 TPa) or below 1 MPa, or its mass density is above 23 000 "
+        "kg/m3 (osmium is 22 590) or below 1 kg/m3, in the units the file "
+        "declares. The values are used as they are, and the deflections, "
+        "frequencies and self-weight follow from them. Most likely the value "
+        "is written in another unit than the one declared, as when ETABS "
+        "writes kPa under a declared MPa (Young's modulus 1000 times and "
+        "density 100 times too large). Correct the value or the unit.",
+    ),
     # Sections
     MessageKind(
         "W-SEC-001",
