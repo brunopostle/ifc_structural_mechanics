@@ -336,7 +336,7 @@ These surface connections have no AppliedCondition, so they support nothing, and
 
 ### E-LOD-001: Load of an unsupported kind
 
-Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations), point actions with single displacements on supports, and curve and planar actions with temperature changes of a constant distribution. Displacements with a distortion and the varying actions of IFC2X3 are not.
+Supported are point, linear, curve and planar actions with single forces, linear forces or planar forces (and their configurations), point actions with single displacements on supports, and curve and planar actions with temperature changes of a constant distribution. A configuration of one load with no Locations on a constant action is that load. Displacements with a distortion and the varying actions of IFC2X3 are not supported.
 
 ### E-LOD-002: Load distribution cannot be used
 

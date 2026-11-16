@@ -559,6 +559,7 @@ class LoadsExtractor:
         applied_load = getattr(ifc_load, "AppliedLoad", None)
         if applied_load is None:
             raise ModelExtractionError("It has no AppliedLoad.", code="E-LOD-006")
+        applied_load = self._single_constant_load(ifc_load, applied_load)
         for varying in (
             "IfcStructuralLinearActionVarying",
             "IfcStructuralPlanarActionVarying",
@@ -737,6 +738,27 @@ class LoadsExtractor:
             "actions are supported.",
             code="E-LOD-001",
         )
+
+    @staticmethod
+    def _single_constant_load(ifc_load, applied_load):
+        """The load of a constant action's configuration of one load, else as given.
+
+        RFEM (by IfcOpenShell 0.7) writes the load of a constant planar
+        action as ``IfcStructuralLoadConfiguration($, (load), $)``: one load,
+        at no location, on an action whose value does not vary means that
+        load.
+        """
+        if not applied_load.is_a("IfcStructuralLoadConfiguration"):
+            return applied_load
+        distribution = getattr(ifc_load, "PredefinedType", None) or "CONST"
+        values = getattr(applied_load, "Values", None) or ()
+        if (
+            distribution == "CONST"
+            and len(values) == 1
+            and not getattr(applied_load, "Locations", None)
+        ):
+            return values[0]
+        return applied_load
 
     def _support_displacement(
         self, ifc_load, applied_load, load_id: str

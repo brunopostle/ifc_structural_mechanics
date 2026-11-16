@@ -1007,8 +1007,9 @@ _ERRORS = [
         "forces, linear forces or planar forces (and their configurations), "
         "point actions with single displacements on supports, and curve and "
         "planar actions with temperature changes of a constant distribution. "
-        "Displacements with a distortion and the varying actions of IFC2X3 "
-        "are not.",
+        "A configuration of one load with no Locations on a constant action "
+        "is that load. Displacements with a distortion and the varying "
+        "actions of IFC2X3 are not supported.",
     ),
     MessageKind(
         "E-LOD-002",

@@ -708,6 +708,43 @@ class TestLoads:
         with pytest.raises(ModelExtractionError, match="IfcStructuralLoadTemperature"):
             Extractor(model).extract_model()
 
+    @staticmethod
+    def _planar_loads(model, action):
+        return [
+            load
+            for group in Extractor(model).extract_model().load_groups
+            for load in group.loads
+            if load.id == action.GlobalId
+        ]
+
+    def test_constant_planar_action_with_a_configuration_of_one_load_is_read(self):
+        """RFEM writes IfcStructuralLoadConfiguration($, (force), $) (2vh)."""
+        model = _open("building_01")
+        action = model.by_type("IfcStructuralPlanarAction")[0]
+        expected = [
+            load.magnitude.tolist() for load in self._planar_loads(model, action)
+        ]
+        assert expected
+        action.AppliedLoad = model.create_entity(
+            "IfcStructuralLoadConfiguration", None, (action.AppliedLoad,), None
+        )
+
+        found = [load.magnitude.tolist() for load in self._planar_loads(model, action)]
+
+        assert found == expected
+
+    def test_configuration_of_two_loads_on_a_constant_action_is_an_error(self):
+        model = _open("building_01")
+        action = model.by_type("IfcStructuralPlanarAction")[0]
+        force = action.AppliedLoad
+        action.AppliedLoad = model.create_entity(
+            "IfcStructuralLoadConfiguration", None, (force, force), None
+        )
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert action.GlobalId in str(error.value)
+        assert "IfcStructuralLoadConfiguration" in str(error.value)
+
 
 def _support_displacement(model, item, **values):
     """A point action moving *item*, in beam_01's Dead case."""
