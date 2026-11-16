@@ -161,3 +161,131 @@ few percent, since shell elements differ between programs. A larger
 difference is worth a bead. Once a result is agreed, add the model to
 `tests/test_data/` and its reference values to
 `tests/validation/test_pipeline_benchmarks.py`.
+
+## Appendix: results of this library
+
+`bonsai_frame_3d.ifc` at commit `e0e65da` (sha256 `94294cd1…`), analysed
+with ifc_structural_mechanics 0.2.0 and CalculiX 2.23 on a 0.25 m mesh of
+quadratic elements (B32R beams, S6 shells): 5,345 nodes, 2,760 elements.
+The pictures are made by `python docs/images/make_images.py bonsai_frame_3d`.
+
+The only warning is `W-SEC-001`: the torsional stiffness of a solid
+rectangle is approximate, by up to 9 %. Bending is not affected. The modal
+run adds `W-LOD-011` (the load cases add no mass, as asked above) and
+`W-LOD-006` (no combinations in a modal analysis).
+
+Units below: kN, kN·m, mm. Forces and displacements are in global axes.
+
+### Sums of reactions
+
+| Case | Fx | Fy | Fz | Hand check | Imbalance (N / N·m) |
+|---|---|---|---|---|---|
+| G | 0 | 0 | 520.18 | 520.2 up | 0.06 / 0.22 |
+| Q | 0 | 0 | 90.00 | 90.0 up | 0.00 / 0.01 |
+| Wx | −14.00 | 0 | 0 | 14.0 in −x | 0.00 / 0.01 |
+| Wy | 0 | −30.00 | 0 | 30.0 in −y | 0.00 / 0.01 |
+| ULS1 | −12.60 | 0 | 837.24 | 1.35 G + 1.5 Q + 0.9 Wx | 0.08 / 0.30 |
+| ULS2 | 0 | −45.00 | 796.74 | 1.35 G + 1.05 Q + 1.5 Wy | 0.08 / 0.29 |
+| SLS | 0 | 0 | 610.18 | G + Q | 0.06 / 0.22 |
+
+### Reactions at the bases
+
+Fx, Fy, Fz in kN; Mx, My, Mz in kN·m. F4 to F6 are pinned and carry no
+moment.
+
+| Base | Case | Fx | Fy | Fz | Mx | My | Mz |
+|---|---|---|---|---|---|---|---|
+| F1 | G | 8.38 | 4.69 | 63.42 | −2.49 | 9.55 | −0.02 |
+| F2 | G | 0.00 | 9.56 | 130.64 | −8.03 | 0.00 | 0.00 |
+| F3 | G | −8.38 | 4.69 | 63.42 | −2.49 | −9.55 | 0.02 |
+| F4 | G | 4.85 | −5.41 | 64.90 | | | |
+| F5 | G | 0.00 | −8.13 | 132.89 | | | |
+| F6 | G | −4.85 | −5.41 | 64.90 | | | |
+| F1 | Q | 3.99 | 2.16 | 20.69 | −1.18 | 3.91 | 0.11 |
+| F2 | Q | −4.39 | 2.56 | 25.33 | −2.21 | −5.66 | 0.12 |
+| F3 | Q | 0.14 | 0.01 | −1.67 | 0.13 | −0.47 | 0.11 |
+| F4 | Q | 2.44 | −2.46 | 21.41 | | | |
+| F5 | Q | −2.38 | −2.13 | 25.85 | | | |
+| F6 | Q | 0.21 | −0.14 | −1.60 | | | |
+| F1 | Wx | −5.61 | −0.72 | −0.79 | 1.42 | −5.91 | 0.11 |
+| F2 | Wx | −2.01 | −0.01 | −0.29 | 0.01 | −3.74 | 0.12 |
+| F3 | Wx | −1.68 | 0.74 | 1.08 | −1.44 | −3.36 | 0.12 |
+| F4 | Wx | −3.50 | −0.20 | 0.19 | | | |
+| F5 | Wx | −0.67 | 0.01 | −0.43 | | | |
+| F6 | Wx | −0.54 | 0.19 | 0.24 | | | |
+| F1 | Wy | −0.12 | −7.62 | −3.73 | 15.16 | −0.13 | 0.01 |
+| F2 | Wy | 0.00 | −8.03 | −4.36 | 15.63 | 0.00 | 0.00 |
+| F3 | Wy | 0.12 | −7.62 | −3.73 | 15.16 | 0.13 | −0.01 |
+| F4 | Wy | 0.06 | −2.21 | 3.76 | | | |
+| F5 | Wy | 0.00 | −2.31 | 4.30 | | | |
+| F6 | Wy | −0.06 | −2.21 | 3.76 | | | |
+
+G is symmetric about x = 6 m, as it should be. Under G the frame also leans
+in y (Fy at every base, 0.25 mm at the top): the fixed bases on y = 0 are
+stiffer than the pinned ones on y = 5. Under Q the far corners F3 and F6
+lift by 1.6 to 1.7 kN.
+
+![Bending moments under self-weight, with the reactions](../../docs/images/bonsai_frame_3d_moments.png)
+
+### Displacements
+
+At the input node nearest each point (the slab is meshed in triangles, so
+the nearest node is up to 3 cm away), as the mean over the cross-section:
+ux, uy, uz in mm.
+
+| Point | G | Q | Wx | Wy |
+|---|---|---|---|---|
+| S1 middle (3, 2.5, 3.5) | 0.00, 0.25, −1.33 | 0.08, 0.09, −0.73 | 0.15, 0.03, 0.00 | 0.00, 0.56, −0.03 |
+| S2 middle (9, 2.5, 3.5) | 0.00, 0.25, −1.33 | 0.08, 0.04, 0.04 | 0.15, −0.03, 0.01 | 0.00, 0.56, −0.03 |
+| K6 top (12, 5, 3.5) | 0.00, 0.25, −0.05 | 0.10, 0.01, 0.00 | 0.17, −0.05, 0.00 | 0.00, 0.56, 0.00 |
+
+| Point | ULS1 | ULS2 | SLS |
+|---|---|---|---|
+| S1 middle | 0.25, 0.49, −2.89 | 0.08, 1.27, −2.61 | 0.08, 0.34, −2.06 |
+| S2 middle | 0.25, 0.37, −1.74 | 0.08, 1.22, −1.80 | 0.08, 0.29, −1.30 |
+| K6 top | 0.30, 0.31, −0.07 | 0.10, 1.19, −0.08 | 0.10, 0.26, −0.05 |
+
+The largest displacements are 1.36 mm (G), 0.74 mm (Q), 2.94 mm (ULS1) and
+3.35 mm (ULS2).
+
+![Displacement under Q, the imposed load on S1 only](../../docs/images/bonsai_frame_3d_q.png)
+
+![Displacement under ULS1](../../docs/images/bonsai_frame_3d_uls1.png)
+
+### Bending moments in B6
+
+Mf1 (about the beam's horizontal axis, kN·m, positive hogging) from
+`results.json`. B6 runs from C2 (y = 0) to C5 (y = 5). The beam shares its
+nodes with both slab panels, so its moment jumps a little at each node where
+the slab takes force from it (`docs/design/known_limitations.md`); the values
+are at its ends and at the node in the middle.
+
+| Case | C2 end | Middle | C5 end |
+|---|---|---|---|
+| G | 17.46 | −33.92 | 19.62 |
+| Q | 4.29 | −8.87 | 4.78 |
+| Wx | −0.03 | 0.04 | −0.03 |
+| Wy | −8.58 | −0.97 | 5.56 |
+| ULS1 | 29.97 | −59.07 | 33.63 |
+| ULS2 | 15.20 | −56.57 | 39.85 |
+| SLS | 21.74 | −42.79 | 24.40 |
+
+How much of the slab works with the beam differs between programs, so these
+are the results to compare with most care.
+
+### Natural frequencies
+
+Mass of the materials only: 53.0 t (520.18 kN / 9.81).
+
+| Mode | Hz | Effective mass | Shape |
+|---|---|---|---|
+| 1 | 4.91 | 82 % in x | sway in x, twisting: the pinned side y = 5 moves more |
+| 2 | 5.32 | 95 % in y | sway in y |
+| 3 | 7.34 | 13 % in x | twist about z |
+| 4 | 15.65 | 0 % | |
+| 5 | 16.95 | 66 % in z | slabs vertical |
+| 6 | 25.84 | 0 % | |
+
+![First mode, 4.91 Hz](../../docs/images/bonsai_frame_3d_mode_1.png)
+
+![Second mode, 5.32 Hz](../../docs/images/bonsai_frame_3d_mode_2.png)
