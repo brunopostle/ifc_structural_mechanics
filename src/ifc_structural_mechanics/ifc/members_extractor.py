@@ -778,7 +778,9 @@ class MembersExtractor:
                             own_scales, "thermalExpansionCoefficient", prop
                         )
 
-        name = getattr(material, "Name", None) or "unnamed"
+        # A name is only a label, and RFEM writes IfcMaterial('', '', $):
+        # an unnamed material is called by its entity id
+        name = getattr(material, "Name", None) or f"IfcMaterial #{material.id()}"
         if elastic_modulus_raw is None:
             raise ModelExtractionError(
                 f"Its material '{name}' has no Young's modulus "
@@ -888,7 +890,7 @@ class MembersExtractor:
                 if hasattr(material, "id") and callable(material.id)
                 else str(uuid.uuid4())
             ),
-            name=material.Name if hasattr(material, "Name") else "Unknown Material",
+            name=name,
             density=density,
             elastic_modulus=elastic_modulus,
             poisson_ratio=poisson_ratio,
