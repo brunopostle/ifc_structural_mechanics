@@ -68,6 +68,13 @@ def _load_groups_of(entity) -> list:
     ]
 
 
+#: The types of a load group that stands, in a combination, for the load
+#: cases it groups, its Coefficient their factor: IFC2X3's
+#: LOAD_COMBINATION_GROUP, and LOAD_GROUP, which RFEM writes for it in IFC4
+#: (where it groups actions, IfcRelAssignsToGroupByFactor giving factors)
+FACTOR_GROUP_TYPES = ("LOAD_COMBINATION_GROUP", "LOAD_GROUP")
+
+
 def is_load_case(group) -> bool:
     """Whether a load group is a load case.
 
@@ -436,10 +443,12 @@ class LoadsExtractor:
         ``Coefficient`` multiplies all of them, and a case assigned twice has
         its factors added.
 
-        A load group of type LOAD_GROUP in a combination stands for what it
-        groups, each with the group's ``Coefficient`` as a further factor:
-        RFEM writes each term of a combination as such a group holding one
-        load case (combination -> group, Coefficient 1.5 -> load case).
+        A load group of load cases in a combination stands for them, each
+        with the group's ``Coefficient`` as a further factor: IFC2X3's
+        LOAD_COMBINATION_GROUP, which IFC4 replaced by
+        ``IfcRelAssignsToGroupByFactor``. RFEM still writes each term of a
+        combination so in IFC4, typed LOAD_GROUP (combination -> group,
+        Coefficient 1.5 -> load case), and is read the same way.
 
         A combination that names no load case, or something that is neither
         a load case nor a load group of them, cannot be formed: it is left
@@ -487,7 +496,7 @@ class LoadsExtractor:
                             )
                         elif (
                             obj.is_a(self.LOAD_GROUP_TYPE)
-                            and obj.PredefinedType == "LOAD_GROUP"
+                            and obj.PredefinedType in FACTOR_GROUP_TYPES
                             and obj.GlobalId not in path
                             and self._groups_only_load_cases(
                                 obj, assignments, load_case_ids
@@ -567,7 +576,7 @@ class LoadsExtractor:
             obj.GlobalId in load_case_ids
             or (
                 obj.is_a(self.LOAD_GROUP_TYPE)
-                and obj.PredefinedType == "LOAD_GROUP"
+                and obj.PredefinedType in FACTOR_GROUP_TYPES
                 and obj.GlobalId not in seen
                 and self._groups_only_load_cases(obj, assignments, load_case_ids, seen)
             )

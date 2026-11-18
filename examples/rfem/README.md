@@ -30,7 +30,9 @@ Q, Wx and Wy of the Bonsai model's four load cases. What it adds to the list abo
 - load cases that are `IfcStructuralLoadGroup`s of type `LOAD_CASE`, not
   `IfcStructuralLoadCase`s (both are IFC4; read as load cases);
 - each term of a combination a load group of type `LOAD_GROUP` with the factor as its
-  `Coefficient`, holding one load case (read through, the factors multiplied);
+  `Coefficient`, holding one load case: IFC2X3's `LOAD_COMBINATION_GROUP`, which IFC4
+  replaced by `IfcRelAssignsToGroupByFactor` and whose `LOAD_GROUP` groups actions
+  (read as IFC2X3's, the factors multiplied);
 - the edges of each face's `IfcEdgeLoop` in the sense of each edge and out of order,
   against IFC's IsContinuous rule (read by following them end to end, `W-IFC-008`);
 - the zero components of its point loads written as denormal numbers such as

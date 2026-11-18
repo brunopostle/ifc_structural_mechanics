@@ -12,6 +12,7 @@ import pytest
 ifcopenshell = pytest.importorskip("ifcopenshell")
 
 from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
+from ifc_structural_mechanics.ifc.loads_extractor import LoadsExtractor  # noqa: E402
 
 IFC_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 
@@ -143,11 +144,11 @@ class TestFactors:
 class TestFactorGroups:
     """A load group of load cases in a combination stands for them (RFEM)."""
 
-    def _factor_group(self, model, cases, coefficient):
+    def _factor_group(self, model, cases, coefficient, kind="LOAD_GROUP"):
         group = model.create_entity(
             "IfcStructuralLoadGroup",
             GlobalId=ifcopenshell.guid.new(),
-            PredefinedType="LOAD_GROUP",
+            PredefinedType=kind,
             ActionType="NOTDEFINED",
             ActionSource="NOTDEFINED",
             Coefficient=coefficient,
@@ -163,6 +164,30 @@ class TestFactorGroups:
         combinations, warnings = _extract(model)
         assert combinations["DCon1"] == {"Dead": 1.5, "Live": 3.0}
         assert not [w for w in warnings if "not a load case" in w]
+
+    def test_ifc2x3_load_combination_group(self):
+        """IFC2X3 has no IfcRelAssignsToGroupByFactor: the group gives the factor."""
+        model = ifcopenshell.file(schema="IFC2X3")
+        _FILES.append(model)
+
+        def group(kind, coefficient=None):
+            return model.create_entity(
+                "IfcStructuralLoadGroup",
+                GlobalId=ifcopenshell.guid.new(),
+                PredefinedType=kind,
+                ActionType="NOTDEFINED",
+                ActionSource="NOTDEFINED",
+                Coefficient=coefficient,
+            )
+
+        dead, live = group("LOAD_CASE"), group("LOAD_CASE")
+        combination = group("LOAD_COMBINATION")
+        _assign(model, [dead], group_dead := group("LOAD_COMBINATION_GROUP", 1.35))
+        _assign(model, [live], group_live := group("LOAD_COMBINATION_GROUP", 1.5))
+        _assign(model, [group_dead, group_live], combination)
+        extractor = LoadsExtractor(model)
+        (found,) = extractor.extract_load_combinations()
+        assert found.load_groups == {dead.GlobalId: 1.35, live.GlobalId: 1.5}
 
     def test_group_without_a_coefficient_counts_once(self):
         model = _open("beam_01")
