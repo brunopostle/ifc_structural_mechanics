@@ -119,6 +119,21 @@ _KINDS = [
         "in the results is the right way up, and give the items the "
         "SharedPlacement as their ObjectPlacement to make the file say so.",
     ),
+    MessageKind(
+        "W-IFC-008",
+        "Face outlines with their edges out of order",
+        "The IfcEdgeLoop of these faces does not give its edges end to end, "
+        "each starting where the one before it ends, as IFC requires "
+        "(IsContinuous); RFEM writes them so. Taken in the order given, the "
+        "corners would cross the face. The outline is read by following the "
+        "edges from the first, in its sense, each to the edge that meets its "
+        "end, which is the one closed outline they make; a loop whose edges "
+        "do not make one stops the analysis. The sense of the outline matters "
+        "only for a plain IfcFace (W-IFC-004). Check the outline in the "
+        "results, and give the edges in order, each IfcOrientedEdge with the "
+        "Orientation that makes it start at the end of the one before, to "
+        "make the file valid.",
+    ),
     # Materials
     MessageKind(
         "W-MAT-001",

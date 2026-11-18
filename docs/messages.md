@@ -58,6 +58,10 @@ The file declares an IfcDerivedUnit made of one unit to the power one, such as a
 
 These structural items have no ObjectPlacement, and their analysis model's SharedPlacement is not the project's axes. IFC says the SharedPlacement "shall be common to all items" of the model, so their coordinates are read in its axes, as those of the items it places. RFEM writes its coordinates with Z down and turns them up with the SharedPlacement, which it gives to curve members and connections but not to surface members; read in the project's axes these would lie upside down, apart from the rest. Check the model in the results is the right way up, and give the items the SharedPlacement as their ObjectPlacement to make the file say so.
 
+### W-IFC-008: Face outlines with their edges out of order
+
+The IfcEdgeLoop of these faces does not give its edges end to end, each starting where the one before it ends, as IFC requires (IsContinuous); RFEM writes them so. Taken in the order given, the corners would cross the face. The outline is read by following the edges from the first, in its sense, each to the edge that meets its end, which is the one closed outline they make; a loop whose edges do not make one stops the analysis. The sense of the outline matters only for a plain IfcFace (W-IFC-004). Check the outline in the results, and give the edges in order, each IfcOrientedEdge with the Orientation that makes it start at the end of the one before, to make the file valid.
+
 ## Materials
 
 ### E-MAT-001: Member without a material

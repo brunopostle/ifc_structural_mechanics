@@ -30,6 +30,7 @@ from ..utils.messages import warning
 from .entity_identifier import (
     find_member_endpoints,
     get_item_transformation,
+    get_representation,
     get_transformation,
     transform_vectors,
 )
@@ -67,6 +68,19 @@ def _load_groups_of(entity) -> list:
     ]
 
 
+def is_load_case(group) -> bool:
+    """Whether a load group is a load case.
+
+    An ``IfcStructuralLoadCase``, or an ``IfcStructuralLoadGroup`` whose
+    PredefinedType is LOAD_CASE: IFC4 allows both, and RFEM and IFC2X3 files
+    have only the second. ``ifcopenshell.util.structural`` goes by the
+    PredefinedType alone.
+    """
+    if group.is_a("IfcStructuralLoadCombination"):
+        return False
+    return group.is_a("IfcStructuralLoadCase") or group.PredefinedType == "LOAD_CASE"
+
+
 def _activity_load_cases(activity) -> list:
     """The load cases an activity is in, directly or through load groups.
 
@@ -79,7 +93,7 @@ def _activity_load_cases(activity) -> list:
         if group in seen:
             continue
         seen.add(group)
-        if group.PredefinedType == "LOAD_CASE" or group.is_a("IfcStructuralLoadCase"):
+        if is_load_case(group):
             cases[group] = None
         elif group.PredefinedType == "LOAD_GROUP":
             groups.extend(_load_groups_of(group))
@@ -129,7 +143,6 @@ class LoadsExtractor:
     CURVE_LOAD_TYPE = "IfcStructuralCurveAction"
     AREA_LOAD_TYPE = "IfcStructuralPlanarAction"
     LOAD_GROUP_TYPE = "IfcStructuralLoadGroup"
-    LOAD_CASE_TYPE = "IfcStructuralLoadCase"
 
     def __init__(
         self,
@@ -267,6 +280,14 @@ class LoadsExtractor:
             self.logger.debug(f"The schema of this file has no {entity_type}")
             return []
 
+    def _load_case_entities(self) -> list:
+        """The load cases of the file, of either kind (``is_load_case()``)."""
+        return [
+            group
+            for group in self._entities_of_type(self.LOAD_GROUP_TYPE)
+            if is_load_case(group)
+        ]
+
     def extract_load_groups(self) -> List[LoadGroup]:
         """
         Extract all load groups from the IFC file.
@@ -286,11 +307,11 @@ class LoadsExtractor:
         for group_entity in self._entities_of_type(self.LOAD_GROUP_TYPE):
             if not group_entity.is_a(
                 "IfcStructuralLoadCombination"
-            ) and not group_entity.is_a("IfcStructuralLoadCase"):
+            ) and not is_load_case(group_entity):
                 load_group_entities.append(group_entity)
         self.logger.info(f"Found {len(load_group_entities)} load groups")
 
-        load_case_entities = self._entities_of_type(self.LOAD_CASE_TYPE)
+        load_case_entities = self._load_case_entities()
         self.logger.info(f"Found {len(load_case_entities)} load cases")
 
         # Create domain objects for each load group and load case
@@ -321,7 +342,8 @@ class LoadsExtractor:
                 description=case_description,
                 is_load_case=True,
             )
-            coefficients = case_entity.SelfWeightCoefficients
+            # Only an IfcStructuralLoadCase has them
+            coefficients = getattr(case_entity, "SelfWeightCoefficients", None)
             if coefficients is not None:
                 # In the "global" axes, the analysis model's SharedPlacement
                 load_case.self_weight_coefficients = [
@@ -414,17 +436,21 @@ class LoadsExtractor:
         ``Coefficient`` multiplies all of them, and a case assigned twice has
         its factors added.
 
-        A combination that names no load case, or something that is not a
-        load case, cannot be formed: it is left out, and a warning says so.
+        A load group of type LOAD_GROUP in a combination stands for what it
+        groups, each with the group's ``Coefficient`` as a further factor:
+        RFEM writes each term of a combination as such a group holding one
+        load case (combination -> group, Coefficient 1.5 -> load case).
+
+        A combination that names no load case, or something that is neither
+        a load case nor a load group of them, cannot be formed: it is left
+        out, and a warning says so.
 
         Returns:
             List of extracted load combinations as domain objects
         """
         self.logger.info("Extracting load combinations")
 
-        load_case_ids = {
-            case.GlobalId for case in self._entities_of_type(self.LOAD_CASE_TYPE)
-        }
+        load_case_ids = {case.GlobalId for case in self._load_case_entities()}
         assignments: Dict[str, List[Any]] = {}
         for rel in self.ifc.by_type("IfcRelAssignsToGroup"):
             group = rel.RelatingGroup
@@ -444,19 +470,40 @@ class LoadsExtractor:
             )
             coefficient = entity.Coefficient
             scale = 1.0 if coefficient is None else float(coefficient)
-            strangers = []
-            for rel in assignments.get(entity.GlobalId, []):
-                factor = scale
-                if rel.is_a("IfcRelAssignsToGroupByFactor"):
-                    factor *= float(rel.Factor)
-                for obj in rel.RelatedObjects:
-                    if obj.GlobalId in load_case_ids:
-                        combination.add_load_group(
-                            obj.GlobalId,
-                            factor + combination.load_groups.get(obj.GlobalId, 0.0),
-                        )
-                    else:
-                        strangers.append(obj)
+            strangers: List[Any] = []
+            # (group, factor of what it groups, groups it is nested in)
+            pending = [(entity, scale, (entity.GlobalId,))]
+            while pending:
+                group, group_factor, path = pending.pop(0)
+                for rel in assignments.get(group.GlobalId, []):
+                    factor = group_factor
+                    if rel.is_a("IfcRelAssignsToGroupByFactor"):
+                        factor *= float(rel.Factor)
+                    for obj in rel.RelatedObjects:
+                        if obj.GlobalId in load_case_ids:
+                            combination.add_load_group(
+                                obj.GlobalId,
+                                factor + combination.load_groups.get(obj.GlobalId, 0.0),
+                            )
+                        elif (
+                            obj.is_a(self.LOAD_GROUP_TYPE)
+                            and obj.PredefinedType == "LOAD_GROUP"
+                            and obj.GlobalId not in path
+                            and self._groups_only_load_cases(
+                                obj, assignments, load_case_ids
+                            )
+                        ):
+                            coefficient = obj.Coefficient
+                            pending.append(
+                                (
+                                    obj,
+                                    factor
+                                    * (1.0 if coefficient is None else coefficient),
+                                    path + (obj.GlobalId,),
+                                )
+                            )
+                        else:
+                            strangers.append(obj)
             label = f"{combination.name} ({entity.GlobalId})"
             if strangers:
                 not_cases.append(
@@ -497,6 +544,35 @@ class LoadsExtractor:
 
         self.logger.info(f"Extracted {len(load_combinations)} load combinations")
         return load_combinations
+
+    def _groups_only_load_cases(
+        self, group, assignments, load_case_ids, seen: Tuple[str, ...] = ()
+    ) -> bool:
+        """Whether a load group in a combination groups load cases and nothing else.
+
+        A load group of actions is part of a load case, not a term of a
+        combination: the combination cannot be formed from load case results.
+        Load groups nested in it are looked into; one that groups nothing is
+        not a group of load cases.
+        """
+        objects = [
+            obj
+            for rel in assignments.get(group.GlobalId, [])
+            for obj in rel.RelatedObjects
+        ]
+        seen = seen + (group.GlobalId,)
+        if not objects:
+            return False
+        return all(
+            obj.GlobalId in load_case_ids
+            or (
+                obj.is_a(self.LOAD_GROUP_TYPE)
+                and obj.PredefinedType == "LOAD_GROUP"
+                and obj.GlobalId not in seen
+                and self._groups_only_load_cases(obj, assignments, load_case_ids, seen)
+            )
+            for obj in objects
+        )
 
     def _create_domain_loads(self, ifc_load) -> List[Load]:
         """
@@ -1316,10 +1392,9 @@ class LoadsExtractor:
             if getattr(rel, "RelatingElement", None) is not None
         ]
         for item in items:
-            representation = getattr(item, "Representation", None)
-            for rep in getattr(representation, "Representations", None) or []:
-                if rep.RepresentationType != "Vertex":
-                    continue
+            # Also one with no type, read from its items (RFEM)
+            rep = get_representation(item, "Vertex")
+            if rep is not None:
                 candidates.extend(
                     (item, getattr(vertex, "VertexGeometry", None))
                     for vertex in rep.Items

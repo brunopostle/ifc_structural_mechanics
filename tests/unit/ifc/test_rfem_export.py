@@ -8,6 +8,13 @@ every topology representation unset; it names material properties 'Young
 modulus' and the like; and it puts a surface connection with no condition on
 each surface member. Each stopped the analysis or put the slab upside down,
 3 m below the columns it rests on.
+
+``examples/rfem/bonsai_frame_3d_rfem.ifc`` is the Bonsai example frame built
+again in RFEM 6.15 and exported, unchanged (reported 2026-11-18). Its load
+cases are load groups of type LOAD_CASE, each term of a combination is a load
+group with a Coefficient holding one load case, its point loads are on
+connections with untyped representations, and the edges of its faces' loops
+are out of order. Each stopped the analysis or lost its load cases.
 """
 
 import os
@@ -18,6 +25,7 @@ import pytest
 ifcopenshell = pytest.importorskip("ifcopenshell")
 
 from ifc_structural_mechanics.ifc.entity_identifier import (  # noqa: E402
+    face_loops,
     get_item_transformation,
     get_representation,
 )
@@ -27,6 +35,7 @@ from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
 )
 
 RFEM = os.path.join("examples", "rfem", "structure_01_rfem.ifc")
+FRAME = os.path.join("examples", "rfem", "bonsai_frame_3d_rfem.ifc")
 SLAB = "0MBetTBij3CBOT8x93dlIS"
 WALL = "30Nu9FEuzBzefjy_PVyI1C"
 COLUMN = "3YkvmL4l5C5hq2iKoNYoDq"
@@ -35,8 +44,8 @@ COLUMN = "3YkvmL4l5C5hq2iKoNYoDq"
 _FILES = []
 
 
-def _open():
-    model = ifcopenshell.open(RFEM)
+def _open(path=RFEM):
+    model = ifcopenshell.open(path)
     _FILES.append(model)
     return model
 
@@ -172,3 +181,76 @@ class TestConnectionThatDoesNothing:
         with pytest.raises(ModelExtractionError) as error:
             Extractor(model).extract_model()
         assert error.value.code == "E-SUP-004"
+
+
+class TestFrameLoadCases:
+    """Load groups of type LOAD_CASE are load cases, as IFC4 allows."""
+
+    def test_load_cases_are_read(self):
+        extracted = Extractor(_open(FRAME)).extract_model()
+        cases = {g.name: g for g in extracted.load_groups if g.is_load_case}
+        assert set(cases) == {"Q", "Wx", "Wy"}
+        assert [len(cases[n].actions) for n in ("Q", "Wx", "Wy")] == [1, 2, 3]
+
+    def test_combinations_through_factor_groups(self):
+        """Combination -> load group (Coefficient) -> load case."""
+        extracted = Extractor(_open(FRAME)).extract_model()
+        names = {g.id: g.name for g in extracted.load_groups}
+        combinations = {
+            c.name: {names[i]: f for i, f in c.load_groups.items()}
+            for c in extracted.load_combinations
+        }
+        assert combinations == {
+            "Load Combination 1": {"Q": 1.5, "Wx": pytest.approx(0.9)},
+            "Load Combination 2": {"Q": pytest.approx(1.05), "Wy": 1.5},
+            "Load Combination 3": {"Q": 1.0},
+        }
+        assert "W-LOD-005" not in _codes(extracted)
+
+    def test_point_loads_are_at_their_untyped_nodes(self):
+        extracted = Extractor(_open(FRAME)).extract_model()
+        (wy,) = [g for g in extracted.load_groups if g.name == "Wy"]
+        positions = sorted(tuple(np.round(load.position, 6)) for load in wy.actions)
+        # RFEM's Z down, turned up by the SharedPlacement
+        assert positions == [(0.0, 0.0, 3.5), (6.0, 0.0, 3.5), (12.0, 0.0, 3.5)]
+
+
+class TestUnchainedEdgeLoop:
+    """RFEM gives a face's edges in the sense of each edge, out of order."""
+
+    def test_outline_is_read_end_to_end(self):
+        model = _open(FRAME)
+        face = get_representation(
+            model.by_guid("30OGJYwY1Bax8sEPxwObEn"), "Face"
+        ).Items[0]
+        outline, holes = face_loops(face)
+        assert holes == []
+        assert np.round(outline, 6).tolist() == [
+            [6.0, 0.0, -3.5],
+            [12.0, 0.0, -3.5],
+            [12.0, -5.0, -3.5],
+            [6.0, -5.0, -3.5],
+        ]
+
+    def test_both_surfaces_are_reported(self):
+        extracted = Extractor(_open(FRAME)).extract_model()
+        (found,) = [w for w in extracted.analysis_warnings if w["code"] == "W-IFC-008"]
+        assert set(found["ifc_guids"]) == {
+            "30OGJYwY1Bax8sEPxwObEn",
+            "1JxZ01lwX6HODpvlB5C06b",
+        }
+
+    def test_edges_that_make_no_outline_are_an_error(self):
+        model = _open(FRAME)
+        member = model.by_guid("30OGJYwY1Bax8sEPxwObEn")
+        loop = get_representation(member, "Face").Items[0].Bounds[0].Bound
+        # Leave out one side: the rest do not close
+        loop.EdgeList = loop.EdgeList[:3]
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-IFC-002"
+        assert "do not join up into one closed outline" in str(error.value)
+
+    def test_chained_loop_is_not_reported(self):
+        extracted = Extractor(_open()).extract_model()
+        assert "W-IFC-008" not in _codes(extracted)

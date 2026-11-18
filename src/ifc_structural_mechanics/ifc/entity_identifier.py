@@ -191,12 +191,7 @@ def face_loops(face, unit_scale: float = 1.0) -> tuple:
     def corners(bound) -> list:
         loop = bound.Bound
         if loop.is_a("IfcEdgeLoop"):
-            points = []
-            for edge in loop.EdgeList:
-                element = edge.EdgeElement if edge.is_a("IfcOrientedEdge") else edge
-                forward = getattr(edge, "Orientation", True)
-                vertex = element.EdgeStart if forward else element.EdgeEnd
-                points.append(get_coordinate(vertex.VertexGeometry, unit_scale))
+            points = [start for start, _ in _chained_edges(loop, unit_scale)[0]]
         elif loop.is_a("IfcPolyLoop"):
             points = [get_coordinate(point, unit_scale) for point in loop.Polygon]
         else:
@@ -210,6 +205,93 @@ def face_loops(face, unit_scale: float = 1.0) -> tuple:
         return [list(point) for point in points]
 
     return corners(outer[0]), [corners(b) for b in bounds if b is not outer[0]]
+
+
+def _edge_ends(loop, unit_scale: float) -> list:
+    """The (start, end) coordinates of each edge of an ``IfcEdgeLoop``, in its sense.
+
+    Raises:
+        ValueError: If an end has no coordinates.
+    """
+    ends = []
+    for edge in loop.EdgeList:
+        element = edge.EdgeElement if edge.is_a("IfcOrientedEdge") else edge
+        pair = [
+            get_coordinate(vertex.VertexGeometry, unit_scale)
+            for vertex in (element.EdgeStart, element.EdgeEnd)
+        ]
+        if any(point is None for point in pair):
+            raise ValueError("A corner of its face has no coordinates.")
+        if not getattr(edge, "Orientation", True):
+            pair.reverse()
+        ends.append(tuple(tuple(float(v) for v in point) for point in pair))
+    return ends
+
+
+def _chained_edges(loop, unit_scale: float) -> tuple:
+    """The edges of an ``IfcEdgeLoop`` end to end, and whether they were so.
+
+    IFC wants each edge of a loop to start where the one before it ends
+    (IfcEdgeLoop IsContinuous). RFEM writes them in another order, and in
+    the sense of their edges: the outline is still there, and is read by
+    following the edges from the first, in its sense, each to the one that
+    meets its end.
+
+    Returns:
+        (edges, chained): the (start, end) of each edge, in the order and
+        sense of the outline, and whether the loop gave them so.
+
+    Raises:
+        ValueError: If the edges do not form one closed outline.
+    """
+    edges = _edge_ends(loop, unit_scale)
+    if not edges:
+        raise ValueError("The IfcEdgeLoop of its face has no edges.")
+    points = np.array([point for edge in edges for point in edge])
+    size = float(np.max(np.ptp(points, axis=0)))
+    tolerance = _CORNER_TOLERANCE * max(size, 1.0)
+
+    def same(a, b) -> bool:
+        return math.dist(a, b) <= tolerance
+
+    if all(same(edges[i - 1][1], edge[0]) for i, edge in enumerate(edges)):
+        return edges, True
+    chain, rest = [edges[0]], edges[1:]
+    while rest:
+        end = chain[-1][1]
+        meeting = [i for i, e in enumerate(rest) if same(e[0], end) or same(e[1], end)]
+        if len(meeting) != 1:
+            break
+        start, finish = rest.pop(meeting[0])
+        chain.append((start, finish) if same(start, end) else (finish, start))
+    if rest or not same(chain[-1][1], chain[0][0]):
+        where = ", ".join(f"{v:.6g}" for v in chain[-1][1])
+        raise ValueError(
+            "The edges of its IfcEdgeLoop do not start each where the one "
+            "before it ends, and do not join up into one closed outline when "
+            f"followed from the first (stuck at ({where})). Give the loop its "
+            "edges in order, each IfcOrientedEdge with the Orientation that "
+            "makes it start at the end of the one before."
+        )
+    return chain, False
+
+
+def unchained_edge_loops(face) -> bool:
+    """Whether a bound of an ``IfcFace`` has edges out of order (``_chained_edges``).
+
+    Raises:
+        ValueError: As ``face_loops()``.
+    """
+    return any(
+        not _chained_edges(bound.Bound, 1.0)[1]
+        for bound in face.Bounds or []
+        if bound.Bound.is_a("IfcEdgeLoop")
+    )
+
+
+#: How far two ends of edges may be apart and be one corner, as a share of
+#: the size of their loop (at least 1 in its units)
+_CORNER_TOLERANCE = 1e-6
 
 
 #: How far, in metres, a corner of a face may be from its plane

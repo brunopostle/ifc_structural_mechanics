@@ -33,6 +33,7 @@ from .entity_identifier import (
     implied_face_axes,
     missing_edge_message,
     transform_vectors,
+    unchained_edge_loops,
 )
 
 
@@ -85,6 +86,7 @@ class ConnectionsExtractor:
         # Warnings for the results (``utils.messages.warning``)
         self.warnings: List[Dict] = []
         self._faces_without_surface: List[str] = []
+        self._unchained_faces: List[str] = []
         self._idle_connections: List[str] = []
         # Stiffness units that depend on the length unit and that the file
         # does not declare, with the connections read in them (94g.32)
@@ -361,6 +363,8 @@ class ConnectionsExtractor:
                 code="E-SUP-004",
             )
         corners = self._face_corners(item)
+        if unchained_edge_loops(item):
+            self._note_unchained_face(ifc_connection.GlobalId)
         transformation = get_item_transformation(ifc_connection, self.length_scale)
         face = [[float(v) * self.length_scale for v in corner] for corner in corners]
         if transformation:
@@ -559,6 +563,24 @@ class ConnectionsExtractor:
                 f"Could not read the local axes of connection {getattr(ifc_connection, 'GlobalId', '?')}: {e}",
                 code="E-IFC-005",
             ) from e
+
+    def _note_unchained_face(self, connection_id: str) -> None:
+        """One W-IFC-008 for every surface connection whose edges are out of order."""
+        found = self._unchained_faces
+        if connection_id not in found:
+            found.append(connection_id)
+        self.warnings = [w for w in self.warnings if w["code"] != "W-IFC-008"]
+        self.warnings.append(
+            warning(
+                "W-IFC-008",
+                f"{len(found)} surface connection(s) have an outline whose "
+                f"edges are out of order ({', '.join(found[:3])}"
+                f"{', ...' if len(found) > 3 else ''}), where IFC wants each "
+                "to start where the one before ends. Each outline is read by "
+                "following its edges end to end.",
+                ifc_guids=found,
+            )
+        )
 
     def _note_face_without_surface(self, connection_id: str) -> None:
         """One W-IFC-004 for every surface connection read on its corners."""

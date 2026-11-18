@@ -148,7 +148,10 @@ class TestLoadsExtractor:
         self.load_case.Name = "Test Load Case"
         self.load_case.Description = "A test load case"
         self.load_case.PredefinedType = "LOAD_CASE"
-        self.load_case.is_a = lambda x: x == "IfcStructuralLoadCase"
+        self.load_case.is_a = lambda x: x in (
+            "IfcStructuralLoadCase",
+            "IfcStructuralLoadGroup",
+        )
 
         # Setup RelAssignsToGroup for LOAD_CASE relationship with load groups
         self.rel_assigns_to_case = MagicMock()
@@ -178,13 +181,13 @@ class TestLoadsExtractor:
             elif entity_type == "IfcStructuralPlanarAction":
                 return [self.area_load]
             elif entity_type == "IfcStructuralLoadGroup":
-                # Return both groups and combinations for the tests
+                # Its subtype IfcStructuralLoadCase too, as ifcopenshell does
                 if (
                     hasattr(self, "mock_return_load_combination")
                     and self.mock_return_load_combination
                 ):
-                    return [self.load_group, self.load_combination]
-                return [self.load_group]
+                    return [self.load_group, self.load_case, self.load_combination]
+                return [self.load_group, self.load_case]
             elif entity_type == "IfcRelAssignsToGroup":
                 rel_list = [self.rel_assigns_to_group, self.rel_assigns_to_case]
                 if (

@@ -4170,6 +4170,46 @@ class TestRfemExport:
         )
 
 
+class TestRfemFrameExport:
+    """The Bonsai example frame built again in RFEM 6.15 and exported.
+
+    ``examples/rfem/bonsai_frame_3d_rfem.ifc``, as exported (reported
+    2026-11-18). Its load cases are load groups of type LOAD_CASE, and each
+    term of its combinations a load group with a Coefficient: once read as
+    one step with every load at once and no combinations. Its point loads
+    stopped the analysis (E-LOD-003), and the edges of its faces, out of
+    order, made Gmsh fail (E-MSH-001). The loads are those of the Bonsai
+    model's Q, Wx and Wy (no G), Wy in RFEM's +Y, which is -Y here: RFEM's
+    axes have Z down.
+    """
+
+    PATH = os.path.join("examples", "rfem", "bonsai_frame_3d_rfem.ifc")
+
+    def test_load_cases_and_combinations(self, tmp_path):
+        data = _run(self.PATH, tmp_path, mesh_size=0.5)
+        assert data["load_cases"] == ["Q", "Wx", "Wy"]
+        reactions = data["global_reactions"]["by_load_case"]
+        totals = {
+            case: [reactions[case][k] for k in ("fx_N", "fy_N", "fz_N")]
+            for case in data["load_cases"]
+        }
+        # 3 kN/m2 on 6 x 5 m; 2 kN/m on two 3.5 m columns; 3 x 10 kN
+        assert totals["Q"] == pytest.approx([0.0, 0.0, 90000.0], abs=1.0)
+        assert totals["Wx"] == pytest.approx([-14000.0, 0.0, 0.0], abs=1.0)
+        assert totals["Wy"] == pytest.approx([0.0, 30000.0, 0.0], abs=1.0)
+        for case in data["load_cases"]:
+            assert reactions[case]["moment_imbalance_Nm"] < 1.0
+        factors = {c["name"]: c["factors"] for c in data["load_combinations"]}
+        assert factors == {
+            "Load Combination 1": {"Q": 1.5, "Wx": pytest.approx(0.9)},
+            "Load Combination 2": {"Q": pytest.approx(1.05), "Wy": 1.5},
+            "Load Combination 3": {"Q": 1.0},
+        }
+        codes = {w["code"] for w in data["warnings"]}
+        assert "W-IFC-008" in codes
+        assert not codes & {"W-LOD-002", "W-LOD-005", "W-CHK-001", "W-CHK-002"}
+
+
 class TestEccentricityStatedOnly:
     """A column drawn up to its joint, its eccentricity only in the relation.
 

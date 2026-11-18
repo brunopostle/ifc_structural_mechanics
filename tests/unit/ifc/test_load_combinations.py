@@ -140,6 +140,47 @@ class TestFactors:
         assert combinations["DCon1"] == {"Dead": 1.5, "Live": -1.0}
 
 
+class TestFactorGroups:
+    """A load group of load cases in a combination stands for them (RFEM)."""
+
+    def _factor_group(self, model, cases, coefficient):
+        group = model.create_entity(
+            "IfcStructuralLoadGroup",
+            GlobalId=ifcopenshell.guid.new(),
+            PredefinedType="LOAD_GROUP",
+            ActionType="NOTDEFINED",
+            ActionSource="NOTDEFINED",
+            Coefficient=coefficient,
+        )
+        _assign(model, cases, group)
+        return group
+
+    def test_coefficients_multiply(self):
+        model = _open("beam_01")
+        live = self._factor_group(model, [_group_case(model, "Live")], 2.0)
+        outer = self._factor_group(model, [live], 0.5)
+        _assign(model, [outer], _group(model, "DCon1"), 3.0)
+        combinations, warnings = _extract(model)
+        assert combinations["DCon1"] == {"Dead": 1.5, "Live": 3.0}
+        assert not [w for w in warnings if "not a load case" in w]
+
+    def test_group_without_a_coefficient_counts_once(self):
+        model = _open("beam_01")
+        live = self._factor_group(model, [_group_case(model, "Live")], None)
+        _assign(model, [live], _group(model, "DCon1"))
+        combinations, _ = _extract(model)
+        assert combinations["DCon1"] == {"Dead": 1.5, "Live": 1.0}
+
+    def test_group_of_a_case_and_an_action_is_not_formed(self):
+        model = _open("beam_01")
+        action = model.by_type("IfcStructuralAction")[0]
+        mixed = self._factor_group(model, [_group_case(model, "Live"), action], 2.0)
+        _assign(model, [mixed], _group(model, "DCon1"))
+        combinations, warnings = _extract(model)
+        assert "DCon1" not in combinations
+        assert any(mixed.GlobalId in w and "not a load case" in w for w in warnings)
+
+
 class TestWhatCannotBeFormed:
     def test_combination_of_nothing_is_left_out_and_reported(self):
         model = _open("beam_01")

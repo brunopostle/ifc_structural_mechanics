@@ -26,6 +26,7 @@ from ..ifc.entity_identifier import (
     implied_face_axes,
     missing_edge_message,
     transform_vectors,
+    unchained_edge_loops,
 )
 from ..utils.error_handling import ModelExtractionError
 from ..utils.messages import warning
@@ -163,6 +164,7 @@ class MembersExtractor:
         self._disagreeing_psets: List[str] = []
         self._sloped_profiles: List[str] = []
         self._faces_without_surface: List[str] = []
+        self._unchained_faces: List[str] = []
 
     def extract_all_members(self) -> List[StructuralMember]:
         """
@@ -360,6 +362,8 @@ class MembersExtractor:
 
         face = representation.Items[0]
         _, holes = self._face_loops(face, self.length_scale)
+        if unchained_edge_loops(face):
+            self._note_unchained_face(entity.GlobalId)
         implied_normal = None
         if not face.is_a("IfcFaceSurface"):
             try:
@@ -599,6 +603,24 @@ class MembersExtractor:
             return outline or None
 
         return None
+
+    def _note_unchained_face(self, member_id: str) -> None:
+        """One W-IFC-008 for every surface member whose edges are out of order."""
+        found = self._unchained_faces
+        if member_id not in found:
+            found.append(member_id)
+        self.warnings = [w for w in self.warnings if w["code"] != "W-IFC-008"]
+        self.warnings.append(
+            warning(
+                "W-IFC-008",
+                f"{len(found)} surface member(s) have an outline whose edges "
+                f"are out of order ({', '.join(found[:3])}"
+                f"{', ...' if len(found) > 3 else ''}), where IFC wants each "
+                "to start where the one before ends. Each outline is read by "
+                "following its edges end to end.",
+                ifc_guids=found,
+            )
+        )
 
     def _warn_faces_without_surface(self) -> None:
         """One W-IFC-004 for every surface member that is a plain IfcFace."""
