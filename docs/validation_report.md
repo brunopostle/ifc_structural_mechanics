@@ -11,7 +11,8 @@ pipeline. Tests are grouped into two tiers:
   joints and loads.
 
 All of them live in `tests/validation/`, run under `pytest`, and are skipped when `ccx`
-is not on the PATH. Figures below were measured on 2026-10-10 with CalculiX 2.23.
+is not on the PATH. Figures below were measured on 2026-10-10 with CalculiX 2.23, and
+those of the Tier 2 tables and the example baselines again on 2026-11-27.
 
 ---
 
@@ -174,55 +175,62 @@ weight taken out of the case.
 
 | Case | Section and element | Reference | Pipeline | Error |
 |------|---------------------|-----------|----------|-------|
-| Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B32R | 0.2814 mm | 0.2800 mm | 0.5% |
-| Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B32R | 1.1115 mm | 1.1059 mm | 0.5% |
+| Cantilever, strong axis (as authored) | 0.2 × 0.4 rectangle, B32R | 0.2814 mm | 0.2814 mm | < 0.1% |
+| Cantilever, weak axis (`Axis` rotated 90°) | 0.2 × 0.4 rectangle, B32R | 1.1115 mm | 1.1108 mm | < 0.1% |
 | Cantilever reaction | 0.2 × 0.4 rectangle, B32R | 18.36 N | 18.36 N | 0.0% |
-| Cantilever, strong axis | 200 × 400 I, equivalent rectangle | 0.1419 mm | 0.1417 mm | 0.2% |
-| Cantilever, weak axis | 200 × 400 I, equivalent rectangle | 1.6087 mm | 1.5972 mm | 0.7% |
+| Cantilever, strong axis | 200 × 400 I, equivalent rectangle | 0.1419 mm | 0.1419 mm | < 0.1% |
+| Cantilever, weak axis | 200 × 400 I, equivalent rectangle | 1.6087 mm | 1.6087 mm | < 0.1% |
 | Cantilever reaction | 200 × 400 I, equivalent rectangle | 2.663 N | 2.663 N | 0.0% |
 | Cantilever, strong axis | 200 × 400 I, U1 (`--open-sections user-element`) | 0.1419 mm | 0.1419 mm | < 0.1% |
 | Cantilever, weak axis | 200 × 400 I, U1 | 1.6144 mm | 1.6143 mm | < 0.1% |
-| Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6584 mm | 0.3% |
-| Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3535 mm | 1.2% |
-| Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1793 mm | 1.2% |
-| Fixed-fixed beam as shipped (20 kN and its weight), midspan | 0.3 m square, B32R | 0.4280 mm | 0.4252 mm | 0.6% |
+| Cantilever | 150 mm round bar, equivalent rectangle | 0.6602 mm | 0.6598 mm | < 0.1% |
+| Cantilever | 300 × 10 mm tube, equivalent rectangle | 0.3579 mm | 0.3545 mm | 0.9% |
+| Cantilever | 200 × 400 × 10 mm box, equivalent rectangle | 0.1814 mm | 0.1798 mm | 0.9% |
+| Fixed-fixed beam as shipped (20 kN and its weight), midspan | 0.3 m square, B32R | 0.4280 mm | 0.4279 mm | < 0.1% |
 | Fixed-fixed beam as shipped, reaction | 0.3 m square, B32R | 28.829 kN | 28.829 kN | 0.0% |
-| Fixed-fixed beam, its weight alone, midspan | 0.3 m square, B32R | 0.0774 mm | 0.0765 mm | 1.2% |
-| Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
-| Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1733 mm | 1.1% |
+| Fixed-fixed beam, its weight alone, midspan | 0.3 m square, B32R | 0.0774 mm | 0.0774 mm | < 0.1% |
+| Fixed-fixed beam, 5 kN/m along global −Z | 0.3 m square, B32R | 0.1753 mm | 0.1753 mm | < 0.1% |
+| Fixed-fixed beam, 5 kN/m along global +Y | 0.3 m square, B32R | 0.1753 mm | 0.1750 mm | 0.2% |
 | Fixed-fixed beam, line-load reaction | 0.3 m square, B32R | 20.00 kN | 20.00 kN | 0.0% |
-| Fixed-fixed beam, midspan, 20 kN | 200 × 400 I, equivalent rectangle | 1.0776 mm | 1.1002 mm | 2.1% |
-| Fixed-fixed beam, 5 kN/m along global −Z | 200 × 400 I, equivalent rectangle | 0.5388 mm | 0.5389 mm | < 0.1% |
-| Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.376 mm | 0.5% |
-| Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.358 mm | 0.1% |
+| Fixed-fixed beam, midspan, 20 kN | 200 × 400 I, equivalent rectangle | 1.0776 mm | 1.0776 mm | < 0.1% |
+| Fixed-fixed beam, 5 kN/m along global −Z | 200 × 400 I, equivalent rectangle | 0.5388 mm | 0.5393 mm | 0.1% |
+| Slab on two cantilever beams under its edges | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.397 mm | 1.1% |
+| Slab on two cantilever beams inside it | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.378 mm | 0.5% |
 | Slab on two cantilever beams, reaction | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 99.47 N | 99.47 N | 0.0% |
-| Same, each beam's own entry in `results.json` | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.362 mm | 0.1% |
-| Slab on two cantilever beams inside it | 200 × 400 I beams (equivalent rectangle), 0.1 m slab | 4.913 mm | 4.951 mm | 0.8% |
+| Same, each beam's own entry in `results.json` | 0.2 × 0.4 beams, 0.1 m slab, B32R + S6 | 3.360 mm | 3.382 mm | 0.7% |
+| Slab on two cantilever beams inside it | 200 × 400 I beams (equivalent rectangle), 0.1 m slab | 4.913 mm | 5.041 mm | 2.6% |
 
 **Tolerance**: 3% on deflection, 0.01% on the self-weight reaction. **Status**: PASS
+
+Since 2026-10-10 the cantilevers have lost the stiffness their clamped root and the
+shear modulus of a solid rectangle gave them (`aiz.91`, `aiz.101`), and are now
+Timoshenko's to 1e-5. The slabs on cantilevers became softer with them, which those on
+rectangles have room for; the one on I beams went from 0.8% to 2.6%, near its
+tolerance, and is not explained yet (`849`).
 
 Section forces and member stress from `results.json`, same models (tolerance 1%):
 
 | Case | Quantity | Statics | Pipeline | Error |
 |------|----------|---------|----------|-------|
 | Cantilever, 0.2 × 0.4 rectangle | Shear at the root | 18.364 N | 18.364 N | < 0.1% |
-| Cantilever, 0.2 × 0.4 rectangle | Moment at the root | 27.546 N·m | 27.545 N·m | < 0.1% |
-| Cantilever, 0.2 × 0.4 rectangle | Largest normal stress | 5165.0 Pa | 5164.7 Pa | < 0.1% |
-| Cantilever, weak axis | Moment (reported as `Mf2`) | 27.546 N·m | 27.545 N·m | < 0.1% |
+| Cantilever, 0.2 × 0.4 rectangle | Moment at the root | 27.546 N·m | 27.546 N·m | < 0.1% |
+| Cantilever, 0.2 × 0.4 rectangle | Largest normal stress | 5165.0 Pa | 5164.9 Pa | < 0.1% |
+| Cantilever, weak axis | Moment (reported as `Mf2`) | 27.546 N·m | 27.546 N·m | < 0.1% |
 | Cantilever, 200 × 400 I, equivalent rectangle | Moment at the root | 3.9942 N·m | 3.994 N·m | < 0.1% |
-| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, strong axis | 2435.9 Pa | 2435.8 Pa | < 0.1% |
-| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, weak axis | 14961.6 Pa | 14960.8 Pa | < 0.1% |
+| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, strong axis | 2435.9 Pa | 2435.9 Pa | < 0.1% |
+| Cantilever, 200 × 400 I, equivalent rectangle | Normal stress, weak axis | 14961.6 Pa | 14961.5 Pa | < 0.1% |
 | Fixed-fixed beam as shipped (20 kN and its weight) | Shear at the ends, (P + w L) / 2 | 14.4145 kN | 14.4140 kN | < 0.1% |
-| Fixed-fixed beam as shipped | Moment at the ends, P L / 8 + w L² / 12 | 12.943 kN·m | 12.951 kN·m | 0.1% |
+| Fixed-fixed beam as shipped | Moment at the ends, P L / 8 + w L² / 12 | 12.943 kN·m | 12.943 kN·m | < 0.1% |
 
 CalculiX can write beam section forces, but only in its two-dimensional output mode,
 where shell stresses are averaged through the thickness and their bending part is lost.
 So they are integrated here from the ordinary three-dimensional results: at each
 cross-section of an expanded beam element that has nodes (both ends, and the middle of a
 quadratic element) the nodal stresses are interpolated over the rectangle and integrated
-into an axial force, two shear forces, two bending moments and a torque. The fixed-fixed
-row is from a 0.5 m mesh, eight elements; at the same mesh the cantilever's root moment is
-0.5% low.
+into an axial force, two shear forces, two bending moments and a torque. The rows are
+from a 0.05 m mesh. A coarse mesh is as good: the moment along an element under a load
+along it is put right from its shear (`aiz.89`, `docs/design/known_limitations.md`),
+where at a 0.5 m mesh the cantilever's root moment was once 0.5% low.
 
 For a member analysed as an equivalent rectangle the solver's stresses are those of the
 stand-in, but their resultants are the member's real forces, and the stress reported is
@@ -284,21 +292,25 @@ What the equivalent rectangle does not have is the profile's stresses, so
 `results.json` takes them from the section forces. Nor can it have the profile's shear
 and torsional stiffness at once; see Torsion below. U1 elements with a general section remain available with
 `--open-sections user-element` for models made of such members only. On `portal_01` the
-two agree: 2.172 mm with equivalent rectangles and 2.181 mm with U1 at a 0.25 m mesh.
+two agree: 2.186 mm with equivalent rectangles and 2.172 mm with U1 at a 0.25 m mesh.
 
 **T, angle and channel**, all 200 × 400 mm, as cantilevers under self-weight about both
-axes (0.05 m mesh, tolerance 3%). The reference uses the second moments about the
-centroidal axes parallel to the legs, computed in the test from the section's rectangles.
-Measured again on 2026-11-07, with each member at its centroid (below):
+axes (0.05 m mesh, tolerance 3%). The reference is beam theory with the second moments
+and the product of inertia worked out in the test from the section's rectangles. Measured
+again on 2026-11-27, with each member at its centroid (below) and the angle about its
+principal axes (`94g.37`):
 
 | Section | Strong axis: theory / pipeline | Weak axis: theory / pipeline |
 |---------|-------------------------------|------------------------------|
 | T | 0.2405 / 0.2405 mm (< 0.1%) | 2.1608 / 2.1608 mm (< 0.1%) |
-| Angle | 0.2264 / 0.2265 mm (< 0.1%) | 1.2464 / 1.2464 mm (< 0.1%) |
+| Angle, down | 0.3316 / 0.3326 mm (0.3%) | 1.8394 / 1.8383 mm (< 0.1%) |
+| Angle, across | 0.4376 / 0.4395 mm (0.4%) | 0.4376 / 0.4395 mm (0.4%) |
 | Channel | 0.1419 / 0.1419 mm (< 0.1%) | 0.8772 / 0.8772 mm (< 0.1%) |
 
-For the angle this is the library's assumption rather than the whole truth: its principal
-axes are rotated, and a real angle also moves sideways. A channel is an
+The angle, 400 × 200 mm, is unequal: its principal axes are turned about 15 degrees from
+its legs, so under its weight it moves across as well as down. Until 2026-11-11 it was
+analysed about its legs, as if it did not, and gave 0.2265 and 1.2464 mm down and nothing
+across. A channel is an
 `IfcUShapeProfileDef`. Until 2026-10-11 the extractor looked for an entity name that does
 not exist in IFC, so every real channel became a default 0.1 × 0.2 m rectangle without a
 word (682% out on this case). A profile the library cannot read, a Z section for
@@ -326,18 +338,18 @@ by a stiff link at every node, as thick as keeps it within 1e-5.
 
 | Case | Quantity | Theory | Pipeline | Error |
 |------|----------|--------|----------|-------|
-| 20 kN at midspan, 0.3 m square | Deflection | 1.3382 mm | 1.3383 mm | < 0.1% |
+| 20 kN at midspan, 0.3 m square | Deflection | 1.3382 mm | 1.3390 mm | < 0.1% |
 | 20 kN at midspan, 0.3 m square | Moment / shear | 20.000 kN·m / 10.000 kN | 20.000 / 9.9996 | < 0.1% |
-| 5 kN/m, 0.3 m square | Deflection | 0.8337 mm | 0.8337 mm | < 0.1% |
+| 5 kN/m, 0.3 m square | Deflection | 0.8337 mm | 0.8345 mm | 0.1% |
 | 5 kN/m, 0.3 m square | Moment at midspan | 10.000 kN·m | 10.026 kN·m | 0.3% |
-| 5 kN/m, 200 × 400 I | Deflection | 1.8940 mm | 1.8983 mm | 0.2% |
+| 5 kN/m, 200 × 400 I | Deflection | 1.8940 mm | 1.9006 mm | 0.3% |
 
 A pin here holds the three translations and rotation about the beam's axis. Supports that
 hold the translations alone, at both ends, leave the beam free to turn about its own
 axis. The solver does not object; it returns an arbitrary rotation, and the deflection
 read on the faces of the 0.3 m section came out as 2.92 mm instead of 1.34. Such a member
 is now held in torsion at one support and the analysis says so; the same case then gives
-1.3383 mm.
+1.3390 mm.
 
 **Torsion**: a 3 m cantilever with a 1 m arm at right angles on its tip and 1 kN on the
 end of the arm (0.125 m mesh). Statics fixes the forces whatever the stiffness: the
@@ -401,7 +413,7 @@ way round). Nothing used it before this.
 rectangle's two shear moduli are scaled by one number until the formula above gives G J
 for the section. The cost is shear stiffness, too high by the same number: 1.11 for the
 round bar, 1.40 for the 200 × 400 × 10 box, 1.88 for the 300 × 10 tube. That is why the
-tube and box cantilevers in the table above are 1.2% stiff where they used to be 0.2%.
+tube and box cantilevers in the table above are 0.9% stiff where the round bar is exact.
 Before this change the same sections had the right shear stiffness and 0.53, 0.71 and
 0.90 of their torsional stiffness.
 
@@ -475,6 +487,37 @@ With the columns continued 1 m above the slab, 84.93 N against 84.93 N.
 
 ---
 
+## Tier 2: Buckling and natural frequencies
+
+**Source**: `tests/validation/test_pipeline_benchmarks.py` (`TestBucklingResults`,
+`TestModalAnalysis`)
+
+**Buckling** through the pipeline is checked on Euler columns. A buckling analysis
+finds the factors of each load combination by itself, its load cases times their
+factors (`bqj`, 2026-11-27): three combinations of an axial and a sideways case each
+give the Euler factor of their own axial load within 0.4%, and a column whose load is
+doubled in a second set of loads has half the factor. Before, every load of the file
+was applied at once, which means nothing when the cases are alternatives.
+
+**Natural frequencies** (`--analysis-type modal`), with the mass of the materials
+only:
+
+- `cantilever_01`: its first four vertical bending modes are Timoshenko's with 5/6 to
+  1e-6; sideways they follow the shear modulus written across the width, 17% above
+  5/6 G, to 1e-3. Axial modes are exact; torsion of the solid rectangle is 0.8% low.
+- A 200 × 400 I section as its equivalent rectangle has the real section's mass and
+  rotary inertia, and its bending modes are Timoshenko's with κ = 1 on the real shear
+  areas to 1e-3. Its torsional modes are 5.4 times too high (30 times too stiff; see
+  Torsion above).
+- `slab_01` held in translation on its four edges is 1.4 to 1.7% below Mindlin's
+  simply supported plate, as its static deflection is 2.6 to 3.3% above Navier's.
+- `building_01` with its `Masonry` corrected (see the baselines below): 4.250, 4.481
+  and 5.485 Hz for the first three modes, against 4.25, 4.48 and 5.39 Hz in RFEM.
+
+A mechanism gives modes at or near zero frequency, which are reported (`W-CHK-003`).
+
+---
+
 ## Tier 2: Against Code_Aster
 
 **Source**: `tests/validation/test_pipeline_benchmarks.py` (`TestCodeAsterReferences`)
@@ -486,7 +529,7 @@ reference value is the largest nodal translation in
 
 | Model | Code_Aster | This library | Mesh | Error | Tested |
 |-------|-----------|--------------|------|-------|--------|
-| `cantilever_01` | 0.2766 mm | 0.2800 mm | 0.05 m | +1.2% (shear deflection) | yes, 3% |
+| `cantilever_01` | 0.2766 mm | 0.2814 mm | 0.05 m | +1.7% (shear deflection) | yes, 3% |
 | `structure_01` | 0.4273 mm | 0.4284 / 0.4332 / 0.4342 mm | 1.0 / 0.5 / 0.25 m | +0.3% / +1.4% / +1.6% | yes, 5% at 0.5 m, and convergence |
 | `slab_01`, supports as in the reference run | 0.3761 mm | 0.3686 / 0.3773 / 0.3796 mm | 1.0 / 0.5 / 0.25 m | −2.0% / +0.3% / +0.9% | yes, 3% at 0.5 m |
 | `grid_of_beams` | 0.3963 mm; 0.367 mm without the weight of its rigid arms | 0.3753 / 0.3754 / 0.3754 mm | 1.0 / 0.5 / 0.25 m | +2.3% against 0.367 | yes, 3% at 0.5 m, and 1% between meshes |
@@ -496,10 +539,10 @@ member in `results.json` at a 0.5 m mesh (tested to 10%):
 
 | Member | Code_Aster | This library, on the element faces | At the member axis |
 |--------|-----------|--------------|------|
-| Slab_01 | 0.4273 mm | 0.4333 mm | — |
-| Wall_01 | 0.0764 mm | 0.0810 mm | — |
-| Column_01 (pin-ended) | 0.0770 mm | 0.0832 mm | 0.0790 mm |
-| Column_02 | 0.0898 mm | 0.0919 mm | 0.0917 mm |
+| Slab_01 | 0.4273 mm | 0.4332 mm | — |
+| Wall_01 | 0.0764 mm | 0.0796 mm | — |
+| Column_01 (pin-ended) | 0.0770 mm | 0.0822 mm | 0.0804 mm |
+| Column_02 | 0.0898 mm | 0.0922 mm | 0.0916 mm |
 
 `results.json` takes its values from the nodes of the solid elements CalculiX expands
 beams and shells into, which lie on the faces of the member. Where a member rotates they
@@ -562,7 +605,7 @@ single maximum.
 
 Full pipeline, default 1.0 m mesh (2 m for `building_02`), quadratic elements. These are
 **regression baselines, not validated results**, except where a Tier 2 test covers the
-model. Measured 2026-10-31, CalculiX 2.23; the U1 figures for `portal_01` are older.
+model. Measured 2026-11-27, CalculiX 2.23.
 
 | Model | Load flag | Max displacement | Vertical reaction | Standing |
 |-------|-----------|------------------|-------------------|----------|
@@ -571,7 +614,7 @@ model. Measured 2026-10-31, CalculiX 2.23; the U1 figures for `portal_01` are ol
 | `structure_01` | `--gravity` | 0.428 mm | 660 N | Covered by Tier 2 (Code_Aster) |
 | `slab_01` | `--gravity` | 0.173 mm | 230 N | Covered by Tier 2 (beam theory) at 0.5 m; 5% stiff at 1.0 m |
 | `grid_of_beams` | `--gravity` | 0.375 mm | 273 N | Covered by Tier 2 (Code_Aster, corrected) |
-| `portal_01` | — | 2.19 mm | 42.7 kN | Reactions against the results in the file (Tier 2). 2.19 mm at 0.25 m; 2.06 and 2.18 mm with U1 elements. Until 2026-10-12 it was loaded on the whole beam, twice what the file says: 4.04 mm and 85.4 kN |
+| `portal_01` | — | 2.19 mm | 42.7 kN | Reactions against the results in the file (Tier 2). 2.19 mm at 0.25 m; 2.05 and 2.17 mm with U1 elements. Until 2026-10-12 it was loaded on the whole beam, twice what the file says: 4.04 mm and 85.4 kN |
 | `building_02` | — | 16.8 mm (Dead), 26.0 mm (Live), 15.3 mm (Extra_dead) | 67.0 MN (Dead), 30.0 MN (Live), 60.3 MN (Extra_dead) | At a 2 m mesh. `Dead` is the self-weight. At 4 m (measured before `Dead` was a case, with `--gravity`): 15.7 / 24.1 / 14.4 mm. Reactions match the applied loads; deflections plausible but not compared with a reference |
 | `building_01` | — | 6.78 mm (Dead), 0.289 mm (Live), 0.10 mm (floor finishing) | 48.55 MN (Dead), 282.0 kN (Live), 13.5 kN (floor finishing) | `Dead` is the self-weight, nearly all of it a `Masonry` of 202 t/m³ (written in kPa under a declared MPa by ETABS 17; W-MAT-005). At 0.5 m: 7.99 mm (Dead), 0.340 mm (Live). The largest displacements leave out the links and arms the writer adds, which once set those of `Dead` (`aiz.92`). Reactions match the applied loads; deflections unchecked |
 
@@ -890,11 +933,13 @@ which are both at the supports, is 3 367.
 `EQX` and `EQY`. `Live` and `Extra_dead` have loads, `Dead` is the self-weight alone,
 and the other three have nothing. Reactions: `Dead` 66.9681 MN, `Live` 30.0166 MN,
 `Extra_dead` 60.2858 MN, `1.4D+1.6L` 226.1821 MN = 1.4 × (66.9681 + 60.2858) +
-1.6 × 30.0166; largest displacement 16.8, 26.0, 15.3 and 54.9 mm (measured 2026-10-31). Until 2026-10-12
+1.6 × 30.0166; largest displacement 16.8, 26.0, 15.3 and 54.9 mm (measured 2026-10-31, and the same on
+2026-11-27). Until 2026-10-12
 `Dead` was left out, and `1.4D+1.6L` came to 132.4 MN and 44.5 mm. The combinations took the run from 178 s to 277 s (5.8 s each) and `results.json`
 from 5.4 to 43.7 MB when `Dead` was not a case, and left peak memory at 2.2 GB (one
-is held at a time). With `Dead` the file is 45.9 MB and the peak 2.2 to 2.3 GB; the
-run was timed at 184 s and, on a busy machine, 346 s.
+is held at a time). With `Dead` the file was 45.9 MB and the peak 2.2 to 2.3 GB; the
+run was timed at 184 s and, on a busy machine, 346 s. On 2026-11-27, with what
+has been added since, it was 60 MB, 2.6 GB and 559 s.
 
 What the extraction does with combinations (`tests/unit/ifc/test_load_combinations.py`,
 on the example files): a relation without a factor counts once; the combination's
@@ -921,10 +966,10 @@ that `Dead` is its weight alone, w = 2500 × 0.09 × 9.81 = 2207.25 N/m over 4 m
 |---|---|---|---|---|
 | (0, 0, −1) | Vertical reaction, w L | 8 829.0 N | 8 829.0 N | 0.0% |
 | (0, 0, −1) | End shear, w L / 2 | 4 414.5 N | 4 414.3 N | < 0.1% |
-| (0, 0, −1) | End moment, w L² / 12 | 2 943.0 N·m | 2 945.1 N·m | 0.1% |
-| (0, 0, −1) | Midspan deflection, bending and shear | 0.0774 mm | 0.0765 mm | 1.2% |
+| (0, 0, −1) | End moment, w L² / 12 | 2 943.0 N·m | 2 943.0 N·m | < 0.1% |
+| (0, 0, −1) | Midspan deflection, bending and shear | 0.0774 mm | 0.0774 mm | < 0.1% |
 | (0, 0, −0.4) | Vertical reaction | 3 531.6 N | 3 531.6 N | 0.0% |
-| (0, 0, −0.4) | Midspan deflection, 0.4 of the pipeline's 0.07649 mm | 0.03059 mm | 0.03059 mm | 0.0% |
+| (0, 0, −0.4) | Midspan deflection, 0.4 of the pipeline's 0.07738 mm | 0.03095 mm | 0.03095 mm | 0.0% |
 | (0, −1, 0) | Reaction along Y, none along Z | 8 829.0 N | 8 829.0 N | 0.0% |
 | (0, −1, 0) | End moment, sideways bending | 2 943.0 N·m | 2 944.8 N·m | 0.1% |
 
@@ -934,8 +979,9 @@ twice. `beam_01` as shipped (20 kN and its weight) gives 28 829.0 N and, for its
 combination `DCon1` = 1.5 `Dead`, 43 243.5 N = 1.5 × 28 829.0. A material with no
 density in a case that includes self-weight is refused, as with `--gravity`.
 
-Not checked against a reference: self-weight in a buckling step, where the weight of
-every case is written with every load (the input file is checked, the factor is not).
+Not checked against a reference: self-weight in a buckling step, where each set of loads
+has the weight its cases include times their factors (the input file is checked, the
+buckling factor is not).
 
 ## Plane trusses and frames
 
@@ -1319,15 +1365,16 @@ to a node of shells alone swings freely about their normal.
 
 - **Plane structures in a plane not parallel to two global axes**, and plane
   structures with surface members (a shear wall), are not recognised and get no help.
-  Nor were the benchmark models authored in Bonsai: they are built with IfcOpenShell.
+  The benchmark models are built with IfcOpenShell; the one model authored in Bonsai
+  (`examples/bonsai/`) has hand checks of its reaction totals only.
 - **Members that can spin in a space structure** are found one member or one straight
   run at a time. A member is taken to be held by any member across it that it joins
   without a torsional release; whether that one can itself give way is not checked.
 - **Self-weight of a load case** is checked on one beam, with native elements. Not
   checked: U1 elements (their weight is written as nodal forces), surface members
   other than through the totals of `building_01` and `building_02`, and buckling.
-- **Load combinations** are checked on one beam. Buckling has none. A case without
-  loads adds nothing and is named in `cases_without_loads`.
+- **Load combinations** are checked on one beam, and in buckling on Euler columns. A
+  case without loads adds nothing and is named in `cases_without_loads`.
 - **Reactions on CalculiX 2.21 and earlier** at a clamped member end with no section
   forces to replace them (a U1 member, a member and a slab at one support): marked
   unreliable, with every other support that has no member end, and the total is the
@@ -1349,8 +1396,8 @@ to a node of shells alone swings freely about their normal.
 - **Member stress** is the normal stress from axial force and bending only. Shear,
   torsion, buckling and anything specific to concrete are not checked.
 - **Shell members in membrane action**: walls are only checked through `structure_01`.
-- **Angles about their true principal axes**: the product of inertia is ignored.
-  Z, lipped C and arbitrary profiles are not supported at all.
+- **Angles about their principal axes**: checked on one unequal angle cantilever under
+  its weight (above). Z, lipped C and arbitrary profiles are not supported at all.
 - **Frames and buildings**: only `structure_01` has been compared with a reference.
   `building_02` has none.
 - **Beams tied to the slab or wall they lie in**: covered by Tier 2 for a slab on two
@@ -1382,4 +1429,6 @@ to a node of shells alone swings freely about their normal.
   the I section; see the torsion table above.
 - **`building_01`**: reactions only. Its deflection under `Dead` (self-weight) is still moving 10%
   between a 0.5 m and a 0.25 m mesh.
-- **Buckling** beyond the single Euler column.
+- **Buckling** beyond Euler columns.
+- **Modal analysis** beyond single members, a plate and `building_01`'s first three
+  modes against RFEM (above).

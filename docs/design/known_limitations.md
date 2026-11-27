@@ -4,8 +4,8 @@ Open bugs and proposed work are tracked in beads (`bd list --status=open`), not
 here. This section only records the constraints that shape day-to-day work.
 
 - **Stock CalculiX is the target** (decision 2026-10-09). The local `ccx` may be
-  a patched Copr build; CI runs Ubuntu's package (2.21) on three Python
-  versions and conda-forge's 2.23 in a job of its own
+  a patched Copr build; CI runs Ubuntu's package (2.21) on two Python
+  versions (3.10, 3.11) and conda-forge's 2.23 in a job of its own
   (`test-calculix-2-23`). Do not rely on the gen3delem patch in `patches/`.
 - **Reactions are the solver's nodal forces less the loads applied at the
   support nodes** (`94g.1`). CalculiX's `RF` is the force inside the
@@ -247,7 +247,8 @@ here. This section only records the constraints that shape day-to-day work.
   Never run it finer than 2 m on the development machine. The knots of `aiz.104`
   took a whole run at 2 m from 13 min and 2.34 GB to 15 min and 3.10 GB, and moved its
   largest displacements by 0.34% and its supports by 0.35% at most; the figures for
-  `ccx` that follow are from before them. Measured
+  `ccx` that follow are from before them. Measured 2026-11-27 (0.3.0): 559 s and
+  2.63 GB at most for the static run at 2 m, 286 s for six modes. Measured
   2026-10-17: at 2 m `ccx` alone needs 60 s and 2.08 GB (SPOOLES, the only
   direct solver of stock builds); `SOLVER=ITERATIVE CHOLESKY` does not
   converge on expanded shells, and S8R quads instead of S6 save 17% of

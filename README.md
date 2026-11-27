@@ -17,7 +17,7 @@ again.
 | | |
 |---|---|
 | ![building_02 under 1.4 Dead + 1.6 Live](docs/images/building_02_combination.png) | ![building_02, first mode](docs/images/building_02_mode_1.png) |
-| **`building_02`**: a 60 m tower on a podium, 1,304 members (beams, columns, slabs and walls) on one conforming mesh of 36,767 nodes. Its three load cases are solved in one run (7 minutes and 1.9 GB at a 2 m mesh) and its 17 load combinations are added up from them. Shown: 1.4 Dead + 1.6 Live, 55 mm at most. | **Modal analysis** of the same model: the first of six modes, the tower swaying at 0.41 Hz (4 minutes), with the mass of its materials. |
+| **`building_02`**: a 60 m tower on a podium, 1,304 members (beams, columns, slabs and walls) on one conforming mesh of 36,767 nodes. Its three load cases are solved in one run (9 minutes and 2.6 GB at a 2 m mesh) and its 17 load combinations are added up from them. Shown: 1.4 Dead + 1.6 Live, 55 mm at most. | **Modal analysis** of the same model: the first of six modes, the tower swaying at 0.41 Hz (5 minutes), with the mass of its materials. |
 | ![portal_01 bending moments](docs/images/portal_01_moments.png) | ![beam_01 shear force](docs/images/beam_01_shear.png) |
 | **Section force diagrams** along every member, here the bending moment of `portal_01` on the tension side, with the load on half of its beam and the reactions at its clamped feet, which balance the load to six figures. | **Shear force** of `beam_01`: the jump of 20 kN under the point load at midspan, and the slope of its own weight on either side. |
 | ![structure_01 under self-weight](docs/images/structure_01_displacement.png) | ![building_01 under live load](docs/images/building_01_live.png) |
@@ -33,7 +33,7 @@ IFC Structural Mechanics provides a workflow for performing structural analysis 
 
 - **IFC Model Extraction**: Extract structural members (beams, columns, slabs, walls), connections, loads, and material/section properties from IFC files using `IfcStructuralAnalysisModel`
 - **Automated Meshing**: Generate finite element meshes using Gmsh with conforming topology (shared nodes at member intersections). Elements are quadratic by default: three-node beams (B32R) and six-node triangular shells (S6)
-- **Structural Analysis**: Linear static and linear buckling analysis using CalculiX (CCX)
+- **Structural Analysis**: Linear static, linear buckling (each load combination by itself) and modal analysis (natural frequencies and mode shapes, with the mass of the materials) using CalculiX (CCX)
 - **Multiple Load Cases**: Each load case (an `IfcStructuralLoadCase`, or an `IfcStructuralLoadGroup` of type `LOAD_CASE`) maps to a separate CalculiX `*STEP`; results are tagged with the load case name
 - **Beam Sections**: Solid rectangles use CalculiX's own rectangular section. Every other supported profile (circular, hollow circular, hollow rectangular, I, asymmetric I, T, L, and U channel) is analysed as a rectangle with the same axial, bending and shear stiffness and the same weight, computed from the profile's `A`, `Iy`, `Iz` and shear areas (an angle's about its principal axes), so any mix of sections runs on stock CalculiX. Sections are oriented by `IfcStructuralCurveMember.Axis`, with the profile depth along the member's local z
 - **Temperature Loads and Support Displacements**: An `IfcStructuralLoadTemperature` on a curve or surface action heats its whole member: `DeltaTConstant` expands it, `DeltaTY` and `DeltaTZ` bend it across the section or thickness. An `IfcStructuralLoadSingleDisplacement` on a point action moves the support it is assigned to (settlement, rotation)
@@ -80,8 +80,8 @@ the ones a user needs to know before trusting a result.
   Models that connect a slab only at its corners would otherwise leave the
   beams under its edges carrying nothing. The tie passes forces, not moments.
   `--strict-connections` analyses only the connections in the file.
-- **Large models are slow.** `building_02` takes 3 to 6 minutes (measured 184 s
-  and 346 s on the same machine, the second while it was busy) and 2.3 GB at a
+- **Large models are slow.** `building_02` takes about 9 minutes (559 s, measured
+  2026-11-27) and 2.6 GB at a
   2 m mesh, with three load cases and 17 combinations, and needs more than 5 GB at 1 m. Its deflections move about 7%
   between a 4 m and a 2 m mesh. `--element-order 1`
   switches to linear elements, which are faster but several times too stiff in
@@ -229,8 +229,7 @@ the ones a user needs to know before trusting a result.
   the largest values along a member) worked out again from the sum. Linear
   static analysis only. A beam under `1.35 Dead + 1.5 Live` matches one load
   case holding the factored loads to one part in a million. `building_02`'s 17
-  combinations add about 100 s to its 180 s, and take its `results.json`
-  from 5 MB to 44 MB.
+  combinations take its `results.json` to 60 MB.
 - **Support reactions.** `supports` in `results.json` (schema 1.1) gives, for
   every support and load case, the force and moment it exerts on the
   structure, at its position, in global axes and in the support's own axes
@@ -471,10 +470,16 @@ The repository includes example IFC structural models (as a git submodule in `ex
 
 Values are from the default 1.0 m mesh (2 m for `building_02`, which does not
 fit in 5 GB of memory at 1 m) with CalculiX 2.23 and quadratic elements,
-measured on 2026-10-31. The Code_Aster references are the IfcOpenShell IFC2CA
+measured on 2026-11-27. The Code_Aster references are the IfcOpenShell IFC2CA
 results shipped in `examples/analysis-models/models/`. Reactions equal the
 applied loads to six figures at any mesh size; `results.json` gives both, and
 the reaction at each support (see below).
+
+`examples/bonsai/bonsai_frame_3d.ifc` is a two-bay, one-storey frame with two
+slabs, built by hand in Bonsai. [Its guide](examples/bonsai/README.md) says how
+it was made, with hand checks of the reactions, and has this library's results
+for each load case and combination, and its natural frequencies, to compare
+with another analysis program.
 
 To run an example:
 

@@ -9,8 +9,8 @@ Run from the root of the repository, with PyVista installed
 
 Each model is analysed at the settings given here, which are part of what
 the picture shows, and the pictures are written beside this script.
-``building_02`` takes about eight minutes and 2 GB of memory for its static
-analysis and as long again for its modes.
+``building_02`` takes about nine minutes and 2.6 GB of memory for its static
+analysis and five more for its modes (measured 2026-11-27).
 """
 
 import argparse

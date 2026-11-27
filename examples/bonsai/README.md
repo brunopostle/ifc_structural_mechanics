@@ -246,7 +246,9 @@ ux, uy, uz in mm.
 | K6 top | 0.30, 0.31, −0.07 | 0.10, 1.19, −0.08 | 0.10, 0.26, −0.05 |
 
 The largest displacements are 1.36 mm (G), 0.74 mm (Q), 2.94 mm (ULS1) and
-3.35 mm (ULS2).
+2.90 mm (ULS2; 3.35 mm here until 2026-11-27, when the code of 0.3.0 gave the
+reactions, the moments in B6, the frequencies and the other largest displacements
+of this appendix unchanged).
 
 ![Displacement under Q, the imposed load on S1 only](../../docs/images/bonsai_frame_3d_q.png)
 
