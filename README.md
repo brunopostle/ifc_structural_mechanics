@@ -326,6 +326,10 @@ ifc-analysis analyze model.ifc --output ./results
 # Specify mesh size (in metres, default: 1.0)
 ifc-analysis analyze model.ifc --output ./results --mesh-size 0.5
 
+# A finer mesh at a connection or member, by its GlobalId (repeatable)
+ifc-analysis analyze model.ifc --output ./results --mesh-size 1.0 \
+    --mesh-size-at '3n7$56nqP17902_7RCTidz:0.25'
+
 # Add self-weight to a file that has no load case
 ifc-analysis analyze model.ifc --output ./results --gravity
 
@@ -344,6 +348,7 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--analysis-type TYPE` | `linear_static`, `linear_buckling` or `modal` | `linear_static` |
 | `--modes N` | How many modes a modal analysis finds, lowest frequency first | `10` |
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
+| `--mesh-size-at GLOBALID:SIZE` | A finer element size (metres) at the structural member or connection with this GlobalId, growing to `--mesh-size` around it by a quarter of a metre per metre. Repeatable. A clamped edge, a line support, a column head; at a point on a slab the stresses grow without limit as the mesh is refined, and there is a warning (`W-MSH-003`) | none |
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |
 | `--gravity` | Add self-weight as a load case of its own, `Gravity`. For files with no load case: a load case that includes self-weight in the file has it without this | off |
 | `--strict-connections` | Analyse only the connections in the IFC file. Without it a beam or column lying in a slab or wall is also tied to it along its length | off |

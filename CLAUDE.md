@@ -73,6 +73,10 @@ python -m ifc_structural_mechanics.cli analyze model.ifc --output ./results
 # Specify analysis type and mesh size
 ifc-analysis analyze model.ifc --output ./results --analysis-type linear_static --mesh-size 0.2
 
+# A finer mesh at a member or connection by its GlobalId (repeatable), graded
+# to --mesh-size around it; recorded as run.settings.local_mesh_sizes_m
+ifc-analysis analyze model.ifc --output ./results --mesh-size 1.0 --mesh-size-at 'GLOBALID:0.25'
+
 # Linear elements (B31, S3) instead of the default quadratic ones (B32R, S6)
 ifc-analysis analyze model.ifc --output ./results --element-order 1
 
@@ -173,7 +177,7 @@ Generates finite element meshes:
 2. Call `fragment()` separately for curves and surfaces, so beams share nodes with beams and shells with shells. Support points on beam interiors and connection points landing on a slab are passed as fragment tools so the mesh has a node there, and so are line connections joining a beam and a slab, which are meshed node for node with the beam. Beam and shell nodes are joined later, in the writer (see `docs/design/connections.md`)
 3. Single `synchronize()` call
 4. Remap entity tags after fragmentation
-5. Apply mesh sizes (minimum size for shared points)
+5. Apply mesh sizes: each point the smallest size of the members it lies on, a point on none the default size; local sizes (`--mesh-size-at`) as Gmsh `Threshold` fields under a `Min` background field (see `docs/design/known_limitations.md`)
 6. Create Gmsh physical groups — each member's geometry entities get a numbered physical group named by member ID, so mesh elements inherit their parent member identity
 
 **Element order**: the mesh is second order by default (`MeshingConfig.get_element_order()`,

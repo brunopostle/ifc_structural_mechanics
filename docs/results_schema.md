@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.15**.
+calculation report. This page describes schema **1.16**.
 
 It is read together with the IFC file it was made from, which
 `run.input_file` names and pins with its SHA-256: check that before going
@@ -86,12 +86,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.13 | 2026-10-18 | `deflected_shapes` of curve members; their `mode_shapes` in a buckling or modal analysis. For an export as IFC structural results: `connections` with the movement of each point connection, `load_case_ifc_guids`, `ifc_result_group`. Surface members' `surface_mesh`, `surface_axes`, `surface_fields` and `surface_mode_shapes`. Lists of numbers are written on one line. |
 | 1.14 | 2026-11-11 | An angle's `section_axes` are its principal axes, and its section forces and `max_normal_stress_Pa` are about them; they were along its legs, about which it was analysed. No key changes. |
 | 1.15 | 2026-11-11 | `max_distortion_m` of members, per load case, per combination and in their envelopes: how much a member changes shape, without the rigid motion that fits it best. `max_relative_displacement_m` is unchanged, but is described as it always was: it leaves out a translation of the member as a whole, not a turn. |
+| 1.16 | 2026-11-27 | `local_mesh_sizes_m` in `run.settings`: the finer element sizes asked for at members and connections (`--mesh-size-at`). |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.15",
+  "schema_version": "1.16",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m",
             "frequency": "Hz", "mass": "kg"},
@@ -224,7 +225,9 @@ says otherwise (`_in_axes`, the section force diagrams).
   tied to the slabs they lie in), `open_sections` (`equivalent` or
   `user_element`) and `gravity` (a `Gravity` load case of self-weight was
   added); in a modal analysis, `num_modes`, how many modes were asked for
-  (schema 1.12).
+  (schema 1.12); `local_mesh_sizes_m`, only when some were asked for, the
+  finer element size at each member or connection by its GlobalId
+  (`--mesh-size-at`; schema 1.16).
 
 ## Warnings: `warnings`
 

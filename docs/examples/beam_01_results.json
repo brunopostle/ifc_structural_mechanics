@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.15",
+  "schema_version": "1.16",
   "units": {
     "length": "m",
     "force": "N",
@@ -14,7 +14,7 @@
     "name": "beam example.EDB"
   },
   "run": {
-    "created": "2026-11-11T13:22:37+00:00",
+    "created": "2026-11-27T15:58:49+00:00",
     "library": {
       "name": "ifc_structural_mechanics",
       "version": "0.2.0"

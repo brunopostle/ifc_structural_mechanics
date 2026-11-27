@@ -51,6 +51,7 @@ def analyze_ifc(
     strict_connections: bool = False,
     open_sections: str = "equivalent",
     num_modes: int = 10,
+    local_mesh_sizes: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -84,6 +85,12 @@ def analyze_ifc(
             CalculiX cannot mix with other beam or shell elements.
         num_modes (int, optional): How many modes a modal analysis finds,
             lowest frequency first. Defaults to 10.
+        local_mesh_sizes (Dict[str, float], optional): A finer element size,
+            in metres, at members or connections of the analysis model, by
+            their GlobalId. The mesh grows from it to ``mesh_size`` around.
+            A GlobalId that is not a member or connection of the model, or a
+            size no smaller than that of the members it lies on, fails the
+            analysis. Defaults to none.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -203,7 +210,9 @@ def analyze_ifc(
             open_sections=open_sections,
             num_modes=num_modes,
         )
-        meshing_config = create_meshing_config(mesh_size, element_order)
+        meshing_config = create_meshing_config(
+            mesh_size, element_order, local_mesh_sizes
+        )
         system_config = SystemConfig()
 
         # Step 3: Define output file paths
@@ -318,6 +327,11 @@ def analyze_ifc(
                         open_sections=open_sections,
                         gravity=gravity,
                         **({"num_modes": num_modes} if modal else {}),
+                        **(
+                            {"local_mesh_sizes_m": dict(local_mesh_sizes)}
+                            if local_mesh_sizes
+                            else {}
+                        ),
                     ),
                     warnings=result["warnings"],
                 )
@@ -497,24 +511,33 @@ def create_analysis_config(
     return config
 
 
-def create_meshing_config(mesh_size: float, element_order: int = 2) -> MeshingConfig:
+def create_meshing_config(
+    mesh_size: float,
+    element_order: int = 2,
+    local_mesh_sizes: Optional[Dict[str, float]] = None,
+) -> MeshingConfig:
     """
     Create a meshing configuration with the specified mesh size.
 
     Args:
         mesh_size (float): Default mesh size.
         element_order (int): 2 for quadratic elements, 1 for linear ones.
+        local_mesh_sizes (Dict[str, float], optional): Finer sizes at members
+            or connections, by GlobalId.
 
     Returns:
         MeshingConfig: The meshing configuration.
 
     Raises:
-        ValueError: If element_order is neither 1 nor 2.
+        ValueError: If element_order is neither 1 nor 2, or a local size is
+            not positive.
     """
     config = MeshingConfig()
     config.set_default_mesh_size(mesh_size)
     config.set_element_order(element_order)
     config.validate()
+    for ifc_guid, size in (local_mesh_sizes or {}).items():
+        config.set_local_element_size(ifc_guid, size)
     return config
 
 

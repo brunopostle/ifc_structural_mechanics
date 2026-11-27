@@ -21,6 +21,7 @@ from ..domain.load import PointLoad
 from ..domain.structural_member import CurveMember, SurfaceMember
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import MeshingError
+from ..utils.messages import record_warning
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,38 @@ COORD_PRECISION = 6
 # Points this close are one: rounding to COORD_PRECISION moves one by up to 9e-7,
 # and fragment() moves a vertex it merges.
 SAME_POINT_TOLERANCE = 5e-6
+
+# How fast elements grow away from a local mesh size: metres of element size
+# per metre of distance, so each element is at most about a quarter larger
+# than the one before it.
+_LOCAL_SIZE_GRADING = 0.25
+
+
+def _point_distance(point) -> str:
+    """A Gmsh MathEval expression for the distance from ``point``."""
+    return (
+        "sqrt("
+        + "+".join(f"({axis}-({float(c)!r}))^2" for axis, c in zip("xyz", point))
+        + ")"
+    )
+
+
+def _segment_distance(start, end) -> str:
+    """A Gmsh MathEval expression for the distance from a straight segment."""
+    a = [float(c) for c in start]
+    d = [float(e) - c for e, c in zip(end, a)]
+    length2 = sum(c * c for c in d)
+    if length2 == 0.0:
+        return _point_distance(a)
+    along = "+".join(f"({axis}-({c!r}))*({dc!r})" for axis, c, dc in zip("xyz", a, d))
+    t = f"max(0,min(1,({along})/({length2!r})))"
+    return (
+        "sqrt("
+        + "+".join(
+            f"({axis}-({c!r})-({dc!r})*{t})^2" for axis, c, dc in zip("xyz", a, d)
+        )
+        + ")"
+    )
 
 
 class GmshGeometryConverter:
@@ -1258,6 +1291,208 @@ class GmshGeometryConverter:
         for pt in existing:
             gmsh.model.mesh.setSize([(0, pt)], point_sizes.get(pt, default_size))
 
+    def _apply_local_mesh_sizes(self, domain_model: StructuralModel) -> None:
+        """Make the mesh finer where ``MeshingConfig`` has a local size.
+
+        Each local size belongs to a member or connection by its GlobalId. The
+        elements there have that size, and grow away from it by
+        ``_LOCAL_SIZE_GRADING`` up to the coarsest member size, through a
+        ``Threshold`` field on its distance from the member or connection. The
+        fields are combined by a ``Min`` field as the background mesh, and
+        Gmsh takes the smallest of it and the sizes at the points.
+
+        Raises:
+            MeshingError: If a GlobalId is not that of a member or connection
+                of the model (E-MSH-006), or its size is no finer than that of
+                the members it lies on (E-MSH-007).
+        """
+        local_sizes = self.meshing_config.get_local_element_sizes()
+        if not local_sizes:
+            return
+
+        targets: Dict[str, Any] = {
+            member.ifc_guid: member
+            for member in domain_model.members
+            if getattr(member, "ifc_guid", None)
+        }
+        for connection in domain_model.connections:
+            if getattr(connection, "ifc_guid", None):
+                targets[connection.ifc_guid] = connection
+        unknown = [guid for guid in local_sizes if guid not in targets]
+        if unknown:
+            raise MeshingError(
+                "A local mesh size was given to "
+                f"{', '.join(unknown)}, which is not a structural member or "
+                "connection of the analysis model.",
+                code="E-MSH-006",
+                ifc_guids=unknown,
+            )
+
+        default_size = self.meshing_config.get_default_element_size()
+        coarsest = max(self._member_mesh_sizes.values(), default=default_size)
+        fields: List[int] = []
+        points_on_shells: List[str] = []
+        for guid, size in local_sizes.items():
+            target = targets[guid]
+            around = self._size_around(target, default_size)
+            if size >= around:
+                raise MeshingError(
+                    f"The mesh size of {size:g} m asked for at {guid} is no "
+                    f"smaller than the {around:g} m of the members it lies on, "
+                    "so it would change nothing.",
+                    code="E-MSH-007",
+                    ifc_guids=[guid],
+                )
+            fields += self._local_size_fields(target, size, coarsest)
+            if self._is_point_on_shell(target, domain_model):
+                points_on_shells.append(guid)
+            logger.info(f"Local mesh size {size:g} m at {guid}")
+
+        combined = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(combined, "FieldsList", fields)
+        gmsh.model.mesh.field.setAsBackgroundMesh(combined)
+
+        if points_on_shells:
+            shown = ", ".join(points_on_shells[:5])
+            more = len(points_on_shells) - 5
+            record_warning(
+                domain_model,
+                "W-MSH-003",
+                f"{len(points_on_shells)} local mesh size(s) at a point support "
+                f"or joint on a surface member ({shown}"
+                f"{f' and {more} more' if more > 0 else ''}): the stresses "
+                "there grow without limit as the mesh is refined.",
+                ifc_guids=points_on_shells,
+            )
+
+    def _size_around(self, target, default_size: float) -> float:
+        """The element size of a member, or the smallest of a connection's."""
+        if isinstance(target, (CurveMember, SurfaceMember)):
+            return self._member_mesh_sizes.get(target.id, default_size)
+        sizes = [
+            self._member_mesh_sizes[member_id]
+            for member_id in target.connected_members
+            if member_id in self._member_mesh_sizes
+        ]
+        return min(sizes, default=default_size)
+
+    @staticmethod
+    def _is_point_on_shell(target, domain_model: StructuralModel) -> bool:
+        """Whether ``target`` is a point connection on a surface member."""
+        if isinstance(target, (CurveMember, SurfaceMember)):
+            return False
+        if getattr(target, "edge", None) is not None:
+            return False
+        if getattr(target, "face", None) is not None:
+            return False
+        return any(
+            isinstance(domain_model.get_member(member_id), SurfaceMember)
+            for member_id in target.connected_members
+            if domain_model.get_member(member_id) is not None
+        )
+
+    def _local_size_fields(self, target, size: float, coarsest: float) -> List[int]:
+        """The fields giving ``size`` at ``target``, graded to ``coarsest``."""
+        reach = (coarsest - size) / _LOCAL_SIZE_GRADING
+
+        if isinstance(target, CurveMember):
+            curves = self._member_curve_tags.get(target.id, [])
+            return [
+                self._threshold(field, size, coarsest, reach)
+                for field in self._curve_distance_fields(curves, size)
+            ]
+        if isinstance(target, SurfaceMember):
+            return self._area_fields(
+                self._member_surface_tags.get(target.id, []), size, coarsest, reach
+            )
+        face = getattr(target, "face", None)
+        if face is not None:
+            pieces = self._surfaces_inside(np.array(face, dtype=float))
+            if not pieces:
+                raise MeshingError(
+                    f"The surface connection {target.ifc_guid} covers no part "
+                    "of a surface member, so it cannot be given a mesh size.",
+                    code="E-MSH-004",
+                    ifc_guids=[target.ifc_guid],
+                )
+            return self._area_fields(pieces, size, coarsest, reach)
+        edge = getattr(target, "edge", None)
+        if edge is not None:
+            distance = _segment_distance(edge[0], edge[1])
+        else:
+            distance = _point_distance(target.position)
+        field = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(field, "F", distance)
+        return [self._threshold(field, size, coarsest, reach)]
+
+    def _area_fields(
+        self, surfaces: List[int], size: float, coarsest: float, reach: float
+    ) -> List[int]:
+        """``size`` over ``surfaces``, graded away from their outline."""
+        inside = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(inside, "F", repr(float(size)))
+        restrict = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(restrict, "InField", inside)
+        gmsh.model.mesh.field.setNumbers(restrict, "SurfacesList", surfaces)
+        gmsh.model.mesh.field.setNumber(restrict, "IncludeBoundary", 1)
+        outline = sorted(
+            {
+                abs(tag)
+                for _, tag in gmsh.model.getBoundary(
+                    [(2, s) for s in surfaces], combined=True, oriented=False
+                )
+            }
+        )
+        return [restrict] + [
+            self._threshold(field, size, coarsest, reach)
+            for field in self._curve_distance_fields(outline, size)
+        ]
+
+    @staticmethod
+    def _curve_distance_fields(curves: List[int], size: float) -> List[int]:
+        """Fields of the distance from each curve: exact for straight ones."""
+        fields = []
+        for tag in curves:
+            if gmsh.model.getType(1, tag) == "Line":
+                ends = gmsh.model.getBoundary([(1, tag)], oriented=False)
+                a, b = (gmsh.model.getValue(0, abs(p), []) for _, p in ends)
+                field = gmsh.model.mesh.field.add("MathEval")
+                gmsh.model.mesh.field.setString(field, "F", _segment_distance(a, b))
+            else:
+                field = gmsh.model.mesh.field.add("Distance")
+                gmsh.model.mesh.field.setNumbers(field, "CurvesList", [tag])
+                length = gmsh.model.occ.getMass(1, tag)
+                gmsh.model.mesh.field.setNumber(
+                    field, "Sampling", int(np.ceil(length / size)) + 1
+                )
+            fields.append(field)
+        return fields
+
+    @staticmethod
+    def _threshold(distance: int, size: float, coarsest: float, reach: float) -> int:
+        """A field of ``size`` at ``distance`` zero, ``coarsest`` at ``reach``."""
+        field = gmsh.model.mesh.field.add("Threshold")
+        for name, value in (
+            ("InField", distance),
+            ("SizeMin", size),
+            ("SizeMax", coarsest),
+            ("DistMin", 0.0),
+            ("DistMax", reach),
+            ("StopAtDistMax", 1),
+        ):
+            gmsh.model.mesh.field.setNumber(field, name, value)
+        return field
+
+    def _surfaces_inside(self, face: np.ndarray) -> List[int]:
+        """Gmsh surfaces whose centre lies on the planar polygon ``face``."""
+        return [
+            tag
+            for _, tag in gmsh.model.getEntities(2)
+            if self._point_in_planar_polygon(
+                np.array(gmsh.model.occ.getCenterOfMass(2, tag)), face
+            )
+        ]
+
     def _points_of_member(self, member) -> List[int]:
         """Gmsh points on a member's geometry after fragment()."""
         if isinstance(member, CurveMember):
@@ -1360,6 +1595,7 @@ class GmshGeometryConverter:
 
         # Phase 5: Apply mesh sizes
         self._apply_all_mesh_sizes(domain_model)
+        self._apply_local_mesh_sizes(domain_model)
         self._conform_line_joints()
 
         # Phase 6: Create physical groups for element-to-member mapping

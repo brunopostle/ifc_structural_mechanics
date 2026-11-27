@@ -343,5 +343,26 @@ here. This section only records the constraints that shape day-to-day work.
   width modulus written, 17% above 5/6 G, to 1e-3. `slab_01` held in translation on four
   edges is 1.4 to 1.7% below Mindlin's hard simply supported plate, as its
   static deflection is 2.6 to 3.3% above Navier's.
+- **Local mesh sizes** (`3if`, GitHub issue #1, `--mesh-size-at GLOBALID:SIZE`,
+  `MeshingConfig.set_local_element_size()`) are Gmsh fields, not point sizes:
+  a `Threshold` on the distance from the member or connection, `SizeMin` the
+  local size, `SizeMax` the coarsest member size, growing by
+  `_LOCAL_SIZE_GRADING` (0.25 m per m), all under one `Min` field as the
+  background mesh. The distances from points and straight edges are `MathEval`
+  expressions (Gmsh's names are lowercase: `sqrt`, `min`, `max`; `Sqrt` does not
+  parse), exact and with no entity needed; a surface member or the pieces under
+  a surface connection get a `Restrict`ed constant inside and the distance from
+  their outline outside. Every point is first given the size of the members it
+  lies on (`kbq`), so a local size only ever refines: one no smaller than the
+  members' is refused (`E-MSH-007`), as is a GlobalId that is no member or
+  connection of the analysis model (`E-MSH-006`). An opening has no GlobalId;
+  refine its slab. At a point support or joint on a shell the stresses are
+  singular and do not converge (`W-MSH-003`). Along a line in a shell's plane
+  held by equations (hinged edges, line bearings, springs) refinement once made
+  the result more flexible; the knots of `aiz.104` put that right, so it is not
+  warned about. Measured (`TestSurfaceFields.test_finer_at_the_clamps_only`):
+  `slab_01`'s clamp moment is 0.910 of q L^2 / 12 at a 1 m mesh and 0.994 at
+  0.25 m (1357 points), and 0.994 at 1 m with 0.25 m along the two clamped
+  edges (567 points).
 - **FRD/DAT parsing is duplicated on purpose** between `results_parser.py` and
   `ccxquery/parsers/`; `ccxquery` is a standalone debugging tool.

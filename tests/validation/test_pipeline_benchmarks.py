@@ -4322,6 +4322,44 @@ class TestSurfaceFields:
             assert shear == pytest.approx(sign * q * L * B / 2, rel=0.03)
             assert moment == pytest.approx(q * L**2 / 12 * B, rel=0.01)
 
+    def test_finer_at_the_clamps_only(self, tmp_path):
+        """A coarse mesh made fine along the clamped edges alone (3if).
+
+        Measured (mid-width moment at the clamps over q L^2 / 12): 0.910 at a
+        1 m mesh, 0.985 at 0.5 m, 0.994 at 0.25 m with 1357 points, and 0.994
+        with 567 points at 1 m with 0.25 m along the two clamped edges.
+        """
+        model = ifcopenshell.open(SLAB)
+        clamps = [c.GlobalId for c in model.by_type("IfcStructuralCurveConnection")]
+        assert len(clamps) == 2
+
+        def clamp_moments(mesh_size, local=None):
+            out = tmp_path / f"{mesh_size}_{bool(local)}"
+            data = _run(SLAB, out, mesh_size, gravity=True, local_mesh_sizes=local)
+            (member,) = [m for m in data["members"] if m["type"] == "surface"]
+            points = np.array(member["surface_mesh"]["points_m"])
+            mx = np.array(member["surface_fields"]["Gravity"]["mx_Nm_per_m"])
+            weight = data["global_reactions"]["by_load_case"]["Gravity"]["fz_N"]
+            q = weight / (self.SPAN * self.WIDTH)
+            middle = np.abs(points[:, 1] - self.WIDTH / 2) < 0.4
+            ratios = [
+                mx[middle & (np.abs(points[:, 0] - x) < 1e-6)].mean()
+                / (q * self.SPAN**2 / 12)
+                for x in (0.0, self.SPAN)
+            ]
+            return data, len(points), ratios
+
+        _, _, coarse = clamp_moments(1.0)
+        assert all(r < 0.95 for r in coarse)
+        _, uniform_points, _ = clamp_moments(0.25)
+        data, points, local = clamp_moments(1.0, {guid: 0.25 for guid in clamps})
+        assert local == pytest.approx([1.0, 1.0], rel=0.01)
+        assert points < 0.5 * uniform_points
+        assert data["run"]["settings"]["mesh_size_m"] == 1.0
+        assert data["run"]["settings"]["local_mesh_sizes_m"] == {
+            guid: 0.25 for guid in clamps
+        }
+
     def test_wall_foot_carries_its_reaction(self, tmp_path):
         """structure_01's wall on a line support: its membrane forces along
         the foot add up to the support's reaction."""

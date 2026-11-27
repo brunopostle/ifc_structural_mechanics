@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+from typing import Dict, Optional
 
 import click
 
@@ -73,6 +74,16 @@ def cli():
     default=1,
     show_default=True,
     help="Default size for mesh elements (in meters)",
+)
+@click.option(
+    "--mesh-size-at",
+    "local_mesh_sizes",
+    multiple=True,
+    callback=lambda ctx, param, value: _parse_local_mesh_sizes(value),
+    metavar="GLOBALID:SIZE",
+    help="A finer element size (in meters) at the structural member or "
+    "connection with this GlobalId, growing to --mesh-size around it. "
+    "Repeatable",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option("--json-output", "-j", is_flag=True, help="Output results in JSON format")
@@ -145,6 +156,7 @@ def analyze(
     strict_connections: bool = False,
     open_sections: str = "equivalent",
     num_modes: int = 10,
+    local_mesh_sizes: Optional[Dict[str, float]] = None,
 ):
     """
     Run structural analysis on an IFC file.
@@ -165,9 +177,43 @@ def analyze(
         strict_connections,
         open_sections.replace("-", "_"),
         num_modes,
+        local_mesh_sizes,
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
+
+
+def _parse_local_mesh_sizes(values) -> Dict[str, float]:
+    """``GLOBALID:SIZE`` values of --mesh-size-at, as a dict.
+
+    A GlobalId has no colon, so the size is what follows the last one.
+
+    Raises:
+        click.BadParameter: If a value is not GLOBALID:SIZE with a positive
+            size, or a GlobalId is given twice.
+    """
+    sizes: Dict[str, float] = {}
+    for value in values:
+        ifc_guid, sep, size_text = value.rpartition(":")
+        try:
+            size = float(size_text)
+        except ValueError:
+            size = None
+        if not sep or not ifc_guid or size is None:
+            raise click.BadParameter(
+                f"{value!r} is not GLOBALID:SIZE", param_hint="--mesh-size-at"
+            )
+        if not size > 0:
+            raise click.BadParameter(
+                f"the size in {value!r} must be positive",
+                param_hint="--mesh-size-at",
+            )
+        if ifc_guid in sizes:
+            raise click.BadParameter(
+                f"{ifc_guid} is given more than once", param_hint="--mesh-size-at"
+            )
+        sizes[ifc_guid] = size
+    return sizes
 
 
 def run_analyze(
@@ -184,6 +230,7 @@ def run_analyze(
     strict_connections: bool = False,
     open_sections: str = "equivalent",
     num_modes: int = 10,
+    local_mesh_sizes: Optional[Dict[str, float]] = None,
 ) -> int:
     """
     Run the analysis and return the appropriate exit code.
@@ -202,6 +249,7 @@ def run_analyze(
         strict_connections (bool): Analyse only the connections in the file.
         open_sections (str): "equivalent" or "user_element".
         num_modes (int): How many modes a modal analysis finds.
+        local_mesh_sizes (Dict[str, float]): Finer sizes by GlobalId.
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -220,6 +268,8 @@ def run_analyze(
         click.echo(f"Output directory: {output_dir}")
         click.echo(f"Analysis type: {analysis_type}")
         click.echo(f"Mesh size:     {mesh_size}")
+        for ifc_guid, size in (local_mesh_sizes or {}).items():
+            click.echo(f"  at {ifc_guid}: {size}")
         click.echo(click.style(f"{'=' * 50}", fg="blue"))
         click.echo("Starting analysis...")
 
@@ -256,6 +306,7 @@ def run_analyze(
             strict_connections=strict_connections,
             open_sections=open_sections,
             num_modes=num_modes,
+            local_mesh_sizes=local_mesh_sizes or None,
         )
 
         # Format and display results

@@ -410,6 +410,36 @@ class MeshingConfig(BaseConfig):
         # Default to 3D if not specified or invalid
         return 3
 
+    def set_local_element_size(self, ifc_guid: str, element_size: float) -> None:
+        """Ask for a finer mesh at one member or connection.
+
+        The element size is ``element_size`` on the member or connection with
+        the GlobalId ``ifc_guid``, and grows from there to the size around it.
+        ``min_element_size`` is lowered to it if need be, as Gmsh would
+        otherwise make no element smaller than that.
+
+        Args:
+            ifc_guid: The GlobalId of a structural member or connection of the
+                analysis model.
+            element_size: Element size there, in metres. Must be positive.
+
+        Raises:
+            ValueError: If ``element_size`` is not positive.
+        """
+        if not element_size > 0:
+            raise ValueError(
+                f"The mesh size at {ifc_guid} must be positive, got {element_size}"
+            )
+        self._config.setdefault("local_sizes", {})[ifc_guid] = float(element_size)
+        settings = self._config["global_settings"]
+        settings["min_element_size"] = min(
+            settings["min_element_size"], float(element_size)
+        )
+
+    def get_local_element_sizes(self) -> Dict[str, float]:
+        """The local element sizes asked for, by GlobalId (a copy)."""
+        return dict(self._config.get("local_sizes", {}))
+
     def get_min_element_size(self) -> float:
         """
         Get the minimum element size allowed for meshing.

@@ -184,6 +184,14 @@ A surface support's outline, or a line joining a beam to a slab, could not be pu
 
 A meshing option has a value Gmsh does not know; the message lists the ones it does.
 
+### E-MSH-006: Local mesh size for something not in the analysis model
+
+A local mesh size (--mesh-size-at) names a GlobalId that is not a structural member or connection of the analysis model. Check the GlobalId: loads, load groups and building elements cannot be given a mesh size.
+
+### E-MSH-007: Local mesh size not finer than the mesh around it
+
+A local mesh size can only make the mesh finer: where sizes meet the smallest is used. This one is no smaller than the size of the members it lies on, so it would change nothing. Give a smaller size, or a larger --mesh-size for the rest of the model.
+
 ### W-MSH-001: Members overlap
 
 Two members occupy the same place (a short beam inside a longer one, a landing in a floor slab). The mesh has one set of elements there, analysed with the material and section or thickness of the member that comes first in the file, not both. Remove the overlap if both were meant to carry load.
@@ -191,6 +199,10 @@ Two members occupy the same place (a short beam inside a longer one, a landing i
 ### W-MSH-002: Members with no elements
 
 These members lie wholly inside others (see W-MSH-001) and have no elements of their own. They take no part in the analysis and have no results; the member they overlap carries their share.
+
+### W-MSH-003: Finer mesh at a point on a shell
+
+A local mesh size was asked for at a point support or joint on a surface member. A force at a point of a shell gives stresses there that have no finite value: the finer the mesh, the larger the peak, and it does not converge. A finer mesh there gives a larger number, not a better one. Read the stresses a little way from the point, or spread the support or joint over the area it really acts on.
 
 ## Joints between members
 

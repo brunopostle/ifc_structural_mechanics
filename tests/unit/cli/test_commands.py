@@ -109,6 +109,7 @@ class TestEnhancedCLICommands:
                 strict_connections=False,
                 open_sections="equivalent",
                 num_modes=10,
+                local_mesh_sizes=None,
             )
 
     def test_analyze_custom_params(
@@ -144,6 +145,7 @@ class TestEnhancedCLICommands:
                 strict_connections=False,
                 open_sections="equivalent",
                 num_modes=10,
+                local_mesh_sizes=None,
             )
 
     def test_analyze_strict_connections(
@@ -194,6 +196,102 @@ class TestEnhancedCLICommands:
             kwargs = mock_analyze_ifc.call_args.kwargs
             assert kwargs["analysis_type"] == "modal"
             assert kwargs["num_modes"] == 4
+
+    def test_analyze_local_mesh_sizes(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        """--mesh-size-at GLOBALID:SIZE reaches the analysis, by GlobalId."""
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "analyze",
+                    temp_ifc_file,
+                    "--output",
+                    temp_output_dir,
+                    "--mesh-size-at",
+                    "3n7$56nqP17902_7RCTidz:0.1",
+                    "--mesh-size-at",
+                    "11EltkHPv5uOArZ8quRgI_:0.25",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert mock_analyze_ifc.call_args.kwargs["local_mesh_sizes"] == {
+            "3n7$56nqP17902_7RCTidz": 0.1,
+            "11EltkHPv5uOArZ8quRgI_": 0.25,
+        }
+
+    def test_analyze_without_local_mesh_sizes(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli, ["analyze", temp_ifc_file, "--output", temp_output_dir]
+            )
+        assert result.exit_code == 0, result.output
+        assert mock_analyze_ifc.call_args.kwargs["local_mesh_sizes"] is None
+
+    @pytest.mark.parametrize(
+        "value, says",
+        [
+            ("3n7$56nqP17902_7RCTidz", "is not GLOBALID:SIZE"),
+            ("3n7$56nqP17902_7RCTidz:", "is not GLOBALID:SIZE"),
+            (":0.1", "is not GLOBALID:SIZE"),
+            ("3n7$56nqP17902_7RCTidz:fine", "is not GLOBALID:SIZE"),
+            ("3n7$56nqP17902_7RCTidz:0", "must be positive"),
+            ("3n7$56nqP17902_7RCTidz:-0.1", "must be positive"),
+        ],
+    )
+    def test_analyze_refuses_a_bad_local_mesh_size(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir, value, says
+    ):
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "analyze",
+                    temp_ifc_file,
+                    "--output",
+                    temp_output_dir,
+                    "--mesh-size-at",
+                    value,
+                ],
+            )
+        assert result.exit_code == 2
+        assert says in result.output
+        mock_analyze_ifc.assert_not_called()
+
+    def test_analyze_refuses_a_globalid_given_twice(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "analyze",
+                    temp_ifc_file,
+                    "--output",
+                    temp_output_dir,
+                    "--mesh-size-at",
+                    "A:0.1",
+                    "--mesh-size-at",
+                    "A:0.2",
+                ],
+            )
+        assert result.exit_code == 2
+        assert "more than once" in result.output
 
     def test_analyze_with_warnings(
         self, mock_analyze_ifc, temp_ifc_file, temp_output_dir
