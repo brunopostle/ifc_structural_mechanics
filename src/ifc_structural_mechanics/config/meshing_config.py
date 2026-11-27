@@ -268,6 +268,15 @@ class MeshingConfig(BaseConfig):
 
         return self._config["member_types"][member_type]["element_size"]
 
+    def get_default_element_size(self) -> float:
+        """
+        Get the global default element size.
+
+        Returns:
+            float: The size for mesh points that belong to no member.
+        """
+        return float(self._config["global_settings"]["default_element_size"])
+
     def get_element_type(self, member_type: str) -> str:
         """
         Get the element type for a specific member type.

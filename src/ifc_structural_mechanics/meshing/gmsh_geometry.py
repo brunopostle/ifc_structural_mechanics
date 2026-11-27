@@ -1228,37 +1228,64 @@ class GmshGeometryConverter:
 
     def _apply_all_mesh_sizes(self, domain_model: StructuralModel) -> None:
         """
-        Apply mesh sizes to all member points after synchronize.
+        Apply mesh sizes to all points after synchronize.
 
-        For shared points (used by multiple members), use the minimum size.
+        A point takes the smallest size of the members whose geometry it lies
+        on: its own points, the ends of the pieces fragment() cut it into, and
+        points fragment() embedded in it (supports and connections inside a
+        span or a slab). A point on no member takes the global default size,
+        never another member's (kbq).
         """
-        # Build point -> min mesh size mapping
         point_sizes: Dict[int, float] = {}
+
+        def give(pt: int, size: float) -> None:
+            point_sizes[pt] = min(point_sizes.get(pt, size), size)
 
         for member in domain_model.members:
             size = self._member_mesh_sizes.get(member.id)
             if size is None:
                 continue
-            pts = self._member_point_tags.get(member.id, [])
-            for pt in pts:
-                if pt in point_sizes:
-                    point_sizes[pt] = min(point_sizes[pt], size)
-                else:
-                    point_sizes[pt] = size
+            for pt in self._member_point_tags.get(member.id, []):
+                give(pt, size)
+            for pt in self._points_of_member(member):
+                give(pt, size)
 
-        # Also collect points from post-fragment entities that may have new tags
-        # Get all points in the model after synchronize
         existing = {tag for _, tag in gmsh.model.getEntities(0)}
-        # For any point not yet assigned a size, use a reasonable default
-        default_size = min(point_sizes.values()) if point_sizes else 1.0
-        for tag in existing:
-            point_sizes.setdefault(tag, default_size)
+        default_size = self.meshing_config.get_default_element_size()
 
-        # Apply sizes; fragmenting merges coincident points, so some of the
-        # tags recorded before it no longer exist
-        for pt, size in point_sizes.items():
-            if pt in existing:
-                gmsh.model.mesh.setSize([(0, pt)], size)
+        # Fragmenting merges coincident points, so some of the tags recorded
+        # before it no longer exist
+        for pt in existing:
+            gmsh.model.mesh.setSize([(0, pt)], point_sizes.get(pt, default_size))
+
+    def _points_of_member(self, member) -> List[int]:
+        """Gmsh points on a member's geometry after fragment()."""
+        if isinstance(member, CurveMember):
+            dim_tags = [(1, tag) for tag in self._member_curve_tags.get(member.id, [])]
+        elif isinstance(member, SurfaceMember):
+            dim_tags = [
+                (2, tag) for tag in self._member_surface_tags.get(member.id, [])
+            ]
+        else:
+            return []
+        if not dim_tags:
+            return []
+
+        points = set()
+        entities = list(dim_tags)
+        for dim, tag in dim_tags:
+            entities += [tuple(e) for e in gmsh.model.mesh.getEmbedded(dim, tag)]
+        for dim, tag in entities:
+            if dim == 0:
+                points.add(tag)
+            else:
+                points.update(
+                    abs(p)
+                    for _, p in gmsh.model.getBoundary(
+                        [(dim, tag)], combined=False, oriented=False, recursive=True
+                    )
+                )
+        return sorted(points)
 
     # ------------------------------------------------------------------
     # Main entry point: convert_model with shared topology
