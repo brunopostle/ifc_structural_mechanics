@@ -96,6 +96,7 @@ def plane_model(
     depth=None,
     cases=None,
     turn=0.0,
+    combinations=None,
 ):
     """Write a truss or frame of square bars in the global X-Z plane, in metres.
 
@@ -152,6 +153,8 @@ def plane_model(
         turn: An angle in degrees about global Z by which the placement of
             every item turns the whole structure, its supports' axes and
             its loads with it: a plane off the global axes.
+        combinations: ``{name: {case: factor}}``, load combinations of the
+            load cases by their names (``Load`` and those of ``cases``).
 
     Returns:
         *path*.
@@ -553,6 +556,33 @@ def plane_model(
             other,
         )
         loaded_by.append(other)
+    by_name = {group.Name: group for group in loaded_by}
+    for name, factors in (combinations or {}).items():
+        combination = create(
+            "IfcStructuralLoadGroup",
+            guid(),
+            None,
+            name,
+            None,
+            None,
+            "LOAD_COMBINATION",
+            "NOTDEFINED",
+            "NOTDEFINED",
+            None,
+            None,
+        )
+        for case_name, factor in factors.items():
+            create(
+                "IfcRelAssignsToGroupByFactor",
+                guid(),
+                None,
+                None,
+                None,
+                [by_name[case_name]],
+                None,
+                combination,
+                factor,
+            )
     analysis.LoadedBy = loaded_by
     model.write(path)
     return path

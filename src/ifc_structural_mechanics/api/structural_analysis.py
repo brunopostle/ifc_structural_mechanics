@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .. import __version__
+from ..analysis.buckling_loads import buckling_load_sets, governing_set
 from ..analysis.calculix_runner import CalculixRunner
 from ..analysis.output_parser import solver_warnings
 from ..analysis.plausibility import plausibility_warnings
-from ..analysis.results_parser import BUCKLING_REFERENCE_CASE, ResultsParser
+from ..analysis.results_parser import ResultsParser
 from ..config.analysis_config import AnalysisConfig
 from ..config.meshing_config import MeshingConfig
 from ..config.system_config import SystemConfig
@@ -52,6 +53,8 @@ def analyze_ifc(
     open_sections: str = "equivalent",
     num_modes: int = 10,
     local_mesh_sizes: Optional[Dict[str, float]] = None,
+    combinations: Optional[List[str]] = None,
+    load_cases: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Run a structural analysis on an IFC file using the unified workflow.
@@ -91,6 +94,15 @@ def analyze_ifc(
             A GlobalId that is not a member or connection of the model, or a
             size no smaller than that of the members it lies on, fails the
             analysis. Defaults to none.
+        combinations (List[str], optional): For a buckling analysis, the
+            names of the load combinations to find the buckling factors of,
+            each by itself. By default every combination of the file is, or
+            every load case when it has no combination.
+        load_cases (List[str], optional): For a buckling analysis, the names
+            of load cases to find the buckling factors of by themselves
+            (``Gravity`` for ``gravity``). Given with or without
+            ``combinations``, only those named are analysed. A name the file
+            does not have fails the analysis.
 
     Returns:
         Dict[str, Any]: Dictionary with analysis results, containing:
@@ -120,6 +132,12 @@ def analyze_ifc(
         raise ValueError(
             f"Unsupported analysis type: {analysis_type}. "
             f"Supported types: {list(AnalysisConfig.ANALYSIS_TYPES.keys())}"
+        )
+    if (combinations or load_cases) and analysis_type != "linear_buckling":
+        raise ValueError(
+            "Load combinations and load cases are chosen for a buckling "
+            f"analysis only, not for {analysis_type}: a linear static "
+            "analysis gives results for all of them."
         )
 
     # Initialize result dictionary
@@ -202,6 +220,14 @@ def analyze_ifc(
         validation_warnings = _validate_model(domain_model, gravity, modal=modal)
         result["warnings"].extend(validation_warnings)
 
+        # The loads of each step of a buckling analysis
+        if analysis_type == "linear_buckling":
+            sets, set_warnings = buckling_load_sets(
+                domain_model, gravity, combinations, load_cases
+            )
+            domain_model.buckling_load_sets = sets
+            result["warnings"].extend(set_warnings)
+
         # Step 2: Create configurations
         analysis_config = create_analysis_config(
             analysis_type,
@@ -257,24 +283,29 @@ def analyze_ifc(
         results_json_path = None
         if calculix_output_files:
             try:
-                load_cases = [
+                solved_cases = [
                     g
                     for g in domain_model.load_groups
                     if g.is_load_case and g.has_actions
                 ]
-                load_case_names = [g.name for g in load_cases]
+                load_case_names = [g.name for g in solved_cases]
                 if gravity:
                     load_case_names.append("Gravity")
                 if not load_case_names:
                     load_case_names = None
+                buckling_names = None
                 if analysis_type == "linear_buckling":
-                    # One step, with the loads of every case in it
-                    load_case_names = [BUCKLING_REFERENCE_CASE]
+                    # A step per set of loads, with a set of results under
+                    # the loads and one per mode
+                    load_case_names = None
+                    buckling_names = [s.name for s in domain_model.buckling_load_sets]
                 elif modal:
                     # One step, its results are modes
                     load_case_names = None
                 results_parser = ResultsParser(
-                    domain_model, load_case_names=load_case_names
+                    domain_model,
+                    load_case_names=load_case_names,
+                    buckling_load_sets=buckling_names,
                 )
                 parsed_results = results_parser.parse_results(calculix_output_files)
                 result["parsed_results"] = parsed_results
@@ -283,27 +314,36 @@ def analyze_ifc(
                     getattr(domain_model, "analysis_warnings", [])[warnings_passed_on:]
                 )
                 logger.info("Successfully parsed analysis results")
+                if analysis_type == "linear_buckling":
+                    result["warnings"].extend(
+                        _reversed_buckling(
+                            domain_model.buckling_load_sets,
+                            parsed_results.get("buckling") or [],
+                        )
+                    )
 
                 # Export GlobalId-keyed JSON results
                 results_json_path = os.path.join(output_dir, "results.json")
                 # A combination is the sum of its load cases' results, which
-                # needs a step per case and a linear analysis
-                combinations = list(domain_model.load_combinations)
-                if combinations and analysis_type != "linear_static":
+                # needs a step per case and a linear analysis. A buckling
+                # analysis has a step per combination instead
+                file_combinations = list(domain_model.load_combinations)
+                if file_combinations and modal:
                     result["warnings"].append(
                         warning(
                             "W-LOD-006",
-                            f"{len(combinations)} load combination(s) of "
+                            f"{len(file_combinations)} load combination(s) of "
                             "the file have no results: combinations are "
                             "only formed in a linear static analysis.",
                         )
                     )
-                    combinations = []
+                if analysis_type != "linear_static":
+                    file_combinations = []
                 exporter = ResultsExporter(
                     domain_model,
                     parsed_results,
                     element_nodes=results_parser.element_nodes,
-                    load_combinations=combinations,
+                    load_combinations=file_combinations,
                     analysis_type=analysis_type,
                     node_coordinates=results_parser.node_coordinates,
                 )
@@ -327,6 +367,16 @@ def analyze_ifc(
                         open_sections=open_sections,
                         gravity=gravity,
                         **({"num_modes": num_modes} if modal else {}),
+                        **(
+                            {"buckling_combinations": list(combinations)}
+                            if combinations
+                            else {}
+                        ),
+                        **(
+                            {"buckling_load_cases": list(load_cases)}
+                            if load_cases
+                            else {}
+                        ),
                         **(
                             {"local_mesh_sizes_m": dict(local_mesh_sizes)}
                             if local_mesh_sizes
@@ -437,6 +487,38 @@ def analyze_ifc(
         raise StructuralAnalysisError(
             f"Analysis workflow failed: {str(e)}", code="E-GEN-001"
         ) from e
+
+
+def _reversed_buckling(sets, steps) -> List[Dict[str, Any]]:
+    """A warning for the sets of loads that buckle only reversed.
+
+    A negative factor is a buckling under the loads pulling the other way,
+    which is not what a combination stands for; a set with none positive
+    among the modes found does not buckle as it is, in those modes.
+    """
+    names = [
+        load_set.name
+        for load_set, step in zip(sets, steps)
+        if step and governing_set([step]) is None
+    ]
+    if not names:
+        return []
+    return [
+        warning(
+            "W-RES-006",
+            f"{len(names)} set(s) of loads of the buckling analysis have no "
+            "positive buckling factor among the modes found, only negative "
+            "ones: they buckle only with their loads reversed. "
+            + ", ".join(names[:5])
+            + (" ..." if len(names) > 5 else "")
+            + ".",
+            ifc_guids=[
+                load_set.ifc_guid
+                for load_set in sets
+                if load_set.name in names and load_set.ifc_guid
+            ],
+        )
+    ]
 
 
 def extract_model(ifc_path: str) -> StructuralModel:

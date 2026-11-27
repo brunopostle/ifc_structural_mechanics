@@ -26,6 +26,7 @@ from ..analysis.boundary_condition_handling import (
     released_rotation_axes,
     support_displacement_values,
 )
+from ..analysis.buckling_loads import ALL_LOADS, BucklingLoadSet, governing_set
 from ..analysis.plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from ..analysis.section_forces import _stations
 from ..analysis.superposition import combine_results
@@ -76,7 +77,7 @@ class ResultsExporter:
             curve members; without them there are none.
     """
 
-    SCHEMA_VERSION = "1.16"
+    SCHEMA_VERSION = "1.17"
 
     # A mode below this frequency (a period of 100 s) is a movement the
     # structure does not resist: no building sways that slowly, and a
@@ -213,13 +214,19 @@ class ResultsExporter:
         """The GlobalId of the ``IfcStructuralLoadCase`` of each load case.
 
         None for one the analysis made itself (``Gravity``, the reference
-        loads of a buckling analysis).
+        loads of a buckling analysis). In a buckling analysis a set of
+        results may be a combination's, and has its GlobalId.
         """
         groups = {
             group.name: group.id
             for group in getattr(self.model, "load_groups", [])
             if getattr(group, "is_load_case", False)
         }
+        # Those of a buckling analysis are under its sets of loads, which
+        # may be combinations
+        if self.analysis_type == "linear_buckling":
+            for load_set in getattr(self.model, "buckling_load_sets", None) or []:
+                groups[load_set.name] = load_set.ifc_guid
         return {case: groups.get(case) for case in load_cases}
 
     def _connections(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -423,21 +430,55 @@ class ResultsExporter:
         return result
 
     def _buckling(self, load_cases: List[str]) -> Dict[str, Any]:
-        """Return the buckling factors, lowest first."""
-        factors = self.parsed_results.get("buckling") or []
-        if not factors:
+        """Return the buckling factors of each set of loads, lowest first.
+
+        ``reference_load_case`` and ``modes`` are those of the governing set,
+        the one that buckles first; the members' ``mode_shapes`` are its
+        modes. ``load_sets`` has every set, in the order of its step.
+        """
+        steps = self.parsed_results.get("buckling") or []
+        if not any(steps):
             raise ResultProcessingError(
                 "The buckling analysis ran but the solver reported no "
                 "buckling factors.",
                 code="E-RES-005",
             )
+        sets = list(getattr(self.model, "buckling_load_sets", None) or [])
+        if not sets and len(steps) == 1:
+            # One step whose loads were not recorded: every load at once
+            sets = [BucklingLoadSet((load_cases or [ALL_LOADS])[0], "all_loads")]
+        if len(sets) != len(steps):
+            raise ResultProcessingError(
+                f"The buckling analysis has {len(sets)} set(s) of loads and "
+                f"CalculiX reported the factors of {len(steps)} step(s).",
+                code="E-RES-008",
+            )
+        governing = governing_set(steps)
+        governing = 0 if governing is None else governing
+        listed = []
+        for index, (load_set, step) in enumerate(zip(sets, steps)):
+            entry: Dict[str, Any] = {
+                "name": load_set.name,
+                "kind": load_set.kind,
+                "ifc_guid": load_set.ifc_guid,
+            }
+            if load_set.kind == "load_combination":
+                entry["factors"] = dict(load_set.case_factors)
+            entry["modes"] = self._buckling_modes(step)
+            entry["governing"] = index == governing
+            listed.append(entry)
         return {
-            "reference_load_case": load_cases[0] if load_cases else None,
-            "modes": [
-                {"mode": int(mode), "factor": float(factor)}
-                for mode, factor in sorted(factors)
-            ],
+            "reference_load_case": sets[governing].name,
+            "modes": listed[governing]["modes"],
+            "load_sets": listed,
         }
+
+    @staticmethod
+    def _buckling_modes(step: List[Tuple[int, float]]) -> List[Dict[str, Any]]:
+        return [
+            {"mode": int(mode), "factor": float(factor)}
+            for mode, factor in sorted(step)
+        ]
 
     # ------------------------------------------------------------------
     # Load combinations

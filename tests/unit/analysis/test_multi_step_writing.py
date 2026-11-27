@@ -240,15 +240,16 @@ class TestSelfWeightOfALoadCase:
         assert "** Gravity (self-weight)" in steps[1]
         assert [_grav_lines(step) for step in steps] == [[(9.81, [0.0, 0.0, -1.0])]] * 2
 
-    def test_buckling_step_has_the_weight_of_every_case(self):
-        """All the load cases act at once in a buckling step."""
+    def test_buckling_step_has_the_weight_of_its_case(self):
+        """A buckling step per load case, with its own weight (bqj)."""
         model = _make_model_with_load_cases(2)
         model.load_groups[0].self_weight_coefficients = [0.0, 0.0, -1.0]
         model.load_groups[1].self_weight_coefficients = [0.0, 0.0, -0.5]
-        (step,) = self._steps(model, analysis_type="linear_buckling")
-        ((size, direction),) = _grav_lines(step)
-        assert size == 9.81 * 1.5
-        assert direction == [0.0, 0.0, -1.0]
+        steps = self._steps(model, analysis_type="linear_buckling")
+        assert [_grav_lines(step) for step in steps] == [
+            [(9.81, [0.0, 0.0, -1.0])],
+            [(9.81 / 2, [0.0, 0.0, -1.0])],
+        ]
 
     def test_weight_on_support_nodes_is_recorded(self):
         """The reactions need what each step puts on the support nodes."""

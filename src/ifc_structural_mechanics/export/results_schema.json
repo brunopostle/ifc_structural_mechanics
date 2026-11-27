@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.16",
+  "$id": "https://github.com/brunopostle/ifc_structural_mechanics/results_schema/1.17",
   "title": "results.json",
-  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.16: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
+  "description": "The results of an analysis by ifc_structural_mechanics, keyed to the IFC GlobalIds of what they belong to. Exactly schema 1.17: a file of a later 1.x may have keys this does not describe, which a reader ignores (see docs/results_schema.md). Units are SI; directions are global unless a key says otherwise.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     "supports"
   ],
   "properties": {
-    "schema_version": {"const": "1.16"},
+    "schema_version": {"const": "1.17"},
     "units": {
       "type": "object",
       "additionalProperties": false,
@@ -88,16 +88,23 @@
       "additionalProperties": false,
       "required": ["reference_load_case", "modes"],
       "properties": {
-        "reference_load_case": {"type": "string"},
-        "modes": {
+        "reference_load_case": {"description": "The governing set of loads of load_sets, the one that buckles first (schema 1.17; before, the one set).", "type": "string"},
+        "modes": {"$ref": "#/$defs/buckling_modes"},
+        "load_sets": {
+          "description": "Each set of loads a buckling factor was found for, in step order: a load combination, a load case or every load (schema 1.17).",
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["mode", "factor"],
+            "required": ["name", "kind", "ifc_guid", "modes", "governing"],
             "properties": {
-              "mode": {"type": "integer", "minimum": 1},
-              "factor": {"type": "number"}
+              "name": {"type": "string"},
+              "kind": {"enum": ["load_combination", "load_case", "all_loads"]},
+              "ifc_guid": {"type": ["string", "null"]},
+              "factors": {"type": "object", "additionalProperties": {"type": "number"}},
+              "modes": {"$ref": "#/$defs/buckling_modes"},
+              "governing": {"type": "boolean"}
             }
           }
         }
@@ -105,7 +112,7 @@
     },
     "modal": {"$ref": "#/$defs/modal"},
     "load_case_ifc_guids": {
-      "description": "The GlobalId of the IfcStructuralLoadCase of each load case; null for one the analysis made itself (schema 1.13).",
+      "description": "The GlobalId of the IfcStructuralLoadCase of each load case; null for one the analysis made itself (schema 1.13). In a buckling analysis, that of the load combination or load case of each set of loads (schema 1.17).",
       "type": "object",
       "additionalProperties": {"type": ["string", "null"]}
     },
@@ -190,8 +197,22 @@
               "type": "object",
               "minProperties": 1,
               "additionalProperties": {"type": "number", "exclusiveMinimum": 0}
-            }
+            },
+            "buckling_combinations": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+            "buckling_load_cases": {"type": "array", "minItems": 1, "items": {"type": "string"}}
           }
+        }
+      }
+    },
+    "buckling_modes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "factor"],
+        "properties": {
+          "mode": {"type": "integer", "minimum": 1},
+          "factor": {"type": "number"}
         }
       }
     },

@@ -368,14 +368,37 @@ class AnalysisOutput:
             if self.analysis_type not in ("modal", "linear_buckling"):
                 raise ValueError(f"No mode {mode}: a {self.analysis_type} analysis")
             count = len(self.frd.offsets("DISP"))
-            # A buckling analysis has the displacements under its loads first
-            first = 1 if self.analysis_type == "linear_buckling" else 0
-            if not 1 <= mode <= count - first:
-                raise ValueError(f"No mode {mode}: the analysis has {count - first}")
+            if self.analysis_type == "linear_buckling":
+                # Each step has the displacements under its loads first, then
+                # its modes; results.json has the modes of the governing one
+                first, count = self._buckling_blocks()
+            else:
+                first = 0
+            if not 1 <= mode <= count:
+                raise ValueError(f"No mode {mode}: the analysis has {count}")
             return first + mode - 1
         if case not in self.load_cases:
             raise ValueError(f"No load case {case!r}: {self.load_cases or 'none'}")
+        if self.analysis_type == "linear_buckling":
+            return self._buckling_blocks(case)[0] - 1
         return self.load_cases.index(case)
+
+    def _buckling_blocks(self, case: Optional[str] = None) -> Tuple[int, int]:
+        """The block of the first mode of a buckling step, and how many modes
+        it has: of the step under *case*'s loads, or of the governing step.
+
+        Each step has a block under its loads and then one per mode.
+        """
+        sets = self.results.get("buckling", {}).get("load_sets")
+        if not sets:
+            # Before schema 1.17: one step
+            return 1, len(self.frd.offsets("DISP")) - 1
+        first = 0
+        for load_set in sets:
+            if load_set["name"] == case or (case is None and load_set["governing"]):
+                return first + 1, len(load_set["modes"])
+            first += 1 + len(load_set["modes"])
+        raise ValueError(f"No buckling loads {case!r}")
 
     def _factors(
         self, case: Optional[str], combination: Optional[str]

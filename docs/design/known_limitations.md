@@ -295,7 +295,7 @@ here. This section only records the constraints that shape day-to-day work.
   does not give). A case with nothing else is still a case: select load
   cases with `LoadGroup.has_actions`, never with `.loads`. `Dead` has
   `(0, 0, -1)` in `beam_01`, `building_01` and `building_02`. A buckling
-  step has the weight of every case, as it has every load.
+  step has the weight of each case of its combination, times its factor.
 - **`--gravity` is for files with no load case** (`cantilever_01`,
   `slab_01`, `structure_01`, `grid_of_beams`, which have no loads otherwise,
   and whose Code_Aster references are self-weight runs). It adds a case of
@@ -304,21 +304,42 @@ here. This section only records the constraints that shape day-to-day work.
 - **Benchmarks on `beam_01` variants take the weight out** (`_beam_01()` in
   `test_pipeline_benchmarks.py`) so that one load is checked against its
   closed form; those that run the file as shipped include it.
-- **Buckling factors** come from a single `*BUCKLE` step that contains the
-  loads. CalculiX scales only loads defined inside that step; a preceding
-  `*STATIC` step is a fixed preload. Validated for one Euler column only.
-  The result file has the displacements under those loads first (the same
-  as a static run, measured) and then a shape per mode, on a scale of the
-  solver's own (the largest translation 5.6e-4 for a column's first mode,
-  2.3e-5 for its tenth; it was once documented as one, which it is not).
-  `ResultsParser._set_mode_shapes_apart()` moves the shapes to
+- **Buckling factors** come from a `*BUCKLE` step per set of loads
+  (`bqj`, 2026-11-27, asked for by balrobs): each load combination, its load
+  cases times their factors and the self-weight they include times the same
+  factors; each load case when the file has no combination; every load at
+  once (`Reference loads`) when it has no load case. `--gravity` is a set of
+  its own, `Gravity`, as it is a load case of its own in a static analysis.
+  `--combination`/`--case` choose some (`E-LOD-009` for a name the file
+  does not have). Every load at once, the only set before, means nothing
+  when the cases are alternatives (wind or snow), which is why. Measured on
+  2.23: two `*BUCKLE` steps in one input are solved each by itself (an Euler
+  column with its load doubled in the second has half the factor), and two
+  `*CLOAD` lines on one node in one step add up, so a combination writes its
+  cases' loads one after another, each through `_ScaledLoads`. CalculiX
+  scales only loads defined inside the step; a preceding `*STATIC` step is a
+  fixed preload. Validated against Euler columns (`TestBucklingResults`,
+  three combinations of an axial and a sideways case within 0.4%).
+  The result file has, for each step, the displacements under its loads
+  first (the same as a static run, measured) and then a shape per mode, on a
+  scale of the solver's own (the largest translation 5.6e-4 for a column's
+  first mode, 2.3e-5 for its tenth; it was once documented as one, which it
+  is not); the .dat has a block of factors per step.
+  `ResultsParser._set_mode_shapes_apart()` names the displacements after
+  their set and moves the shapes of the governing set (whose least positive
+  factor is least: a negative one is the loads reversed, `W-RES-006`) to
   `parsed_results["mode_shapes"]`; they are not displacements and must never
-  be listed as load cases (`aiz.73`). `results.json` has the one case
-  `Reference loads`, `buckling.modes` with the factors, and each curve
-  member's `mode_shapes` (`94g.13.4`), each mode scaled by
-  `ResultsExporter._scale_buckling_shapes()` to a largest translation of
-  one along any member. A modal analysis's `mode_shapes` keep the solver's
-  scale, a generalised mass of one.
+  be listed as load cases (`aiz.73`). The other sets' shapes are in the
+  .frd only: 17 combinations of `building_02` would make `results.json`
+  seventeen times the size. `results.json` has a case per set,
+  `buckling.load_sets` with the factors of each, `buckling.modes` those of
+  the governing one, and each curve member's `mode_shapes` (`94g.13.4`),
+  each mode scaled by `ResultsExporter._scale_buckling_shapes()` to a
+  largest translation of one along any member. A modal analysis's
+  `mode_shapes` keep the solver's scale, a generalised mass of one. Each
+  set is an eigenvalue solve of its own: a file with many combinations
+  takes that many times as long; choose with `--combination`. Not
+  measured: several `*BUCKLE` steps on 2.21 (CI runs the tests on it).
 - **Modal analysis** (`lon`, `--analysis-type modal`, `--modes`, default 10)
   is one `*FREQUENCY` step and no load. Its mass is the materials' density
   alone (a material without one stops it, `E-MAT-003`): IFC cannot say

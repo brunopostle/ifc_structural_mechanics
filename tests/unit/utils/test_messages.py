@@ -112,7 +112,7 @@ def test_a_retired_code_is_refused():
 
 
 def test_every_warning_of_an_analysis_has_a_code(tmp_path):
-    """beam_01 as a buckling run warns from the writer and the API."""
+    """beam_01 as a modal run warns from the writer and the API."""
     path = ROOT / "examples" / "analysis-models" / "ifcFiles" / "beam_01.ifc"
     if not path.exists():
         pytest.skip("example models submodule missing")
@@ -120,9 +120,7 @@ def test_every_warning_of_an_analysis_has_a_code(tmp_path):
         pytest.skip("CalculiX (ccx) not installed")
     from ifc_structural_mechanics.api.structural_analysis import analyze_ifc
 
-    result = analyze_ifc(
-        str(path), str(tmp_path), analysis_type="linear_buckling", mesh_size=0.5
-    )
+    result = analyze_ifc(str(path), str(tmp_path), analysis_type="modal", mesh_size=0.5)
     codes = [found.get("code") for found in result["warnings"]]
     assert "W-LOD-006" in codes
     assert all(code in KINDS for code in codes), codes

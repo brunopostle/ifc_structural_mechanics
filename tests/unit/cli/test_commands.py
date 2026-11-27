@@ -110,6 +110,8 @@ class TestEnhancedCLICommands:
                 open_sections="equivalent",
                 num_modes=10,
                 local_mesh_sizes=None,
+                combinations=None,
+                load_cases=None,
             )
 
     def test_analyze_custom_params(
@@ -146,6 +148,8 @@ class TestEnhancedCLICommands:
                 open_sections="equivalent",
                 num_modes=10,
                 local_mesh_sizes=None,
+                combinations=None,
+                load_cases=None,
             )
 
     def test_analyze_strict_connections(
@@ -223,6 +227,75 @@ class TestEnhancedCLICommands:
             "3n7$56nqP17902_7RCTidz": 0.1,
             "11EltkHPv5uOArZ8quRgI_": 0.25,
         }
+
+    def test_analyze_buckling_of_some_combinations(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        """--combination and --case reach a buckling analysis, in order."""
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "analyze",
+                    temp_ifc_file,
+                    "--output",
+                    temp_output_dir,
+                    "--analysis-type",
+                    "linear_buckling",
+                    "--combination",
+                    "ULS 2",
+                    "--combination",
+                    "ULS 1",
+                    "--case",
+                    "Snow",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        kwargs = mock_analyze_ifc.call_args.kwargs
+        assert kwargs["combinations"] == ["ULS 2", "ULS 1"]
+        assert kwargs["load_cases"] == ["Snow"]
+        assert "Combination:   ULS 2" in result.output
+
+    def test_analyze_buckling_of_every_combination_by_default(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir
+    ):
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "analyze",
+                    temp_ifc_file,
+                    "--output",
+                    temp_output_dir,
+                    "--analysis-type",
+                    "linear_buckling",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        kwargs = mock_analyze_ifc.call_args.kwargs
+        assert kwargs["combinations"] is None and kwargs["load_cases"] is None
+
+    @pytest.mark.parametrize("option", ["--combination", "--case"])
+    def test_a_choice_of_loads_is_for_buckling_only(
+        self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir, option
+    ):
+        with patch(
+            "ifc_structural_mechanics.cli.commands.analyze_ifc",
+            mock_analyze_ifc,
+        ):
+            result = runner.invoke(
+                cli,
+                ["analyze", temp_ifc_file, "--output", temp_output_dir, option, "A"],
+            )
+        assert result.exit_code == 2
+        assert "for --analysis-type linear_buckling" in result.output
+        mock_analyze_ifc.assert_not_called()
 
     def test_analyze_without_local_mesh_sizes(
         self, runner, mock_analyze_ifc, temp_ifc_file, temp_output_dir

@@ -275,11 +275,15 @@ the ones a user needs to know before trusting a result.
   at a point (the end of a wall, a column in a wall) they change abruptly
   from one cross-section to the next and their largest values depend on the
   mesh size.
-- **Linear buckling** is validated for one Euler column only. Its
-  `results.json` (schema 1.4) has the buckling factors of all the loads of
-  the model together (`buckling.modes`) and the displacements under those
-  loads, and (schema 1.13) the shape of each mode along each curve member;
-  there are no stresses, reactions or load combinations.
+- **Linear buckling** is validated against Euler columns only. It finds the
+  buckling factors of each load combination by itself, its load cases times
+  their factors (or of each load case, when the file has no combination;
+  `--combination` and `--case` choose some). Its `results.json` (schema
+  1.17) has the factors of each in `buckling.load_sets`, the governing one,
+  which buckles first, in `buckling.modes`, the displacements under each
+  set of loads and the shape of each mode of the governing one along each
+  curve member; there are no stresses or reactions. Each combination is a
+  solve of its own: a file with many takes that many times as long.
 - **Members without an IFC `Axis`** are given a default section orientation,
   which for a non-square section may not be the one intended. A warning says
   how many and names the first.
@@ -330,6 +334,11 @@ ifc-analysis analyze model.ifc --output ./results --mesh-size 0.5
 ifc-analysis analyze model.ifc --output ./results --mesh-size 1.0 \
     --mesh-size-at '3n7$56nqP17902_7RCTidz:0.25'
 
+# Buckling factors of each load combination; or of some, by name
+ifc-analysis analyze model.ifc --output ./results --analysis-type linear_buckling
+ifc-analysis analyze model.ifc --output ./results --analysis-type linear_buckling \
+    --combination 'ULS 1' --combination 'ULS 2'
+
 # Add self-weight to a file that has no load case
 ifc-analysis analyze model.ifc --output ./results --gravity
 
@@ -347,6 +356,8 @@ ifc-analysis analyze model.ifc --output ./results --json-output
 | `--output DIR` | Output directory for analysis results (required) | — |
 | `--analysis-type TYPE` | `linear_static`, `linear_buckling` or `modal` | `linear_static` |
 | `--modes N` | How many modes a modal analysis finds, lowest frequency first | `10` |
+| `--combination NAME` | A buckling analysis of this load combination, by itself. Repeatable | every combination |
+| `--case NAME` | A buckling analysis of this load case, by itself (`Gravity` for `--gravity`). Repeatable; with `--combination` or alone, only those named are analysed | every load case, when the file has no combination |
 | `--mesh-size FLOAT` | Element size for mesh generation (metres) | `1.0` |
 | `--mesh-size-at GLOBALID:SIZE` | A finer element size (metres) at the structural member or connection with this GlobalId, growing to `--mesh-size` around it by a quarter of a metre per metre. Repeatable. A clamped edge, a line support, a column head; at a point on a slab the stresses grow without limit as the mesh is refined, and there is a warning (`W-MSH-003`) | none |
 | `--element-order [1\|2]` | `2`: quadratic elements (B32R, S6). `1`: linear (B31, S3), faster but needs a much finer mesh for slabs | `2` |

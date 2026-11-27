@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import sys
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import click
 
@@ -142,6 +142,23 @@ def cli():
     show_default=True,
     help="How many modes a modal analysis finds, lowest frequency first",
 )
+@click.option(
+    "--combination",
+    "combinations",
+    multiple=True,
+    metavar="NAME",
+    help="A buckling analysis of this load combination (repeatable). By "
+    "default every combination is analysed, each by itself, or every load "
+    "case when the file has no combination",
+)
+@click.option(
+    "--case",
+    "load_cases",
+    multiple=True,
+    metavar="NAME",
+    help="A buckling analysis of this load case by itself (repeatable); with "
+    "--combination or alone, only those named are analysed",
+)
 def analyze(
     ifc_file: str,
     output_dir: str,
@@ -157,12 +174,20 @@ def analyze(
     open_sections: str = "equivalent",
     num_modes: int = 10,
     local_mesh_sizes: Optional[Dict[str, float]] = None,
+    combinations: Tuple[str, ...] = (),
+    load_cases: Tuple[str, ...] = (),
 ):
     """
     Run structural analysis on an IFC file.
 
     IFC_FILE is the path to the IFC file to analyze.
     """
+    if (combinations or load_cases) and analysis_type != "linear_buckling":
+        raise click.UsageError(
+            "--combination and --case are for --analysis-type linear_buckling: "
+            "a linear static analysis gives results for every load case and "
+            "combination."
+        )
     exit_code = run_analyze(
         ifc_file,
         output_dir,
@@ -178,6 +203,8 @@ def analyze(
         open_sections.replace("-", "_"),
         num_modes,
         local_mesh_sizes,
+        list(combinations) or None,
+        list(load_cases) or None,
     )
     set_keep_temp_files(keep_files=True)
     sys.exit(exit_code)
@@ -231,6 +258,8 @@ def run_analyze(
     open_sections: str = "equivalent",
     num_modes: int = 10,
     local_mesh_sizes: Optional[Dict[str, float]] = None,
+    combinations: Optional[List[str]] = None,
+    load_cases: Optional[List[str]] = None,
 ) -> int:
     """
     Run the analysis and return the appropriate exit code.
@@ -250,6 +279,8 @@ def run_analyze(
         open_sections (str): "equivalent" or "user_element".
         num_modes (int): How many modes a modal analysis finds.
         local_mesh_sizes (Dict[str, float]): Finer sizes by GlobalId.
+        combinations (List[str]): Combinations a buckling analysis is of.
+        load_cases (List[str]): Load cases a buckling analysis is of.
 
     Returns:
         int: Exit code indicating success (0) or failure (non-zero).
@@ -270,6 +301,10 @@ def run_analyze(
         click.echo(f"Mesh size:     {mesh_size}")
         for ifc_guid, size in (local_mesh_sizes or {}).items():
             click.echo(f"  at {ifc_guid}: {size}")
+        for name in combinations or ():
+            click.echo(f"Combination:   {name}")
+        for name in load_cases or ():
+            click.echo(f"Load case:     {name}")
         click.echo(click.style(f"{'=' * 50}", fg="blue"))
         click.echo("Starting analysis...")
 
@@ -307,6 +342,8 @@ def run_analyze(
             open_sections=open_sections,
             num_modes=num_modes,
             local_mesh_sizes=local_mesh_sizes or None,
+            combinations=combinations or None,
+            load_cases=load_cases or None,
         )
 
         # Format and display results

@@ -380,11 +380,15 @@ The action has no AppliedLoad, or its force cannot be read. Give it one.
 
 ### E-LOD-007: Support displacement that cannot be applied
 
-A prescribed displacement (IfcStructuralLoadSingleDisplacement) moves a support along what it holds. It has to be a point action assigned to a point connection with an AppliedCondition, and every component that is not zero has to be along a direction the support holds rigidly in global axes: not one it leaves free, which would add a restraint the file does not have, not a spring, and not a skew direction, which is held by equations. A buckling analysis takes no support displacements. The message says which applies.
+A prescribed displacement (IfcStructuralLoadSingleDisplacement) moves a support along what it holds. It has to be a point action assigned to a point connection with an AppliedCondition, and every component that is not zero has to be along a direction the support holds rigidly in global axes: not one it leaves free, which would add a restraint the file does not have, not a spring, and not a skew direction, which is held by equations. A buckling analysis takes no support displacements: leave their load cases out of it (--combination, --case). The message says which applies.
 
 ### E-LOD-008: Temperature load that cannot be applied
 
-A temperature change (IfcStructuralLoadTemperature) is applied to the whole of the member its action is assigned to: a curve action to one curve member, a planar action to one surface member, with a constant distribution. The member's material needs a thermal expansion coefficient (Pset_MaterialMechanical.ThermalExpansionCoefficient), which is never assumed. A difference across a curve member needs its local axes (Axis) and a section whose depth is known; a surface member takes a difference across its thickness (DeltaTZ) only, and needs a plane for its normal. A buckling analysis takes no temperature loads, nor does a member of CalculiX user elements (--open-sections user-element). The message says which applies.
+A temperature change (IfcStructuralLoadTemperature) is applied to the whole of the member its action is assigned to: a curve action to one curve member, a planar action to one surface member, with a constant distribution. The member's material needs a thermal expansion coefficient (Pset_MaterialMechanical.ThermalExpansionCoefficient), which is never assumed. A difference across a curve member needs its local axes (Axis) and a section whose depth is known; a surface member takes a difference across its thickness (DeltaTZ) only, and needs a plane for its normal. A buckling analysis takes no temperature loads (leave their load cases out of it with --combination or --case), nor does a member of CalculiX user elements (--open-sections user-element). The message says which applies.
+
+### E-LOD-009: Buckling loads the file does not have
+
+A buckling analysis was asked for a load combination or a load case (--combination, --case) that the file does not have by that name, has more than one of, or that includes no load case with loads. The message lists those it has.
 
 ### W-LOD-001: No loads
 
@@ -408,7 +412,7 @@ A combination may only include load cases. These include another group (a load g
 
 ### W-LOD-006: Load combinations outside a linear static analysis
 
-Combinations are only formed in a linear static analysis, by adding up the results of their load cases. A buckling or modal analysis has none.
+Combinations are only formed in a linear static analysis, by adding up the results of their load cases, and a buckling analysis finds the buckling factors of each. A modal analysis has none.
 
 ### W-LOD-007: Point load moved to the nearest node
 
@@ -429,6 +433,10 @@ CalculiX gives each node one temperature, and members meeting at a node share it
 ### W-LOD-011: Loads are not mass in a modal analysis
 
 A modal analysis takes its mass from the density of the members' materials and applies no load. A load that stands for mass (finishes, partitions, a share of the imposed load) is not counted, since nothing in IFC says which loads are mass, and the frequencies are those of the bare structure. Where that mass matters, the frequencies are too high by about the square root of the ratio of the masses.
+
+### W-LOD-012: Load combinations with nothing to buckle under
+
+A buckling analysis finds the buckling factors of each load combination, under its load cases times their factors. These include no load case that has loads, so they have none.
 
 ## The solver
 
@@ -494,6 +502,10 @@ The reaction of an elastic support is its stiffness times the displacement Calcu
 
 The modal analysis ran and CalculiX reported no frequency. Its output in the output directory says why.
 
+### E-RES-008: Buckling results that do not match their loads
+
+A buckling analysis has a step per set of loads, and CalculiX's result file a set of displacements under each step's loads and one per mode. These did not add up. Report it with the IFC file and the command.
+
 ### W-RES-001: Reactions corrected
 
 The reactions do not balance the loads, or some had to be replaced. CalculiX 2.21 and earlier misreport the force at a support that holds a rotation. Such supports have their forces taken from the ends of their members (good to about 1 %), and the message says which totals still do not balance the loads. Displacements and member forces are not affected then, and CalculiX 2.23 does not need this. Where that does not explain it (no such support, or CalculiX 2.23 or later) the message says so: the cause is not known, the other results may be wrong too, and it should be reported with the input file.
@@ -513,6 +525,10 @@ The solver's own forces at the supports of U1 elements balance the loads and tho
 ### W-RES-005: CalculiX's U1 forces are right
 
 The solver's own forces at the supports of U1 elements balance the loads, which CalculiX 2.23 does not. The reactions given are worked out from the U1 stiffness and agree with them.
+
+### W-RES-006: Buckling only with the loads reversed
+
+Every buckling factor CalculiX found for these loads is negative: the structure would buckle in those modes only if the loads pulled the other way. They do not buckle as they are, in the modes found (ten for each). The governing set of loads is the one with the least positive factor.
 
 ## Plausibility of the results
 

@@ -23,6 +23,7 @@ from ..domain.result import (
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ResultProcessingError
 from ..utils.messages import record_warning
+from .buckling_loads import ALL_LOADS, governing_set
 from .plausibility import BALANCE_LIMIT, BALANCE_NOISE_N
 from .section_forces import element_section_forces
 from .user_element_forces import u1_nodal_forces, u1_section_forces
@@ -30,9 +31,6 @@ from .user_element_forces import u1_nodal_forces, u1_section_forces
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Name of the one set of results a buckling analysis has: every load of the
-# model together, which is what the buckling factors multiply
-BUCKLING_REFERENCE_CASE = "Reference loads"
 
 # Numbers in an FRD line, which may run together. CalculiX writes them as
 # %12.5E, which leaves a space before a positive one where the C library gives
@@ -71,6 +69,7 @@ class ResultsParser:
         self,
         domain_model: Optional[StructuralModel] = None,
         load_case_names: Optional[List[str]] = None,
+        buckling_load_sets: Optional[List[str]] = None,
     ):
         """
         Initialize the results parser.
@@ -81,9 +80,14 @@ class ResultsParser:
             load_case_names (Optional[List[str]]): Ordered list of load case names,
                 one per *STEP in the FRD file. Used to tag results with their load
                 case label.
+            buckling_load_sets (Optional[List[str]]): For a buckling analysis,
+                the name of the loads of each *BUCKLE step, in order
+                (``analysis/buckling_loads.py``); ``load_case_names`` is then
+                left out, as a step has a set of results per mode.
         """
         self.domain_model = domain_model
         self.load_case_names: Optional[List[str]] = load_case_names
+        self.buckling_load_sets: Optional[List[str]] = buckling_load_sets
         # Node IDs of each element, and node positions, in the last FRD file
         # parsed
         self.element_nodes: Dict[int, List[int]] = {}
@@ -1140,23 +1144,25 @@ class ResultsParser:
         with open(file_path, "r") as f:
             return f.read()
 
-    def parse_buckling_eigenvalues(self, dat_file: str) -> List[Tuple[int, float]]:
-        """Parse buckling eigenvalue multipliers from a CalculiX .dat file.
+    def parse_buckling_eigenvalues(
+        self, dat_file: str
+    ) -> List[List[Tuple[int, float]]]:
+        """Parse the buckling factors of each *BUCKLE step from a .dat file.
 
-        CalculiX writes the buckling factors under the header line that contains
-        ``"BUCKLING FACTOR"``.  Each data line has two whitespace-separated
-        fields: mode number (int) and eigenvalue multiplier (float).
+        CalculiX writes the factors of each step under a heading of their
+        own, ``B U C K L I N G   F A C T O R   O U T P U T``, a data line
+        per mode: its number and its factor.
 
         Args:
             dat_file: Path to the .dat file produced by CalculiX.
 
         Returns:
-            List of (mode_number, eigenvalue) tuples, sorted by mode number.
+            For each *BUCKLE step in order, its ``(mode, factor)`` pairs.
         """
-        eigenvalues: List[Tuple[int, float]] = []
+        steps: List[List[Tuple[int, float]]] = []
         if not os.path.exists(dat_file):
             logger.warning(f"DAT file not found: {dat_file}")
-            return eigenvalues
+            return steps
 
         try:
             with open(dat_file) as f:
@@ -1165,24 +1171,29 @@ class ResultsParser:
                     # CalculiX writes the section header with spaced letters:
                     # "B U C K L I N G   F A C T O R   O U T P U T"
                     if "B U C K L I N G" in line or "BUCKLING FACTOR" in line:
+                        if not in_block:
+                            steps.append([])
                         in_block = True
                         continue
                     if in_block:
                         parts = line.split()
                         if len(parts) == 2:
                             try:
-                                eigenvalues.append((int(parts[0]), float(parts[1])))
+                                steps[-1].append((int(parts[0]), float(parts[1])))
                             except ValueError:
                                 pass  # Non-data line — skip, don't end block
-                        elif parts and eigenvalues:
+                        elif parts and steps[-1]:
                             # End block only after data is collected so column
                             # headers ("MODE NO  BUCKLING") don't prematurely stop
                             in_block = False
         except (IOError, OSError) as e:
             logger.warning(f"Error reading DAT file {dat_file}: {e}")
 
-        logger.info(f"Parsed {len(eigenvalues)} buckling eigenvalues from {dat_file}")
-        return eigenvalues
+        steps = [step for step in steps if step]
+        logger.info(
+            f"Parsed the buckling factors of {len(steps)} step(s) from {dat_file}"
+        )
+        return steps
 
     # The blocks of a *FREQUENCY step in the .dat file, by their headings
     _FREQUENCY_BLOCKS = {
@@ -1456,7 +1467,11 @@ class ResultsParser:
                 eigenvalues = self.parse_buckling_eigenvalues(dat_file)
                 parsed_results["buckling"].extend(eigenvalues)
                 if eigenvalues:
-                    self._set_mode_shapes_apart(parsed_results)
+                    self._set_mode_shapes_apart(
+                        parsed_results,
+                        eigenvalues,
+                        self.buckling_load_sets or [ALL_LOADS],
+                    )
 
                 # The modes of a modal analysis: every set of displacements
                 # in the result file is the shape of one
@@ -1494,28 +1509,61 @@ class ResultsParser:
             ) from e
 
     @staticmethod
-    def _set_mode_shapes_apart(parsed_results: Dict[str, List]) -> None:
+    def _set_mode_shapes_apart(
+        parsed_results: Dict[str, List],
+        steps: List[List[Tuple[int, float]]],
+        names: List[str],
+    ) -> None:
         """Move the mode shapes of a buckling analysis out of the displacements.
 
-        The result file of a ``*BUCKLE`` step has the displacements under the
-        loads of the step first, and then one set per mode: its shape, on a
-        scale of the solver's own. Those are not displacements, and read as
-        load cases they are a structure moving by some arbitrary amount.
-        They are named ``Mode <n>``, as those of a modal analysis are.
+        The result file of each ``*BUCKLE`` step has the displacements under
+        the loads of the step first, and then one set per mode: its shape,
+        on a scale of the solver's own. Those are not displacements, and
+        read as load cases they are a structure moving by some arbitrary
+        amount. The displacements are named after the step's loads
+        (*names*); the shapes of the governing step, the one that buckles
+        first, are kept as ``Mode <n>``, as those of a modal analysis are.
+        The others are in the result file only.
+
+        Raises:
+            ResultProcessingError: When the result file does not have a set
+                of displacements under each step's loads and one per mode.
         """
         displacements = parsed_results["displacement"]
-        if not displacements:
-            return
-        under_load = displacements[0].metadata.get("load_case")
-        parsed_results["displacement"] = [
-            r for r in displacements if r.metadata.get("load_case") == under_load
-        ]
-        shapes = [r for r in displacements if r.metadata.get("load_case") != under_load]
-        names: Dict[Any, str] = {}
-        for result in shapes:
-            step = result.metadata.get("load_case")
-            names.setdefault(step, f"Mode {len(names) + 1}")
-            result.add_metadata("load_case", names[step])
+        blocks: List[Any] = []
+        for result in displacements:
+            label = result.metadata.get("load_case")
+            if label not in blocks:
+                blocks.append(label)
+        expected = sum(1 + len(step) for step in steps)
+        if len(names) != len(steps) or len(blocks) != expected:
+            raise ResultProcessingError(
+                f"The buckling analysis has {len(names)} set(s) of loads, and "
+                f"CalculiX reported the factors of {len(steps)} step(s) and "
+                f"{len(blocks)} set(s) of displacements, where {expected} "
+                "were expected.",
+                code="E-RES-008",
+            )
+        governing = governing_set(steps)
+        governing = 0 if governing is None else governing
+        rename: Dict[Any, Tuple[str, bool]] = {}
+        index = 0
+        for number, (name, step) in enumerate(zip(names, steps)):
+            rename[blocks[index]] = (name, False)
+            for mode, _ in step:
+                index += 1
+                if number == governing:
+                    rename[blocks[index]] = (f"Mode {mode}", True)
+            index += 1
+        kept: List[Any] = []
+        shapes: List[Any] = []
+        for result in displacements:
+            new = rename.get(result.metadata.get("load_case"))
+            if new is None:
+                continue
+            result.add_metadata("load_case", new[0])
+            (shapes if new[1] else kept).append(result)
+        parsed_results["displacement"] = kept
         parsed_results["mode_shapes"] = shapes
 
     @staticmethod

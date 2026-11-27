@@ -136,7 +136,8 @@ class TestDirectCalculixBucklingValidation:
 
         parser = ResultsParser()
         self.parsed = parser.parse_results(self.result_files)
-        self.eigenvalues = self.parsed.get("buckling", [])
+        # The factors of the one *BUCKLE step
+        (self.eigenvalues,) = self.parsed.get("buckling") or [[]]
 
     def test_buckling_eigenvalue_parsed(self):
         """At least one eigenvalue should be extracted from the .dat file."""

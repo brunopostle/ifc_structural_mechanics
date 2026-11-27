@@ -497,8 +497,8 @@ _KINDS = [
         "W-LOD-006",
         "Load combinations outside a linear static analysis",
         "Combinations are only formed in a linear static analysis, by adding "
-        "up the results of their load cases. A buckling or modal analysis has "
-        "none.",
+        "up the results of their load cases, and a buckling analysis finds "
+        "the buckling factors of each. A modal analysis has none.",
     ),
     MessageKind(
         "W-LOD-007",
@@ -543,6 +543,13 @@ _KINDS = [
         "are those of the bare structure. Where that mass matters, the "
         "frequencies are too high by about the square root of the ratio of "
         "the masses.",
+    ),
+    MessageKind(
+        "W-LOD-012",
+        "Load combinations with nothing to buckle under",
+        "A buckling analysis finds the buckling factors of each load "
+        "combination, under its load cases times their factors. These "
+        "include no load case that has loads, so they have none.",
     ),
     # The solver
     MessageKind(
@@ -601,6 +608,15 @@ _KINDS = [
         "The solver's own forces at the supports of U1 elements balance the "
         "loads, which CalculiX 2.23 does not. The reactions given are worked "
         "out from the U1 stiffness and agree with them.",
+    ),
+    MessageKind(
+        "W-RES-006",
+        "Buckling only with the loads reversed",
+        "Every buckling factor CalculiX found for these loads is negative: "
+        "the structure would buckle in those modes only if the loads pulled "
+        "the other way. They do not buckle as they are, in the modes found "
+        "(ten for each). The governing set of loads is the one with the "
+        "least positive factor.",
     ),
     # Plausibility of the results
     MessageKind(
@@ -1109,7 +1125,8 @@ _ERRORS = [
         "rigidly in global axes: not one it leaves free, which would add a "
         "restraint the file does not have, not a spring, and not a skew "
         "direction, which is held by equations. A buckling analysis takes no "
-        "support displacements. The message says which applies.",
+        "support displacements: leave their load cases out of it "
+        "(--combination, --case). The message says which applies.",
     ),
     MessageKind(
         "E-LOD-008",
@@ -1123,8 +1140,17 @@ _ERRORS = [
         "local axes (Axis) and a section whose depth is known; a surface "
         "member takes a difference across its thickness (DeltaTZ) only, and "
         "needs a plane for its normal. A buckling analysis takes no "
-        "temperature loads, nor does a member of CalculiX user elements "
+        "temperature loads (leave their load cases out of it with "
+        "--combination or --case), nor does a member of CalculiX user elements "
         "(--open-sections user-element). The message says which applies.",
+    ),
+    MessageKind(
+        "E-LOD-009",
+        "Buckling loads the file does not have",
+        "A buckling analysis was asked for a load combination or a load case "
+        "(--combination, --case) that the file does not have by that name, "
+        "has more than one of, or that includes no load case with loads. "
+        "The message lists those it has.",
     ),
     # The solver
     MessageKind(
@@ -1209,6 +1235,14 @@ _ERRORS = [
         "No modes",
         "The modal analysis ran and CalculiX reported no frequency. Its "
         "output in the output directory says why.",
+    ),
+    MessageKind(
+        "E-RES-008",
+        "Buckling results that do not match their loads",
+        "A buckling analysis has a step per set of loads, and CalculiX's "
+        "result file a set of displacements under each step's loads and one "
+        "per mode. These did not add up. Report it with the IFC file and "
+        "the command.",
     ),
     # Anything else
     MessageKind(

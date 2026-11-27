@@ -4,7 +4,7 @@
 solver's files: the results of the analysis keyed to the IFC GlobalIds of the
 members, supports and load groups they belong to. It is the contract with
 other tools, such as a viewer that draws results over the model or a
-calculation report. This page describes schema **1.16**.
+calculation report. This page describes schema **1.17**.
 
 It is read together with the IFC file it was made from, which
 `run.input_file` names and pins with its SHA-256: check that before going
@@ -87,12 +87,13 @@ instance). Absent means unknown; never read it as zero.
 | 1.14 | 2026-11-11 | An angle's `section_axes` are its principal axes, and its section forces and `max_normal_stress_Pa` are about them; they were along its legs, about which it was analysed. No key changes. |
 | 1.15 | 2026-11-11 | `max_distortion_m` of members, per load case, per combination and in their envelopes: how much a member changes shape, without the rigid motion that fits it best. `max_relative_displacement_m` is unchanged, but is described as it always was: it leaves out a translation of the member as a whole, not a turn. |
 | 1.16 | 2026-11-27 | `local_mesh_sizes_m` in `run.settings`: the finer element sizes asked for at members and connections (`--mesh-size-at`). |
+| 1.17 | 2026-11-27 | A buckling analysis finds the factors of each load combination (or each load case when there is none), not of every load at once: `buckling.load_sets`, and `buckling_combinations` and `buckling_load_cases` in `run.settings` (`--combination`, `--case`). `reference_load_case` and `modes` are those of the governing set; `load_cases` names one set of results per set of loads, which may be a combination's, with its GlobalId in `load_case_ifc_guids`. |
 
 ## Outline
 
 ```json
 {
-  "schema_version": "1.16",
+  "schema_version": "1.17",
   "units": {"length": "m", "force": "N", "moment": "N*m",
             "stress": "Pa", "displacement": "m",
             "frequency": "Hz", "mass": "kg"},
@@ -227,7 +228,10 @@ says otherwise (`_in_axes`, the section force diagrams).
   added); in a modal analysis, `num_modes`, how many modes were asked for
   (schema 1.12); `local_mesh_sizes_m`, only when some were asked for, the
   finer element size at each member or connection by its GlobalId
-  (`--mesh-size-at`; schema 1.16).
+  (`--mesh-size-at`; schema 1.16); in a buckling analysis of some of the
+  load combinations or load cases, `buckling_combinations` and
+  `buckling_load_cases`, their names as asked for (`--combination`,
+  `--case`; schema 1.17).
 
 ## Warnings: `warnings`
 
@@ -259,23 +263,46 @@ allows and the library does not give at present.
 
 ## Analysis type, buckling and modes
 
-`analysis_type` (schema 1.4) says what was run. A buckling analysis has one
-set of results, named in `load_cases`: the model under all of its loads
-together, every load case and its self-weight. It has no reactions or
-stresses. `buckling` is then present:
+`analysis_type` (schema 1.4) says what was run. A buckling analysis finds
+the buckling factors of sets of loads, each by itself (schema 1.17): each
+load combination of the file, its load cases times their factors and the
+self-weight they include with them; each load case when the file has no
+combination, and `Gravity` for `--gravity`; every load at once, `Reference
+loads`, when it has no load case. `--combination` and `--case` choose some
+of them. Load cases that are alternatives (wind or snow) mean nothing
+together, which is why every load at once, as before 1.17, is no answer.
+Each set has a set of results under its loads, named in `load_cases` by the
+name of its combination or load case: the displacements a static analysis
+of it gives. It has no reactions or stresses. `buckling` is then present:
 
 ```json
-"buckling": {"reference_load_case": "Reference loads",
-             "modes": [{"mode": 1, "factor": 12.3}, ...]}
+"buckling": {"reference_load_case": "ULS snow",
+             "modes": [{"mode": 1, "factor": 12.3}, ...],
+             "load_sets": [
+               {"name": "ULS snow", "kind": "load_combination",
+                "ifc_guid": "...", "factors": {"Dead": 1.35, "Snow": 1.5},
+                "modes": [{"mode": 1, "factor": 12.3}, ...],
+                "governing": true},
+               {"name": "ULS wind", "kind": "load_combination", ...}]}
 ```
 
-Each `factor` is what those loads have to be multiplied by for the model to
-buckle in that mode, lowest first. The shape of each mode along each curve
-member is in its `mode_shapes` (schema 1.13), as a deflected shape is, by the
-name `Mode <n>`. Each mode is scaled so that its largest translation along any
-member is one: a shape, not displacements. (The solver's own scale means
-nothing; it was 5.6e-4 for the first mode of a column and 2.3e-5 for its
-tenth.)
+Each `factor` is what the set's loads have to be multiplied by for the
+model to buckle in that mode, lowest mode first; ten modes are found for
+each set. `kind` is `load_combination`, `load_case` or `all_loads`;
+`ifc_guid` is that of the combination or load case, `null` for one the
+analysis made itself; `factors` is a combination's, by load case. The
+governing set is the one whose least positive factor is least: the one
+that buckles first. A negative factor is a buckling with the loads
+reversed, which is not what a combination stands for, and a set with no
+positive factor among its modes draws `W-RES-006`. `reference_load_case`
+and `modes` are those of the governing set (before 1.17, of the one set).
+
+The shape of each mode of the governing set along each curve member is in
+its `mode_shapes` (schema 1.13), as a deflected shape is, by the name
+`Mode <n>`; those of the other sets are only in the solver's result file.
+Each mode is scaled so that its largest translation along any member is
+one: a shape, not displacements. (The solver's own scale means nothing; it
+was 5.6e-4 for the first mode of a column and 2.3e-5 for its tenth.)
 
 A modal analysis (schema 1.12) finds the natural frequencies of the model as
 it stands on its supports. It applies no load, so `load_cases` is empty,
@@ -490,7 +517,9 @@ of a line support); the last gives the same reactions along them.
 - `load_case_ifc_guids` gives the GlobalId of the `IfcStructuralLoadCase`
   of each load case, by its name, or `null` for one the analysis made itself
   (`Gravity`, the `Reference loads` of a buckling analysis). Load
-  combinations have theirs in `load_combinations`.
+  combinations have theirs in `load_combinations`; in a buckling analysis
+  a set of results under a combination's loads has the combination's
+  (schema 1.17).
 - `ifc_result_group` is what the result group says of the results:
   `theory_type` (`IfcAnalysisTheoryTypeEnum`) is `FIRST_ORDER_THEORY` for a
   linear static analysis and for the displacements of a buckling analysis

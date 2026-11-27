@@ -4842,21 +4842,76 @@ class TestLoadCombinations:
             values["max_displacement_m"] for values in member["by_load_case"].values()
         )
 
-    def test_buckling_has_no_combinations(self, tmp_path):
+    def _buckling(self, tmp_path, **selection):
         output_dir = str(tmp_path / "buckling")
         result = analyze_ifc(
             ifc_path=_beam_with_two_cases(tmp_path),
             output_dir=output_dir,
             mesh_size=self.MESH,
             analysis_type="linear_buckling",
+            **selection,
         )
         assert result["status"] == "success", result.get("errors")
-        assert any(
-            "3 load combination(s) of the file have no results" in w["message"]
-            for w in result["warnings"]
-        )
         with open(os.path.join(output_dir, "results.json")) as fh:
-            assert "load_combinations" not in json.load(fh)
+            return json.load(fh), result["warnings"]
+
+    def test_buckling_has_a_step_per_combination(self, tmp_path):
+        """bqj: the factors of each combination, not of every load at once."""
+        data, warnings = self._buckling(tmp_path)
+        assert not [w for w in warnings if w["code"] == "W-LOD-006"]
+        assert "load_combinations" not in data
+        sets = data["buckling"]["load_sets"]
+        assert [s["name"] for s in sets] == ["DCon1", self.NAME, "Dead - Live"]
+        assert data["load_cases"] == [s["name"] for s in sets]
+        assert sets[1]["factors"] == {"Dead": COMBINED_DEAD, "Live": COMBINED_LIVE}
+        assert all(s["kind"] == "load_combination" for s in sets)
+        assert data["load_case_ifc_guids"] == {s["name"]: s["ifc_guid"] for s in sets}
+        (governing,) = [s for s in sets if s["governing"]]
+        assert data["buckling"]["reference_load_case"] == governing["name"]
+        assert data["buckling"]["modes"] == governing["modes"]
+        least = min(m["factor"] for s in sets for m in s["modes"] if m["factor"] > 0)
+        assert min(m["factor"] for m in governing["modes"] if m["factor"] > 0) == least
+
+    def test_a_combination_is_its_cases_times_their_factors(self, tmp_path):
+        """DCon1 is 1.5 Dead, so Dead by itself buckles at 1.5 times its
+        factors; a combination and a case are chosen by name. (Mode 10, the
+        last the eigensolver finds, came 4e-5 apart.)"""
+        (tmp_path / "case").mkdir()
+        data, _ = self._buckling(tmp_path, combinations=["DCon1"])
+        alone, _ = self._buckling(tmp_path / "case", load_cases=["Dead"])
+        (combined,) = data["buckling"]["load_sets"]
+        (case,) = alone["buckling"]["load_sets"]
+        assert (combined["name"], case["name"], case["kind"]) == (
+            "DCon1",
+            "Dead",
+            "load_case",
+        )
+        assert [m["factor"] for m in case["modes"]] == pytest.approx(
+            [1.5 * m["factor"] for m in combined["modes"]], rel=1e-4
+        )
+        assert data["run"]["settings"]["buckling_combinations"] == ["DCon1"]
+        assert alone["run"]["settings"]["buckling_load_cases"] == ["Dead"]
+
+    def test_a_name_the_file_does_not_have(self, tmp_path):
+        result = analyze_ifc(
+            ifc_path=_beam_with_two_cases(tmp_path),
+            output_dir=str(tmp_path / "out"),
+            mesh_size=self.MESH,
+            analysis_type="linear_buckling",
+            combinations=["ULS 9"],
+        )
+        assert result["status"] == "failed"
+        (error,) = result["errors"]
+        assert error["code"] == "E-LOD-009"
+        assert "'ULS 9'" in error["message"] and "DCon2" in error["message"]
+
+    def test_a_static_analysis_takes_no_choice(self, tmp_path):
+        with pytest.raises(ValueError, match="buckling analysis only"):
+            analyze_ifc(
+                ifc_path=_beam_with_two_cases(tmp_path),
+                output_dir=str(tmp_path / "out"),
+                combinations=["DCon1"],
+            )
 
 
 TRUSS_NODES = {"A": (0, 0), "B": (4, 0), "C": (8, 0), "D": (2, 3), "E": (6, 3)}
@@ -5265,6 +5320,48 @@ class TestBucklingResults:
         assert data["global_displacements"]["envelope"]["max_tz_m"] == pytest.approx(
             shortening, rel=0.05
         )
+
+    def test_a_factor_per_combination(self, tmp_path):
+        """bqj (balrobs): wind and snow are alternatives, so each combination
+        has factors of its own, and the governing one buckles first.
+
+        The column has a joint halfway up with the wind on it, across: it
+        bends the column and does not compress it, so a combination's
+        factor is the Euler load over its compression alone.
+        """
+        data, warnings = _plane_run(
+            tmp_path,
+            mesh_size=0.25,
+            analysis_type="linear_buckling",
+            nodes={"A": (0, 0), "M": (0, self.HEIGHT / 2), "B": (0, self.HEIGHT)},
+            members=[("A", "M"), ("M", "B")],
+            supports={"A": PLANE_PIN, "B": (True, True, False, False, False, False)},
+            loads={"B": (0.0, -self.LOAD), "M": (500.0, 0.0)},
+            cases={"Wind": ["PM"]},
+            combinations={
+                "ULS 1": {"Load": 1.35},
+                "ULS 2": {"Load": 1.0, "Wind": 1.5},
+                "SLS": {"Load": 0.5},
+            },
+            side=self.SIDE,
+            hinged=False,
+        )
+        euler = math.pi**2 * PLANE_E * self.SIDE**4 / 12 / self.HEIGHT**2
+        sets = {s["name"]: s for s in data["buckling"]["load_sets"]}
+        assert list(sets) == ["ULS 1", "ULS 2", "SLS"]
+        for name, compression in (("ULS 1", 1.35), ("ULS 2", 1.0), ("SLS", 0.5)):
+            assert sets[name]["modes"][0]["factor"] == pytest.approx(
+                euler / (compression * self.LOAD), rel=0.02
+            )
+        assert sets["ULS 2"]["factors"] == {"Load": 1.0, "Wind": 1.5}
+        assert [s["governing"] for s in sets.values()] == [True, False, False]
+        assert data["buckling"]["reference_load_case"] == "ULS 1"
+        assert data["load_cases"] == list(sets)
+        (top,) = [m for m in data["members"] if "mode_shapes" in m][:1]
+        assert sorted(top["mode_shapes"]) == sorted(
+            f"Mode {m['mode']}" for m in sets["ULS 1"]["modes"]
+        )
+        assert not [w for w in warnings if "probably" in w]
 
     def test_truss_draws_no_warning_about_its_size(self, tmp_path):
         _, warnings = _plane_run(

@@ -86,6 +86,10 @@ ifc-analysis analyze model.ifc --output ./results --strict-connections
 # CalculiX U1 elements for I/T/L/C/round/hollow sections (models of those only)
 ifc-analysis analyze model.ifc --output ./results --open-sections user-element
 
+# Buckling factors of each load combination by itself (or each load case when
+# there is none); --combination/--case (repeatable) choose some
+ifc-analysis analyze model.ifc --output ./results --analysis-type linear_buckling --combination 'ULS 1'
+
 # Natural frequencies and mode shapes (mass from the materials only)
 ifc-analysis analyze model.ifc --output ./results --analysis-type modal --modes 12
 
@@ -205,11 +209,12 @@ Runs CalculiX and processes results:
 - `output_parser.py`: Reads what CalculiX printed (`CalculixRunner.solver_output`): `check_convergence()` for whether it finished, `solver_warnings()` for its `*WARNING` blocks, each kind once with a count, which go into `result["warnings"]`. A warning caused by something the writer does on purpose is to be removed at the source (the rigid links have `*DENSITY 0.` for that), not filtered here
 - `boundary_condition_handling.py`: Handles boundary conditions and analysis steps
 - `superposition.py`: Results of a load combination from those of its load cases (see `docs/design/connections.md`)
+- `buckling_loads.py`: The sets of loads of a buckling analysis, a `*BUCKLE` step each: each combination (its cases times their factors), else each load case, else every load (see `docs/design/known_limitations.md`)
 - `plane_structure.py`: Recognises plane trusses and frames and what holds them in their plane (see `docs/design/connections.md`)
 
 #### 5a. Visualization (`src/ifc_structural_mechanics/visualization/`)
 Pictures of an output directory (`ifc-analysis plot`, vi9):
-- `output_files.py`: `AnalysisOutput` reads `analysis.inp` (the mesh as written; a `** Member <id>` comment the writer puts before each member's set gives its id; `BC_<id>` node sets; `*CLOAD` per step), `analysis.frd` and `results.json`. No PyVista. Each node of an expanded solid belongs to the node of its own input element it is nearest to (the rule of `parse_support_node_moments()`); a node's displacement is the mean over its cross-section, its stress the largest. **Never match nodes by distance alone**: a 0.15 m tolerance once left 4 of `beam_01`'s 10 nodes undeformed (`aiz.102`). Combinations are their cases times their factors; load case n is the n-th `DISP` block, mode n of a buckling analysis the (n+1)-th.
+- `output_files.py`: `AnalysisOutput` reads `analysis.inp` (the mesh as written; a `** Member <id>` comment the writer puts before each member's set gives its id; `BC_<id>` node sets; `*CLOAD` per step), `analysis.frd` and `results.json`. No PyVista. Each node of an expanded solid belongs to the node of its own input element it is nearest to (the rule of `parse_support_node_moments()`); a node's displacement is the mean over its cross-section, its stress the largest. **Never match nodes by distance alone**: a 0.15 m tolerance once left 4 of `beam_01`'s 10 nodes undeformed (`aiz.102`). Combinations are their cases times their factors; load case n is the n-th `DISP` block. A buckling analysis has a step per set of loads (`buckling.load_sets`), each a block under its loads and one per mode; `--mode n` is of the governing set.
 - `plot.py`: `render()` and `plot()` with PyVista: deformed shapes (viridis), section force diagrams from `results.json` along `section_axes` (moments on the tension side, diverging colours), supports, reactions, loads, mode shapes. Quadratic cells are split into linear ones through all their nodes. Draw many things as one mesh: a mesh per member took 39 s on `building_02`.
 - `docs/images/make_images.py` makes the pictures of README.md and docs/ from the example models; run it again when a change shows in them.
 

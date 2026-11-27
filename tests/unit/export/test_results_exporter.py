@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ifc_structural_mechanics.analysis.buckling_loads import BucklingLoadSet
 from ifc_structural_mechanics.domain.property import Material, Section
 from ifc_structural_mechanics.domain.structural_member import CurveMember
 from ifc_structural_mechanics.domain.structural_model import StructuralModel
@@ -289,7 +290,7 @@ class TestSchemaStructure:
     ResultsExporter.SCHEMA_VERSION and update these tests intentionally.
     """
 
-    CURRENT_SCHEMA_VERSION = "1.16"
+    CURRENT_SCHEMA_VERSION = "1.17"
 
     _REQUIRED_UNIT_KEYS = {"length", "force", "moment", "stress", "displacement"}
     _REQUIRED_MEMBER_KEYS = {"ifc_guid", "id", "type", "status"}
@@ -346,16 +347,18 @@ class TestSchemaStructure:
 class TestBuckling:
     """A buckling analysis reports its factors, or fails (`aiz.73`)."""
 
-    def _exporter(self, factors):
+    def _exporter(self, steps, sets=None):
         model = StructuralModel(id="test")
+        if sets is not None:
+            model.buckling_load_sets = sets
         return ResultsExporter(
             domain_model=model,
-            parsed_results={"displacement": [], "buckling": factors},
+            parsed_results={"displacement": [], "buckling": steps},
             analysis_type="linear_buckling",
         )
 
     def test_factors_are_listed_lowest_mode_first(self):
-        data = self._exporter([(2, 7.5), (1, 3.25)])._build()
+        data = self._exporter([[(2, 7.5), (1, 3.25)]])._build()
         assert data["analysis_type"] == "linear_buckling"
         assert data["buckling"]["modes"] == [
             {"mode": 1, "factor": 3.25},
@@ -365,6 +368,38 @@ class TestBuckling:
     def test_no_factors_is_an_error(self):
         with pytest.raises(ResultProcessingError, match="no buckling factors"):
             self._exporter([])._build()
+
+    def test_each_combination_and_the_governing_one(self):
+        """bqj: the factors of each set of loads; the reference is the one
+        that buckles first, and a negative factor is not that."""
+        sets = [
+            BucklingLoadSet(
+                "ULS snow", "load_combination", "C1", {"a": 1.5}, {"Snow": 1.5}
+            ),
+            BucklingLoadSet(
+                "ULS wind", "load_combination", "C2", {"b": 1.5}, {"Wind": 1.5}
+            ),
+            BucklingLoadSet("Wind", "load_case", "B", {"b": 1.0}),
+        ]
+        steps = [[(1, 4.0), (2, 9.0)], [(1, -1.0), (2, 2.5)], [(1, -0.5)]]
+        buckling = self._exporter(steps, sets)._build()["buckling"]
+        assert buckling["reference_load_case"] == "ULS wind"
+        assert buckling["modes"] == [
+            {"mode": 1, "factor": -1.0},
+            {"mode": 2, "factor": 2.5},
+        ]
+        listed = buckling["load_sets"]
+        assert [s["name"] for s in listed] == ["ULS snow", "ULS wind", "Wind"]
+        assert [s["governing"] for s in listed] == [False, True, False]
+        assert listed[0]["factors"] == {"Snow": 1.5}
+        assert listed[0]["ifc_guid"] == "C1"
+        assert "factors" not in listed[2]
+
+    def test_steps_that_do_not_match_the_loads_are_an_error(self):
+        sets = [BucklingLoadSet("A", "load_case", "A", {"a": 1.0})]
+        with pytest.raises(ResultProcessingError) as raised:
+            self._exporter([[(1, 2.0)], [(1, 3.0)]], sets)._build()
+        assert raised.value.code == "E-RES-008"
 
     def test_static_analysis_has_no_buckling(self):
         data = _make_exporter()._build()

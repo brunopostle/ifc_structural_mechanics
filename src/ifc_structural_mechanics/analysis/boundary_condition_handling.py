@@ -14,6 +14,7 @@ from ..domain.load import HALF_WAVES, PointLoad
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import AnalysisError
 from ..utils.messages import guids_of, record_warning
+from .buckling_loads import BucklingLoadSet, buckling_load_sets
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1669,6 +1670,159 @@ def _note_user_element_loads(
         note(shares)
 
 
+class _ScaledLoads:
+    """Passes what is written on, with every ``*CLOAD`` value times a factor.
+
+    A load combination's ``*BUCKLE`` step has the loads of each of its load
+    cases times the case's factor: they are written as for the case, through
+    this. What is noted of the loads on U1 elements is scaled with them.
+    """
+
+    def __init__(self, file: Any, factor: float):
+        self._file = file
+        self._factor = factor
+        self._pending = ""
+        self._cload = False
+
+    def write(self, text: str) -> int:
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            self._file.write(self._scaled(line) + "\n")
+        return len(text)
+
+    def finish(self) -> None:
+        if self._pending:
+            self._file.write(self._scaled(self._pending))
+            self._pending = ""
+
+    def note_element_loads(self, loads: Dict[int, np.ndarray]) -> None:
+        note = getattr(self._file, "note_element_loads", None)
+        if note is not None:
+            note({element: self._factor * v for element, v in loads.items()})
+
+    def _scaled(self, line: str) -> str:
+        stripped = line.strip()
+        if stripped.startswith("**") or not stripped:
+            return line
+        if stripped.startswith("*"):
+            self._cload = stripped.split(",")[0].strip().upper() == "*CLOAD"
+            return line
+        if not self._cload:
+            raise AnalysisError(
+                f"A load line cannot be scaled for a load combination: {stripped}",
+                code="E-GEN-001",
+            )
+        node, dof, value = (part.strip() for part in stripped.split(","))
+        return f"{node}, {dof}, {float(value) * self._factor:.9e}"
+
+
+def _write_buckling_step(
+    file: TextIO,
+    load_set: BucklingLoadSet,
+    domain_model: StructuralModel,
+    displacements: Dict[Optional[str], Dict[Tuple[str, int], float]],
+    temperatures: Optional[Dict[Optional[str], Dict[int, Tuple[float, ...]]]],
+    short_id_map: Optional[Dict[str, str]],
+    element_sets: Optional[Dict[str, List[int]]],
+    node_coords: Optional[Dict[int, Tuple[float, float, float]]],
+    gravity_direction: Optional[List[float]],
+    u1_node_masses: Optional[Dict[int, float]],
+    u1_element_sets: Optional[set],
+    elements_data: Optional[Dict[int, Dict]],
+    has_u1_elements: bool,
+) -> None:
+    """One ``*BUCKLE`` step, with the loads of a combination or load case.
+
+    CalculiX scales the loads defined *inside* the buckle step; the reported
+    buckling factor multiplies those loads. Loads placed in a preceding
+    *STATIC step are only a fixed preload, and a buckle step without loads of
+    its own returns meaningless factors (ifc_structural_mechanics-ziq). Each
+    *BUCKLE step is solved by itself, from the unloaded structure.
+
+    Raises:
+        AnalysisError: For support displacements or temperature loads in the
+            set's load cases: CalculiX scales loads, not those.
+    """
+    everything = load_set.kind == "all_loads"
+    groups = [
+        g for g in domain_model.load_groups if everything or g.id in load_set.factors
+    ]
+    moved = [d.id for g in groups for d in getattr(g, "support_displacements", ())]
+    if moved:
+        raise AnalysisError(
+            f"The loads of {load_set.name} have {len(moved)} support "
+            f"displacement(s) (the first is {moved[0]}); a buckling analysis "
+            "takes none: CalculiX scales the loads of the buckling step, not "
+            "what its supports are given. Leave the load case out of the "
+            "buckling analysis (--combination, --case).",
+            code="E-LOD-007",
+            ifc_guids=guids_of(domain_model, moved),
+        )
+    heated = [t.id for g in groups for t in getattr(g, "temperature_loads", ())]
+    if heated:
+        raise AnalysisError(
+            f"The loads of {load_set.name} have {len(heated)} temperature "
+            f"load(s) (the first is {heated[0]}); a buckling analysis takes "
+            "none: CalculiX scales the loads of the buckling step, not its "
+            "temperatures. Leave the load case out of the buckling analysis "
+            "(--combination, --case).",
+            code="E-LOD-008",
+            ifc_guids=guids_of(domain_model, heated),
+        )
+    del displacements, temperatures  # checked above, through the groups
+    file.write("*STEP\n")
+    file.write("*BUCKLE\n")
+    file.write("10\n\n")
+    file.write(
+        f"** Buckling loads: {load_set.name} (buckling factor multiplies these)\n"
+    )
+    loads_written = False
+    acceleration = np.zeros(3)
+    if everything:
+        loads_written = _write_validated_loads_within_step(
+            file,
+            domain_model,
+            short_id_map,
+            element_sets,
+            node_coords,
+            u1_element_sets=u1_element_sets,
+            elements_data=elements_data,
+        )
+        # All the load cases act at once, and so does the weight in them
+        acceleration = sum(
+            (_self_weight_acceleration(g) for g in domain_model.load_groups),
+            np.zeros(3),
+        )
+    for group in groups if not everything else ():
+        factor = load_set.factors[group.id]
+        file.write(f"** Load case {group.name} times {factor:g}\n")
+        scaled = _ScaledLoads(file, factor)
+        loads_written |= _write_validated_loads_within_step(
+            scaled,  # type: ignore[arg-type]
+            domain_model,
+            short_id_map,
+            element_sets,
+            node_coords,
+            target_group_id=group.id,
+            u1_element_sets=u1_element_sets,
+            elements_data=elements_data,
+        )
+        scaled.finish()
+        acceleration = acceleration + factor * _self_weight_acceleration(group)
+    if load_set.gravity:
+        acceleration = acceleration + load_set.gravity * STANDARD_GRAVITY * np.array(
+            gravity_direction or [0.0, 0.0, -1.0], dtype=float
+        )
+    if _write_self_weight(file, acceleration, u1_node_masses, has_u1_elements):
+        loads_written = True
+    if not loads_written:
+        file.write("** CRITICAL WARNING: No loads written to buckle step\n\n")
+    file.write("*NODE FILE\n")
+    file.write("U\n")
+    file.write("*END STEP\n\n")
+
+
 def _write_frequency_step(file: TextIO, num_modes: int) -> None:
     """Write the one step of a modal analysis: its lowest ``num_modes`` modes.
 
@@ -1708,8 +1862,9 @@ def _write_analysis_steps(
 
     When explicit load cases are present, writes one *STEP per load case plus
     an optional gravity step. Falls back to a single combined step when there
-    are no load cases or for buckling analysis. A modal analysis has one
-    *FREQUENCY step and no load.
+    are no load cases. A buckling analysis has a *BUCKLE step per set of
+    ``domain_model.buckling_load_sets`` (``analysis/buckling_loads.py``). A
+    modal analysis has one *FREQUENCY step and no load.
 
     Args:
         file (TextIO): The file object to write to.
@@ -1731,16 +1886,13 @@ def _write_analysis_steps(
         num_modes: How many modes a modal analysis asks for.
 
     Raises:
-        AnalysisError: For a buckling analysis with support displacements or
-            temperature loads.
+        AnalysisError: For a buckling analysis of loads with support
+            displacements or temperature loads.
     """
     file.write("** Analysis Steps\n")
 
-    # Linear buckling: a single *BUCKLE step carrying the reference loads.
-    # CalculiX scales the loads defined *inside* the buckle step; the reported
-    # buckling factor multiplies those loads. Loads placed in a preceding
-    # *STATIC step are only a fixed preload, and a buckle step without loads of
-    # its own returns meaningless factors (ifc_structural_mechanics-ziq).
+    # Linear buckling: a *BUCKLE step per load combination or load case
+    # (_write_buckling_step).
     # U1 (Timoshenko) beam elements don't support *EL FILE S, E stress output.
     # BEAM_B31 present in element_sets (even if empty) signals that U1 elements exist.
     has_u1_elements = "BEAM_B31" in (element_sets or {})
@@ -1756,62 +1908,25 @@ def _write_analysis_steps(
     displacements = support_displacement_values(domain_model)
 
     if analysis_type == "linear_buckling":
-        if displacements:
-            moved = [
-                d.id
-                for g in domain_model.load_groups
-                for d in getattr(g, "support_displacements", ())
-            ]
-            raise AnalysisError(
-                f"The model has {len(moved)} support displacement(s) (the first "
-                f"is {moved[0]}); a buckling analysis takes none: CalculiX "
-                "scales the loads of the buckling step, not what its supports "
-                "are given.",
-                code="E-LOD-007",
-                ifc_guids=guids_of(domain_model, moved),
+        sets = getattr(domain_model, "buckling_load_sets", None)
+        if not sets:
+            sets, _ = buckling_load_sets(domain_model, gravity)
+        for load_set in sets:
+            _write_buckling_step(
+                file,
+                load_set,
+                domain_model,
+                displacements,
+                temperatures,
+                short_id_map,
+                element_sets,
+                node_coords,
+                gravity_direction,
+                u1_node_masses,
+                u1_element_sets,
+                elements_data,
+                has_u1_elements,
             )
-        if temperatures:
-            heated = [
-                t.id
-                for g in domain_model.load_groups
-                for t in getattr(g, "temperature_loads", ())
-            ]
-            raise AnalysisError(
-                f"The model has {len(heated)} temperature load(s) (the first is "
-                f"{heated[0]}); a buckling analysis takes none: CalculiX scales "
-                "the loads of the buckling step, not its temperatures.",
-                code="E-LOD-008",
-                ifc_guids=guids_of(domain_model, heated),
-            )
-        file.write("*STEP\n")
-        file.write("*BUCKLE\n")
-        file.write("10\n\n")
-        file.write("** Reference loads (buckling factor multiplies these)\n")
-        loads_written = _write_validated_loads_within_step(
-            file,
-            domain_model,
-            short_id_map,
-            element_sets,
-            node_coords,
-            u1_element_sets=u1_element_sets,
-            elements_data=elements_data,
-        )
-        # All the load cases act at once, and so does the weight in them
-        acceleration = sum(
-            (_self_weight_acceleration(g) for g in domain_model.load_groups),
-            np.zeros(3),
-        )
-        if gravity:
-            acceleration = acceleration + STANDARD_GRAVITY * np.array(
-                gravity_direction or [0.0, 0.0, -1.0], dtype=float
-            )
-        if _write_self_weight(file, acceleration, u1_node_masses, has_u1_elements):
-            loads_written = True
-        if not loads_written:
-            file.write("** CRITICAL WARNING: No loads written to buckle step\n\n")
-        file.write("*NODE FILE\n")
-        file.write("U\n")
-        file.write("*END STEP\n\n")
         return
 
     # For linear static: use one step per load case if any exist
