@@ -14,10 +14,10 @@
     "name": "beam example.EDB"
   },
   "run": {
-    "created": "2026-11-27T20:37:17+00:00",
+    "created": "2026-11-27T22:58:52+00:00",
     "library": {
       "name": "ifc_structural_mechanics",
-      "version": "0.2.0"
+      "version": "0.3.0"
     },
     "solver": {
       "name": "CalculiX",
