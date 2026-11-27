@@ -50,6 +50,9 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # The runner's own Microsoft repository failed with 403 and 'no longer
+          # signed' on image 20261122 (ubuntu-26.04); nothing here needs it
+          grep -rl packages.microsoft.com /etc/apt/sources.list.d | xargs -r sudo rm -f
           sudo apt-get update -q
           sudo apt-get install -y calculix-ccx libglu1-mesa
 
@@ -109,6 +112,9 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # The runner's own Microsoft repository failed with 403 and 'no longer
+          # signed' on image 20261122 (ubuntu-26.04); nothing here needs it
+          grep -rl packages.microsoft.com /etc/apt/sources.list.d | xargs -r sudo rm -f
           sudo apt-get update -q
           sudo apt-get install -y libglu1-mesa
 
