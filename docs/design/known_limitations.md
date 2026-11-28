@@ -103,6 +103,15 @@ here. This section only records the constraints that shape day-to-day work.
   skipped on 2.21; the 2.23 job in CI fails if any of them is skipped. To run the suite against 2.21 locally: a container from
   `ubuntu:24.04` with `calculix-ccx`, and a `ccx` script first in `PATH`
   that runs `podman run --rm -v "$PWD":/w:Z -w /w <image> ccx "$@"`.
+- **Every member is a beam or a shell that bends** (`72q`). A member whose
+  `PredefinedType` says otherwise (`CABLE`, `TENSION_MEMBER`,
+  `COMPRESSION_MEMBER`, `MEMBRANE_ELEMENT`, `USERDEFINED`) stops the analysis
+  (`E-IFC-007`); it used to be analysed as a beam or shell without a word.
+  None of the example models has one. A `PIN_JOINED_MEMBER` is a beam whose
+  connections release both its bending rotations (`tests/helpers.plane_model`
+  builds trusses so), and `E-IFC-007` when one holds it
+  (`_check_pin_jointed_members()` in `ifc/extractor.py`). Cables, membranes
+  and prestress are `dk3`.
 - **Only the solid rectangle is written as a CalculiX section**, with one
   shear modulus lowered to correct its torsion. Every other
   profile is an equivalent rectangle (see `sections.md`). Do not

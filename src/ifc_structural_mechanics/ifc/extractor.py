@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.unit
+import numpy as np
 
 from ..domain.structural_model import StructuralModel
 from ..utils.error_handling import ModelExtractionError
@@ -29,6 +30,43 @@ from .entity_identifier import (
 )
 from .loads_extractor import LoadsExtractor
 from .members_extractor import MembersExtractor
+
+
+def _check_pin_jointed_members(model: StructuralModel) -> None:
+    """Refuse a PIN_JOINED_MEMBER a connection holds in bending.
+
+    Such a bar carries axial force only. It is analysed as a beam, which is
+    right when every connection along it releases both its bending rotations,
+    and another structure when one does not (``E-IFC-007``). Rotation about
+    the bar's own axis may be held.
+    """
+    for member in model.members:
+        if not getattr(member, "pin_jointed", False):
+            continue
+        guid = member.ifc_guid or member.id
+        along = np.array(member.geometry[-1], dtype=float) - np.array(
+            member.geometry[0], dtype=float
+        )
+        along /= np.linalg.norm(along)
+        holding = []
+        for connection in model.connections:
+            if member.id not in connection.connected_members:
+                continue
+            released = connection.released_dofs_by_member.get(guid, [])
+            axes = connection.release_axes_by_member.get(guid) or np.eye(3)
+            held = [axes[dof - 4] for dof in (4, 5, 6) if dof not in released]
+            if any(np.linalg.norm(np.cross(along, axis)) > 1e-6 for axis in held):
+                holding.append(connection.ifc_guid or connection.id)
+        if holding:
+            raise ModelExtractionError(
+                f"Member {guid} cannot be analysed. Its PredefinedType is "
+                "PIN_JOINED_MEMBER, which carries axial force only, but "
+                f"connection(s) {', '.join(holding)} hold it in bending: release "
+                "its rotations in the AppliedCondition of its "
+                "IfcRelConnectsStructuralMember there.",
+                code="E-IFC-007",
+                ifc_guids=[guid, *holding],
+            )
 
 
 class Extractor:
@@ -250,6 +288,7 @@ class Extractor:
             )
             self._extract_items_directly(model)
 
+        _check_pin_jointed_members(model)
         # Before the loads: a load on the part of a member cut away is off it
         self.warnings.extend(
             apply_eccentricities(self.ifc, model, self.members_extractor.length_scale)

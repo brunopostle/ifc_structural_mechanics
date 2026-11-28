@@ -171,6 +171,7 @@ class CurveMember(StructuralMember):
         allow_none_props: bool = False,
         ifc_guid: Optional[str] = None,
         local_axis: Optional[tuple] = None,
+        pin_jointed: bool = False,
     ) -> None:
         """
         Initialize a curve member.
@@ -184,6 +185,9 @@ class CurveMember(StructuralMember):
                                     (used for testing or incremental construction).
             ifc_guid (Optional[str]): IFC GlobalId for traceability to source model.
             local_axis (Optional[tuple]): Local axis orientation vector (x, y, z) for the member.
+            pin_jointed (bool): Its IFC PredefinedType is PIN_JOINED_MEMBER: it
+                carries axial force only, so its connections must release its
+                bending (``Extractor`` checks it).
 
         Raises:
             ValueError: If any of the required parameters are invalid.
@@ -191,6 +195,7 @@ class CurveMember(StructuralMember):
         # Set section property first
         self.section = section
         self.local_axis = local_axis
+        self.pin_jointed = pin_jointed
         # Surface members it is tied to along its length (set by the writer)
         self.tied_to_surface_members: List[str] = []
 

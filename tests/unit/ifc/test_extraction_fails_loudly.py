@@ -18,6 +18,7 @@ from ifc_structural_mechanics.ifc.extractor import Extractor  # noqa: E402
 from ifc_structural_mechanics.utils.error_handling import (  # noqa: E402
     ModelExtractionError,
 )
+from tests.helpers import PLANE_PIN, PLANE_ROLLER, plane_model  # noqa: E402
 
 IFC_DIR = os.path.join("examples", "analysis-models", "ifcFiles")
 
@@ -335,6 +336,91 @@ class TestMembers:
         """A second extractor used to hang a default 0.1 x 0.2 section on it."""
         slab = Extractor(_open("slab_01")).extract_model().members[0]
         assert getattr(slab, "section", None) is None
+
+    @pytest.mark.parametrize(
+        "name, ifc_class, kind, says",
+        [
+            ("cantilever_01", "IfcStructuralCurveMember", "CABLE", "tension only"),
+            ("cantilever_01", "IfcStructuralCurveMember", "TENSION_MEMBER", "tension"),
+            (
+                "cantilever_01",
+                "IfcStructuralCurveMember",
+                "COMPRESSION_MEMBER",
+                "compression only",
+            ),
+            ("slab_01", "IfcStructuralSurfaceMember", "MEMBRANE_ELEMENT", "membrane"),
+        ],
+    )
+    def test_member_type_the_analysis_cannot_represent_is_an_error(
+        self, name, ifc_class, kind, says
+    ):
+        """Cables and membranes were analysed as beams and shells that bend."""
+        model = _open(name)
+        member = model.by_type(ifc_class)[0]
+        member.PredefinedType = kind
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-IFC-007"
+        assert error.value.ifc_guids == [member.GlobalId]
+        assert kind in str(error.value)
+        assert says in str(error.value)
+
+    def test_user_defined_member_type_is_an_error_that_names_it(self):
+        model = _open("cantilever_01")
+        member = model.by_type("IfcStructuralCurveMember")[0]
+        member.PredefinedType = "USERDEFINED"
+        member.ObjectType = "Strut"
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(model).extract_model()
+        assert error.value.code == "E-IFC-007"
+        assert "USERDEFINED (Strut)" in str(error.value)
+
+    _BAR = ({"A": (0, 0), "B": (4, 0)}, [("A", "B")])
+
+    def _bar(self, tmp_path, release):
+        nodes, members = self._BAR
+        path = plane_model(
+            str(tmp_path / "bar.ifc"),
+            nodes,
+            members,
+            {"A": PLANE_PIN, "B": PLANE_ROLLER},
+            {},
+            release=release,
+        )
+        return Extractor(path).extract_model()
+
+    def test_pin_jointed_bar_released_at_its_connections_is_analysed(self, tmp_path):
+        model = self._bar(tmp_path, (True, True, True, False, False, False))
+        assert [member.pin_jointed for member in model.members] == [True]
+
+    def test_pin_jointed_bar_may_be_held_about_its_own_axis(self, tmp_path):
+        """The bar lies along X: holding rotation about X is no bending."""
+        model = self._bar(tmp_path, (True, True, True, True, False, False))
+        assert [member.pin_jointed for member in model.members] == [True]
+
+    def test_pin_jointed_bar_held_in_bending_is_an_error(self, tmp_path):
+        """It was analysed as a beam with moments at its ends."""
+        with pytest.raises(ModelExtractionError) as error:
+            self._bar(tmp_path, (True, True, True, False, True, False))
+        assert error.value.code == "E-IFC-007"
+        assert "PIN_JOINED_MEMBER" in str(error.value)
+        assert "hold it in bending" in str(error.value)
+        assert len(error.value.ifc_guids) == 3  # the bar and its two joints
+
+    @pytest.mark.parametrize(
+        "name, ifc_class, kind",
+        [
+            ("cantilever_01", "IfcStructuralCurveMember", "RIGID_JOINED_MEMBER"),
+            ("cantilever_01", "IfcStructuralCurveMember", "NOTDEFINED"),
+            ("slab_01", "IfcStructuralSurfaceMember", "SHELL"),
+            ("slab_01", "IfcStructuralSurfaceMember", "BENDING_ELEMENT"),
+            ("slab_01", "IfcStructuralSurfaceMember", "NOTDEFINED"),
+        ],
+    )
+    def test_member_types_of_beams_and_shells_are_analysed(self, name, ifc_class, kind):
+        model = _open(name)
+        model.by_type(ifc_class)[0].PredefinedType = kind
+        assert len(Extractor(model).extract_model().members) == 1
 
 
 class TestConnections:

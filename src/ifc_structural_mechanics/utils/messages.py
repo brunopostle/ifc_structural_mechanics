@@ -790,6 +790,21 @@ _ERRORS = [
         "several models whose SharedPlacements differ, so its coordinates "
         "could be in either. Give it an ObjectPlacement.",
     ),
+    MessageKind(
+        "E-IFC-007",
+        "Member type not supported",
+        "The member's PredefinedType says it behaves in a way the analysis "
+        "cannot represent: CABLE and TENSION_MEMBER (tension only), "
+        "COMPRESSION_MEMBER (compression only), MEMBRANE_ELEMENT (in-plane "
+        "forces only), or USERDEFINED, whose behaviour is not known. Beams and "
+        "shells bend and carry tension and compression alike, so analysing it "
+        "as one would be of another structure. If the member does act as a "
+        "beam or shell, give it RIGID_JOINED_MEMBER, SHELL or BENDING_ELEMENT. "
+        "A PIN_JOINED_MEMBER (axial force only) is analysed as a beam whose "
+        "connections release both its bending rotations, and is this error "
+        "when one of them holds it: release them in the AppliedCondition of "
+        "its IfcRelConnectsStructuralMember there.",
+    ),
     # Materials
     MessageKind(
         "E-MAT-001",

@@ -50,6 +50,20 @@ PLAUSIBLE_DENSITY = (1.0, 23000.0)
 # constant from the dimensions leaves out the fillets, a fifth of a rolled I's.
 PSET_AGREEMENT = 1.5
 
+# Member types (PredefinedType) whose behaviour the analysis cannot represent:
+# beams and shells bend and carry tension and compression alike. NOTDEFINED,
+# no type, RIGID_JOINED_MEMBER, SHELL and BENDING_ELEMENT are analysed, and
+# PIN_JOINED_MEMBER when its connections release its bending (Extractor).
+_UNSUPPORTED_MEMBER_TYPES = {
+    "CABLE": "is a cable, which carries tension only and has no bending stiffness",
+    "TENSION_MEMBER": "carries tension only",
+    "COMPRESSION_MEMBER": "carries compression only",
+    "MEMBRANE_ELEMENT": (
+        "is a membrane, which carries in-plane forces only and has no bending "
+        "stiffness"
+    ),
+}
+
 # Units a section property is commonly given in, by their size in SI
 _SECTION_UNIT_NAMES = {
     "area": {1e-6: "mm2", 1e-4: "cm2", 0.0254**2: "in2"},
@@ -293,8 +307,31 @@ class MembersExtractor:
         """
         return self._create_member(entity, self._build_surface_member)
 
+    @staticmethod
+    def _check_member_type(entity) -> None:
+        """Refuse a member whose PredefinedType the analysis cannot represent.
+
+        Such a member would be analysed as a beam or shell, which bends and
+        carries tension and compression: another structure.
+        """
+        kind = getattr(entity, "PredefinedType", None)
+        if kind in _UNSUPPORTED_MEMBER_TYPES:
+            raise ModelExtractionError(
+                f"Its PredefinedType is {kind}: it {_UNSUPPORTED_MEMBER_TYPES[kind]}, "
+                "which this analysis cannot represent.",
+                code="E-IFC-007",
+            )
+        if kind == "USERDEFINED":
+            object_type = getattr(entity, "ObjectType", None)
+            raise ModelExtractionError(
+                f"Its PredefinedType is USERDEFINED ({object_type or 'no ObjectType'}): "
+                "what it carries is not known.",
+                code="E-IFC-007",
+            )
+
     def _build_curve_member(self, entity) -> CurveMember:
         """Create a curve member; see ``_create_curve_member``."""
+        self._check_member_type(entity)
         representation = get_representation(entity, "Edge")
         if not representation:
             raise ModelExtractionError(
@@ -340,10 +377,12 @@ class MembersExtractor:
             section=self._create_section(profile),
             ifc_guid=entity.GlobalId,
             local_axis=tuple(orientation) if orientation is not None else None,
+            pin_jointed=getattr(entity, "PredefinedType", None) == "PIN_JOINED_MEMBER",
         )
 
     def _build_surface_member(self, entity) -> SurfaceMember:
         """Create a surface member; see ``_create_surface_member``."""
+        self._check_member_type(entity)
         representation = get_representation(entity, "Face")
         if not representation:
             raise ModelExtractionError(
