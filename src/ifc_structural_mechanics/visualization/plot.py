@@ -237,7 +237,12 @@ def render(
 
     plotter = pv.Plotter(off_screen=off_screen, window_size=list(window_size))
     plotter.set_background("white")
-    plotter.enable_anti_aliasing("ssaa")
+    # SSAA draws through an offscreen framebuffer several times the window's
+    # size, which some Windows OpenGL drivers refuse in an interactive window
+    # (vtkOpenGLFramebufferObject FRAMEBUFFER_INCOMPLETE_ATTACHMENT, bd7,
+    # balrobs 2026-11-28); FXAA has no such buffer and looked the same to him.
+    # Screenshots keep SSAA: they are the documentation's pictures.
+    plotter.enable_anti_aliasing("ssaa" if off_screen else "fxaa")
 
     caption: List[str] = []
     if field in DIAGRAMS:
