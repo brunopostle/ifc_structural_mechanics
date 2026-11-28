@@ -244,6 +244,63 @@ def test_mode_shapes(tmp_path):
         output.displacement(mode=4)
 
 
+class TestBucklingSets:
+    """Each combination of a buckling analysis is a step with modes of its
+    own. `--combination X --mode n` drew the governing set's mode with its
+    factor whatever X was, and `--combination X` alone was refused
+    (reported 2026-11-28 on a portal with two combinations)."""
+
+    @pytest.fixture(scope="class")
+    def column(self, tmp_path_factory):
+        from tests.helpers import PLANE_PIN, plane_model
+
+        directory = tmp_path_factory.mktemp("buckling_sets")
+        path = plane_model(
+            str(directory / "column.ifc"),
+            {"A": (0, 0), "B": (0, 3.0)},
+            [("A", "B")],
+            {"A": PLANE_PIN, "B": (True, True, False, False, False, False)},
+            {"B": (0.0, -10000.0)},
+            combinations={"ULS": {"Load": 1.35}, "SLS": {"Load": 0.5}},
+            hinged=False,
+        )
+        return _analyse(
+            path, directory / "out", mesh_size=0.5, analysis_type="linear_buckling"
+        )
+
+    def test_a_combination_names_its_own_set(self, column):
+        assert column.buckling_set()["name"] == "ULS"  # the governing one
+        sls = column.buckling_set(combination="SLS")
+        assert sls["name"] == "SLS"
+        assert sls["modes"][0]["factor"] == pytest.approx(
+            column.buckling_set()["modes"][0]["factor"] * 1.35 / 0.5, rel=1e-3
+        )
+        with pytest.raises(ValueError, match="No buckling loads 'ULS 9'"):
+            column.buckling_set(combination="ULS 9")
+
+    def test_a_mode_is_of_the_set_named(self, column):
+        assert column._block_index(None, 1, "SLS") != column._block_index(
+            None, 1, "ULS"
+        )
+
+    def test_the_loads_of_a_combination_are_drawn(self, column):
+        uls = column.displacement(combination="ULS")
+        sls = column.displacement(combination="SLS")
+        assert np.abs(uls).max() > 0
+        np.testing.assert_allclose(sls, uls * 0.5 / 1.35, rtol=1e-3, atol=1e-12)
+
+    def test_the_caption_names_the_set_and_its_factor(self, column):
+        from ifc_structural_mechanics.visualization.plot import _case_label
+
+        factor = column.buckling_set(combination="SLS")["modes"][0]["factor"]
+        assert _case_label(None, "SLS", 1, column) == (
+            f"Buckling mode 1 of load combination SLS: load factor {factor:.3g}"
+        )
+        assert _case_label(None, "SLS", None, column) == (
+            "Loads of the buckling analysis: load combination SLS = 0.5 × Load"
+        )
+
+
 def test_missing_files_are_reported(tmp_path):
     with pytest.raises(FileNotFoundError, match="analysis.inp"):
         AnalysisOutput(str(tmp_path))

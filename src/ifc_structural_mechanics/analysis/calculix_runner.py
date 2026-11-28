@@ -155,6 +155,7 @@ class CalculixRunner:
             )
             error_output = self._process_result.stdout + self._process_result.stderr
             self._raise_if_known_gen3delem_user_element_bug(error_output, target_path)
+            self._raise_if_memory_fault(error_output)
             self._raise_if_singular_system(error_output, target_path)
             raise AnalysisError(
                 f"CalculiX analysis failed with return code {self._process_result.return_code}",
@@ -173,6 +174,39 @@ class CalculixRunner:
 
         logger.info("CalculiX analysis completed successfully")
         return self.result_files
+
+    # What the C library prints when a program corrupts its memory
+    _MEMORY_FAULTS = (
+        "double free",
+        "free(): ",
+        "corrupted size",
+        "corruption",
+        "Segmentation fault",
+    )
+
+    @classmethod
+    def _raise_if_memory_fault(cls, error_output: str) -> None:
+        """Tell a crash inside CalculiX from a singular matrix.
+
+        Both stop after "Factoring the system of equations" with no error of
+        CalculiX's own, but a crash leaves the C library's message. It is a
+        fault of the solver, not of the model: calling it a mechanism sent
+        users looking for a missing support (2026-11-28, a buckling step with
+        point loads after one with gravity alone on CalculiX 2.21).
+        """
+        found = next((f for f in cls._MEMORY_FAULTS if f in error_output), None)
+        if found is None:
+            return
+        line = next(
+            (ln.strip() for ln in error_output.splitlines() if found in ln), found
+        )
+        raise AnalysisError(
+            f"CalculiX crashed ({line}). This is a fault in the solver, not a "
+            "sign that the model is a mechanism. The input file is kept in the "
+            "output directory: try another CalculiX version, and report the "
+            "input file.",
+            code="E-SLV-007",
+        )
 
     @staticmethod
     def _raise_if_singular_system(error_output: str, input_file_path: Path) -> None:

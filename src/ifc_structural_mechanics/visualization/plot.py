@@ -134,19 +134,38 @@ def _count(number: int, noun: str) -> str:
 
 
 def _case_label(case, combination, mode, output: AnalysisOutput) -> str:
+    load_set = output.buckling_set(case, combination)
     if mode is not None:
-        modes = output.modes
+        modes = load_set["modes"] if load_set else output.modes
         entry = modes[mode - 1] if mode - 1 < len(modes) else {}
         if "frequency_Hz" in entry:
             return f"Mode {mode}: {entry['frequency_Hz']:.3g} Hz"
+        under = f" of {_set_label(load_set, terms=False)}" if load_set else ""
         if "factor" in entry:
-            return f"Buckling mode {mode}: load factor {entry['factor']:.3g}"
-        return f"Mode {mode}"
+            return f"Buckling mode {mode}{under}: load factor {entry['factor']:.3g}"
+        return f"Mode {mode}{under}"
+    if load_set is not None:
+        return f"Loads of the buckling analysis: {_set_label(load_set)}"
     if combination is not None:
         factors = output.load_combinations[combination]
         terms = " + ".join(f"{f:g} × {name}" for name, f in factors.items())
         return f"Load combination: {combination} = {terms}"
     return f"Load case: {case}"
+
+
+def _set_label(load_set: dict, terms: bool = True) -> str:
+    """A buckling set of loads by name, a combination with its terms."""
+    kind = load_set.get("kind")
+    if kind == "load_combination" and not terms:
+        return f"load combination {load_set['name']}"
+    if kind == "load_combination":
+        terms = " + ".join(
+            f"{f:g} × {name}" for name, f in load_set.get("factors", {}).items()
+        )
+        return f"load combination {load_set['name']}" + (f" = {terms}" if terms else "")
+    if kind == "load_case":
+        return f"load case {load_set['name']}"
+    return load_set["name"]
 
 
 def _default_case(output: AnalysisOutput, case, combination, mode):

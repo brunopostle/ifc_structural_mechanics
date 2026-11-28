@@ -363,6 +363,22 @@ class TestSingularSystemDetection:
             self.ABORTED + " *ERROR in something\n", inp
         )
 
+    @pytest.mark.parametrize(
+        "fault",
+        ["double free or corruption (out)", "free(): double free detected in tcache 2"],
+    )
+    def test_a_crash_is_not_called_a_mechanism(self, fault):
+        """CalculiX 2.21 crashing on a buckling step was reported as a
+        singular matrix (2026-11-28)."""
+        with pytest.raises(AnalysisError) as exc_info:
+            CalculixRunner._raise_if_memory_fault(self.ABORTED + fault + "\n")
+        assert exc_info.value.code == "E-SLV-007"
+        assert fault in str(exc_info.value)
+        assert "mechanism" in str(exc_info.value)  # that it is not one
+
+    def test_a_silent_abort_is_no_crash(self):
+        CalculixRunner._raise_if_memory_fault(self.ABORTED)
+
     def test_does_not_raise_before_factorisation(self, tmp_path):
         inp = tmp_path / "model.inp"
         inp.write_text("*ELEMENT, TYPE=B31, ELSET=E\n1, 1, 2\n")

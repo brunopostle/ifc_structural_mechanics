@@ -548,7 +548,11 @@ def _handle_error(error_type: str, error: Exception, json_output: bool = False) 
 @click.option(
     "--mode",
     type=click.IntRange(min=1),
-    help="Mode shape to draw, of a modal or buckling analysis (default: 1)",
+    help=(
+        "Mode shape to draw, of a modal or buckling analysis (default: 1); of "
+        "a buckling analysis, of the combination or load case given, else of "
+        "the governing one"
+    ),
 )
 @click.option(
     "--field",

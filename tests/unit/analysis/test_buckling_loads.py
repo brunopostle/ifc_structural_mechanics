@@ -159,3 +159,26 @@ def test_two_combinations_of_one_name_go_by_their_globalid():
 )
 def test_the_governing_set_buckles_first(factors, governing):
     assert governing_set(factors) == governing
+
+
+def _with_weight_case(model):
+    weight = LoadGroup(id="G", name="Self-weight", is_load_case=True)
+    weight.self_weight_coefficients = [0.0, 0.0, -1.0]
+    model.load_groups.insert(0, weight)
+    return model
+
+
+def test_sets_of_self_weight_alone_are_written_last():
+    """CalculiX 2.21 crashes on a buckling step with point loads after one
+    with gravity alone (a user's portal, 2026-11-28)."""
+    sets, _ = buckling_load_sets(_with_weight_case(_model(combinations=False)))
+    assert [s.name for s in sets] == ["Dead", "Snow", "Wind", "Self-weight"]
+
+
+def test_sets_chosen_by_name_keep_self_weight_last():
+    sets, _ = buckling_load_sets(
+        _with_weight_case(_model()),
+        combinations=["ULS wind"],
+        load_cases=["Self-weight", "Snow"],
+    )
+    assert [s.name for s in sets] == ["ULS wind", "Snow", "Self-weight"]

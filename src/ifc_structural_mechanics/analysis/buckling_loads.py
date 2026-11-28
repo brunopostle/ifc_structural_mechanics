@@ -10,6 +10,13 @@ with every load in it, as before.
 CalculiX solves each ``*BUCKLE`` step of an input file on its own (measured on
 2.23: the same column with its load doubled in a second step has half the
 factor), and it adds the loads written to one node in one step.
+
+A step whose only load is self-weight (``*DLOAD`` GRAV) is written after every
+step with point loads: CalculiX 2.21 and some builds of 2.23 crash with a
+double free on a ``*BUCKLE`` step with ``*CLOAD`` after one with gravity
+alone (measured 2026-11-28 on a user's portal with a load case per step;
+stock 2.23 from conda-forge does not). Gravity steps last, or one after
+another, run on all of them.
 """
 
 from dataclasses import dataclass, field
@@ -104,7 +111,7 @@ def buckling_load_sets(
             sets.append(BucklingLoadSet(GRAVITY, "load_case", gravity=1.0))
         if not sets:
             sets = [BucklingLoadSet(ALL_LOADS, "all_loads")]
-        return _named_apart(sets), warnings
+        return _weight_alone_last(_named_apart(sets), model), warnings
 
     sets = []
     unknown = []
@@ -139,7 +146,32 @@ def buckling_load_sets(
             + ".",
             code="E-LOD-009",
         )
-    return _named_apart(sets), warnings
+    return _weight_alone_last(_named_apart(sets), model), warnings
+
+
+def _weight_alone_last(
+    sets: List[BucklingLoadSet], model: Any
+) -> List[BucklingLoadSet]:
+    """The sets, those whose only load is self-weight after the others.
+
+    CalculiX 2.21 crashes on a ``*BUCKLE`` step with point loads after one
+    with gravity alone (see the module's docstring). The order is otherwise
+    kept: the sets' results are found in it.
+    """
+    groups = {g.id: g for g in model.load_groups}
+
+    def weight_alone(load_set: BucklingLoadSet) -> bool:
+        if load_set.kind == "all_loads":
+            return not any(g.actions for g in model.load_groups)
+        return not any(
+            groups[group_id].actions
+            for group_id in load_set.factors
+            if group_id in groups
+        )
+
+    return [s for s in sets if not weight_alone(s)] + [
+        s for s in sets if weight_alone(s)
+    ]
 
 
 def _named_apart(sets: List[BucklingLoadSet]) -> List[BucklingLoadSet]:

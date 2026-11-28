@@ -348,8 +348,16 @@ here. This section only records the constraints that shape day-to-day work.
   largest translation of one along any member. A modal analysis's
   `mode_shapes` keep the solver's scale, a generalised mass of one. Each
   set is an eigenvalue solve of its own: a file with many combinations
-  takes that many times as long; choose with `--combination`. Not
-  measured: several `*BUCKLE` steps on 2.21 (CI runs the tests on it).
+  takes that many times as long; choose with `--combination`. Measured
+  2026-11-28 (a user's portal, a step per load case): stock 2.21 and the
+  local 2.23 build crash with a double free on a `*BUCKLE` step with
+  `*CLOAD` after one whose only load is gravity; stock 2.23 from
+  conda-forge does not, and gravity steps last, or one after another, run
+  on all of them. `_weight_alone_last()` in `buckling_loads.py` writes them
+  last; `*CLOAD, OP=NEW` or a zero `*CLOAD` in the gravity step does not
+  help. A step's gravity does not carry into the next. The crash was
+  reported as a mechanism (`E-SLV-001`); the C library's message now makes
+  it `E-SLV-007`.
 - **Modal analysis** (`lon`, `--analysis-type modal`, `--modes`, default 10)
   is one `*FREQUENCY` step and no load. Its mass is the materials' density
   alone (a material without one stops it, `E-MAT-003`): IFC cannot say

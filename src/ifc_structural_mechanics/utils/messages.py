@@ -1207,6 +1207,17 @@ _ERRORS = [
         "The CalculiX input file could not be written to, copied to or found "
         "in the output directory. Check the directory and the space left.",
     ),
+    MessageKind(
+        "E-SLV-007",
+        "CalculiX crashed",
+        "CalculiX stopped on a memory fault of its own (the C library's "
+        "'double free', 'corruption' or a segmentation fault), not on an "
+        "error in the model. Some builds have such faults: stock 2.21 "
+        "crashed on a buckling step with point loads after one with gravity "
+        "alone, which the analysis now avoids by writing gravity-only steps "
+        "last. Try another CalculiX version (2.23 recommended) and report "
+        "the input file, which is kept in the output directory.",
+    ),
     # Reading the results
     MessageKind(
         "E-RES-001",

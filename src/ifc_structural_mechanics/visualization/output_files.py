@@ -362,16 +362,41 @@ class AnalysisOutput:
                 result_nodes.append(int(node))
         return np.array(rows, dtype=int), np.array(result_nodes, dtype=int)
 
-    def _block_index(self, case: Optional[str], mode: Optional[int]) -> int:
-        """Which displacement or stress block a case or mode is."""
+    def buckling_set(
+        self, case: Optional[str] = None, combination: Optional[str] = None
+    ) -> Optional[dict]:
+        """The set of loads of a buckling analysis a case or combination
+        names, as ``results.json`` has it; the governing one for neither.
+
+        Each set is a step of its own, under a combination's loads or a load
+        case's, and has modes of its own. None for another analysis, or a
+        buckling one from before schema 1.17 (one step).
+        """
+        if self.analysis_type != "linear_buckling":
+            return None
+        sets = self.results.get("buckling", {}).get("load_sets") or []
+        if not sets:
+            return None
+        name = combination if combination is not None else case
+        for load_set in sets:
+            if load_set["name"] == name or (name is None and load_set["governing"]):
+                return load_set
+        raise ValueError(f"No buckling loads {name!r}: {[s['name'] for s in sets]}")
+
+    def _block_index(
+        self, case: Optional[str], mode: Optional[int], buckling: Optional[str] = None
+    ) -> int:
+        """Which displacement or stress block a case or mode is; a buckling
+        mode is of the set of loads named *buckling*, the governing set's
+        when None."""
         if mode is not None:
             if self.analysis_type not in ("modal", "linear_buckling"):
                 raise ValueError(f"No mode {mode}: a {self.analysis_type} analysis")
             count = len(self.frd.offsets("DISP"))
             if self.analysis_type == "linear_buckling":
                 # Each step has the displacements under its loads first, then
-                # its modes; results.json has the modes of the governing one
-                first, count = self._buckling_blocks()
+                # its modes
+                first, count = self._buckling_blocks(buckling)
             else:
                 first = 0
             if not 1 <= mode <= count:
@@ -403,6 +428,9 @@ class AnalysisOutput:
     def _factors(
         self, case: Optional[str], combination: Optional[str]
     ) -> Dict[str, float]:
+        if self.analysis_type == "linear_buckling" and combination is not None:
+            # A combination is a set of loads of its own, solved in its step
+            return {self.buckling_set(combination=combination)["name"]: 1.0}
         if combination is not None:
             if combination not in self.load_combinations:
                 raise ValueError(
@@ -437,7 +465,12 @@ class AnalysisOutput:
         rows, _ = self._pairs
         values = np.zeros((len(rows), 3))
         if mode is not None:
-            values = self._on_nodes("DISP", self._block_index(None, mode), 3)
+            load_set = self.buckling_set(case, combination)
+            values = self._on_nodes(
+                "DISP",
+                self._block_index(None, mode, load_set and load_set["name"]),
+                3,
+            )
         else:
             for name, factor in self._factors(case, combination).items():
                 values = values + factor * self._on_nodes(

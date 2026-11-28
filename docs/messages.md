@@ -468,6 +468,10 @@ Stock CalculiX crashes in gen3delem when U1 beams sit beside other beam or shell
 
 The CalculiX input file could not be written to, copied to or found in the output directory. Check the directory and the space left.
 
+### E-SLV-007: CalculiX crashed
+
+CalculiX stopped on a memory fault of its own (the C library's 'double free', 'corruption' or a segmentation fault), not on an error in the model. Some builds have such faults: stock 2.21 crashed on a buckling step with point loads after one with gravity alone, which the analysis now avoids by writing gravity-only steps last. Try another CalculiX version (2.23 recommended) and report the input file, which is kept in the output directory.
+
 ### W-SLV-001: Warning from CalculiX
 
 CalculiX printed this warning, given once for each kind with a count. The analysis removes the causes it knows of, so one that appears is worth reporting with the input file.
