@@ -372,7 +372,7 @@ The load is not assigned to a member (IfcRelConnectsStructuralActivity), or has 
 
 ### E-LOD-004: Load in axes that cannot be used
 
-The load is given in local coordinates of an item that has no axes (none assigned, a surface connection, a curve member with no usable Axis), or per projected length in local coordinates. Give it in global coordinates.
+The load is given in local coordinates of an item that has no axes (none assigned, a surface connection, a curve member with no usable Axis), or per projected length or area in local coordinates, or per projected area on a face with no normal. Give it in global coordinates.
 
 ### E-LOD-005: Moment that cannot be applied
 

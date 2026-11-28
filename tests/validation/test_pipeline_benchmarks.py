@@ -3868,6 +3868,75 @@ class TestSimplySupportedPlateSelfWeight:
             pressure * self.A * self.B, rel=1e-4
         )
 
+    def _pitched(self, path, pitch, projected_or_true, global_or_local="GLOBAL_COORDS"):
+        """The plate turned about Y by *pitch*, its supports with it, and its
+        area load, still in the project's axes, given per true or projected
+        area.
+
+        The items get a turned placement of their own: the analysis model's
+        SharedPlacement, whose axes a load in GLOBAL_COORDS is in, is the
+        one they shared, and stays as it was.
+        """
+        model = ifcopenshell.open(path)
+        turned = model.create_entity(
+            "IfcLocalPlacement",
+            None,
+            model.create_entity(
+                "IfcAxis2Placement3D",
+                model.create_entity("IfcCartesianPoint", (0.0, 0.0, 0.0)),
+                model.create_entity(
+                    "IfcDirection", (-math.sin(pitch), 0.0, math.cos(pitch))
+                ),
+                model.create_entity(
+                    "IfcDirection", (math.cos(pitch), 0.0, math.sin(pitch))
+                ),
+            ),
+        )
+        for item in model.by_type("IfcStructuralItem"):
+            item.ObjectPlacement = turned
+        for action in model.by_type("IfcStructuralPlanarAction"):
+            action.ProjectedOrTrue = projected_or_true
+            action.GlobalOrLocal = global_or_local
+        model.write(path)
+        return path
+
+    @pytest.mark.parametrize(
+        "projected_or_true, area",
+        [("PROJECTED_LENGTH", "plan"), ("TRUE_LENGTH", "true")],
+    )
+    def test_area_load_per_plan_area_on_a_pitched_plate(
+        self, tmp_path, projected_or_true, area
+    ):
+        """ek5: a load per projected area, as snow on a pitched roof is given
+        per plan area, was applied per true area: 1/cos 30 = 15 % too much.
+
+        The total vertical reaction is the load times the plan area, or
+        times the true area when the load is given per true area.
+        """
+        pressure, pitch = 2.5, math.radians(30)
+        path = self._pitched(
+            self._plate(tmp_path, area_load=(0.0, 0.0, -pressure)),
+            pitch,
+            projected_or_true,
+        )
+        data = _run(path, tmp_path, mesh_size=0.5)
+        factor = math.cos(pitch) if area == "plan" else 1.0
+        assert data["global_reactions"]["total"]["fz_N"] == pytest.approx(
+            pressure * self.A * self.B * factor, rel=1e-4
+        )
+
+    def test_area_load_per_projected_area_in_local_axes_is_refused(self, tmp_path):
+        path = self._pitched(
+            self._plate(tmp_path, area_load=(0.0, 0.0, -2.5)),
+            math.radians(30),
+            "PROJECTED_LENGTH",
+            "LOCAL_COORDS",
+        )
+        with pytest.raises(ModelExtractionError) as error:
+            Extractor(path).extract_model()
+        assert error.value.code == "E-LOD-004"
+        assert "per projected area" in str(error.value)
+
     def test_area_load_sideways_does_not_bend_the_plate(self, tmp_path):
         """Given along global X, the same load acts in the plane of the slab."""
         path = self._plate(tmp_path, area_load=(2.5, 0.0, 0.0))

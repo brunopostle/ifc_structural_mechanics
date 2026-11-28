@@ -1115,8 +1115,9 @@ _ERRORS = [
         "Load in axes that cannot be used",
         "The load is given in local coordinates of an item that has no axes "
         "(none assigned, a surface connection, a curve member with no usable "
-        "Axis), or per projected length in local coordinates. Give it in "
-        "global coordinates.",
+        "Axis), or per projected length or area in local coordinates, or per "
+        "projected area on a face with no normal. Give it in global "
+        "coordinates.",
     ),
     MessageKind(
         "E-LOD-005",

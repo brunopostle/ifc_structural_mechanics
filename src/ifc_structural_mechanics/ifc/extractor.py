@@ -32,6 +32,51 @@ from .loads_extractor import LoadsExtractor
 from .members_extractor import MembersExtractor
 
 
+def _surface_normal(member) -> Optional[np.ndarray]:
+    """The unit normal of a surface member: that of its face, or of its
+    outline (Newell's method) when the face gives none."""
+    normal = getattr(member, "normal", None)
+    if normal is None:
+        corners = np.array(member.geometry, dtype=float)
+        normal = np.cross(corners, np.roll(corners, -1, axis=0)).sum(axis=0)
+    normal = np.array(normal, dtype=float)
+    length = float(np.linalg.norm(normal))
+    return normal / length if length > 0 else None
+
+
+def _per_true_area(model: StructuralModel) -> None:
+    """Turn area loads given per projected area into loads per true area.
+
+    A load per projected area (``ProjectedOrTrue`` PROJECTED_LENGTH), as
+    snow on a pitched roof is given per plan area, is per area of the face
+    as seen along the load: per true area it is that times the cosine of the
+    angle between the load and the face's normal. Line loads are made per
+    true length as they are read (``LoadsExtractor._per_true_length()``).
+    """
+    members = {m.id: m for m in model.members if m.entity_type == "surface"}
+    for group in model.load_groups:
+        for load in group.loads:
+            if not getattr(load, "per_projected_area", False):
+                continue
+            member = members.get(load.surface_reference)
+            normal = _surface_normal(member) if member is not None else None
+            if normal is None:
+                raise ModelExtractionError(
+                    f"Load {getattr(load, 'action_id', None) or load.id} cannot be "
+                    "analysed. It is given per projected area, and the face of "
+                    f"its member {load.surface_reference} has no normal to "
+                    "project it with.",
+                    code="E-LOD-004",
+                    ifc_guids=[load.surface_reference],
+                )
+            force = np.asarray(load.get_force_vector(), dtype=float)
+            size = float(np.linalg.norm(force))
+            if size > 0:
+                load.magnitude = force * abs(float(np.dot(force / size, normal)))
+            # Each load once, though it may be in several groups
+            load.per_projected_area = False
+
+
 def _check_pin_jointed_members(model: StructuralModel) -> None:
     """Refuse a PIN_JOINED_MEMBER a connection holds in bending.
 
@@ -294,6 +339,7 @@ class Extractor:
             apply_eccentricities(self.ifc, model, self.members_extractor.length_scale)
         )
         self._extract_loads_for_model(model)
+        _per_true_area(model)
         self._pass_on_warnings(model)
         return model
 

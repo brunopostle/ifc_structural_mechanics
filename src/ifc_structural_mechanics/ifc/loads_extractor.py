@@ -794,6 +794,13 @@ class LoadsExtractor:
                 )
 
             force_vector = self._in_global_axes(ifc_load, force_vector)
+            projected = getattr(ifc_load, "ProjectedOrTrue", None) == "PROJECTED_LENGTH"
+            if projected and self._coordinate_system(ifc_load) == "local":
+                raise ModelExtractionError(
+                    "It is given per projected area and in local coordinates; "
+                    "only a load in global directions can be.",
+                    code="E-LOD-004",
+                )
 
             # Find related surface
             surface_ref = self._get_surface_reference(ifc_load)
@@ -816,6 +823,9 @@ class LoadsExtractor:
                 surface_reference=surface_ref,
             )
             area_load.coordinate_system = self._coordinate_system(ifc_load)
+            # Per plan area, as snow on a pitched roof: made per true area
+            # once its member's normal is known (Extractor)
+            area_load.per_projected_area = projected
             return area_load
 
         raise ModelExtractionError(

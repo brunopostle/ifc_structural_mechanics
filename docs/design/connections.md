@@ -265,7 +265,13 @@ first and last being where the load starts and ends. They become `LineLoad.sampl
 `_varying_line_load_to_nodal_forces()` integrates them over each element, and
 `_seed_load_points()` puts a mesh node at every sample. `portal_01` is loaded on half
 of its beam this way and was once analysed with twice its load, because the locations
-were not read. `ProjectedOrTrue` is applied in the extractor (`_per_true_length()`).
+were not read. `ProjectedOrTrue` is applied in the extractor: a line load per
+projected length is made per true length as it is read (`_per_true_length()`, the sine
+of the angle between load and member), and an area load per projected area once its
+member's normal is known (`_per_true_area()` in `ifc/extractor.py`, the cosine of the
+angle between load and normal). Area loads were left per true area until `ek5`
+(2026-11-28): snow given per plan area on a 30° roof was 15% too much. A pitched-plate
+benchmark checks both (`test_area_load_per_plan_area_on_a_pitched_plate`).
 The other distributions (`aiz.58`):
 
 - **SINUS and PARABOLA** have one value, the largest, at the middle of the member, and
